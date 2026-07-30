@@ -45,6 +45,15 @@ def session(engine) -> Session:
 
 
 @pytest.fixture
+def seeded_session(session) -> Session:
+    """A session pre-seeded with the frozen AI-compute evidence slice."""
+    from app.scripts.seed_ai_compute_case import seed
+
+    seed(session)
+    return session
+
+
+@pytest.fixture
 def document_service(session):
     from app.repositories.documents import DocumentRepository
     from app.services.ingest import DocumentService
