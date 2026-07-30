@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,6 +65,81 @@ def client():
     from app.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture
+def research_repository(session):
+    from app.repositories.research import ResearchRepository
+
+    return ResearchRepository(session)
+
+
+@pytest.fixture
+def research_service(research_repository):
+    from app.services.research import ResearchService
+
+    return ResearchService(research_repository)
+
+
+@pytest.fixture
+def research_case(research_service):
+    return research_service.add_case(
+        title="AI compute demand", industry_topic="ai_compute", created_by="tester"
+    )
+
+
+@pytest.fixture
+def thesis(research_service, research_case):
+    return research_service.add_thesis(
+        research_case.id, statement="GPU demand will grow", created_by="tester"
+    )
+
+
+@pytest.fixture
+def statement(research_service, span):
+    return research_service.add_statement(
+        span.id, "预计需求增长", kind="research_opinion"
+    )
+
+
+@pytest.fixture
+def assessment_service(research_repository):
+    from app.services.assessment import AssessmentService
+
+    return AssessmentService(research_repository)
+
+
+@pytest.fixture
+def snapshot(assessment_service, thesis, statement, research_service):
+    research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    return assessment_service.freeze_snapshot(
+        thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=UTC)
+    )
+
+
+@pytest.fixture
+def ai_assessment(assessment_service, snapshot):
+    return assessment_service.create_ai_assessment(
+        snapshot.id, conclusion="supported", rationale="evidence supports", gaps=[]
+    )
+
+
+@pytest.fixture
+def future_link(research_service, thesis, statement):
+    return research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="future orders",
+        scope={"segment": "DC"},
+        available_at=datetime(2026, 12, 31, tzinfo=UTC),
+    )
 
 
 def pytest_collection_modifyitems(config, items):

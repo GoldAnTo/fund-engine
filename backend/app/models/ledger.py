@@ -12,19 +12,45 @@ Immutability is enforced at two layers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, Uuid, event
+from sqlalchemy import DateTime, Date, ForeignKey, JSON, String, Text, Uuid, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
 
-IMMUTABLE_TABLES = frozenset({"document_versions", "source_spans"})
+AssessmentStatus = Literal["supported", "contradicted", "insufficient_evidence"]
+EvidenceRole = Literal["supports", "contradicts", "contextualizes"]
+SourceStatementKind = Literal[
+    "disclosed_fact", "management_attribution", "forecast", "research_opinion"
+]
+ReviewOutcome = Literal["confirmed", "modified", "rejected"]
+ReviewState = Literal["machine_generated", "reviewed", "rejected"]
+
+IMMUTABLE_TABLES = frozenset(
+    {
+        "document_versions",
+        "source_spans",
+        "research_cases",
+        "theses",
+        "causal_steps",
+        "causal_edges",
+        "source_statements",
+        "evidence_links",
+        "evidence_snapshots",
+        "ai_assessments",
+        "review_decisions",
+    }
+)
 
 
 class ImmutableLedgerError(Exception):
     """Raised on any attempt to UPDATE or DELETE an append-only ledger table."""
+
+
+class ValidationError(Exception):
+    """Raised when a service-layer validation fails."""
 
 
 class Base(DeclarativeBase):
@@ -88,3 +114,154 @@ class SourceSpan(Base):
     )
     locator: Mapped[dict] = mapped_column(JSON, nullable=False)
     verbatim_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ResearchCase(Base):
+    __tablename__ = "research_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    industry_topic: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class Thesis(Base):
+    __tablename__ = "theses"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class CausalStep(Base):
+    __tablename__ = "causal_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    thesis_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("theses.id"), nullable=False
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class CausalEdge(Base):
+    __tablename__ = "causal_edges"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    source_step_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("causal_steps.id"), nullable=False
+    )
+    target_step_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("causal_steps.id"), nullable=False
+    )
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    creator_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class SourceStatement(Base):
+    __tablename__ = "source_statements"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    source_span_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_spans.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_period: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class EvidenceLink(Base):
+    __tablename__ = "evidence_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    thesis_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("theses.id"), nullable=False
+    )
+    source_statement_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_statements.id"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[dict] = mapped_column(JSON, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    creator_type: Mapped[str] = mapped_column(String(32), nullable=False, default="ai")
+    review_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="machine_generated"
+    )
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class EvidenceSnapshot(Base):
+    __tablename__ = "evidence_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    thesis_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("theses.id"), nullable=False
+    )
+    cutoff: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    evidence_link_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class AIAssessment(Base):
+    __tablename__ = "ai_assessments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("evidence_snapshots.id"), nullable=False
+    )
+    conclusion: Mapped[str] = mapped_column(String(32), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    gaps: Mapped[list] = mapped_column(JSON, nullable=False)
+    displayed_as_provisional: Mapped[bool] = mapped_column(
+        nullable=False, default=True
+    )
+    creator_type: Mapped[str] = mapped_column(String(32), nullable=False, default="ai")
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ReviewDecision(Base):
+    __tablename__ = "review_decisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    ai_assessment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("ai_assessments.id"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    conclusion: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
