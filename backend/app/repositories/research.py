@@ -263,3 +263,131 @@ class ResearchRepository:
         return self._session.scalar(
             select(AIAssessment).where(AIAssessment.id == assessment_id)
         )
+
+    # ------------------------------------------------------------------ readers (workbench / projection)
+
+    def get_case(self, case_id: uuid.UUID) -> ResearchCase | None:
+        return self._session.get(ResearchCase, case_id)
+
+    def latest_thesis_for_case(
+        self, research_case_id: uuid.UUID
+    ) -> Thesis | None:
+        return self._session.scalar(
+            select(Thesis)
+            .where(Thesis.research_case_id == research_case_id)
+            .order_by(Thesis.created_at.desc())
+            .limit(1)
+        )
+
+    def theses_for_case(
+        self, research_case_id: uuid.UUID
+    ) -> list[Thesis]:
+        return list(
+            self._session.scalars(
+                select(Thesis)
+                .where(Thesis.research_case_id == research_case_id)
+                .order_by(Thesis.created_at)
+            )
+        )
+
+    def latest_assessment_for_thesis(
+        self,
+        thesis_id: uuid.UUID,
+        *,
+        cutoff: datetime,
+    ) -> AIAssessment | None:
+        """Latest AI assessment for a thesis available on or before *cutoff*.
+
+        Availability is governed by the assessment ``created_at``, not the
+        snapshot's evidence cutoff, so a snapshot frozen with a future evidence
+        cutoff is still visible once it has been created.
+        """
+        return self._session.scalar(
+            select(AIAssessment)
+            .join(
+                EvidenceSnapshot,
+                AIAssessment.snapshot_id == EvidenceSnapshot.id,
+            )
+            .where(EvidenceSnapshot.thesis_id == thesis_id)
+            .where(AIAssessment.created_at <= cutoff)
+            .order_by(AIAssessment.created_at.desc())
+            .limit(1)
+        )
+
+    def latest_review_for_assessment(
+        self, assessment_id: uuid.UUID
+    ) -> ReviewDecision | None:
+        return self._session.scalar(
+            select(ReviewDecision)
+            .where(ReviewDecision.ai_assessment_id == assessment_id)
+            .order_by(ReviewDecision.created_at.desc())
+            .limit(1)
+        )
+
+    def causal_steps_for_thesis(
+        self, thesis_id: uuid.UUID
+    ) -> list[CausalStep]:
+        return list(
+            self._session.scalars(
+                select(CausalStep)
+                .where(CausalStep.thesis_id == thesis_id)
+                .order_by(CausalStep.sequence)
+            )
+        )
+
+    def causal_edges_for_steps(
+        self, step_ids: list[uuid.UUID]
+    ) -> list[CausalEdge]:
+        if not step_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(CausalEdge)
+                .where(CausalEdge.source_step_id.in_(step_ids))
+                .where(CausalEdge.target_step_id.in_(step_ids))
+                .order_by(CausalEdge.created_at)
+            )
+        )
+
+    def span_for_statement(
+        self, statement_id: uuid.UUID
+    ) -> SourceSpan | None:
+        statement = self.get_statement(statement_id)
+        if statement is None:
+            return None
+        return self._session.scalar(
+            select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
+        )
+
+    def all_evidence_links(self) -> list[EvidenceLink]:
+        return list(self._session.scalars(select(EvidenceLink)))
+
+    def all_theses(self) -> list[Thesis]:
+        return list(self._session.scalars(select(Thesis)))
+
+    def all_causal_steps(self) -> list[CausalStep]:
+        return list(self._session.scalars(select(CausalStep)))
+
+    def all_causal_edges(self) -> list[CausalEdge]:
+        return list(self._session.scalars(select(CausalEdge)))
+
+    def all_statements(self) -> list[SourceStatement]:
+        return list(self._session.scalars(select(SourceStatement)))
+
+    def all_spans(self) -> list[SourceSpan]:
+        return list(self._session.scalars(select(SourceSpan)))
+
+    def all_document_versions(self) -> list[DocumentVersion]:
+        return list(self._session.scalars(select(DocumentVersion)))
+
+    def all_cases(self) -> list[ResearchCase]:
+        return list(self._session.scalars(select(ResearchCase)))
+
+    def all_snapshots(self) -> list[EvidenceSnapshot]:
+        return list(self._session.scalars(select(EvidenceSnapshot)))
+
+    def all_ai_assessments(self) -> list[AIAssessment]:
+        return list(self._session.scalars(select(AIAssessment)))
+
+    def all_reviews(self) -> list[ReviewDecision]:
+        return list(self._session.scalars(select(ReviewDecision)))

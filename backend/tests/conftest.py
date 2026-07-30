@@ -11,6 +11,9 @@ from sqlalchemy.pool import StaticPool
 PG_URL = os.getenv("TEST_DATABASE_URL")
 USE_PG = bool(PG_URL)
 
+NEO4J_URL = os.getenv("NEO4J_URL")
+USE_NEO4J = bool(NEO4J_URL)
+
 
 @pytest.fixture(scope="session")
 def engine():
@@ -240,9 +243,189 @@ def future_disclosure(instrument_repository, fund, mapped_stock):
 
 
 def pytest_collection_modifyitems(config, items):
-    if USE_PG:
-        return
-    skip_pg = pytest.mark.skip(reason="requires PostgreSQL (set TEST_DATABASE_URL)")
-    for item in items:
-        if "pg_only" in item.keywords:
-            item.add_marker(skip_pg)
+    if not USE_PG:
+        skip_pg = pytest.mark.skip(reason="requires PostgreSQL (set TEST_DATABASE_URL)")
+        for item in items:
+            if "pg_only" in item.keywords:
+                item.add_marker(skip_pg)
+    if not USE_NEO4J:
+        skip_neo4j = pytest.mark.skip(reason="requires a live Neo4j (set NEO4J_URL)")
+        for item in items:
+            if "neo4j_only" in item.keywords:
+                item.add_marker(skip_neo4j)
+
+
+# ---------------------------------------------------------------------------
+# Workbench read-API fixtures (Task 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_client(session):
+    """A TestClient wired to the in-memory test session via get_db override."""
+    from app.db import get_db
+    from app.main import app
+
+    def _override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def workbench_case(
+    document_service,
+    research_service,
+    assessment_service,
+    instrument_repository,
+):
+    """A complete, wired-up case for workbench read-API tests.
+
+    Wires document -> span -> statement -> case -> thesis -> evidence link ->
+    snapshot -> AI assessment, plus company (theme role on the case) -> stock ->
+    valuation snapshot, and fund -> holding disclosure on the theme stock.
+    """
+    from dataclasses import dataclass
+
+    version = document_service.freeze(
+        raw=b"workbench source", source_url="https://example.test/wb"
+    )
+    span = document_service.add_span(
+        document_version_id=version.id,
+        locator={"page": 32, "table_row": 4},
+        verbatim_text="财报第 32 页，表格第 4 行：CapEx 同比增长 40%",
+    )
+    statement = research_service.add_statement(
+        span.id,
+        "CapEx 同比增长 40%",
+        kind="disclosed_fact",
+        observed_period=date(2026, 3, 31),
+    )
+    case = research_service.add_case(
+        title="AI compute demand", industry_topic="ai_compute", created_by="tester"
+    )
+    thesis = research_service.add_thesis(
+        case.id, statement="GPU demand will grow", created_by="tester"
+    )
+    link = research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    snapshot = assessment_service.freeze_snapshot(
+        thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=UTC)
+    )
+    ai_assessment = assessment_service.create_ai_assessment(
+        snapshot.id,
+        conclusion="supported",
+        rationale="evidence supports",
+        gaps=["缺少下游需求传导证据"],
+    )
+    company = instrument_repository.add_company(
+        code="600519", name="Mapped Corp", type="listed"
+    )
+    instrument_repository.add_theme_role(
+        company_id=company.id,
+        role="beneficiary",
+        scope={"segment": "AI compute"},
+        research_case_id=case.id,
+        applicable_from=date(2026, 1, 1),
+    )
+    stock = instrument_repository.add_stock(
+        company_id=company.id, code="600519.SH", name="Mapped Corp", market="SSE"
+    )
+    valuation = instrument_repository.add_valuation_snapshot(
+        stock_id=stock.id,
+        as_of_date=date(2026, 6, 30),
+        metric_name="PE_TTM",
+        metric_value=Decimal("45.2"),
+        source="wind",
+        definition="总市值/近四月归母净利润",
+    )
+    fund_company = instrument_repository.add_fund_company(
+        code="FC001", name="Alpha Fund Management"
+    )
+    fund = instrument_repository.add_fund(
+        code="001001",
+        name="Alpha Growth Fund",
+        fund_type="equity",
+        management_company_id=fund_company.id,
+        scale=Decimal("1000000000"),
+        establish_date=date(2015, 1, 1),
+    )
+    disclosure = instrument_repository.add_holding_disclosure(
+        fund_id=fund.id,
+        stock_id=stock.id,
+        weight=Decimal("0.082"),
+        report_period=date(2026, 3, 31),
+        published_at=date(2026, 4, 22),
+        source="fund-report-2026Q1",
+    )
+
+    @dataclass
+    class WorkbenchFixture:
+        case: object
+        thesis: object
+        statement: object
+        link: object
+        snapshot: object
+        ai_assessment: object
+        company: object
+        stock: object
+        valuation: object
+        fund: object
+        disclosure: object
+
+    return WorkbenchFixture(
+        case=case,
+        thesis=thesis,
+        statement=statement,
+        link=link,
+        snapshot=snapshot,
+        ai_assessment=ai_assessment,
+        company=company,
+        stock=stock,
+        valuation=valuation,
+        fund=fund,
+        disclosure=disclosure,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph-projection fixtures (Task 6, neo4j_only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ledger_fixture(workbench_case):
+    """Ledger data with a known evidence-link count for projection assertions."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class LedgerFixture:
+        evidence_link_count: int
+
+    return LedgerFixture(evidence_link_count=1)
+
+
+@pytest.fixture
+def projector(session):
+    """A ProjectionService backed by a live Neo4j (neo4j_only tests only)."""
+    from neo4j import GraphDatabase
+
+    from app.services.projection import ProjectionService
+
+    uri = os.getenv("NEO4J_URL")
+    user = os.getenv("NEO4J_USER", "neo4j")
+    password = os.getenv("NEO4J_PASSWORD", "evidence-graph")
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        yield ProjectionService(driver, session)
+    finally:
+        driver.close()

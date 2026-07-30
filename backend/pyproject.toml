@@ -10,6 +10,7 @@ dependencies = [
     "alembic>=1.13",
     "psycopg[binary]>=3.1",
     "pydantic>=2",
+    "neo4j>=5.14",
 ]
 
 [project.optional-dependencies]
@@ -30,4 +31,5 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "pg_only: requires a live PostgreSQL database (set TEST_DATABASE_URL)",
+    "neo4j_only: requires a live Neo4j (set NEO4J_URL)",
 ]

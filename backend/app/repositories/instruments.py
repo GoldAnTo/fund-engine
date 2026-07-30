@@ -250,3 +250,102 @@ class InstrumentRepository:
             .order_by(ValuationSnapshot.as_of_date.desc())
             .limit(1)
         )
+
+    # ------------------------------------------------------------------ readers (workbench / projection)
+
+    def theme_roles_for_case(
+        self, research_case_id: uuid.UUID
+    ) -> list[ThemeRole]:
+        return list(
+            self._session.scalars(
+                select(ThemeRole).where(
+                    ThemeRole.research_case_id == research_case_id
+                )
+            )
+        )
+
+    def companies_by_ids(
+        self, company_ids: list[uuid.UUID]
+    ) -> list[Company]:
+        if not company_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Company).where(Company.id.in_(company_ids))
+            )
+        )
+
+    def stocks_for_companies(
+        self, company_ids: list[uuid.UUID]
+    ) -> list[Stock]:
+        if not company_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Stock).where(Stock.company_id.in_(company_ids))
+            )
+        )
+
+    def stock_by_id(self, stock_id: uuid.UUID) -> Stock | None:
+        return self._session.get(Stock, stock_id)
+
+    def fund_by_id(self, fund_id: uuid.UUID) -> Fund | None:
+        return self._session.get(Fund, fund_id)
+
+    def valuation_snapshots_for_stocks(
+        self, stock_ids: list[uuid.UUID]
+    ) -> list[ValuationSnapshot]:
+        if not stock_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(ValuationSnapshot)
+                .where(ValuationSnapshot.stock_id.in_(stock_ids))
+                .order_by(ValuationSnapshot.as_of_date)
+            )
+        )
+
+    def holding_disclosures_for_stocks(
+        self, stock_ids: list[uuid.UUID]
+    ) -> list[HoldingDisclosure]:
+        if not stock_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(HoldingDisclosure)
+                .where(HoldingDisclosure.stock_id.in_(stock_ids))
+                .order_by(HoldingDisclosure.report_period.desc())
+            )
+        )
+
+    def funds_by_ids(self, fund_ids: list[uuid.UUID]) -> list[Fund]:
+        if not fund_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Fund).where(Fund.id.in_(fund_ids))
+            )
+        )
+
+    # ------------------------------------------------------------------ readers (projection)
+
+    def all_companies(self) -> list[Company]:
+        return list(self._session.scalars(select(Company)))
+
+    def all_stocks(self) -> list[Stock]:
+        return list(self._session.scalars(select(Stock)))
+
+    def all_funds(self) -> list[Fund]:
+        return list(self._session.scalars(select(Fund)))
+
+    def all_fund_companies(self) -> list[FundCompany]:
+        return list(self._session.scalars(select(FundCompany)))
+
+    def all_valuation_snapshots(self) -> list[ValuationSnapshot]:
+        return list(self._session.scalars(select(ValuationSnapshot)))
+
+    def all_holding_disclosures(self) -> list[HoldingDisclosure]:
+        return list(self._session.scalars(select(HoldingDisclosure)))
+
+    def all_theme_roles(self) -> list[ThemeRole]:
+        return list(self._session.scalars(select(ThemeRole)))
