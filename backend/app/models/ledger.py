@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, JSON, String, Text, Uuid, event
+from sqlalchemy import DateTime, Date, ForeignKey, JSON, Numeric, String, Text, Uuid, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -41,6 +42,13 @@ IMMUTABLE_TABLES = frozenset(
         "evidence_snapshots",
         "ai_assessments",
         "review_decisions",
+        "companies",
+        "stocks",
+        "fund_companies",
+        "funds",
+        "valuation_snapshots",
+        "holding_disclosures",
+        "theme_roles",
     }
 )
 
@@ -262,6 +270,124 @@ class ReviewDecision(Base):
     conclusion: Mapped[str | None] = mapped_column(String(32), nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class Company(Base):
+    __tablename__ = "companies"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class Stock(Base):
+    __tablename__ = "stocks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("companies.id"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    market: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class FundCompany(Base):
+    __tablename__ = "fund_companies"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class Fund(Base):
+    __tablename__ = "funds"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    fund_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    scale: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    establish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    management_company_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("fund_companies.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ValuationSnapshot(Base):
+    __tablename__ = "valuation_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    stock_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("stocks.id"), nullable=False
+    )
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    metric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class HoldingDisclosure(Base):
+    __tablename__ = "holding_disclosures"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    fund_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("funds.id"), nullable=False
+    )
+    stock_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("stocks.id"), nullable=False
+    )
+    weight: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    report_period: Mapped[date] = mapped_column(Date, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ThemeRole(Base):
+    __tablename__ = "theme_roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("companies.id"), nullable=False
+    )
+    research_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=True
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[dict] = mapped_column(JSON, nullable=False)
+    applicable_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    applicable_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source_statement_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("source_statements.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

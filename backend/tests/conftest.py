@@ -1,5 +1,6 @@
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -139,6 +140,102 @@ def future_link(research_service, thesis, statement):
         reason="future orders",
         scope={"segment": "DC"},
         available_at=datetime(2026, 12, 31, tzinfo=UTC),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Instrument and exposure fixtures (Task 5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def instrument_repository(session):
+    from app.repositories.instruments import InstrumentRepository
+
+    return InstrumentRepository(session)
+
+
+@pytest.fixture
+def exposure_service(instrument_repository):
+    from app.services.exposure import ExposureService
+
+    return ExposureService(instrument_repository)
+
+
+@pytest.fixture
+def company(instrument_repository):
+    return instrument_repository.add_company(
+        code="000001", name="Plain Corp", type="listed"
+    )
+
+
+@pytest.fixture
+def stock(instrument_repository, company):
+    return instrument_repository.add_stock(
+        company_id=company.id, code="000001.SZ", name="Plain Corp", market="SZSE"
+    )
+
+
+@pytest.fixture
+def fund_company(instrument_repository):
+    return instrument_repository.add_fund_company(
+        code="FC001", name="Alpha Fund Management"
+    )
+
+
+@pytest.fixture
+def fund(instrument_repository, fund_company):
+    return instrument_repository.add_fund(
+        code="001001",
+        name="Alpha Growth Fund",
+        fund_type="equity",
+        management_company_id=fund_company.id,
+        scale=Decimal("1000000000"),
+        establish_date=date(2015, 1, 1),
+    )
+
+
+@pytest.fixture
+def mapped_stock(instrument_repository):
+    """A stock whose company carries an active ThemeRole."""
+    mapped_company = instrument_repository.add_company(
+        code="600519", name="Mapped Corp", type="listed"
+    )
+    instrument_repository.add_theme_role(
+        company_id=mapped_company.id,
+        role="beneficiary",
+        scope={"segment": "AI compute"},
+        applicable_from=date(2026, 1, 1),
+    )
+    return instrument_repository.add_stock(
+        company_id=mapped_company.id,
+        code="600519.SH",
+        name="Mapped Corp",
+        market="SSE",
+    )
+
+
+@pytest.fixture
+def holding_disclosure(instrument_repository, fund, mapped_stock):
+    return instrument_repository.add_holding_disclosure(
+        fund_id=fund.id,
+        stock_id=mapped_stock.id,
+        weight=Decimal("0.082"),
+        report_period=date(2026, 3, 31),
+        published_at=date(2026, 4, 22),
+        source="fund-report-2026Q1",
+    )
+
+
+@pytest.fixture
+def future_disclosure(instrument_repository, fund, mapped_stock):
+    return instrument_repository.add_holding_disclosure(
+        fund_id=fund.id,
+        stock_id=mapped_stock.id,
+        weight=Decimal("0.091"),
+        report_period=date(2026, 6, 30),
+        published_at=date(2026, 7, 15),
+        source="fund-report-2026Q2",
     )
 
 
