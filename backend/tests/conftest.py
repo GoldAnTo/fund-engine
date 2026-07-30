@@ -438,3 +438,131 @@ def projector(session):
         yield ProjectionService(driver, session)
     finally:
         driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Release-gate fixtures (Task 9)
+# ---------------------------------------------------------------------------
+
+
+class _SeededDatabase:
+    """Wrapper around a seeded session for destructive data-mutation tests.
+
+    Mutations use the raw DBAPI connection underlying the session's
+    ``Connection`` (``session.connection().connection``) to bypass the
+    SQLAlchemy ``before_execute`` append-only event guard, which would
+    otherwise reject DELETE/UPDATE on immutable ledger tables.  Using the
+    session's own DBAPI connection (rather than ``engine.raw_connection()``)
+    ensures mutations are visible to subsequent ORM queries within the same
+    uncommitted transaction.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    @property
+    def session(self) -> Session:
+        return self._session
+
+    def dbapi_cursor(self):
+        """Return a cursor on the session's underlying DBAPI connection."""
+        return self._session.connection().connection.cursor()
+
+    def delete_one_source_span(self) -> None:
+        """Delete a source span that is part of the assessment traceability chain.
+
+        Finds a span referenced by a SourceStatement and deletes it directly
+        via DBAPI, bypassing the append-only guard.  Subsequent ORM queries
+        will see the span as missing, breaking the assessment->span chain.
+        """
+        from sqlalchemy import select
+
+        from app.models.ledger import SourceStatement
+
+        statement = self._session.scalars(select(SourceStatement).limit(1)).first()
+        assert statement is not None, "seeded database has no source statements"
+        span_id_hex = statement.source_span_id.hex
+
+        cur = self.dbapi_cursor()
+        cur.execute("DELETE FROM source_spans WHERE id = ?", (span_id_hex,))
+        assert cur.rowcount == 1, f"expected to delete 1 span, deleted {cur.rowcount}"
+        self._session.expire_all()
+
+    def insert_undated_disclosure(self) -> None:
+        """Insert a HoldingDisclosure with NULL published_at via raw DBAPI.
+
+        SQLite enforces NOT NULL at the column level, so the
+        ``holding_disclosures`` table is recreated with ``published_at``
+        nullable (preserving all existing rows), then a new row with
+        ``published_at = NULL`` is inserted.  Individual ``execute()`` calls
+        are used instead of ``executescript()`` (which would COMMIT the
+        session's uncommitted seed data).  The service-layer validation
+        that requires ``published_at`` is bypassed entirely.
+        """
+        from sqlalchemy import select
+
+        from app.models.ledger import Fund, Stock
+
+        import uuid
+
+        fund = self._session.scalars(select(Fund).limit(1)).first()
+        stock = self._session.scalars(select(Stock).limit(1)).first()
+        assert fund is not None and stock is not None
+
+        cur = self.dbapi_cursor()
+        # Recreate the table with published_at nullable, preserving all data.
+        # Use individual execute() calls — executescript() would COMMIT.
+        cur.execute(
+            "CREATE TABLE holding_disclosures_new ("
+            "id CHAR(32) NOT NULL, "
+            "fund_id CHAR(32) NOT NULL, "
+            "stock_id CHAR(32) NOT NULL, "
+            "weight NUMERIC NOT NULL, "
+            "report_period DATE NOT NULL, "
+            "published_at DATETIME, "
+            "acquired_at DATETIME NOT NULL, "
+            "source VARCHAR(128) NOT NULL, "
+            "created_at DATETIME NOT NULL, "
+            "PRIMARY KEY (id), "
+            "FOREIGN KEY(fund_id) REFERENCES funds (id), "
+            "FOREIGN KEY(stock_id) REFERENCES stocks (id))"
+        )
+        cur.execute(
+            "INSERT INTO holding_disclosures_new SELECT * FROM holding_disclosures"
+        )
+        cur.execute("DROP TABLE holding_disclosures")
+        cur.execute(
+            "ALTER TABLE holding_disclosures_new RENAME TO holding_disclosures"
+        )
+        cur.execute(
+            "INSERT INTO holding_disclosures "
+            "(id, fund_id, stock_id, weight, report_period, published_at, "
+            "acquired_at, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                uuid.uuid4().hex,
+                fund.id.hex,
+                stock.id.hex,
+                0.05,
+                "2026-03-31",
+                None,
+                "2026-01-01 00:00:00.000000",
+                "test-undated",
+                "2026-01-01 00:00:00.000000",
+            ),
+        )
+        self._session.expire_all()
+
+
+@pytest.fixture
+def release_gate(seeded_session):
+    """A ReleaseGate backed by the seeded in-memory session (no projector)."""
+    from scripts.verify_ai_compute_slice import ReleaseGate
+
+    return ReleaseGate(seeded_session)
+
+
+@pytest.fixture
+def seeded_database(seeded_session):
+    """A seeded-session wrapper for destructive data-mutation tests."""
+    return _SeededDatabase(seeded_session)
