@@ -121,13 +121,13 @@ export function DocumentLibraryPage() {
                     data-testid={`library-row-${d.id}`}
                   >
                     <td>
-                      <span className="library-row__title">{d.title}</span>
+                      <span className="library-row__title">{d.title ?? "元数据待补"}</span>
                       <span className="library-row__version muted">
                         {d.version_label} · {d.span_count} 段
                       </span>
                     </td>
-                    <td>{d.publisher}</td>
-                    <td>{d.document_type}</td>
+                    <td>{d.publisher ?? "元数据待补"}</td>
+                    <td>{d.document_type ?? "元数据待补"}</td>
                     <td>{d.publish_date}</td>
                     <td>
                       <span data-quality={d.parse_quality}>
@@ -164,15 +164,15 @@ export function DocumentLibraryPage() {
           )}
           {selected && (
             <>
-              <h2>{selected.title}</h2>
+              <h2>{selected.title ?? "元数据待补"}</h2>
               <dl className="library-inspector__meta">
                 <div>
                   <dt>来源</dt>
-                  <dd>{selected.publisher}</dd>
+                  <dd>{selected.publisher ?? "元数据待补"}</dd>
                 </div>
                 <div>
                   <dt>类型</dt>
-                  <dd>{selected.document_type}</dd>
+                  <dd>{selected.document_type ?? "元数据待补"}</dd>
                 </div>
                 <div>
                   <dt>发布日</dt>

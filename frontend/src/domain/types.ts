@@ -7,7 +7,15 @@ export type Conclusion =
   | "contradicted"
   | "insufficient_evidence";
 
-export type EdgeKind = "evidence" | "causal" | "theme_role" | "holding";
+export type EdgeKind =
+  | "evidence"
+  | "causal"
+  | "theme_role"
+  | "holding"
+  | "contains_thesis"
+  | "company_stock"
+  | "contains_step"
+  | "valuation";
 
 export type NodeKind =
   | "case"
@@ -16,7 +24,8 @@ export type NodeKind =
   | "step"
   | "company"
   | "stock"
-  | "fund";
+  | "fund"
+  | "valuation";
 
 export type EvidenceRole = "supports" | "contradicts" | "contextualizes";
 
@@ -103,7 +112,7 @@ export interface WorkspaceOverview {
   framework: ResearchFrameworkNode[];
   totals: {
     evidence_total: number;
-    reliable_pct: number;
+    reliable_pct: number | null;
     pending_review: number;
     major_blockers: number;
   };
@@ -247,9 +256,9 @@ export interface CitationEntry {
 
 export interface SourceDocumentView {
   id: string;
-  title: string;
-  publisher: string;
-  document_type: "公告" | "财报" | "研报" | "行业资料";
+  title: string | null;
+  publisher: string | null;
+  document_type: string | null;
   publish_date: string;
   available_at: string;
   acquired_at: string;

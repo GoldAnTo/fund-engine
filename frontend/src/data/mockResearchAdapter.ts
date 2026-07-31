@@ -1180,8 +1180,8 @@ export class MockResearchAdapter implements ResearchClient {
     const filtered = q
       ? docs.filter(
           (d) =>
-            d.title.toLowerCase().includes(q) ||
-            d.publisher.toLowerCase().includes(q) ||
+            (d.title ?? "").toLowerCase().includes(q) ||
+            (d.publisher ?? "").toLowerCase().includes(q) ||
             d.linked_cases.some((c) => c.title.toLowerCase().includes(q))
         )
       : docs;

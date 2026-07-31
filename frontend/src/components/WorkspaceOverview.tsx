@@ -122,8 +122,16 @@ export function WorkspaceOverview({ data }: Props) {
                 <strong>{data.totals.evidence_total.toLocaleString()}</strong>
               </span>
               <span className="case-summary__total">
-                <span className="case-summary__total__label">可靠证据</span>
-                <strong>{data.totals.reliable_pct}%</strong>
+                <span className="case-summary__total__label">
+                  {data.totals.reliable_pct === null
+                    ? "尚无人工质量口径"
+                    : "可靠证据"}
+                </span>
+                <strong>
+                  {data.totals.reliable_pct === null
+                    ? "-"
+                    : `${data.totals.reliable_pct}%`}
+                </strong>
               </span>
               <span className="case-summary__total">
                 <span className="case-summary__total__label">待评级</span>
