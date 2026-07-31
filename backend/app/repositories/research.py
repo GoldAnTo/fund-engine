@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.ledger import (
@@ -288,6 +288,33 @@ class ResearchRepository:
                 .where(Thesis.research_case_id == research_case_id)
                 .order_by(Thesis.created_at)
             )
+        )
+
+    def cases_page(
+        self,
+        *,
+        limit: int,
+        after_created_at: datetime | None = None,
+        after_id: uuid.UUID | None = None,
+    ) -> list[ResearchCase]:
+        """Return up to ``limit + 1`` cases newest-first for cursor pagination."""
+        query = select(ResearchCase).order_by(
+            ResearchCase.created_at.desc(), ResearchCase.id.desc()
+        )
+        if after_created_at is not None and after_id is not None:
+            query = query.where(
+                tuple_(ResearchCase.created_at, ResearchCase.id)
+                < tuple_(after_created_at, after_id)
+            )
+        return list(self._session.scalars(query.limit(limit + 1)))
+
+    def thesis_by_id_for_case(
+        self, case_id: uuid.UUID, thesis_id: uuid.UUID
+    ) -> Thesis | None:
+        return self._session.scalar(
+            select(Thesis)
+            .where(Thesis.id == thesis_id)
+            .where(Thesis.research_case_id == case_id)
         )
 
     def latest_assessment_for_thesis(

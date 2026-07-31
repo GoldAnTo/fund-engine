@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.cases import router as cases_router
 from app.api.v1.router import router as v1_router
+from app.errors import NotFoundError
 
 logger = logging.getLogger("industry_evidence_workspace")
 
@@ -55,10 +56,8 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-@app.exception_handler(KeyError)
-async def key_error_handler(request: Request, exc: KeyError):
-    # Temporary handler: Task 3 replaces this with an explicit NotFoundError
-    # so only genuine not-found conditions are mapped to the v1 envelope.
+@app.exception_handler(NotFoundError)
+async def not_found_error_handler(request: Request, exc: NotFoundError):
     request_id = getattr(request.state, "request_id", "")
     return JSONResponse(
         status_code=404,
@@ -66,7 +65,7 @@ async def key_error_handler(request: Request, exc: KeyError):
             "schema_version": "v1",
             "error": {
                 "code": "not_found",
-                "message": str(exc.args[0]) if exc.args else "not found",
+                "message": str(exc) or "not found",
                 "request_id": request_id,
                 "details": {},
             },

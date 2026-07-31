@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.cases import router as cases_router
 from app.schemas.v1.common import HealthResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -13,3 +14,6 @@ def health_v1() -> HealthResponse:
         service="industry-evidence-workspace",
         status="ok",
     )
+
+
+router.include_router(cases_router)
