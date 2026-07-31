@@ -40,7 +40,11 @@ export function CausalChainHorizontal({
                 {String(step.sequence).padStart(2, "0")}
               </span>
               <span className={`causal-step-h__status status-${statusTone(step.status)}`}>
-                {step.status === "ai_pending_review" ? "AI 提议" : "已审核"}
+                {step.status === null
+                ? "无审核标记"
+                : step.status === "ai_pending_review"
+                  ? "AI 提议"
+                  : "已审核"}
               </span>
             </header>
             <h4 className="causal-step-h__title">{step.title}</h4>
@@ -57,7 +61,8 @@ export function CausalChainHorizontal({
   );
 }
 
-function statusTone(s: ObjectStatus): string {
+function statusTone(s: ObjectStatus | null): string {
+  if (s === null) return "neutral";
   if (s === "ai_pending_review") return "amber";
   if (s === "human_confirmed" || s === "human_modified") return "deep-green";
   if (s === "human_rejected") return "clay";

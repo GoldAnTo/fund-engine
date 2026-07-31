@@ -25,7 +25,7 @@ function defaultCitations(record: EvidenceRecord): CitationEntry[] {
       id: `${record.link_id}-c1`,
       theme: "需求扩张 + 渗透率提升",
       date: record.available_at.slice(0, 10),
-      description: record.statement_text.slice(0, 28),
+      description: (record.statement_text ?? "").slice(0, 28),
     },
     {
       id: `${record.link_id}-c2`,
@@ -83,7 +83,7 @@ export function SourceInspector({ record, citations, onClose }: Props) {
       <Breadcrumb
         items={[
           { label: "来源", href: "#" },
-          { label: record.source_label, href: "#" },
+          { label: record.source_label ?? "元数据待补", href: "#" },
           { label: record.period ?? "信息", href: "#" },
           { label: "原始快照" },
         ]}
@@ -136,7 +136,9 @@ export function SourceInspector({ record, citations, onClose }: Props) {
           <dt>相关性</dt>
           <dd>
             <Chip tone="moss" bordered size="xs">
-              {(record.reliability * 100).toFixed(0)}
+              {record.reliability == null
+                ? "尚无人工质量口径"
+                : `${(record.reliability * 100).toFixed(0)}`}
             </Chip>
           </dd>
         </div>
@@ -153,7 +155,11 @@ export function SourceInspector({ record, citations, onClose }: Props) {
         <div>
           <dt>状态</dt>
           <dd>
-            <StatusMark status={STATUS_BY_REVIEW[record.review_state]} />
+            {record.review_state in STATUS_BY_REVIEW ? (
+              <StatusMark status={STATUS_BY_REVIEW[record.review_state as keyof typeof STATUS_BY_REVIEW]} />
+            ) : (
+              <span>—</span>
+            )}
           </dd>
         </div>
       </dl>
@@ -163,7 +169,12 @@ export function SourceInspector({ record, citations, onClose }: Props) {
         <ol>
           <li>
             <span>{record.available_at}</span>{" "}
-            <span>AI 提议证据 · 可靠度 {(record.reliability * 100).toFixed(0)}</span>
+            <span>
+              AI 提议证据 · 可靠度{" "}
+              {record.reliability == null
+                ? "尚无人工质量口径"
+                : `${(record.reliability * 100).toFixed(0)}`}
+            </span>
           </li>
           {record.review_state === "machine_generated" && (
             <li className="muted">等待人工复核</li>

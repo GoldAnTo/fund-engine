@@ -188,7 +188,7 @@ export function ResearchCaseDossierPage() {
 
           {tab === "研究摘要" && (
             <ResearchDossier
-              rationale={dossier.assessment.rationale}
+              rationale={dossier.assessment?.rationale ?? ""}
               competitiveExplanations={dossier.competitive_explanations}
               gaps={dossier.gaps}
               log={dossier.log}
@@ -274,7 +274,7 @@ export function ResearchCaseDossierPage() {
                 />
               </section>
 
-              {dossier.assessment.major_gap && !isEmptyCase && (
+              {dossier.assessment?.major_gap && !isEmptyCase && (
                 <p className="dossier__major-gap" data-testid="major-gap">
                   主要阻塞：{dossier.assessment.major_gap}
                 </p>

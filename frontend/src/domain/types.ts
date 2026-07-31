@@ -140,13 +140,7 @@ export interface ThesisAssessment {
   bullets: string[];
   gaps: string[];
   provisional: boolean;
-  review: {
-    outcome: ReviewOutcome;
-    conclusion: Conclusion | null;
-    reason: string;
-    reviewer: string;
-    reviewed_at: string;
-  } | null;
+  review: Record<string, unknown> | null;
   major_gap: string | null;
   status_label: string;
   supply_chain_level: string;
@@ -160,14 +154,14 @@ export interface CausalStepView {
   sequence: number;
   title: string;
   description: string;
-  status: ObjectStatus;
+  status: ObjectStatus | null;
 }
 
 export interface EvidenceRecord {
   link_id: string;
   statement_id: string;
-  statement_text: string;
-  statement_kind: StatementKind;
+  statement_text: string | null;
+  statement_kind: StatementKind | null;
   span_id: string | null;
   verbatim_text: string | null;
   locator: Record<string, unknown> | null;
@@ -177,8 +171,8 @@ export interface EvidenceRecord {
   period: string | null;
   available_at: string;
   review_state: ReviewState;
-  source_label: string;
-  reliability: number; // 0–1, distinct from maturity/confidence
+  source_label: string | null;
+  reliability: number | null; // null = no backend reliability in this delivery
   chip_label?: string;
   preview?: string;
   source_meta?: string;
@@ -189,7 +183,7 @@ export interface ResearchCaseDossier {
   theses: ResearchCaseSummary[];
   focus_thesis_id: string;
   tabs: string[];
-  assessment: ThesisAssessment;
+  assessment: ThesisAssessment | null;
   causal_chain: CausalStepView[];
   evidence: {
     supports: EvidenceRecord[];
@@ -259,7 +253,7 @@ export interface SourceDocumentView {
   title: string | null;
   publisher: string | null;
   document_type: string | null;
-  publish_date: string;
+  publish_date: string | null;
   available_at: string;
   acquired_at: string;
   parser_version: string;
@@ -268,7 +262,7 @@ export interface SourceDocumentView {
   linked_cases: { id: string; title: string }[];
   span_count: number;
   statement_count: number;
-  version_label: string; // e.g. v3 · 2024-05-12
+  version_label: string | null; // e.g. v3 · 2024-05-12
 }
 
 export interface DocumentSpan {

@@ -1,47 +1,35 @@
 import type { components } from "../contracts/v1";
 import type {
   Conclusion,
+  DocumentSpan,
   DocumentsQuery,
   DossierQuery,
   EdgeKind,
-  EvidenceRole,
-  GraphEdge,
-  GraphNode,
   EvidenceRecord,
+  EvidenceRole,
   NodeKind,
   OverviewQuery,
+  PageStateErrorKind,
   RelationshipGraph,
   RelationshipQuery,
   ResearchCaseDossier,
   ResearchCaseSummary,
-  ReviewOutcome,
-  ReviewQueueItem,
-  ReviewState,
+  ResearchClient,
   SearchHit,
   SourceDocumentView,
   StatementKind,
   ThesisAssessment,
-  DocumentSpan,
-  CausalStepView,
   WorkspaceOverview,
-  ResearchClient,
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
 
 type Schemas = components["schemas"];
 
-// The v1 error envelope is produced by the backend exception handler, not the
-// OpenAPI schema, so it is declared here manually.
-interface V1ErrorEnvelope {
-  error: {
-    code: string;
-    message: string;
-    request_id: string;
-    details: Record<string, unknown>;
-  };
-}
+// Backend does not prefix /api/v1 in the OpenAPI spec; the adapter always
+// runs against the configured base URL which already includes the version.
+type ErrorEnvelopeDTO = components["schemas"]["ErrorEnvelope"];
 
-const VALID_NODE_KINDS: readonly string[] = [
+const VALID_NODE_KINDS: readonly NodeKind[] = [
   "case",
   "thesis",
   "statement",
@@ -51,8 +39,7 @@ const VALID_NODE_KINDS: readonly string[] = [
   "fund",
   "valuation",
 ];
-
-const VALID_EDGE_KINDS: readonly string[] = [
+const VALID_EDGE_KINDS: readonly EdgeKind[] = [
   "evidence",
   "causal",
   "theme_role",
@@ -62,14 +49,45 @@ const VALID_EDGE_KINDS: readonly string[] = [
   "contains_step",
   "valuation",
 ];
-
-const VALID_GROUPS: readonly string[] = [
-  "evidence",
-  "proposition",
-  "causal",
-  "company",
-  "fund",
+const VALID_STATEMENT_KINDS: readonly StatementKind[] = [
+  "disclosed_fact",
+  "management_attribution",
+  "forecast",
+  "research_opinion",
 ];
+const VALID_EVIDENCE_ROLES: readonly EvidenceRole[] = [
+  "supports",
+  "contradicts",
+  "contextualizes",
+];
+
+// Backend search deep_link paths are prefixed with /research-cases/... but
+// the React routes are /cases/... and /relationships/...; rewrite to the
+// real frontend routes so clicks do not hit the wildcard redirect.
+function rewriteDeepLink(deepLink: string): string {
+  if (
+    deepLink.startsWith("/research-cases/") &&
+    deepLink.endsWith("/dossier")
+  ) {
+    return deepLink
+      .replace(/^\/research-cases\//, "/cases/")
+      .replace(/\/dossier$/, "");
+  }
+  if (deepLink.startsWith("/research-cases/")) {
+    // graph route. Frontend exposes /relationships/:caseId.
+    return deepLink.replace(/^\/research-cases\//, "/relationships/");
+  }
+  return deepLink;
+}
+
+function asPageStateErrorKind(
+  code: string | undefined,
+): PageStateErrorKind {
+  if (code === "permission_denied") return "permission_denied";
+  if (code === "parse_failed") return "parse_failed";
+  if (code === "stale") return "stale";
+  return "backend_unavailable";
+}
 
 export class HttpResearchAdapter implements ResearchClient {
   constructor(private readonly options: { baseUrl: string }) {}
@@ -84,11 +102,14 @@ export class HttpResearchAdapter implements ResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as V1ErrorEnvelope | null;
-      if (payload?.error.code === "permission_denied") {
-        throw new PageStateError("permission_denied", payload.error.message);
-      }
-      throw new PageStateError("backend_unavailable", payload?.error.message);
+      const payload = (await response.json().catch(
+        () => null,
+      )) as ErrorEnvelopeDTO | null;
+      const code = payload?.error?.code;
+      throw new PageStateError(
+        asPageStateErrorKind(code),
+        payload?.error?.message,
+      );
     }
     return (await response.json()) as T;
   }
@@ -96,13 +117,13 @@ export class HttpResearchAdapter implements ResearchClient {
   private buildQuery(params: Record<string, string | undefined>): string {
     const sp = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined) sp.set(k, v);
+      if (v !== undefined && v !== "") sp.set(k, v);
     }
     const qs = sp.toString();
     return qs ? `?${qs}` : "";
   }
 
-  // ── Mappers ──────────────────────────────────────────────────────────────
+  // ── Mappers (honest pass-through; unknown enums throw to surface drift) ─
 
   private mapCaseSummary(dto: Schemas["CaseSummaryDTO"]): ResearchCaseSummary {
     return {
@@ -116,7 +137,9 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  private mapThesisSummary(dto: Schemas["ThesisSummaryDTO"]): ResearchCaseSummary {
+  private mapThesisSummary(
+    dto: Schemas["ThesisSummaryDTO"],
+  ): ResearchCaseSummary {
     return {
       id: dto.id,
       title: dto.statement,
@@ -128,55 +151,117 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  private mapStatementKind(value: string | null): StatementKind {
+  private mapStatementKind(value: string): StatementKind {
+    if ((VALID_STATEMENT_KINDS as readonly string[]).includes(value)) {
+      return value as StatementKind;
+    }
+    // Unknown kind is a contract drift, not something to silently rewrite
+    // into disclosed_fact. Surface it.
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown statement_kind: ${value}`,
+    );
+  }
+
+  private mapReviewState(value: string): EvidenceRecord["review_state"] {
     if (
-      value === "disclosed_fact" ||
-      value === "management_attribution" ||
-      value === "forecast" ||
-      value === "research_opinion"
+      value === "machine_generated" ||
+      value === "reviewed" ||
+      value === "rejected"
     ) {
       return value;
     }
-    return "disclosed_fact";
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown review_state: ${value}`,
+    );
   }
 
-  private mapReviewState(value: string): ReviewState {
-    if (value === "machine_generated" || value === "reviewed" || value === "rejected") {
+  private mapEvidenceRole(value: string): EvidenceRole {
+    if ((VALID_EVIDENCE_ROLES as readonly string[]).includes(value)) {
+      return value as EvidenceRole;
+    }
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown evidence role: ${value}`,
+    );
+  }
+
+  private mapConclusion(value: string): Conclusion {
+    if (
+      value === "supported" ||
+      value === "contradicted" ||
+      value === "insufficient_evidence"
+    ) {
       return value;
     }
-    return "machine_generated";
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown conclusion: ${value}`,
+    );
+  }
+
+  private mapNodeKind(value: string): NodeKind {
+    if ((VALID_NODE_KINDS as readonly string[]).includes(value)) {
+      return value as NodeKind;
+    }
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown graph node kind: ${value}`,
+    );
+  }
+
+  private mapEdgeKind(value: string): EdgeKind {
+    if ((VALID_EDGE_KINDS as readonly string[]).includes(value)) {
+      return value as EdgeKind;
+    }
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown graph edge semantic_kind: ${value}`,
+    );
   }
 
   private mapEvidence(dto: Schemas["EvidenceRecordDTO"]): EvidenceRecord {
     return {
       link_id: dto.link_id,
       statement_id: dto.statement_id,
-      statement_text: dto.statement_text ?? "",
-      statement_kind: this.mapStatementKind(dto.statement_kind),
+      // statement_text is nullable in the backend (Statement missing -> null);
+      // propagate null instead of fabricating "".
+      statement_text: dto.statement_text ?? null,
+      // statement_kind is nullable in the backend (Statement missing -> null).
+      statement_kind: dto.statement_kind
+        ? this.mapStatementKind(dto.statement_kind)
+        : null,
       span_id: dto.span_id,
       verbatim_text: dto.verbatim_text,
       locator: dto.locator,
       reason: dto.reason,
-      role: dto.role,
+      role: this.mapEvidenceRole(dto.role),
       scope: dto.scope,
       period: dto.observed_period,
       available_at: dto.available_at,
       review_state: this.mapReviewState(dto.review_state),
-      source_label: "",
-      reliability: 0,
+      // Backend has no source_label / reliability / preview metadata in this
+      // delivery; expose null so the UI renders an honest placeholder.
+      source_label: null,
+      reliability: null,
     };
   }
 
-  private mapAssessment(dto: Schemas["AssessmentDTO"]): ThesisAssessment {
+  private mapAssessment(
+    dto: Schemas["AssessmentDTO"] | undefined,
+    _focusThesisId: string,
+  ): ThesisAssessment | null {
+    if (!dto) return null;
     return {
       id: dto.id,
       thesis_id: dto.thesis_id,
-      conclusion: dto.conclusion,
+      conclusion: this.mapConclusion(dto.conclusion),
       rationale: dto.rationale,
       bullets: [],
-      gaps: dto.gaps,
+      gaps: dto.gaps ?? [],
       provisional: dto.provisional,
-      review: null,
+      review: dto.review,
       major_gap: null,
       status_label: "",
       supply_chain_level: "",
@@ -186,82 +271,75 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  private mapCausalStep(dto: Schemas["CausalStepDTO"]): CausalStepView {
+  private mapCausalStep(dto: Schemas["CausalStepDTO"]): {
+    id: string;
+    sequence: number;
+    title: string;
+    description: string;
+    status: null;
+  } {
+    // Backend CausalStepDTO carries no review status; do not invent one.
     return {
       id: dto.id,
       sequence: dto.sequence,
-      title: "",
+      title: dto.description,
       description: dto.description,
-      status: "ai_pending_review",
+      status: null,
     };
   }
 
-  private mapNodeKind(value: string): NodeKind {
-    return VALID_NODE_KINDS.includes(value) ? (value as NodeKind) : "statement";
-  }
-
-  private mapEdgeKind(value: string): EdgeKind {
-    return VALID_EDGE_KINDS.includes(value) ? (value as EdgeKind) : "causal";
-  }
-
-  private mapNode(dto: Schemas["GraphNodeDTO"]): GraphNode {
-    const props = (dto.properties ?? {}) as Record<string, unknown>;
-    const node: GraphNode = {
+  private mapNode(dto: Schemas["GraphNodeDTO"]): {
+    id: string;
+    kind: NodeKind;
+    label: string;
+  } {
+    return {
       id: dto.id,
       kind: this.mapNodeKind(dto.kind),
       label: dto.label,
     };
-    if (typeof props.group === "string" && VALID_GROUPS.includes(props.group)) {
-      node.group = props.group as GraphNode["group"];
-    }
-    if (typeof props.sequence === "number") node.sequence = props.sequence;
-    if (typeof props.description === "string") node.description = props.description;
-    if (typeof props.chip === "string") node.chip = props.chip;
-    if (typeof props.publisher === "string") node.publisher = props.publisher;
-    if (typeof props.publish_date === "string") node.publish_date = props.publish_date;
-    if (typeof props.reliability_bar === "number") node.reliability_bar = props.reliability_bar;
-    if (typeof props.chapter === "string") node.chapter = props.chapter;
-    if (typeof props.code === "string") node.code = props.code;
-    if (typeof props.sector === "string") node.sector = props.sector;
-    if (typeof props.relevance === "number") node.relevance = props.relevance;
-    if (typeof props.weight === "string") node.weight = props.weight;
-    if (typeof props.report_period === "string") node.report_period = props.report_period;
-    if (typeof props.relevance_score === "number")
-      node.relevance_score = props.relevance_score;
-    return node;
   }
 
-  private mapEdge(dto: Schemas["GraphEdgeDTO"]): GraphEdge {
-    const props = (dto.properties ?? {}) as Record<string, unknown>;
-    const edge: GraphEdge = {
+  private mapEdge(dto: Schemas["GraphEdgeDTO"]): {
+    id: string;
+    kind: EdgeKind;
+    source: string;
+    target: string;
+    review_state?: EvidenceRecord["review_state"];
+    role?: EvidenceRole;
+  } {
+    const edge: {
+      id: string;
+      kind: EdgeKind;
+      source: string;
+      target: string;
+      review_state?: EvidenceRecord["review_state"];
+      role?: EvidenceRole;
+    } = {
       id: dto.id,
       kind: this.mapEdgeKind(dto.semantic_kind),
       source: dto.source,
       target: dto.target,
     };
-    if (typeof dto.review_state === "string") {
+    if (dto.review_state) {
       edge.review_state = this.mapReviewState(dto.review_state);
     }
-    if (
-      props.role === "supports" ||
-      props.role === "contradicts" ||
-      props.role === "contextualizes"
-    ) {
-      edge.role = props.role as EvidenceRole;
+    const props = (dto.properties ?? {}) as Record<string, unknown>;
+    if (typeof props.role === "string") {
+      edge.role = this.mapEvidenceRole(props.role);
     }
-    if (typeof props.reason === "string") edge.reason = props.reason;
-    if (typeof props.weight === "string") edge.weight = props.weight;
-    if (typeof props.report_period === "string") edge.report_period = props.report_period;
     return edge;
   }
 
-  private mapDocument(dto: Schemas["DocumentSummaryDTO"]): SourceDocumentView {
+  private mapDocument(
+    dto: Schemas["DocumentSummaryDTO"],
+  ): SourceDocumentView {
     return {
       id: dto.id,
       title: null,
       publisher: null,
       document_type: null,
-      publish_date: dto.published_at ?? "",
+      publish_date: dto.published_at ?? null,
       available_at: dto.available_at,
       acquired_at: dto.acquired_at,
       parser_version: dto.parser_version,
@@ -269,17 +347,33 @@ export class HttpResearchAdapter implements ResearchClient {
       linked_cases: [],
       span_count: dto.span_count,
       statement_count: dto.statement_count,
-      version_label: "",
+      version_label: null,
     };
   }
 
   private mapSpan(dto: Schemas["SourceSpanDTO"]): DocumentSpan {
+    const citations = (dto.citations ?? []) as Array<{
+      link_id?: string;
+      thesis_id?: string;
+      role?: string;
+    }>;
     return {
       id: dto.id,
       document_id: dto.document_version_id,
       locator: dto.locator,
       verbatim_text: dto.verbatim_text,
-      cited_by: [],
+      cited_by: citations
+        .filter(
+          (c): c is { link_id: string; thesis_id: string; role: string } =>
+            typeof c.link_id === "string" &&
+            typeof c.thesis_id === "string" &&
+            typeof c.role === "string",
+        )
+        .map((c) => ({
+          evidence_id: c.link_id,
+          thesis_id: c.thesis_id,
+          role: this.mapEvidenceRole(c.role),
+        })),
     };
   }
 
@@ -298,31 +392,32 @@ export class HttpResearchAdapter implements ResearchClient {
       case "fund":
         return "基金";
       default:
-        return "案例";
+        // Unknown object_type is contract drift; surface it.
+        throw new PageStateError(
+          "backend_unavailable",
+          `unknown search object_type: ${objectType}`,
+        );
     }
   }
 
   // ── ResearchClient implementation ────────────────────────────────────────
 
   async getOverview(query?: OverviewQuery): Promise<WorkspaceOverview> {
-    // The overview landing page has no case_id in its route; use the most
-    // recent case from the ledger as the focus case (backend /overview
-    // requires case_id).
     const list = await this.get<Schemas["CaseListResponse"]>(
-      "/research-cases"
+      "/research-cases",
     );
     const focusCase = list.items[0];
     if (!focusCase) {
       throw new PageStateError(
         "backend_unavailable",
-        "no research cases available"
+        "no research cases available",
       );
     }
     const dto = await this.get<Schemas["OverviewResponse"]>(
       `/overview${this.buildQuery({
         case_id: focusCase.id,
         cutoff: query?.cutoff,
-      })}`
+      })}`,
     );
     const caseSummary = this.mapCaseSummary(dto.case);
     return {
@@ -341,7 +436,19 @@ export class HttpResearchAdapter implements ResearchClient {
         occurred_at: kc.occurred_at,
         source_label: kc.source_label,
       })),
-      framework: [],
+      framework: dto.framework
+        .filter(
+          (f): f is Schemas["CausalStepDTO"] =>
+            typeof f.id === "string" &&
+            typeof f.sequence === "number" &&
+            typeof f.description === "string",
+        )
+        .map((s) => ({
+          id: s.id,
+          sequence: String(s.sequence),
+          title: s.description,
+          children: [],
+        })),
       totals: {
         evidence_total: dto.totals.evidence_total,
         reliable_pct: null,
@@ -356,37 +463,39 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getCaseDossier(
     caseId: string,
-    query?: DossierQuery
+    query?: DossierQuery,
   ): Promise<ResearchCaseDossier> {
     const dto = await this.get<Schemas["DossierResponse"]>(
       `/research-cases/${encodeURIComponent(caseId)}/dossier${this.buildQuery({
         thesis_id: query?.thesisId,
         cutoff: query?.cutoff,
-      })}`
+      })}`,
     );
-    const evidence = dto.evidence as Record<string, Schemas["EvidenceRecordDTO"][]>;
-    const assessment: ThesisAssessment = dto.assessment
-      ? this.mapAssessment(dto.assessment)
-      : this.mapAssessment({
-          id: "",
-          thesis_id: dto.focus_thesis_id,
-          conclusion: "insufficient_evidence",
-          rationale: "",
-          gaps: [],
-          provisional: true,
-          review: null,
-        });
+    const evidence = dto.evidence as Record<
+      string,
+      Schemas["EvidenceRecordDTO"][]
+    >;
+    const assessment = this.mapAssessment(
+      dto.assessment ?? undefined,
+      dto.focus_thesis_id,
+    );
     return {
       case: this.mapCaseSummary(dto.case),
       theses: dto.theses.map((t) => this.mapThesisSummary(t)),
       focus_thesis_id: dto.focus_thesis_id,
       tabs: [],
+      // assessment can legitimately be null (no AI snapshot for the focus
+      // thesis yet); expose null so the UI renders an honest placeholder.
       assessment,
       causal_chain: dto.causal_chain.map((c) => this.mapCausalStep(c)),
       evidence: {
         supports: (evidence.supports ?? []).map((e) => this.mapEvidence(e)),
-        contradicts: (evidence.contradicts ?? []).map((e) => this.mapEvidence(e)),
-        contextualizes: (evidence.contextualizes ?? []).map((e) => this.mapEvidence(e)),
+        contradicts: (evidence.contradicts ?? []).map((e) =>
+          this.mapEvidence(e),
+        ),
+        contextualizes: (evidence.contextualizes ?? []).map((e) =>
+          this.mapEvidence(e),
+        ),
       },
       competitive_explanations: dto.competitive_explanations,
       gaps: dto.gaps,
@@ -396,15 +505,13 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getRelationshipGraph(
     caseId: string,
-    query?: RelationshipQuery
+    query?: RelationshipQuery,
   ): Promise<RelationshipGraph> {
     const dto = await this.get<Schemas["GraphResponse"]>(
       `/research-cases/${encodeURIComponent(caseId)}/graph${this.buildQuery({
         cutoff: query?.cutoff,
-      })}`
+      })}`,
     );
-    const nodes = dto.nodes.map((n) => this.mapNode(n));
-    const edges = dto.edges.map((e) => this.mapEdge(e));
     return {
       case: {
         id: caseId,
@@ -415,8 +522,8 @@ export class HttpResearchAdapter implements ResearchClient {
         updated_at: "",
         has_markdown: false,
       },
-      nodes,
-      edges,
+      nodes: dto.nodes.map((n) => this.mapNode(n)),
+      edges: dto.edges.map((e) => this.mapEdge(e)),
       legend: [],
     };
   }
@@ -426,7 +533,7 @@ export class HttpResearchAdapter implements ResearchClient {
       `/documents${this.buildQuery({
         q: query?.query,
         cutoff: query?.cutoff,
-      })}`
+      })}`,
     );
     return dto.items.map((d) => this.mapDocument(d));
   }
@@ -436,7 +543,7 @@ export class HttpResearchAdapter implements ResearchClient {
     spans: DocumentSpan[];
   }> {
     const dto = await this.get<Schemas["DocumentDetailResponse"]>(
-      `/documents/${encodeURIComponent(documentId)}`
+      `/documents/${encodeURIComponent(documentId)}`,
     );
     return {
       document: this.mapDocument(dto.document),
@@ -445,8 +552,15 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async search(query: string): Promise<SearchHit[]> {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      // Backend rejects q < 2 with 422; return empty hits instead of
+      // surfacing an error so the UI search box does not flash a banner on
+      // every keystroke.
+      return [];
+    }
     const dto = await this.get<Schemas["SearchResponse"]>(
-      `/search${this.buildQuery({ q: query })}`
+      `/search${this.buildQuery({ q: trimmed })}`,
     );
     const hits: SearchHit[] = [];
     for (const group of dto.groups) {
@@ -456,7 +570,7 @@ export class HttpResearchAdapter implements ResearchClient {
           id: hit.object_id,
           title: hit.title,
           hint: hit.snippet,
-          navigate_to: hit.deep_link,
+          navigate_to: rewriteDeepLink(hit.deep_link),
         });
       }
     }
@@ -464,28 +578,30 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async getCaseSummaries(): Promise<ResearchCaseSummary[]> {
-    const dto = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const dto = await this.get<Schemas["CaseListResponse"]>(
+      `/research-cases`,
+    );
     return dto.items.map((c) => this.mapCaseSummary(c));
   }
 
-  async getReviewQueue(): Promise<ReviewQueueItem[]> {
+  async getReviewQueue(): Promise<never[]> {
     throw new PageStateError(
       "backend_unavailable",
-      "review API is not available in live-read delivery"
+      "review API is not available in live-read delivery",
     );
   }
 
   async submitReviewDecision(
     _itemId: string,
     _decision: {
-      outcome: ReviewOutcome;
+      outcome: import("../domain/types").ReviewOutcome;
       conclusion: Conclusion | null;
       reason: string;
-    }
+    },
   ): Promise<void> {
     throw new PageStateError(
       "backend_unavailable",
-      "review API is not available in live-read delivery"
+      "review API is not available in live-read delivery",
     );
   }
 }

@@ -16,8 +16,8 @@ describe("MockResearchAdapter scenarios", () => {
 
   it("builds a case dossier with provisional AI assessment and explicit gaps", async () => {
     const dossier = await typical.getCaseDossier("ai-compute");
-    expect(dossier.assessment.provisional).toBe(true);
-    expect(dossier.assessment.major_gap).toBeTruthy();
+    expect(dossier.assessment?.provisional).toBe(true);
+    expect(dossier.assessment?.major_gap).toBeTruthy();
     expect(dossier.gaps.length).toBeGreaterThan(0);
     expect(dossier.evidence.supports.length).toBeGreaterThan(0);
     expect(dossier.evidence.contradicts.length).toBeGreaterThan(0);
@@ -100,14 +100,14 @@ describe("MockResearchAdapter scenarios", () => {
     expect(dossier.evidence.supports).toHaveLength(0);
     expect(dossier.evidence.contradicts).toHaveLength(0);
     expect(dossier.causal_chain).toHaveLength(0);
-    expect(dossier.assessment.major_gap).toBeTruthy();
+    expect(dossier.assessment?.major_gap).toBeTruthy();
   });
 
   it("insufficient scenario returns insufficient_evidence with gaps", async () => {
     const adapter = new MockResearchAdapter({ scenario: "insufficient" });
     const dossier = await adapter.getCaseDossier("ai-compute");
-    expect(dossier.assessment.conclusion).toBe("insufficient_evidence");
-    expect(dossier.assessment.major_gap).toBeTruthy();
+    expect(dossier.assessment?.conclusion).toBe("insufficient_evidence");
+    expect(dossier.assessment?.major_gap).toBeTruthy();
     expect(dossier.gaps.length).toBeGreaterThanOrEqual(3);
     expect(dossier.evidence.supports).toHaveLength(0);
     expect(dossier.evidence.contradicts).toHaveLength(0);

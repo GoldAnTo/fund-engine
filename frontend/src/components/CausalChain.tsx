@@ -62,7 +62,11 @@ export function CausalChain({ steps, onSelect }: Props) {
             <span className="causal-step__title">{step.title}</span>
             <span className="causal-step__desc">{step.description}</span>
             <span className={`causal-step__status status-${statusTone(step.status)}`}>
-              {step.status === "ai_pending_review" ? "AI 提议" : "已审核"}
+              {step.status === null
+                ? "无审核标记"
+                : step.status === "ai_pending_review"
+                  ? "AI 提议"
+                  : "已审核"}
             </span>
           </button>
           {idx < steps.length - 1 && (
@@ -74,7 +78,8 @@ export function CausalChain({ steps, onSelect }: Props) {
   );
 }
 
-function statusTone(s: ObjectStatus): string {
+function statusTone(s: ObjectStatus | null): string {
+  if (s === null) return "neutral";
   if (s === "ai_pending_review") return "amber";
   if (s === "human_confirmed" || s === "human_modified") return "deep-green";
   if (s === "human_rejected") return "clay";

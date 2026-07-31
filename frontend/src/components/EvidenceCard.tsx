@@ -16,7 +16,10 @@ const ROLE_TONE: Record<EvidenceRole, "moss" | "clay" | "neutral"> = {
   contextualizes: "neutral",
 };
 
-const CHIP_BY_KIND: Record<EvidenceRecord["statement_kind"], string> = {
+const CHIP_BY_KIND: Record<
+  NonNullable<EvidenceRecord["statement_kind"]>,
+  string
+> = {
   disclosed_fact: "公告发布",
   management_attribution: "管理层表态",
   forecast: "预测数据",
@@ -30,7 +33,11 @@ const CHIP_BY_KIND: Record<EvidenceRecord["statement_kind"], string> = {
 //   摘录预读 + 理由
 export function EvidenceCard({ record, focused, dimmed, onClick }: Props) {
   const tone = ROLE_TONE[record.role];
-  const chipLabel = record.chip_label ?? CHIP_BY_KIND[record.statement_kind];
+  const chipLabel =
+    record.chip_label ??
+    (record.statement_kind
+      ? CHIP_BY_KIND[record.statement_kind]
+      : "元数据待补");
   return (
     <article
       className={`evidence-card role-${record.role}${
@@ -46,13 +53,17 @@ export function EvidenceCard({ record, focused, dimmed, onClick }: Props) {
           <Chip tone={tone} bordered size="xs">
             {chipLabel}
           </Chip>
-          <span className="evidence-card__source">{record.source_label}</span>
+          <span className="evidence-card__source">
+            {record.source_label ?? "元数据待补"}
+          </span>
           {record.period && (
             <span className="evidence-card__date">{record.period}</span>
           )}
           <span className="evidence-card__status-dot" aria-hidden />
         </header>
-        <h4 className="evidence-card__title">{record.statement_text}</h4>
+        <h4 className="evidence-card__title">
+          {record.statement_text ?? "尚无证据文本"}
+        </h4>
         {record.preview && (
           <p className="evidence-card__preview">{record.preview}</p>
         )}
@@ -64,7 +75,9 @@ export function EvidenceCard({ record, focused, dimmed, onClick }: Props) {
             showValue={false}
           />
           <span className="evidence-card__reliability">
-            {(record.reliability * 100).toFixed(0)}
+            {record.reliability == null
+              ? "尚无人工质量口径"
+              : `${(record.reliability * 100).toFixed(0)}`}
           </span>
           {record.source_meta && (
             <span className="evidence-card__meta muted">{record.source_meta}</span>

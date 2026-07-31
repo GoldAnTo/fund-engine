@@ -993,7 +993,7 @@ function emptyDossier(caseId: string): ResearchCaseDossier {
     ...DOSSIER,
     case: CASES.find((c) => c.id === caseId) ?? CASES[0],
     assessment: {
-      ...DOSSIER.assessment,
+      ...DOSSIER.assessment!,
       conclusion: "insufficient_evidence",
       rationale: "尚无证据进入此案例。",
       gaps: ["待导入第一份资料"],
@@ -1014,7 +1014,7 @@ function conflictDossier(caseId: string): ResearchCaseDossier {
     ...DOSSIER,
     case: CASES.find((c) => c.id === caseId) ?? CASES[0],
     assessment: {
-      ...DOSSIER.assessment,
+      ...DOSSIER.assessment!,
       conclusion: "supported",
       rationale: "支持证据略多于反证，但分歧明显。",
       major_gap: "需要独立第三方证据",
@@ -1027,7 +1027,7 @@ function insufficientDossier(caseId: string): ResearchCaseDossier {
     ...DOSSIER,
     case: CASES.find((c) => c.id === caseId) ?? CASES[0],
     assessment: {
-      ...DOSSIER.assessment,
+      ...DOSSIER.assessment!,
       conclusion: "insufficient_evidence",
       rationale: "证据不足以作出支持或反证判断。",
       gaps: [

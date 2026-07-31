@@ -6,11 +6,13 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.errors import NotFoundError, ValidationFailedError
+from app.schemas.v1.common import ErrorEnvelope
 
 logger = logging.getLogger("industry_evidence_workspace")
 
@@ -114,3 +116,37 @@ async def request_validation_error_handler(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"service": "industry-evidence-workspace", "status": "ok"}
+
+
+def _register_error_envelope(openapi_schema: dict[str, Any]) -> None:
+    """Inject the ErrorEnvelope schema into OpenAPI components.
+
+    The error envelope is produced by global exception handlers, so FastAPI
+    does not auto-document it. Declaring it here keeps the frontend contract
+    (openapi-typescript) as the single source of truth, including errors.
+    """
+    components = openapi_schema.setdefault("components", {}).setdefault(
+        "schemas", {}
+    )
+    if "ErrorEnvelope" in components:
+        return
+    schema = ErrorEnvelope.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    defs = schema.pop("$defs", {})
+    components["ErrorEnvelope"] = schema
+    components.update(defs)
+
+
+def _custom_openapi() -> dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title, version=app.version, routes=app.routes
+    )
+    _register_error_envelope(openapi_schema)
+    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+
+app.openapi = _custom_openapi

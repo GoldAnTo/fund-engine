@@ -48,9 +48,192 @@ describe("HttpResearchAdapter", () => {
 
     expect(dossier.case.id).toBe("case-1");
     expect(dossier.focus_thesis_id).toBe("t-1");
+    expect(dossier.assessment).toBeNull();
     expect(
       (dossier as unknown as Record<string, unknown>).basis
     ).toBeUndefined();
+  });
+
+  it("preserves assessment.review and propagates review_state, framework, citations", async () => {
+    const dossierDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      case: {
+        id: "case-1",
+        title: "Test",
+        topic: "t",
+        created_by: "u",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+      theses: [],
+      focus_thesis_id: "t-1",
+      assessment: {
+        id: "a-1",
+        thesis_id: "t-1",
+        conclusion: "supported",
+        rationale: "r",
+        gaps: [],
+        provisional: true,
+        review: {
+          outcome: "approved",
+          conclusion: "supported",
+          reason: "ok",
+          reviewer: "alice",
+          reviewed_at: "2024-05-01T00:00:00Z",
+        },
+      },
+      causal_chain: [
+        { id: "s-1", sequence: 1, description: "step one" },
+      ],
+      evidence: {
+        supports: [
+          {
+            link_id: "l-1",
+            statement_id: "st-1",
+            statement_text: "real statement text",
+            statement_kind: "disclosed_fact",
+            span_id: "sp-1",
+            verbatim_text: "v",
+            locator: {},
+            role: "supports",
+            reason: "r",
+            scope: {},
+            observed_period: null,
+            available_at: "2024-01-01T00:00:00Z",
+            review_state: "reviewed",
+          },
+        ],
+        contradicts: [],
+        contextualizes: [],
+      },
+      competitive_explanations: [],
+      gaps: [],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(dossierDto)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const dossier = await adapter.getCaseDossier("case-1");
+    expect(dossier.assessment?.review).not.toBeNull();
+    expect(dossier.assessment?.review?.reviewer).toBe("alice");
+    expect(dossier.causal_chain[0].description).toBe("step one");
+    expect(dossier.causal_chain[0].status).toBeNull();
+    expect(dossier.evidence.supports[0].statement_text).toBe("real statement text");
+    expect(dossier.evidence.supports[0].reliability).toBeNull();
+    expect(dossier.evidence.supports[0].source_label).toBeNull();
+  });
+
+  it("document citations are populated from the backend", async () => {
+    const detail = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      document: {
+        id: "doc-1",
+        content_sha256: "x".repeat(64),
+        source_url: "u",
+        published_at: null,
+        available_at: "2024-01-01T00:00:00Z",
+        acquired_at: "2024-01-01T00:00:00Z",
+        parser_version: "1",
+        supersedes_id: null,
+        span_count: 1,
+        statement_count: 1,
+        parse_state: "parsed",
+      },
+      spans: [
+        {
+          id: "sp-1",
+          document_version_id: "doc-1",
+          locator: { p: 1 },
+          verbatim_text: "v",
+          citations: [
+            { link_id: "l-1", thesis_id: "t-1", role: "supports" },
+          ],
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(detail)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const out = await adapter.getDocumentDetail("doc-1");
+    expect(out.spans[0].cited_by).toEqual([
+      { evidence_id: "l-1", thesis_id: "t-1", role: "supports" },
+    ]);
+  });
+
+  it("search returns empty for queries shorter than the backend minimum", async () => {
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await adapter.search("a")).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("search rewrites backend deep links to the React routes", async () => {
+    const search = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      groups: [
+        {
+          object_type: "case",
+          hits: [
+            {
+              object_type: "case",
+              object_id: "c-1",
+              title: "t",
+              snippet: "s",
+              case_id: "c-1",
+              review_state: null,
+              available_at: null,
+              deep_link: "/research-cases/c-1/dossier",
+            },
+          ],
+        },
+      ],
+      page: { has_more: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(search)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const hits = await adapter.search("ab");
+    expect(hits[0].navigate_to).toBe("/cases/c-1");
+  });
+
+  it("throws on unknown graph semantic_kind instead of silently rewriting", async () => {
+    const graph = {
+      schema_version: "graph/v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      nodes: [{ id: "n1", kind: "case", label: "c", properties: {} }],
+      edges: [
+        {
+          id: "e1",
+          semantic_kind: "made_up_kind",
+          source: "n1",
+          target: "n1",
+          review_state: null,
+          available_at: null,
+          valid_interval: null,
+          source_refs: [],
+          properties: {},
+        },
+      ],
+      paths: [],
+      page: { has_more: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(graph)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await expect(adapter.getRelationshipGraph("c-1")).rejects.toMatchObject({
+      kind: "backend_unavailable",
+    });
   });
 
   it("maps the stable error envelope to PageStateError", async () => {

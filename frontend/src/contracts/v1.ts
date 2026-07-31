@@ -610,6 +610,29 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** ErrorEnvelope */
+        ErrorEnvelope: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            error: components["schemas"]["ErrorBody"];
+        };
+        /** ErrorBody */
+        ErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Request Id */
+            request_id: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
     };
     responses: never;
     parameters: never;

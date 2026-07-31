@@ -1,5 +1,5 @@
 interface Props {
-  score: number; // 0..1
+  score: number | null; // 0..1, null = no quality label in this delivery
   tone?: "moss" | "ochre" | "clay" | "neutral" | "mineral" | "iris";
   label?: string;
   showValue?: boolean;
@@ -20,16 +20,30 @@ export function ScoreBar({
   label,
   showValue = true,
 }: Props) {
-  const pct = Math.max(0, Math.min(1, score));
+  const pct = score == null ? 0 : Math.max(0, Math.min(1, score));
   return (
-    <span className="score-bar" aria-label={label ?? `score ${pct.toFixed(2)}`}>
+    <span
+      className="score-bar"
+      aria-label={
+        score == null
+          ? (label ?? "score unavailable")
+          : (label ?? `score ${pct.toFixed(2)}`)
+      }
+    >
       <span className="score-bar__track" aria-hidden>
         <span
           className="score-bar__fill"
-          style={{ width: `${pct * 100}%`, background: TONE_VAR[tone] }}
+          style={{
+            width: `${pct * 100}%`,
+            background: score == null ? "var(--ink-muted)" : TONE_VAR[tone],
+          }}
         />
       </span>
-      {showValue && <span className="score-bar__value">{pct.toFixed(2)}</span>}
+      {showValue && (
+        <span className="score-bar__value">
+          {score == null ? "—" : pct.toFixed(2)}
+        </span>
+      )}
       {label && <span className="score-bar__label">{label}</span>}
     </span>
   );

@@ -10,7 +10,7 @@ interface Props {
   topic: string;
   author: string;
   updatedAt: string;
-  assessment: ThesisAssessment;
+  assessment: ThesisAssessment | null;
   onMarkForReview?: () => void;
 }
 
@@ -74,27 +74,33 @@ export function ResearchCaseHeader({
 
       <p className="case-header__conclusion">
         当前判断：
-        <strong data-conclusion={assessment.conclusion}>
-          {CONCLUSION_LABEL[assessment.conclusion]}
-        </strong>
-        {assessment.provisional && !assessment.review && (
-          <Chip tone="amber" bordered size="xs">
-            未人工复核
-          </Chip>
-        )}
-        {assessment.review && (
+        {assessment ? (
           <>
-            <StatusMark
-              status={
-                assessment.review.outcome === "rejected"
-                  ? "human_rejected"
-                  : assessment.review.outcome === "modified"
-                    ? "human_modified"
-                    : "human_confirmed"
-              }
-            />
-            ：{assessment.review.reason}
+            <strong data-conclusion={assessment.conclusion}>
+              {CONCLUSION_LABEL[assessment.conclusion]}
+            </strong>
+            {assessment.provisional && !assessment.review && (
+              <Chip tone="amber" bordered size="xs">
+                未人工复核
+              </Chip>
+            )}
+            {assessment.review && (
+              <>
+                <StatusMark
+                  status={
+                    assessment.review.outcome === "rejected"
+                      ? "human_rejected"
+                      : assessment.review.outcome === "modified"
+                        ? "human_modified"
+                        : "human_confirmed"
+                  }
+                />
+                ：{assessment.review.reason}
+              </>
+            )}
           </>
+        ) : (
+          <span data-testid="no-assessment">尚无 AI 判断</span>
         )}
       </p>
     </header>
