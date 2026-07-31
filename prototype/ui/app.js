@@ -3,6 +3,7 @@
 
   const data = window.PROTOTYPE_DATA;
   const researchState = window.NEW_RESEARCH_STATE;
+  const planState = window.RESEARCH_PLAN_STATE;
   const {
     DRAFT_FIELDS,
     FIELD_LIMITS,
@@ -48,6 +49,7 @@
     providerOutcomes: Object.freeze({
       quota_failure: "配额受限",
       permission_gap: "权限缺口",
+      manual_upload: "人工补录",
     }),
     providerNames: Object.freeze({
       juyuan: "聚源",
@@ -60,6 +62,7 @@
     providerDetails: Object.freeze({
       "Daily call limit exceeded; no inferred replacement values": "当日调用额度已用尽，未使用推测值替代。",
       "Current credential lacks historical holdings permission": "当前凭证缺少历史持仓读取权限。",
+      "Fund reports uploaded and queued for review": "基金报告曾由人工补录，并进入审核队列。",
     }),
     metricNames: Object.freeze({
       "Data Center revenue": "数据中心收入",
@@ -86,6 +89,24 @@
     }),
     planStates: Object.freeze({
       planned: "计划",
+    }),
+    exposureStates: Object.freeze({
+      probe_required: "尚待探测是否实际暴露并获授权",
+    }),
+    assetKinds: Object.freeze({
+      document: "冻结文档",
+      statement: "来源陈述",
+      metric: "结果数据",
+      evidence_link: "已审核关系",
+    }),
+    reviewStatesExtended: Object.freeze({
+      reviewed: "已人工复核",
+      pending_review: "待人工审核",
+    }),
+    gapTypes: Object.freeze({
+      factor: "因素缺口",
+      positive: "正面证据检索",
+      negative: "反面证据检索",
     }),
   });
 
@@ -835,10 +856,136 @@
     `;
   }
 
+  function renderPlan() {
+    const view = planState.buildResearchPlanViewModel(data);
+    const selectedCount = view.existingAssets.filter((asset) => asset.selected).length;
+    const renderCollectionItems = (items, state, label) => items.map((item) => `
+      <li data-collection-state="${escapeHTML(state)}"><span class="plan-state-mark" aria-hidden="true">${escapeHTML(label.slice(0, 1))}</span><div><strong>${escapeHTML(label)}</strong><p>${escapeHTML(item.label)}</p><small>截止 ${escapeHTML(item.cutoff)}</small></div></li>
+    `).join("");
+    return `
+      <section class="screen research-plan-screen" data-screen="plan">
+        <header class="plan-case-header" data-plan-case-header>
+          <div>
+            <p class="eyebrow">Evidence collection orchestration</p>
+            <h1>研究计划与证据获取</h1>
+            <p class="lede">同一案例内核对复用、外部获取、审核和缺口；所有操作仅改变本页原型状态。</p>
+          </div>
+          <div class="plan-draft-state"><span aria-hidden="true">◇</span><strong>计划草案</strong><small>需人工确认</small></div>
+          <dl class="plan-case-facts">
+            <div><dt>ResearchCase</dt><dd>${escapeHTML(view.case.id)}</dd></div>
+            <div><dt>研究期间</dt><dd>${escapeHTML(view.case.researchPeriod)}</dd></div>
+            <div><dt>证据边界</dt><dd>截止 ${escapeHTML(view.case.cutoff)}</dd></div>
+            <div><dt>计划修订</dt><dd>${escapeHTML(view.case.revision)}</dd></div>
+          </dl>
+        </header>
+
+        <div class="plan-regions">
+          <section class="plan-region assets-region" data-plan-region="assets" aria-labelledby="plan-assets-title">
+            <header><div><p class="section-kicker">内部复用</p><h2 id="plan-assets-title">已有资料与数据</h2></div><p><strong data-reuse-count>${selectedCount}</strong> / ${view.existingAssets.length} 已选</p></header>
+            <div class="asset-list">
+              ${view.existingAssets.map((asset) => `
+                <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}">
+                  <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong>${escapeHTML(asset.label)}</strong><p>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
+                  <div class="asset-review"><span>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
+                  <button type="button" class="plan-button quiet" data-toggle-asset aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
+                </article>
+              `).join("")}
+            </div>
+          </section>
+
+          <section class="plan-region providers-region" data-plan-region="providers" aria-labelledby="plan-providers-title">
+            <header><div><p class="section-kicker">外部获取</p><h2 id="plan-providers-title">Provider 查询计划</h2></div><p>能力目录 ≠ 已暴露/已授权</p></header>
+            <div class="provider-plan-list">
+              ${view.providerQueries.map((query) => `
+                <article class="provider-plan-row">
+                  <div class="provider-title"><span class="plan-state-mark" aria-hidden="true">探</span><div><strong>${escapeHTML(displayLabel(PRESENTATION.providerNames, query.provider, "外部数据适配器"))}适配器</strong><p>能力目录：${escapeHTML(displayLabel(PRESENTATION.providerCapabilities, query.capability, "待分类能力"))}</p></div></div>
+                  <dl><div><dt>查询目的</dt><dd>${escapeHTML(query.purpose)}</dd></div><div><dt>日期范围</dt><dd>${escapeHTML(query.dateScope.start)} 至 ${escapeHTML(query.dateScope.end)} · 截止 ${escapeHTML(query.cutoff)}</dd></div><div><dt>拟冻结产物</dt><dd>${escapeHTML(query.intendedArtifact)}</dd></div><div><dt>计划状态</dt><dd>${escapeHTML(displayLabel(PRESENTATION.planStates, query.status, "待规划"))} · ${escapeHTML(displayLabel(PRESENTATION.exposureStates, query.exposureStatus, "能力状态待确认"))}</dd></div></dl>
+                  <p class="provider-meaning">失败含义：探测失败只表示本次未取得能力证据，不推断接口、参数或替代值。</p>
+                </article>
+              `).join("")}
+            </div>
+          </section>
+
+          <section class="plan-region" data-plan-region="collection" aria-labelledby="plan-collection-title">
+            <header><div><p class="section-kicker">获取与冻结</p><h2 id="plan-collection-title">正在获取并冻结</h2></div><p>状态不混用</p></header>
+            <ul class="collection-list">
+              ${renderCollectionItems(view.collection.reused, "reused_frozen", "已复用并冻结")}
+              ${renderCollectionItems(view.collection.awaitingProbe, "awaiting_capability_probe", "等待能力探测")}
+              ${renderCollectionItems(view.collection.blocked, "blocked_permission", "权限阻塞")}
+              ${view.collection.running.length ? renderCollectionItems(view.collection.running, "running", "正在获取") : '<li class="empty-running" data-empty-running><span aria-hidden="true">○</span><strong>当前没有运行中的获取任务</strong></li>'}
+            </ul>
+          </section>
+
+          <section class="plan-region" data-plan-region="pending" aria-labelledby="plan-pending-title">
+            <header><div><p class="section-kicker">人工关口</p><h2 id="plan-pending-title">待审核结果</h2></div><p>${view.pendingResults.length} 项</p></header>
+            <div class="compact-result-list">
+              ${view.pendingResults.map((item) => `<article><span class="plan-state-mark" aria-hidden="true">审</span><div><strong>${escapeHTML(item.targetLabel)}</strong><p>${escapeHTML(item.task)}</p><small>来源 ${escapeHTML(item.sourceId)} · ${escapeHTML(item.sourceVersion)} · ${escapeHTML(item.reviewLabel)}</small></div></article>`).join("")}
+            </div>
+          </section>
+
+          <section class="plan-region" data-plan-region="gaps" aria-labelledby="plan-gaps-title">
+            <header><div><p class="section-kicker">待补证</p><h2 id="plan-gaps-title">证据缺口</h2></div><a class="plan-text-link" href="?screen=new-research">调整范围</a></header>
+            <div class="gap-list">
+              ${view.gaps.map((gap) => `<article data-gap-id="${escapeHTML(gap.id)}"><div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.gapTypes, gap.type, "证据缺口"))}</span><strong>${escapeHTML(gap.label)}</strong><p>${escapeHTML(gap.scope)} · <span data-gap-status>待获取</span></p></div><button type="button" class="plan-button quiet" data-toggle-gap aria-pressed="false">暂时无法获得</button></article>`).join("")}
+            </div>
+          </section>
+
+          <section class="plan-region" data-plan-region="failures" aria-labelledby="plan-failures-title">
+            <header><div><p class="section-kicker">历史运行结果</p><h2 id="plan-failures-title">失败、额度与权限</h2></div><label class="plan-upload"><span>上传材料</span><input type="file" accept=".pdf,.doc,.docx,.xlsx,.csv,.txt"></label></header>
+            <p class="upload-status" data-upload-status>尚未选择本地材料；不会自动上传。</p>
+            <div class="failure-list">
+              ${[...view.failures, ...view.manualUploads].map((run) => `<article data-provider-run="${escapeHTML(run.id)}" data-provider-outcome="${escapeHTML(run.outcome)}"><div><span class="type-label">历史结果</span><strong>${escapeHTML(displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口"))} · ${escapeHTML(displayLabel(PRESENTATION.providerOutcomes, run.outcome, "运行异常"))}</strong><p>${escapeHTML(run.observedAt)} · ${escapeHTML(displayLabel(PRESENTATION.providerDetails, run.detail, "该次历史运行未形成可复用结果，未推断替代值。"))}</p><small data-retry-status>${run.outcome === "manual_upload" ? "材料已进入待审核结果，不需要重试。" : "仅记录历史失败，不代表未来计划或替代方案。"}</small></div>${run.outcome === "manual_upload" ? "" : '<button type="button" class="plan-button" data-retry-run>重试</button>'}</article>`).join("")}
+            </div>
+          </section>
+        </div>
+        <p class="sr-only" aria-live="polite" data-plan-live></p>
+      </section>
+    `;
+  }
+
+  function bindResearchPlan(root) {
+    const live = root.querySelector("[data-plan-live]");
+    const announce = (message) => { live.textContent = message; };
+    root.addEventListener("click", (event) => {
+      const assetButton = event.target.closest("[data-toggle-asset]");
+      if (assetButton) {
+        const selected = assetButton.getAttribute("aria-pressed") !== "true";
+        assetButton.setAttribute("aria-pressed", String(selected));
+        assetButton.textContent = selected ? "移除" : "复用";
+        const row = assetButton.closest("[data-asset-id]");
+        row.querySelector("[data-reuse-status]").textContent = selected ? "已纳入复用" : "未纳入复用";
+        root.querySelector("[data-reuse-count]").textContent = root.querySelectorAll('[data-toggle-asset][aria-pressed="true"]').length;
+        announce(`${row.dataset.assetId}${selected ? "已纳入" : "已移出"}本地复用选择`);
+        return;
+      }
+      const retry = event.target.closest("[data-retry-run]");
+      if (retry) {
+        retry.closest("[data-provider-run]").querySelector("[data-retry-status]").textContent = "已加入重试队列（原型）";
+        retry.disabled = true;
+        announce("已在本页原型中加入重试队列；尚未执行外部调用");
+        return;
+      }
+      const gapButton = event.target.closest("[data-toggle-gap]");
+      if (gapButton) {
+        const unavailable = gapButton.getAttribute("aria-pressed") !== "true";
+        gapButton.setAttribute("aria-pressed", String(unavailable));
+        gapButton.textContent = unavailable ? "恢复获取" : "暂时无法获得";
+        const row = gapButton.closest("[data-gap-id]");
+        row.querySelector("[data-gap-status]").textContent = unavailable ? "暂时无法获得" : "待获取";
+        announce(`${row.dataset.gapId}${unavailable ? "已标记暂时无法获得" : "已恢复为待获取"}`);
+      }
+    });
+    root.querySelector('input[type="file"]').addEventListener("change", (event) => {
+      const filename = event.target.files?.[0]?.name;
+      root.querySelector("[data-upload-status]").textContent = filename ? `已选择：${filename}；仅保留在本页，尚未上传。` : "尚未选择本地材料；不会自动上传。";
+      announce(filename ? `已在本页选择材料 ${filename}` : "已清除本地材料选择");
+    });
+  }
+
   const SCREEN_RENDERERS = {
     "overview": renderOverview,
     "new-research": renderNewResearch,
-    "plan": () => renderPlaceholder("plan"),
+    "plan": renderPlan,
     "case": () => renderPlaceholder("case"),
     "graph": () => renderPlaceholder("graph"),
     "review": () => renderPlaceholder("review"),
@@ -882,6 +1029,7 @@
       </div>
     `;
     if (screen === "new-research") bindNewResearchForm(data);
+    if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"));
   }
 
   renderShell(requestedScreen());
@@ -889,4 +1037,5 @@
   window.SCREEN_RENDERERS = SCREEN_RENDERERS;
   window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
   window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel, confirmationStorageKey });
+  window.PROTOTYPE_RESEARCH_PLAN = planState;
 }());

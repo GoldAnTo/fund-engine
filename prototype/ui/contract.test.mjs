@@ -102,6 +102,12 @@ export function indexUniqueById(records, collectionName) {
   return index;
 }
 
+function isStrictISODate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 export function isSkippableWindowsSymlinkError(error, platform = process.platform) {
   const permissionOrCapabilityCodes = new Set(["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"]);
   return platform === "win32" && permissionOrCapabilityCodes.has(error?.code);
@@ -144,8 +150,8 @@ export function assertFixtureContract(data) {
   assert.ok(researchPlan, "case must expose an explicit researchPlan");
   assert.equal(
     Object.keys(researchPlan).sort().join(","),
-    ["currentGapFactorIds", "negativeEvidenceSearches", "plannedProviderQueries", "positiveEvidenceSearches", "resultMetricIds", "reusableAssets", "revision"].sort().join(","),
-    "researchPlan must expose the six explicit planning concerns",
+    ["candidateReuseAssetIds", "collectionTasks", "currentGapFactorIds", "negativeEvidenceSearches", "plannedProviderQueries", "positiveEvidenceSearches", "resultMetricIds", "reusableAssets", "revision"].sort().join(","),
+    "researchPlan must expose the explicit planning concerns without adding top-level fixture keys",
   );
   assert.equal(researchPlan.revision, "RP-AIC-2025-01-v1", "researchPlan must expose an explicit immutable revision");
   assert.equal(
@@ -164,6 +170,26 @@ export function assertFixtureContract(data) {
     assert.equal(query.provider, "juyuan", `${query.id} must remain Juyuan-centered`);
     assert.equal(query.mode, "capability_probe", `${query.id} must remain a capability probe`);
     assert.equal(query.status, "planned", `${query.id} must remain planned rather than historical success`);
+    assert.equal(query.exposureStatus, "probe_required", `${query.id} must not claim the catalog capability is exposed or authorized`);
+    for (const field of ["purpose", "intendedArtifact"]) assert.ok(query[field], `${query.id} must include ${field}`);
+    assert.deepEqual(Object.keys(query.dateScope).sort(), ["end", "start"], `${query.id} must include an independent dateScope`);
+    assert.ok(isStrictISODate(query.dateScope.start), `${query.id} dateScope start must be a real ISO date`);
+    assert.ok(isStrictISODate(query.dateScope.end), `${query.id} dateScope end must be a real ISO date`);
+    assert.ok(query.dateScope.start <= query.dateScope.end, `${query.id} dateScope must not be reversed`);
+    assert.equal(query.cutoff, data.case.cutoff, `${query.id} must bind its evidence cutoff explicitly`);
+  }
+  assert.equal(
+    researchPlan.collectionTasks.map((task) => task.state).sort().join(","),
+    ["awaiting_capability_probe", "blocked_permission", "reused_frozen"].join(","),
+    "collection tasks must distinguish reused, awaiting probe, and blocked work",
+  );
+  assert.equal(researchPlan.collectionTasks.some((task) => task.state === "running"), false, "fixture must not claim a running collection task");
+  for (const task of researchPlan.collectionTasks) {
+    assert.ok(task.id && task.label, "collection tasks must be explicit inspectable items");
+    assert.equal(task.cutoff, data.case.cutoff, `${task.id} must bind to the case cutoff`);
+  }
+  for (const search of [...researchPlan.positiveEvidenceSearches, ...researchPlan.negativeEvidenceSearches]) {
+    assert.ok(search.id && search.label && search.scope && search.status, "evidence searches must include id, label, scope, and status");
   }
 
   const idCollections = [
@@ -196,6 +222,28 @@ export function assertFixtureContract(data) {
   for (const caseId of researchPlan.reusableAssets.relatedCaseIds) {
     assert.equal(caseId, data.case.id, `researchPlan relatedCaseIds references unknown case ${caseId}`);
   }
+  const allReusableAssetIds = new Set(reusableReferences.flatMap(([, collectionName]) => [...indexes[collectionName].keys()]));
+  const selectedReusableAssetIds = new Set(reusableReferences.flatMap(([planField]) => researchPlan.reusableAssets[planField]));
+  assert.ok(researchPlan.candidateReuseAssetIds.length > 0, "researchPlan must expose at least one explicit reuse candidate");
+  for (const assetId of researchPlan.candidateReuseAssetIds) {
+    assert.ok(allReusableAssetIds.has(assetId), `researchPlan candidateReuseAssetIds references unknown asset ${assetId}`);
+    assert.equal(selectedReusableAssetIds.has(assetId), false, `researchPlan candidate reuse asset ${assetId} must not already be selected`);
+  }
+  const providerQueryIds = new Set(researchPlan.plannedProviderQueries.map((query) => query.id));
+  for (const task of researchPlan.collectionTasks) {
+    for (const assetId of task.assetIds ?? []) {
+      assert.ok(allReusableAssetIds.has(assetId), `researchPlan collection task ${task.id} references unknown asset ${assetId}`);
+    }
+    for (const queryId of [...(task.providerQueryIds ?? []), ...(task.providerQueryId ? [task.providerQueryId] : [])]) {
+      assert.ok(providerQueryIds.has(queryId), `researchPlan collection task ${task.id} references unknown provider query ${queryId}`);
+    }
+  }
+  const reusedTask = researchPlan.collectionTasks.find((task) => task.state === "reused_frozen");
+  assert.equal(
+    [...reusedTask.assetIds].sort().join(","),
+    [...selectedReusableAssetIds].sort().join(","),
+    "reused_frozen task assets must exactly match selected reusable assets",
+  );
   for (const metricId of researchPlan.resultMetricIds) {
     assert.ok(indexes.metrics.has(metricId), `researchPlan resultMetricIds references unknown metric ${metricId}`);
   }
@@ -441,6 +489,50 @@ async function assertFixtureDataContract() {
   const historicalProviderSuccess = structuredClone(data);
   historicalProviderSuccess.case.researchPlan.plannedProviderQueries[0].status = "success";
   assert.throws(() => assertFixtureContract(historicalProviderSuccess), /must remain planned rather than historical success/u);
+
+  const exposedWithoutProbe = structuredClone(data);
+  exposedWithoutProbe.case.researchPlan.plannedProviderQueries[0].exposureStatus = "authorized";
+  assert.throws(() => assertFixtureContract(exposedWithoutProbe), /must not claim the catalog capability/u);
+
+  const reversedPlanScope = structuredClone(data);
+  reversedPlanScope.case.researchPlan.plannedProviderQueries[0].dateScope = { start: "2025-06-30", end: "2025-01-01" };
+  assert.throws(() => assertFixtureContract(reversedPlanScope), /dateScope must not be reversed/u);
+
+  const impossiblePlanDate = structuredClone(data);
+  impossiblePlanDate.case.researchPlan.plannedProviderQueries[0].dateScope.start = "2025-02-30";
+  assert.throws(() => assertFixtureContract(impossiblePlanDate), /dateScope start must be a real ISO date/u);
+
+  const unknownCollectionAsset = structuredClone(data);
+  unknownCollectionAsset.case.researchPlan.collectionTasks[0].assetIds = ["DOC-MISSING"];
+  assert.throws(() => assertFixtureContract(unknownCollectionAsset), /references unknown asset DOC-MISSING/u);
+
+  const unknownCollectionQuery = structuredClone(data);
+  unknownCollectionQuery.case.researchPlan.collectionTasks[1].providerQueryIds = ["PQ-MISSING"];
+  assert.throws(() => assertFixtureContract(unknownCollectionQuery), /references unknown provider query PQ-MISSING/u);
+
+  const candidateAlreadySelected = structuredClone(data);
+  candidateAlreadySelected.case.researchPlan.candidateReuseAssetIds = [candidateAlreadySelected.case.researchPlan.reusableAssets.documentIds[0]];
+  assert.throws(() => assertFixtureContract(candidateAlreadySelected), /must not already be selected/u);
+}
+
+async function assertResearchPlanStateContract() {
+  const sandbox = { window: {} };
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "data.js"), "utf8"), sandbox);
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "research-plan-state.js"), "utf8"), sandbox);
+  const state = sandbox.window.RESEARCH_PLAN_STATE;
+  assert.ok(Object.isFrozen(state), "research-plan state API must be a narrow frozen global");
+  const view = state.buildResearchPlanViewModel(sandbox.window.PROTOTYPE_DATA);
+  const withoutHistory = state.buildResearchPlanViewModel({ ...sandbox.window.PROTOTYPE_DATA, providerRuns: [] });
+  assert.deepEqual(view.providerQueries, withoutHistory.providerQueries, "provider query plan must not derive intent from historical runs");
+  assert.deepEqual(view.collection, withoutHistory.collection, "collection state must not infer running work from provider history");
+  assert.equal(view.collection.running.length, 0, "plan fixture must have no running tasks");
+  assert.ok(view.existingAssets.length > 0, "plan must resolve reusable frozen assets");
+  const candidates = new Set(sandbox.window.PROTOTYPE_DATA.case.researchPlan.candidateReuseAssetIds);
+  assert.equal(view.existingAssets.filter((item) => !item.selected).every((item) => candidates.has(item.id)), true, "only explicit candidate assets may begin unselected");
+  assert.ok(view.pendingResults.every((item) => item.sourceVersion && item.targetLabel && item.reviewLabel), "pending results must retain source, target, and review state");
+  assert.ok(view.failures.every((item) => ["quota_failure", "permission_gap"].includes(item.outcome)), "retryable failures must include only actual historical failures");
+  assert.ok(view.manualUploads.every((item) => item.outcome === "manual_upload"), "manual uploads must remain separate historical outcomes");
+  assert.equal(view.failures.some((item) => item.outcome === "success"), false, "successful runs must not be repurposed as future plan");
 }
 
 async function assertNewResearchStateDateContract() {
@@ -582,7 +674,7 @@ function selectedRoutes(argv) {
 }
 
 async function assertSourceContract() {
-  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "app.js", "capture.mjs"];
+  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "research-plan-state.js", "app.js", "capture.mjs"];
   for (const filename of requiredFiles) {
     await assert.doesNotReject(
       access(path.join(UI_DIR, filename)),
@@ -590,9 +682,10 @@ async function assertSourceContract() {
     );
   }
 
-  const [html, stateSource, app, styles, readme] = await Promise.all([
+  const [html, stateSource, planStateSource, app, styles, readme] = await Promise.all([
     readFile(path.join(UI_DIR, "index.html"), "utf8"),
     readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"),
+    readFile(path.join(UI_DIR, "research-plan-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "app.js"), "utf8"),
     readFile(path.join(UI_DIR, "styles.css"), "utf8"),
     readFile(path.join(UI_DIR, "README.md"), "utf8"),
@@ -602,8 +695,12 @@ async function assertSourceContract() {
   assert.match(html, /<link[^>]+href=["']\.\/styles\.css["']/u, "index.html must load ./styles.css");
   assert.match(html, /<script[^>]+src=["']\.\/data\.js["'][^>]*><\/script>/u, "index.html must load classic ./data.js");
   assert.match(html, /<script[^>]+src=["']\.\/new-research-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./new-research-state.js");
+  assert.match(html, /<script[^>]+src=["']\.\/research-plan-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./research-plan-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/app\.js["'][^>]*><\/script>/u, "index.html must load classic ./app.js");
   assert.ok(html.indexOf("./data.js") < html.indexOf("./new-research-state.js") && html.indexOf("./new-research-state.js") < html.indexOf("./app.js"), "new-research state must load between fixture data and rendering");
+  assert.ok(html.indexOf("./new-research-state.js") < html.indexOf("./research-plan-state.js") && html.indexOf("./research-plan-state.js") < html.indexOf("./app.js"), "research-plan state must load after shared state and before rendering");
+  assert.match(planStateSource, /function buildResearchPlanViewModel\(/u, "research-plan state must own its view-model builder");
+  assert.doesNotMatch(app, /function buildResearchPlanViewModel\(/u, "app.js must not duplicate the plan view-model builder");
   for (const stateFunction of ["isStrictISODate", "validateObservationRange", "createConfirmationRecord", "normalizeConfirmationRecord", "readConfirmationRecord"]) {
     assert.match(stateSource, new RegExp(`function ${stateFunction}\\(`, "u"), `state module must own ${stateFunction}`);
     assert.doesNotMatch(app, new RegExp(`function ${stateFunction}\\(`, "u"), `app.js must not duplicate ${stateFunction}`);
@@ -835,13 +932,92 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型3-新建研究.png"),
     "new-research must map exactly to prototype/设计原型3-新建研究.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("plan"),
+    path.resolve(UI_DIR, "../设计原型4-研究计划.png"),
+    "plan must map exactly to prototype/设计原型4-研究计划.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertResearchPlanProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "研究计划与证据获取");
+  for (const region of ["已有资料与数据", "Provider 查询计划", "正在获取并冻结", "待审核结果", "证据缺口", "失败、额度与权限"]) {
+    assert.equal(await marker.getByRole("heading", { name: region, exact: true }).count(), 1, `plan must expose exactly one ${region} region`);
+  }
+  for (const action of ["复用", "移除", "重试", "调整范围", "上传材料", "暂时无法获得"]) {
+    assert.ok(await marker.getByText(action, { exact: true }).first().isVisible(), `${action} must be visible`);
+  }
+  const headerText = await marker.locator("[data-plan-case-header]").innerText();
+  for (const copy of ["RC-AIC-2025-01", "2025-01-01 至 2027-12-31", "截止 2025-06-30", "RP-AIC-2025-01-v1", "计划草案", "需人工确认"]) {
+    assert.ok(headerText.includes(copy), `plan header must show ${copy}`);
+  }
+  assert.equal(await marker.locator('[data-collection-state="running"]').count(), 0, "plan must not render a false running task");
+  assert.ok((await marker.locator("[data-empty-running]").textContent()).includes("当前没有运行中的获取任务"));
+  const providerText = await marker.locator('[data-plan-region="providers"]').innerText();
+  for (const copy of ["查询目的", "日期范围", "拟冻结产物", "计划状态", "能力目录", "尚待探测是否实际暴露并获授权"]) {
+    assert.ok(providerText.includes(copy), `provider rows must explain ${copy}`);
+  }
+  assert.doesNotMatch(providerText, /industry_analysis_view|announcement_filing_fulltext|fund_holding_detail|juyuan|capability_probe|probe_required/u, "plan must not leak raw provider enums");
+  assert.ok(await marker.getByRole("button", { name: "复用" }).first().isVisible(), "explicit candidate reuse must be a real visible action");
+
+  const reuseCount = marker.locator("[data-reuse-count]");
+  const initialCount = Number(await reuseCount.textContent());
+  const candidate = marker.locator('[data-asset-id="DOC-BRCM-FY25Q2"] [data-toggle-asset]');
+  await candidate.press("Enter");
+  assert.equal(Number(await reuseCount.textContent()), initialCount + 1, "keyboard reuse must add an explicit candidate locally");
+  assert.equal((await candidate.textContent()).trim(), "移除");
+  await candidate.press("Enter");
+  assert.equal(Number(await reuseCount.textContent()), initialCount, "candidate reuse must remain reversible without fixture mutation");
+  const remove = marker.getByRole("button", { name: "移除" }).first();
+  assert.equal(await remove.getAttribute("aria-pressed"), "true");
+  await remove.press("Enter");
+  assert.equal(Number(await reuseCount.textContent()), initialCount - 1, "keyboard removal must update the local reuse count");
+  assert.equal((await page.locator(":focus").textContent()).trim(), "复用", "asset action must retain focus and expose the inverse action");
+  assert.equal(await page.locator(":focus").getAttribute("aria-pressed"), "false");
+
+  const retry = marker.getByRole("button", { name: "重试" }).first();
+  await retry.click();
+  assert.ok((await retry.locator("xpath=ancestor::*[@data-provider-run]").innerText()).includes("已加入重试队列（原型）"));
+
+  const gap = marker.locator("[data-toggle-gap]").first();
+  await gap.press("Enter");
+  assert.equal((await gap.textContent()).trim(), "恢复获取");
+  assert.equal(await gap.getAttribute("aria-pressed"), "true");
+
+  const input = marker.locator('input[type="file"]');
+  assert.equal(await input.count(), 1, "upload material must use a real file input");
+  await input.setInputFiles({ name: "补充披露.pdf", mimeType: "application/pdf", buffer: Buffer.from("prototype") });
+  assert.ok((await marker.locator("[data-upload-status]").textContent()).includes("已选择：补充披露.pdf"));
+  assert.doesNotMatch(await marker.locator("[data-upload-status]").textContent(), /上传成功/u);
+  await input.focus();
+  assert.notEqual(await marker.locator(".plan-upload span").evaluate((element) => getComputedStyle(element).outlineStyle), "none", "file input keyboard focus must be visible on its label");
+  const manualUpload = marker.locator('[data-provider-outcome="manual_upload"]');
+  assert.equal(await manualUpload.count(), 1, "manual upload must remain an inspectable historical outcome");
+  assert.equal(await manualUpload.getByRole("button", { name: "重试" }).count(), 0, "successful manual upload must not expose retry");
+  assert.equal(await marker.getByRole("link", { name: "调整范围" }).getAttribute("href"), "?screen=new-research");
+  assert.ok(await marker.locator('[aria-live="polite"]').count() > 0, "plan interactions must expose an aria-live status");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const narrow = await page.evaluate(() => ({
+    body: document.body.scrollWidth - document.body.clientWidth,
+    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    height: document.documentElement.scrollHeight,
+  }));
+  assert.ok(narrow.body <= 0 && narrow.document <= 0, `plan must fit 375px without horizontal overflow: ${JSON.stringify(narrow)}`);
+  assert.ok(narrow.height > 812, "plan mobile layout must use normal vertical scrolling");
+  const mobileRetry = marker.getByRole("button", { name: "重试" }).last();
+  await mobileRetry.scrollIntoViewIfNeeded();
+  assert.ok(await mobileRetry.isVisible(), "last plan control must remain reachable on mobile");
+  await mobileRetry.press("Enter");
+  assert.ok((await mobileRetry.locator("xpath=ancestor::*[@data-provider-run]").innerText()).includes("已加入重试队列（原型）"), "mobile keyboard activation must preserve honest retry behavior");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertVisibleThesisTextareasFit(root, context) {
@@ -1664,6 +1840,9 @@ async function assertBrowserContract(routes) {
       if (screen === "new-research") {
         await assertNewResearchProductContract(page, marker, baseURL);
       }
+      if (screen === "plan") {
+        await assertResearchPlanProductContract(page, marker);
+      }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
           assert.doesNotMatch(assessment, forbidden, `${screen} evidence assessment contains forbidden scoring: ${forbidden}`);
@@ -1719,6 +1898,7 @@ async function main() {
   const routes = selectedRoutes(process.argv.slice(2));
   assertAssessmentScoringSemantics();
   await assertFixtureDataContract();
+  await assertResearchPlanStateContract();
   await assertNewResearchStateDateContract();
   await assertNewResearchStateSessionContract();
   await assertSourceContract();

@@ -13,6 +13,7 @@ const VIEWPORT = { width: 1600, height: 1000 };
 const FINAL_CAPTURE_TARGETS = Object.freeze({
   overview: path.resolve(UI_DIR, "../设计原型1.png"),
   "new-research": path.resolve(UI_DIR, "../设计原型3-新建研究.png"),
+  plan: path.resolve(UI_DIR, "../设计原型4-研究计划.png"),
 });
 const CAPTURE_READY_SCREENS = Object.freeze(Object.keys(FINAL_CAPTURE_TARGETS));
 const MIME_TYPES = {
