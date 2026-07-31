@@ -80,6 +80,21 @@ export function assertFixtureContract(data) {
   const indexes = Object.fromEntries(
     idCollections.map((collectionName) => [collectionName, indexUniqueById(data[collectionName], collectionName)]),
   );
+  for (const collectionName of idCollections) {
+    for (const record of data[collectionName]) {
+      if (!Object.hasOwn(record, "snapshotMembership")) continue;
+      assert.ok(
+        Array.isArray(record.snapshotMembership) && record.snapshotMembership.length > 0,
+        `${collectionName}/${record.id} snapshotMembership must be a non-empty array`,
+      );
+      for (const snapshotId of record.snapshotMembership) {
+        assert.ok(
+          indexes.snapshots.has(snapshotId),
+          `${collectionName}/${record.id} references unknown snapshot ${snapshotId}`,
+        );
+      }
+    }
+  }
 
   const requiredRecordIds = {
     companies: ["CO-NVDA", "CO-TSM"],
@@ -113,10 +128,6 @@ export function assertFixtureContract(data) {
     for (const record of data[group]) {
       for (const field of provenanceFields) {
         assert.ok(record[field], `${group}/${record.id} must include ${field}`);
-      }
-      assert.ok(record.snapshotMembership.length > 0, `${group}/${record.id} must belong to at least one snapshot`);
-      for (const snapshotId of record.snapshotMembership) {
-        assert.ok(indexes.snapshots.has(snapshotId), `${group}/${record.id} references unknown snapshot ${snapshotId}`);
       }
       assert.ok(record.publishedAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be published by the cutoff`);
       assert.ok(record.availableAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be available by the cutoff`);
@@ -271,6 +282,14 @@ async function assertFixtureDataContract() {
   const missingSnapshotMembership = structuredClone(data);
   missingSnapshotMembership.documents[0].snapshotMembership = ["RS-MISSING"];
   assert.throws(() => assertFixtureContract(missingSnapshotMembership), /unknown snapshot RS-MISSING/u);
+
+  const missingFundSnapshot = structuredClone(data);
+  missingFundSnapshot.funds[0].snapshotMembership = ["RS-MISSING"];
+  assert.throws(() => assertFixtureContract(missingFundSnapshot), /funds\/FUND-ETF-AI-INFRA references unknown snapshot RS-MISSING/u);
+
+  const emptyReviewSnapshotMembership = structuredClone(data);
+  emptyReviewSnapshotMembership.reviewQueue[0].snapshotMembership = [];
+  assert.throws(() => assertFixtureContract(emptyReviewSnapshotMembership), /reviewQueue\/RQ-001 snapshotMembership must be a non-empty array/u);
 
   const maskedInvalidFactor = structuredClone(data);
   maskedInvalidFactor.evidenceLinks[0].factorId = "F-MISSING";
