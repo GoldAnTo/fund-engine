@@ -625,6 +625,17 @@
       if (!draft) continue;
       for (const field of DRAFT_FIELDS) editor.querySelector(`[data-field="${field}"]`).value = draft[field];
     }
+    autoSizeThesisTextareas(form);
+  }
+
+  function autoSizeThesisTextarea(textarea) {
+    textarea.style.height = "auto";
+    const borderHeight = textarea.offsetHeight - textarea.clientHeight;
+    textarea.style.height = `${textarea.scrollHeight + borderHeight}px`;
+  }
+
+  function autoSizeThesisTextareas(root) {
+    for (const textarea of root.querySelectorAll("[data-thesis-editor] textarea")) autoSizeThesisTextarea(textarea);
   }
 
   const DRAFT_ERROR_MESSAGES = Object.freeze({
@@ -661,6 +672,7 @@
         firstInvalid ??= control;
       }
     }
+    autoSizeThesisTextareas(form);
     firstInvalid?.focus();
   }
 
@@ -705,6 +717,7 @@
     const container = form.querySelector(".thesis-editors");
     container.insertAdjacentHTML("beforeend", renderThesisEditor(blankDraft, container.children.length, fixture.case.aiLabel));
     updateThesisEditorControls(form);
+    autoSizeThesisTextareas(container.lastElementChild);
     container.lastElementChild.querySelector('[data-field="title"]').focus();
   }
 
@@ -712,6 +725,7 @@
     const form = app.querySelector('.new-research-screen form[aria-label="初始命题"]');
     if (!form) return;
     updateThesisEditorControls(form);
+    autoSizeThesisTextareas(form);
     form.addEventListener("click", (event) => {
       const removeButton = event.target.closest("[data-remove-thesis]");
       if (removeButton) {
@@ -728,6 +742,7 @@
       const control = event.target.closest("[data-field]");
       const editor = control?.closest("[data-thesis-editor]");
       if (!editor) return;
+      if (control.matches("textarea")) autoSizeThesisTextarea(control);
       const originLabel = editor.querySelector("[data-draft-origin-label]");
       if (editor.dataset.origin === "ai") {
         originLabel.textContent = editor.dataset.wasConfirmed === "true"
@@ -826,6 +841,7 @@
   }
 
   renderShell(requestedScreen());
+  window.addEventListener("pageshow", () => autoSizeThesisTextareas(app));
   window.SCREEN_RENDERERS = SCREEN_RENDERERS;
   window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
   window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel, confirmationStorageKey });

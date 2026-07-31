@@ -830,6 +830,20 @@ async function assertFinalCaptureRegistryContract() {
   }
 }
 
+async function assertVisibleThesisTextareasFit(root, context) {
+  const measurements = await root.locator("[data-thesis-editor] textarea").evaluateAll((items) => items
+    .filter((item) => item.getClientRects().length > 0)
+    .map((item) => ({
+      id: item.id,
+      field: item.dataset.field,
+      clientHeight: item.clientHeight,
+      scrollHeight: item.scrollHeight,
+    })));
+  const clipped = measurements.filter((item) => item.scrollHeight > item.clientHeight + 1);
+  assert.deepEqual(clipped, [], `${context} must not internally clip Thesis textareas: ${JSON.stringify(clipped)}`);
+  return measurements;
+}
+
 async function assertNewResearchProductContract(page, marker, baseURL) {
   await page.evaluate(() => sessionStorage.clear());
   await page.reload({ waitUntil: "networkidle" });
@@ -930,6 +944,14 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   }
   const draftControls = form.locator('input:not([type="hidden"]), textarea');
   assert.equal(await draftControls.count(), 21, "three Thesis editors must expose exactly seven draft controls each");
+  const defaultTextareaMeasurements = await assertVisibleThesisTextareasFit(form, "default 1600px fixture");
+  assert.equal(defaultTextareaMeasurements.length, 12, "default 1600px fixture must expose all twelve visible Thesis textareas");
+  const longTextarea = editors.first().locator('[data-field="falsifier"]');
+  const originalLongTextareaValue = await longTextarea.inputValue();
+  await longTextarea.fill("若主要云厂商连续两个披露期下调资本开支，并明确说明相关投入未形成部署、订单或交付，同时供应链公司披露产能利用率和相关收入同步回落，则该命题需要被推翻并重新建立验证路径。");
+  await assertVisibleThesisTextareasFit(form, "representative longer allowed input");
+  await longTextarea.fill(originalLongTextareaValue);
+  await assertVisibleThesisTextareasFit(form, "textarea shrink after restoring fixture text");
   assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => !control.hasAttribute("name"))), "visible draft controls must not submit names into the GET URL");
   assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => control.dataset.field)), "visible draft controls must identify fields through data-field");
   assert.deepEqual(await editors.evaluateAll((items) => items.map((item) => item.dataset.thesisId)), ["TH-AIC-01", "TH-AIC-02", "TH-AIC-03"]);
@@ -1103,6 +1125,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(new URL(page.url()).search, "?screen=new-research", "Back from confirmed step 3 must return to canonical step 2");
   assert.equal(await page.locator('[data-screen="new-research"] [data-field="statement"]').first().inputValue(), clickEdit, "Back to step 2 must repopulate the validated confirmation record");
   assert.equal(await page.locator('[data-screen="new-research"] [data-thesis-editor]').count(), 2, "Back must preserve a two-Thesis confirmation");
+  await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "back-restored confirmation");
   assert.deepEqual(
     await page.locator('[data-screen="new-research"] [data-draft-origin-label]').allTextContents(),
     ["AI 起草 · 人工已修改 · 待重新确认", "AI 起草 · 已确认过 · 待重新确认"],
@@ -1220,6 +1243,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(enterEdit);
   await page.goBack({ waitUntil: "networkidle" });
   const restoredOriginEditors = page.locator('[data-screen="new-research"] [data-thesis-editor]');
+  await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "mixed-origin back-restored confirmation");
   assert.deepEqual(await restoredOriginEditors.evaluateAll((items) => items.map((item) => item.dataset.origin)), ["ai", "human", "human"], "Back after refresh must preserve each draft origin");
   assert.deepEqual(await restoredOriginEditors.locator('[data-field="title"]').evaluateAll((items) => items.map((item) => item.value)), [fixtureTheses[1].title, "人工新增标题 A", "人工新增标题 B"], "Back after refresh must preserve editable titles");
   assert.equal(await restoredOriginEditors.nth(0).locator("[data-ai-suggestion-label]").count(), 1);
