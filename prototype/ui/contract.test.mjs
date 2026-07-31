@@ -702,6 +702,10 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await steps.nth(1).getAttribute("data-step-state"), "current", "step 2 must be explicitly current");
   assert.equal(await steps.nth(2).getAttribute("data-step-state"), "upcoming", "step 3 must remain upcoming");
   assert.equal(await steps.nth(3).getAttribute("data-step-state"), "upcoming", "step 4 must remain upcoming");
+  const defaultStageStatus = marker.locator("[data-stage-status]");
+  assert.equal(await defaultStageStatus.count(), 1, "new-research must expose one stage status derived from its active step");
+  assert.equal((await defaultStageStatus.textContent()).trim(), "当前阶段 · 命题待人工确认");
+  assert.equal((await steps.nth(1).textContent()).trim(), "初始命题", "default header status must align with the current rail item");
 
   const summary = marker.locator("[data-question-summary]");
   assert.equal(await summary.count(), 1, "completed research question must be summarized once");
@@ -809,6 +813,10 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.equal(await progressedSteps.nth(1).getAttribute("data-step-state"), "completed", "step 2 must become completed after progression");
     assert.equal(await progressedSteps.nth(2).getAttribute("aria-current"), "step", "step 3 must become current after progression");
     assert.equal(await progressedSteps.nth(2).getAttribute("data-step-state"), "current");
+    assert.equal((await progressedSteps.nth(2).textContent()).trim(), "已有资产");
+    const progressedStatus = progressedMarker.locator("[data-stage-status]");
+    assert.equal((await progressedStatus.textContent()).trim(), "当前阶段 · 复用资产待确认", "step 3 header must align with the current assets stage");
+    assert.ok(!(await progressedMarker.textContent()).includes("当前阶段 · 命题待人工确认"), "step 3 must not retain the contradictory step 2 header status");
     const assetStage = progressedMarker.locator('[data-step-stage="assets"]');
     assert.equal(await assetStage.count(), 1, "step 3 must render the existing-assets section as a stage");
     assert.equal(await assetStage.getAttribute("data-step-preview"), null, "current assets stage must not remain marked as a preview");
@@ -841,6 +849,12 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await fallbackSteps.nth(1).getAttribute("aria-current"), "step", "invalid step must safely fall back to step 2");
   assert.equal(await fallbackSteps.nth(1).getAttribute("data-step-state"), "current");
   assert.equal(await fallbackSteps.nth(2).getAttribute("data-step-state"), "upcoming");
+  assert.equal(
+    (await page.locator('[data-screen="new-research"] [data-stage-status]').textContent()).trim(),
+    "当前阶段 · 命题待人工确认",
+    "invalid step header must align with the normalized step 2 fallback",
+  );
+  assert.equal(await page.locator('[data-screen="new-research"] form[aria-label="初始命题"]').count(), 1, "invalid step fallback must render the step 2 section");
 }
 
 async function assertTeardownContract() {

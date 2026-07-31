@@ -284,7 +284,12 @@
     `;
   }
 
-  function buildNewResearchViewModel(fixture) {
+  function normalizeResearchStep(value) {
+    return String(value) === "3" ? 3 : 2;
+  }
+
+  function buildNewResearchViewModel(fixture, requestedStep = 2) {
+    const activeStep = normalizeResearchStep(requestedStep);
     const reviewedLinks = fixture.evidenceLinks.filter((link) => link.reviewState === "reviewed");
     const providerQueries = fixture.providerRuns.map((run) => (
       displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口")
@@ -292,6 +297,8 @@
 
     return {
       case: fixture.case,
+      activeStep,
+      stageStatus: activeStep === 3 ? "当前阶段 · 复用资产待确认" : "当前阶段 · 命题待人工确认",
       researchPeriod: fixture.case.researchPeriod,
       studyRange: `${fixture.case.researchPeriod.start} 至 ${fixture.case.researchPeriod.end}`,
       researchObject: fixture.case.researchObject,
@@ -356,7 +363,7 @@
   }
 
   function requestedResearchStep() {
-    return new URLSearchParams(window.location.search).get("step") === "3" ? 3 : 2;
+    return normalizeResearchStep(new URLSearchParams(window.location.search).get("step"));
   }
 
   function renderThesisStage(view, currentStep) {
@@ -394,8 +401,8 @@
   }
 
   function renderNewResearch() {
-    const view = buildNewResearchViewModel(data);
-    const currentStep = requestedResearchStep();
+    const view = buildNewResearchViewModel(data, requestedResearchStep());
+    const currentStep = view.activeStep;
     const assetsAreCurrent = currentStep === 3;
     return `
       <main class="screen new-research-screen" data-screen="new-research">
@@ -405,7 +412,7 @@
             <h1>新建产业研究</h1>
             <p class="lede">把一个行业判断拆成可验证、可反证的命题；当前仅确认初始命题，不代表系统已得出结论。</p>
           </div>
-          <span class="draft-boundary">当前阶段 · 命题待人工确认</span>
+          <span class="draft-boundary" data-stage-status>${escapeHTML(view.stageStatus)}</span>
         </header>
 
         <nav class="step-navigation" aria-label="新建研究步骤">
