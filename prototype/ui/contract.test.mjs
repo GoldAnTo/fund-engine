@@ -26,6 +26,47 @@ const FORBIDDEN_ASSESSMENT_PATTERNS = [
   /\b\d+(?:\.\d+)?\s*%\s*(?:的)?\s*(?:证据(?:评分|得分|覆盖率|相关性|相关度|可靠性|质量|支持度)?|相关(?:性|度)?|可靠(?:性|度)?|质量(?:评分|得分)?|评分)/u,
 ];
 
+function pngCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBuffer.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(pngCrc32(Buffer.concat([typeBuffer, data])), 8 + data.length);
+  return chunk;
+}
+
+function rawPngChunks(png) {
+  const chunks = [];
+  let offset = 8;
+  while (offset + 12 <= png.length) {
+    const length = png.readUInt32BE(offset);
+    const end = offset + 12 + length;
+    if (end > png.length) break;
+    chunks.push({ offset, end, length, type: png.toString("ascii", offset + 4, offset + 8) });
+    offset = end;
+  }
+  return chunks;
+}
+
+function replaceFirstIdatWithInvalidZlib(png) {
+  const idat = rawPngChunks(png).find((chunk) => chunk.type === "IDAT");
+  assert.ok(idat, "valid PNG test fixture must contain IDAT");
+  const invalidIdat = makePngChunk("IDAT", Buffer.from([0x78, 0x9c, 0x00]));
+  return Buffer.concat([png.subarray(0, idat.offset), invalidIdat, png.subarray(idat.end)]);
+}
+
 export function assessmentScoringViolations(text) {
   return FORBIDDEN_ASSESSMENT_PATTERNS.filter((pattern) => pattern.test(text));
 }
@@ -373,8 +414,19 @@ async function assertSourceContract() {
 
   assert.equal((styles.match(/\.case-question\s*\{/gu) ?? []).length, 1, "overview must define .case-question only once");
   assert.doesNotMatch(styles, /border-left:\s*4px/u, "selected ResearchCase must not use a generic colored side stripe");
+  assert.doesNotMatch(styles, /\.assessment\s*\{[^}]*border-left:/su, "AI assessment must not use a colored side stripe");
   for (const token of ["--action-surface", "--decision-surface", "--status-surface", "--gap-accent", "--provider-accent", "--frozen-accent"]) {
     assert.match(styles, new RegExp(`${token}:`, "u"), `styles must define semantic token ${token}`);
+  }
+  for (const selector of [
+    ".primary-action:hover",
+    ".primary-action:active",
+    ".primary-action:focus-visible",
+    ".next-action:hover",
+    ".next-action:active",
+    ".next-action:focus-visible",
+  ]) {
+    assert.match(styles, new RegExp(selector.replaceAll(".", "\\."), "u"), `${selector} must have an explicit interaction state`);
   }
 
   assert.match(readme, /Node 20/u, "README must document the compatible Node runtime");
@@ -385,6 +437,9 @@ async function assertSourceContract() {
   assert.match(readme, /--screens overview[^\n]+prototype\/设计原型1\.png/iu, "README must document the overview final capture target");
   assert.match(readme, /unimplemented screens?[^\n]+rejected/iu, "README must say unimplemented screens are rejected");
   assert.match(readme, /atomic/iu, "README must document atomic final-image replacement");
+  assert.match(readme, /CRC32/u, "README must document per-chunk CRC32 validation");
+  assert.match(readme, /zlib/iu, "README must document IDAT zlib validation");
+  assert.match(readme, /scanline/iu, "README must document decoded scanline validation");
   assert.doesNotMatch(readme, /Task 1 has no final screenshot mapping/u, "README must not retain the obsolete Task 1 capture boundary");
   assert.match(readme, /scrollWidth.*1600/u, "README must document the horizontal fit gate");
   assert.match(readme, /scrollHeight.*1000/u, "README must document the vertical fit gate");
@@ -470,15 +525,9 @@ async function assertCaptureDimensionAndOutputContract() {
     /1001.*1000/u,
   );
 
-  const pngHeader = Buffer.alloc(24);
-  Buffer.from("89504e470d0a1a0a", "hex").copy(pngHeader, 0);
-  pngHeader.write("IHDR", 12, "ascii");
-  pngHeader.writeUInt32BE(1600, 16);
-  pngHeader.writeUInt32BE(1000, 20);
-  assert.doesNotThrow(() => assertPngDimensions(pngHeader));
-  pngHeader.writeUInt32BE(1001, 20);
-  assert.throws(() => assertPngDimensions(pngHeader), /1600x1001.*1600x1000/u);
-
+  const validPng = await readFile(path.resolve(UI_DIR, "../设计原型1.png"));
+  assert.doesNotThrow(() => assertPngDimensions(validPng));
+  assert.throws(() => assertPngDimensions(validPng, { width: 1600, height: 1001 }), /1600x1000.*1600x1001/u);
 }
 
 async function assertAtomicFinalCaptureContract() {
@@ -488,13 +537,33 @@ async function assertAtomicFinalCaptureContract() {
   const fixtureDir = await mkdtemp(path.join(os.tmpdir(), "prototype-final-capture-"));
   const target = path.join(fixtureDir, "final.png");
   const original = Buffer.from("existing final image");
-  const png = Buffer.alloc(24);
-  Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
-  png.write("IHDR", 12, "ascii");
-  png.writeUInt32BE(1600, 16);
-  png.writeUInt32BE(1000, 20);
+  const png = await readFile(path.resolve(UI_DIR, "../设计原型1.png"));
+  const chunks = rawPngChunks(png);
+  const iend = chunks.find((chunk) => chunk.type === "IEND");
+  const firstIdat = chunks.find((chunk) => chunk.type === "IDAT");
+  assert.ok(iend && firstIdat, "valid PNG test fixture must include IDAT and IEND");
+
+  const badLength = Buffer.from(png);
+  badLength.writeUInt32BE(Math.min(0xffffffff, firstIdat.length + png.length), firstIdat.offset);
+  const badCrc = Buffer.from(png);
+  badCrc[iend.end - 1] ^= 0xff;
+  const invalidPngs = new Map([
+    ["truncated", png.subarray(0, png.length - 1)],
+    ["missing IEND", png.subarray(0, iend.offset)],
+    ["trailing data", Buffer.concat([png, Buffer.from("trailing")])],
+    ["bad chunk length", badLength],
+    ["bad CRC", badCrc],
+    ["invalid zlib with valid CRC", replaceFirstIdatWithInvalidZlib(png)],
+  ]);
 
   try {
+    for (const [label, invalidPng] of invalidPngs) {
+      await writeFile(target, original);
+      await assert.rejects(writeFinalCaptureAtomically(target, invalidPng), undefined, `${label} PNG must be rejected`);
+      assert.deepEqual(await readFile(target), original, `${label} validation failure must leave existing final bytes unchanged`);
+      assert.deepEqual(await readdir(fixtureDir), ["final.png"], `${label} validation failure must create no temporary sibling`);
+    }
+
     await writeFile(target, original);
     let attemptedRename;
     await assert.rejects(
@@ -815,6 +884,47 @@ async function assertBrowserContract(routes) {
           assert.doesNotMatch(assessment, forbidden, `${screen} evidence assessment contains forbidden scoring: ${forbidden}`);
         }
       }
+
+      await page.setViewportSize({ width: 375, height: 812 });
+      const mobileMenu = page.locator("details.mobile-nav");
+      const mobileSummary = mobileMenu.locator("summary");
+      assert.equal(await mobileMenu.count(), 1, `${screen} must expose one compact mobile navigation`);
+      assert.ok(await mobileSummary.isVisible(), `${screen} mobile navigation control must be visible at 375px`);
+      assert.equal((await mobileSummary.textContent()).trim(), "导航");
+      assert.equal(await mobileSummary.evaluate((element) => element.tagName), "SUMMARY", "mobile navigation control must use native summary semantics");
+      assert.ok(await mobileSummary.evaluate((element) => element.tabIndex >= 0), "mobile navigation control must be keyboard focusable");
+
+      const closedOverflow = await page.evaluate(() => ({
+        body: document.body.scrollWidth - document.body.clientWidth,
+        document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }));
+      assert.ok(closedOverflow.body <= 0 && closedOverflow.document <= 0, `${screen} closed mobile navigation must not overflow: ${JSON.stringify(closedOverflow)}`);
+
+      await mobileSummary.focus();
+      await page.keyboard.press("Enter");
+      assert.ok(await mobileMenu.evaluate((element) => element.open), `${screen} mobile navigation must open from the keyboard`);
+      const mobileNavigation = page.getByRole("navigation", { name: "移动端主导航" });
+      assert.ok(await mobileNavigation.isVisible(), `${screen} opened mobile navigation must expose its named navigation region`);
+      const mobileLinks = mobileNavigation.locator("a");
+      assert.equal(await mobileLinks.count(), 6, `${screen} mobile navigation must contain all six exact destinations`);
+      for (let index = 0; index < await mobileLinks.count(); index += 1) {
+        assert.ok(await mobileLinks.nth(index).isVisible(), `${screen} mobile navigation link ${index + 1} must be visible when open`);
+        assert.ok(await mobileLinks.nth(index).evaluate((element) => element.tabIndex >= 0), `${screen} mobile navigation link ${index + 1} must be keyboard reachable`);
+      }
+      const mobileCurrentPages = mobileNavigation.locator('a[aria-current="page"]');
+      assert.equal(await mobileCurrentPages.count(), expectedNavLabel ? 1 : 0, `${screen} mobile current-page state must use exact route matching`);
+      if (expectedNavLabel) {
+        assert.equal((await mobileCurrentPages.locator("span:last-child").textContent()).trim(), expectedNavLabel);
+        assert.equal(await mobileCurrentPages.getAttribute("href"), `?screen=${screen}`);
+      }
+      const openOverflow = await page.evaluate(() => ({
+        body: document.body.scrollWidth - document.body.clientWidth,
+        document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }));
+      assert.ok(openOverflow.body <= 0 && openOverflow.document <= 0, `${screen} open mobile navigation must not overflow: ${JSON.stringify(openOverflow)}`);
+      await mobileSummary.click();
+      assert.ok(!await mobileMenu.evaluate((element) => element.open), `${screen} mobile navigation must close from pointer activation`);
+      await page.setViewportSize({ width: 1600, height: 1000 });
     }
   });
 }

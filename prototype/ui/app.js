@@ -160,6 +160,15 @@
     `;
   }
 
+  function renderNavLinks(activeNav) {
+    return NAV_ITEMS.map((item) => `
+      <a class="nav-link" href="?screen=${escapeHTML(item.screen)}"${item.screen === activeNav ? ' aria-current="page"' : ""}>
+        <span class="nav-icon" aria-hidden="true">${escapeHTML(item.icon)}</span>
+        <span>${escapeHTML(item.label)}</span>
+      </a>
+    `).join("");
+  }
+
   function renderOverview() {
     const view = buildOverviewViewModel(data);
     const activeCase = view.case;
@@ -315,12 +324,7 @@
             <div><strong>研究台账</strong><small>EVIDENCE LEDGER</small></div>
           </div>
           <nav class="nav-list">
-            ${NAV_ITEMS.map((item) => `
-              <a class="nav-link" href="?screen=${escapeHTML(item.screen)}"${item.screen === activeNav ? ' aria-current="page"' : ""}>
-                <span class="nav-icon" aria-hidden="true">${escapeHTML(item.icon)}</span>
-                <span>${escapeHTML(item.label)}</span>
-              </a>
-            `).join("")}
+            ${renderNavLinks(activeNav)}
           </nav>
           <p class="nav-note">证据台账为事实源<br>图谱与搜索均为可重建投影</p>
         </aside>
@@ -328,6 +332,12 @@
           <div class="breadcrumbs"><span>AI 算力产业链</span><span aria-hidden="true">/</span><strong>${escapeHTML(data.case.snapshotId)}</strong></div>
           <div class="utility-actions"><span class="utility-pill">截止 ${escapeHTML(data.case.cutoff)}</span><span class="utility-pill">只读原型</span></div>
         </header>
+        <details class="mobile-nav">
+          <summary>导航</summary>
+          <nav class="mobile-nav-links" aria-label="移动端主导航">
+            ${renderNavLinks(activeNav)}
+          </nav>
+        </details>
         <div class="work-area">${SCREEN_RENDERERS[screen]()}</div>
       </div>
     `;

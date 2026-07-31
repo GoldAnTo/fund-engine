@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 const UI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const VIEWPORT = { width: 1600, height: 1000 };
@@ -36,15 +37,116 @@ export function assertViewportFit({ scrollWidth, scrollHeight }, viewport = VIEW
   }
 }
 
+function pngCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function expectedNonInterlacedScanlineLength({ width, height, bitDepth, colorType }) {
+  const channelsByColorType = new Map([
+    [0, 1],
+    [2, 3],
+    [3, 1],
+    [4, 2],
+    [6, 4],
+  ]);
+  const channels = channelsByColorType.get(colorType);
+  if (!channels) throw new TypeError(`Unsupported PNG color type ${colorType}`);
+  return (Math.ceil((width * channels * bitDepth) / 8) + 1) * height;
+}
+
 export function assertPngDimensions(png, viewport = VIEWPORT) {
   const signature = "89504e470d0a1a0a";
-  if (png.length < 24 || png.subarray(0, 8).toString("hex") !== signature || png.subarray(12, 16).toString("ascii") !== "IHDR") {
-    throw new TypeError("Capture did not produce a PNG with an IHDR header");
+  if (!Buffer.isBuffer(png) || png.length < 8 || png.subarray(0, 8).toString("hex") !== signature) {
+    throw new TypeError("Capture did not produce a PNG signature");
   }
-  const width = png.readUInt32BE(16);
-  const height = png.readUInt32BE(20);
+
+  let offset = 8;
+  let header;
+  let sawIend = false;
+  let idatEnded = false;
+  const idatParts = [];
+  let chunkIndex = 0;
+  while (offset < png.length) {
+    if (png.length - offset < 12) throw new TypeError("PNG chunk is truncated");
+    const length = png.readUInt32BE(offset);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const chunkEnd = dataEnd + 4;
+    if (dataEnd < dataStart || chunkEnd > png.length) throw new TypeError("PNG chunk length exceeds buffer bounds");
+
+    const typeBuffer = png.subarray(offset + 4, offset + 8);
+    const type = typeBuffer.toString("ascii");
+    if (!/^[A-Za-z]{4}$/u.test(type)) throw new TypeError("PNG chunk type is invalid");
+    const data = png.subarray(dataStart, dataEnd);
+    const expectedCrc = png.readUInt32BE(dataEnd);
+    const actualCrc = pngCrc32(Buffer.concat([typeBuffer, data]));
+    if (actualCrc !== expectedCrc) throw new TypeError(`PNG ${type} chunk CRC mismatch`);
+
+    if (chunkIndex === 0 && type !== "IHDR") throw new TypeError("PNG IHDR must be the first chunk");
+    if (type === "IHDR") {
+      if (header || chunkIndex !== 0 || length !== 13) throw new TypeError("PNG must contain exactly one 13-byte IHDR first");
+      header = {
+        width: data.readUInt32BE(0),
+        height: data.readUInt32BE(4),
+        bitDepth: data[8],
+        colorType: data[9],
+        compression: data[10],
+        filter: data[11],
+        interlace: data[12],
+      };
+      if (!header.width || !header.height || header.compression !== 0 || header.filter !== 0 || ![0, 1].includes(header.interlace)) {
+        throw new TypeError("PNG IHDR fields are invalid");
+      }
+    } else if (type === "IDAT") {
+      if (!header || sawIend || idatEnded) throw new TypeError("PNG IDAT chunks must be contiguous after IHDR");
+      if (length > 0) idatParts.push(data);
+    } else {
+      if (idatParts.length > 0 && type !== "IEND") idatEnded = true;
+      if (type === "IEND") {
+        if (length !== 0) throw new TypeError("PNG IEND must have zero length");
+        if (chunkEnd !== png.length) throw new TypeError("PNG IEND must be the final chunk at exact EOF");
+        sawIend = true;
+      }
+    }
+
+    offset = chunkEnd;
+    chunkIndex += 1;
+    if (sawIend) break;
+  }
+
+  if (!header) throw new TypeError("PNG is missing IHDR");
+  if (idatParts.length === 0) throw new TypeError("PNG must contain at least one non-empty IDAT");
+  if (!sawIend || offset !== png.length) throw new TypeError("PNG is missing a final IEND chunk");
+
+  const { width, height } = header;
   if (width !== viewport.width || height !== viewport.height) {
     throw new RangeError(`PNG dimensions ${width}x${height} do not match viewport ${viewport.width}x${viewport.height}`);
+  }
+
+  let decoded;
+  try {
+    decoded = inflateSync(Buffer.concat(idatParts));
+  } catch (error) {
+    const wrapped = new TypeError("PNG IDAT zlib stream is invalid");
+    wrapped.cause = error;
+    throw wrapped;
+  }
+  if (header.interlace === 0) {
+    const expectedLength = expectedNonInterlacedScanlineLength(header);
+    if (decoded.length !== expectedLength) {
+      throw new TypeError(`PNG decoded scanline length ${decoded.length} does not match expected ${expectedLength}`);
+    }
+    const rowLength = expectedLength / height;
+    for (let row = 0; row < height; row += 1) {
+      if (decoded[row * rowLength] > 4) throw new TypeError(`PNG scanline ${row} has an invalid filter byte`);
+    }
   }
 }
 
