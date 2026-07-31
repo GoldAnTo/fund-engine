@@ -43,7 +43,13 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
 
     # 1. Extract statements from every document version.
     if not skip_extract:
-        versions = list(session.scalars(select(DocumentVersion)))
+        versions = list(
+            session.scalars(
+                select(DocumentVersion).where(
+                    DocumentVersion.parser_version == "gildata-mcp-1"
+                )
+            )
+        )
         total_statements = 0
         for version in versions:
             statements = extractor.extract(version.id, session)

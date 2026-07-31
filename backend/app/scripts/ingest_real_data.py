@@ -210,7 +210,7 @@ def ingest(
     # 1. Research reports -> DocumentVersion + SourceSpan.
     for query in RESEARCH_QUERIES:
         reports = adapters.fetch_research_report(client, query)
-        for report in reports:
+        for report in reports[:3]:
             content = report.get("content", "")
             if not content:
                 continue
@@ -238,7 +238,7 @@ def ingest(
 
     # 2. Announcements -> DocumentVersion + SourceSpan.
     announcements = adapters.fetch_announcement(client, ANNOUNCEMENT_QUERY)
-    for ann in announcements:
+    for ann in announcements[:3]:
         content = ann.get("content", "") or ann.get("title", "")
         if not content:
             continue
