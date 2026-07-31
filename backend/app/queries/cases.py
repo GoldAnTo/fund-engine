@@ -84,7 +84,7 @@ class CaseReadQueries:
         basis: HistoricalBasis,
         research_mode: bool = False,
     ) -> DossierResponse:
-        case = self._repo.get_case(case_id)
+        case = self._repo.get_case(case_id, cutoff=basis.cutoff)
         if case is None:
             raise NotFoundError("research case not found")
 

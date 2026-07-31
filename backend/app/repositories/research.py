@@ -187,11 +187,15 @@ class ResearchRepository:
         thesis_id: uuid.UUID,
         cutoff: datetime,
     ) -> list[EvidenceLink]:
+        # A link is visible at cutoff only if the evidence was available AND
+        # the link had been written to the ledger by then. Filtering only
+        # available_at would allow hindsight leakage via backfilled dates.
         return list(
             self._session.scalars(
                 select(EvidenceLink)
                 .where(EvidenceLink.thesis_id == thesis_id)
                 .where(EvidenceLink.available_at <= cutoff)
+                .where(EvidenceLink.created_at <= cutoff)
                 .order_by(EvidenceLink.available_at)
             )
         )
@@ -266,8 +270,20 @@ class ResearchRepository:
 
     # ------------------------------------------------------------------ readers (workbench / projection)
 
-    def get_case(self, case_id: uuid.UUID) -> ResearchCase | None:
-        return self._session.get(ResearchCase, case_id)
+    def get_case(
+        self,
+        case_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
+    ) -> ResearchCase | None:
+        if cutoff is None:
+            return self._session.get(ResearchCase, case_id)
+        # Historical view: a case created after the cutoff did not exist then.
+        return self._session.scalar(
+            select(ResearchCase)
+            .where(ResearchCase.id == case_id)
+            .where(ResearchCase.created_at <= cutoff)
+        )
 
     def latest_thesis_for_case(
         self,

@@ -251,3 +251,107 @@ def test_missing_case_returns_v1_error(api_client):
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
+
+
+def test_dossier_hides_case_created_after_cutoff(api_client, session):
+    future = datetime(2026, 12, 31, tzinfo=UTC)
+    cutoff = datetime(2026, 6, 1, tzinfo=UTC)
+    case = ResearchCase(
+        title="future case", industry_topic="t", created_by="u", created_at=future
+    )
+    session.add(case)
+    session.flush()
+    response = api_client.get(
+        f"/api/v1/research-cases/{case.id}/dossier",
+        params={"cutoff": cutoff.isoformat()},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+def test_dossier_excludes_link_created_after_cutoff_with_backfilled_available_at(
+    api_client, session
+):
+    # A link written to the ledger AFTER the cutoff, but with available_at
+    # backfilled into the past, must not appear in a historical dossier
+    # (no hindsight leakage).
+    past = datetime(2025, 1, 1, tzinfo=UTC)
+    cutoff = datetime(2026, 6, 1, tzinfo=UTC)
+    future = datetime(2026, 12, 31, tzinfo=UTC)
+
+    case = ResearchCase(
+        title="c", industry_topic="t", created_by="u", created_at=past
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id, statement="t", created_by="u", created_at=past
+    )
+    session.add(thesis)
+    session.flush()
+    version = DocumentVersion(
+        content_sha256="y" * 64,
+        source_url="u",
+        published_at=None,
+        available_at=past,
+        acquired_at=past,
+        parser_version="1",
+        supersedes_id=None,
+    )
+    session.add(version)
+    session.flush()
+    span = SourceSpan(
+        document_version_id=version.id, locator={"p": 1}, verbatim_text="v"
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="disclosed_fact",
+        normalized_text="s",
+        observed_period=None,
+        created_at=past,
+    )
+    session.add(statement)
+    session.flush()
+    # created_at in the FUTURE, available_at backfilled to the past
+    session.add(
+        EvidenceLink(
+            thesis_id=thesis.id,
+            source_statement_id=statement.id,
+            role="supports",
+            reason="r",
+            scope={"s": "d"},
+            available_at=past,
+            creator_type="ai",
+            review_state="reviewed",
+            created_at=future,
+        )
+    )
+    session.flush()
+
+    response = api_client.get(
+        f"/api/v1/research-cases/{case.id}/dossier",
+        params={"cutoff": cutoff.isoformat(), "research_mode": "true"},
+    )
+    assert response.status_code == 200
+    assert response.json()["evidence"]["supports"] == []
+
+
+def test_v1_param_validation_returns_v1_422_envelope(api_client):
+    response = api_client.get("/api/v1/research-cases", params={"limit": 0})
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["schema_version"] == "v1"
+    assert payload["error"]["code"] == "validation_failed"
+    assert payload["error"]["request_id"] == response.headers["x-request-id"]
+
+
+def test_legacy_route_keeps_default_422_format(api_client):
+    # Legacy /api/... routes must keep FastAPI's default 422 format, not the
+    # v1 envelope, for backward compatibility.
+    response = api_client.get("/api/research-cases/not-a-uuid/workbench")
+    assert response.status_code == 422
+    payload = response.json()
+    assert "detail" in payload
+    assert "error" not in payload

@@ -92,6 +92,13 @@ async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
     request_id = getattr(request.state, "request_id", "")
+    # The v1 error envelope applies only to /api/v1; legacy routes keep
+    # FastAPI's default {"detail": [...]} 422 format for compatibility.
+    if not request.url.path.startswith("/api/v1"):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(exc.errors())},
+        )
     return JSONResponse(
         status_code=422,
         content=_v1_error_envelope(
