@@ -1,7 +1,7 @@
-"""Shared v1 wire schemas: base model, historical basis, cursor page, errors."""
+"""Shared v1 wire schemas: base model, health, historical basis, cursor page, errors."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,6 +10,12 @@ class V1Model(BaseModel):
     """Base for every v1 wire DTO. Rejects unknown fields."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class HealthResponse(V1Model):
+    service: str
+    status: str
+    schema_version: Literal["v1"] = "v1"
 
 
 class HistoricalBasisDTO(V1Model):
@@ -33,4 +39,6 @@ class ErrorBody(V1Model):
 
 
 class ErrorEnvelope(V1Model):
+    # Design 4.1: every response, including errors, carries schema_version.
+    schema_version: Literal["v1"] = "v1"
     error: ErrorBody

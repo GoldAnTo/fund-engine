@@ -23,7 +23,12 @@ class HistoricalBasis:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> "HistoricalBasis":
         if cutoff is None:
-            return cls(cutoff=now(), is_historical=False)
+            current = now()
+            # An injected clock may return a naive datetime; normalize to UTC
+            # so the DTO never emits a timezone-less timestamp.
+            if current.tzinfo is None:
+                current = current.replace(tzinfo=UTC)
+            return cls(cutoff=current, is_historical=False)
         if cutoff.tzinfo is None:
             cutoff = cutoff.replace(tzinfo=UTC)
         return cls(cutoff=cutoff, is_historical=True)

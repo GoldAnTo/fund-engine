@@ -2,13 +2,14 @@
 
 from fastapi import APIRouter
 
+from app.schemas.v1.common import HealthResponse
+
 router = APIRouter(prefix="/api/v1")
 
 
-@router.get("/health")
-def health_v1() -> dict[str, str]:
-    return {
-        "service": "industry-evidence-workspace",
-        "status": "ok",
-        "schema_version": "v1",
-    }
+@router.get("/health", response_model=HealthResponse)
+def health_v1() -> HealthResponse:
+    return HealthResponse(
+        service="industry-evidence-workspace",
+        status="ok",
+    )

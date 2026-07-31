@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import FastAPI, Request
@@ -6,6 +7,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.cases import router as cases_router
 from app.api.v1.router import router as v1_router
+
+logger = logging.getLogger("industry_evidence_workspace")
 
 app = FastAPI(title="Industry Evidence Workspace")
 app.add_middleware(
@@ -27,7 +30,27 @@ app.include_router(v1_router)
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Unified internal-error boundary: any exception that escapes the
+        # inner ExceptionMiddleware is converted here to a stable 500 envelope
+        # carrying the request-id, so no 500 ever lacks the correlation header.
+        # Internal text/stack must not leak to the client (design 7.3).
+        logger.exception("Unhandled exception (request_id=%s)", request_id)
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "schema_version": "v1",
+                "error": {
+                    "code": "internal_error",
+                    "message": "internal error",
+                    "request_id": request_id,
+                    "details": {},
+                },
+            },
+            headers={"x-request-id": request_id},
+        )
     response.headers["x-request-id"] = request_id
     return response
 
@@ -40,12 +63,13 @@ async def key_error_handler(request: Request, exc: KeyError):
     return JSONResponse(
         status_code=404,
         content={
+            "schema_version": "v1",
             "error": {
                 "code": "not_found",
                 "message": str(exc.args[0]) if exc.args else "not found",
                 "request_id": request_id,
                 "details": {},
-            }
+            },
         },
         headers={"x-request-id": request_id},
     )

@@ -40,3 +40,43 @@ def test_basis_current_uses_injected_clock():
     basis = HistoricalBasis.from_cutoff(None, now=lambda: now)
     assert basis.cutoff == now
     assert basis.is_historical is False
+
+
+def test_basis_normalizes_naive_injected_clock_to_utc():
+    naive_now = datetime(2026, 7, 31, 4, 0)
+    basis = HistoricalBasis.from_cutoff(None, now=lambda: naive_now)
+    assert basis.cutoff == datetime(2026, 7, 31, 4, 0, tzinfo=UTC)
+    assert basis.cutoff.tzinfo is not None
+    assert basis.is_historical is False
+
+
+def test_basis_to_dto_preserves_timezone():
+    basis = HistoricalBasis.from_cutoff(datetime(2024, 5, 31, 12, 0))
+    dto = basis.to_dto()
+    assert dto.cutoff == datetime(2024, 5, 31, 12, 0, tzinfo=UTC)
+    assert dto.cutoff.tzinfo is not None
+    assert dto.is_historical is True
+
+
+def test_unhandled_exception_returns_500_envelope_with_request_id(api_client):
+    from app.main import app
+
+    @app.get("/api/v1/__raise__")
+    def _raise():
+        raise RuntimeError("boom")
+
+    try:
+        response = api_client.get("/api/v1/__raise__")
+        assert response.status_code == 500
+        payload = response.json()
+        assert payload["schema_version"] == "v1"
+        assert payload["error"]["code"] == "internal_error"
+        assert payload["error"]["request_id"] == response.headers["x-request-id"]
+        # Internal exception text must not leak to the client (design 7.3).
+        assert "boom" not in response.text
+    finally:
+        app.router.routes = [
+            r
+            for r in app.router.routes
+            if getattr(r, "path", "") != "/api/v1/__raise__"
+        ]
