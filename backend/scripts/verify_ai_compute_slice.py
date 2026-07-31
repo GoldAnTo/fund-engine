@@ -369,7 +369,15 @@ def main() -> None:
     with session_local() as session:
         seed(session)
         session.commit()
-        gate = ReleaseGate(session)
+        projector = None
+        if os.getenv("NEO4J_URL"):
+            from app.services.projection import ProjectionService
+
+            try:
+                projector = ProjectionService.from_env(session)
+            except Exception:
+                projector = None
+        gate = ReleaseGate(session, projector=projector)
         result = gate.run()
 
     # Write JSON result to docs/evaluation/runs/<timestamp>.json (no overwrite).

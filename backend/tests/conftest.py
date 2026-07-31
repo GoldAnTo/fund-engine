@@ -17,8 +17,19 @@ USE_NEO4J = bool(NEO4J_URL)
 
 @pytest.fixture(scope="session")
 def engine():
+    from app.models.ledger import Base
+
     if USE_PG:
         eng = create_engine(PG_URL, future=True)
+        # 表与 append-only 触发器由 Alembic migration 管理；测试前 TRUNCATE
+        # 清残留数据，保留结构与触发器（drop_all 会删触发器，故不用）。
+        with eng.begin() as conn:
+            table_names = ", ".join(
+                f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables)
+            )
+            conn.exec_driver_sql(
+                f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+            )
     else:
         eng = create_engine(
             "sqlite://",
@@ -26,11 +37,10 @@ def engine():
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-    from app.models.ledger import Base
-
-    Base.metadata.create_all(eng)
+        Base.metadata.create_all(eng)
     yield eng
-    Base.metadata.drop_all(eng)
+    if not USE_PG:
+        Base.metadata.drop_all(eng)
 
 
 @pytest.fixture
@@ -484,7 +494,23 @@ class _SeededDatabase:
         span_id_hex = statement.source_span_id.hex
 
         cur = self.dbapi_cursor()
-        cur.execute("DELETE FROM source_spans WHERE id = ?", (span_id_hex,))
+        if self._session.bind.dialect.name == "postgresql":
+            # Disable the DB-level append-only trigger and drop the FK constraint
+            # so the destructive DELETE succeeds; the transaction rolls back
+            # (restoring trigger, constraint and row).
+            cur.execute(
+                "ALTER TABLE source_spans DISABLE TRIGGER no_delete_source_spans"
+            )
+            cur.execute(
+                "ALTER TABLE source_statements "
+                "DROP CONSTRAINT IF EXISTS source_statements_source_span_id_fkey"
+            )
+            cur.execute(
+                "DELETE FROM source_spans WHERE id = %s",
+                (str(statement.source_span_id),),
+            )
+        else:
+            cur.execute("DELETE FROM source_spans WHERE id = ?", (span_id_hex,))
         assert cur.rowcount == 1, f"expected to delete 1 span, deleted {cur.rowcount}"
         self._session.expire_all()
 
@@ -510,39 +536,52 @@ class _SeededDatabase:
         assert fund is not None and stock is not None
 
         cur = self.dbapi_cursor()
-        # Recreate the table with published_at nullable, preserving all data.
-        # Use individual execute() calls — executescript() would COMMIT.
-        cur.execute(
-            "CREATE TABLE holding_disclosures_new ("
-            "id CHAR(32) NOT NULL, "
-            "fund_id CHAR(32) NOT NULL, "
-            "stock_id CHAR(32) NOT NULL, "
-            "weight NUMERIC NOT NULL, "
-            "report_period DATE NOT NULL, "
-            "published_at DATETIME, "
-            "acquired_at DATETIME NOT NULL, "
-            "source VARCHAR(128) NOT NULL, "
-            "created_at DATETIME NOT NULL, "
-            "PRIMARY KEY (id), "
-            "FOREIGN KEY(fund_id) REFERENCES funds (id), "
-            "FOREIGN KEY(stock_id) REFERENCES stocks (id))"
-        )
-        cur.execute(
-            "INSERT INTO holding_disclosures_new SELECT * FROM holding_disclosures"
-        )
-        cur.execute("DROP TABLE holding_disclosures")
-        cur.execute(
-            "ALTER TABLE holding_disclosures_new RENAME TO holding_disclosures"
-        )
+        is_pg = self._session.bind.dialect.name == "postgresql"
+        placeholder = "%s" if is_pg else "?"
+        new_id = str(uuid.uuid4()) if is_pg else uuid.uuid4().hex
+        fund_id = str(fund.id) if is_pg else fund.id.hex
+        stock_id = str(stock.id) if is_pg else stock.id.hex
+
+        if is_pg:
+            # PostgreSQL: ALTER COLUMN to nullable in place (DDL is transactional).
+            cur.execute(
+                "ALTER TABLE holding_disclosures "
+                "ALTER COLUMN published_at DROP NOT NULL"
+            )
+        else:
+            # SQLite cannot ALTER COLUMN; recreate the table with published_at nullable.
+            cur.execute(
+                "CREATE TABLE holding_disclosures_new ("
+                "id CHAR(32) NOT NULL, "
+                "fund_id CHAR(32) NOT NULL, "
+                "stock_id CHAR(32) NOT NULL, "
+                "weight NUMERIC NOT NULL, "
+                "report_period DATE NOT NULL, "
+                "published_at DATETIME, "
+                "acquired_at DATETIME NOT NULL, "
+                "source VARCHAR(128) NOT NULL, "
+                "created_at DATETIME NOT NULL, "
+                "PRIMARY KEY (id), "
+                "FOREIGN KEY(fund_id) REFERENCES funds (id), "
+                "FOREIGN KEY(stock_id) REFERENCES stocks (id))"
+            )
+            cur.execute(
+                "INSERT INTO holding_disclosures_new SELECT * FROM holding_disclosures"
+            )
+            cur.execute("DROP TABLE holding_disclosures")
+            cur.execute(
+                "ALTER TABLE holding_disclosures_new RENAME TO holding_disclosures"
+            )
+
         cur.execute(
             "INSERT INTO holding_disclosures "
             "(id, fund_id, stock_id, weight, report_period, published_at, "
             "acquired_at, source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
             (
-                uuid.uuid4().hex,
-                fund.id.hex,
-                stock.id.hex,
+                new_id,
+                fund_id,
+                stock_id,
                 0.05,
                 "2026-03-31",
                 None,
