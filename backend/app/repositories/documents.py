@@ -72,3 +72,31 @@ class DocumentRepository:
         self._session.add(span)
         self._session.flush()
         return span
+
+    # ------------------------------------------------------------------ readers
+
+    def visible_versions(
+        self, *, cutoff: datetime, limit: int
+    ) -> list[DocumentVersion]:
+        # A version is visible at cutoff only if it was available AND acquired
+        # by then; filtering only available_at would allow hindsight leakage.
+        return list(
+            self._session.scalars(
+                select(DocumentVersion)
+                .where(DocumentVersion.available_at <= cutoff)
+                .where(DocumentVersion.acquired_at <= cutoff)
+                .order_by(
+                    DocumentVersion.available_at.desc(), DocumentVersion.id.desc()
+                )
+                .limit(limit + 1)
+            )
+        )
+
+    def spans_for_version(self, version_id: uuid.UUID) -> list[SourceSpan]:
+        return list(
+            self._session.scalars(
+                select(SourceSpan)
+                .where(SourceSpan.document_version_id == version_id)
+                .order_by(SourceSpan.id)
+            )
+        )

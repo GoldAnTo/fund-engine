@@ -72,12 +72,18 @@ def document_service(session):
 
 
 @pytest.fixture
-def span(document_service):
-    version = document_service.freeze(
+def document(document_service):
+    """A frozen document version available now."""
+    return document_service.freeze(
         raw=b"page one", source_url="https://example.test/a"
     )
+
+
+@pytest.fixture
+def span(document, document_service):
+    """A source span attached to the ``document`` version."""
     return document_service.add_span(
-        document_version_id=version.id,
+        document_version_id=document.id,
         locator={"page": 1, "paragraph": 0},
         verbatim_text="original span text",
     )

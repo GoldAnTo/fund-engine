@@ -427,6 +427,32 @@ class ResearchRepository:
             select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
         )
 
+    def statements_for_span_ids(
+        self, span_ids: list[uuid.UUID]
+    ) -> list[SourceStatement]:
+        if not span_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(SourceStatement).where(
+                    SourceStatement.source_span_id.in_(span_ids)
+                )
+            )
+        )
+
+    def links_for_statement_ids(
+        self, statement_ids: list[uuid.UUID]
+    ) -> list[EvidenceLink]:
+        if not statement_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(EvidenceLink).where(
+                    EvidenceLink.source_statement_id.in_(statement_ids)
+                )
+            )
+        )
+
     def all_evidence_links(self) -> list[EvidenceLink]:
         return list(self._session.scalars(select(EvidenceLink)))
 
