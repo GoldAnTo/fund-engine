@@ -2,6 +2,12 @@
 
 Builds wire DTOs directly from the append-only ledger. Never invents author,
 reliability, confidence, status label or prose not present in the ledger.
+
+Historical replay rule (design 10): the cutoff basis filters EVERY entity
+(theses, causal steps, reviews, assessments, evidence links), not just
+EvidenceLink. The AI/human boundary (design 9.2/9.3): machine-generated
+evidence is hidden from the normal dossier and only revealed under an
+explicit research mode; rejected proposals are never returned.
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.errors import NotFoundError
+from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import ResearchCase
 from app.queries.basis import HistoricalBasis
 from app.repositories.research import ResearchRepository
@@ -27,6 +33,11 @@ from app.schemas.v1.cases import (
     ThesisSummaryDTO,
 )
 from app.schemas.v1.common import CursorPage
+
+# review_state values considered "reviewed evidence" for the default dossier.
+_REVIEWED_STATES = frozenset({"reviewed"})
+# additional states visible only under explicit research mode.
+_RESEARCH_STATES = frozenset({"reviewed", "machine_generated"})
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -71,19 +82,24 @@ class CaseReadQueries:
         case_id: uuid.UUID,
         thesis_id: uuid.UUID | None,
         basis: HistoricalBasis,
+        research_mode: bool = False,
     ) -> DossierResponse:
         case = self._repo.get_case(case_id)
         if case is None:
             raise NotFoundError("research case not found")
 
         if thesis_id is not None:
-            thesis = self._repo.thesis_by_id_for_case(case_id, thesis_id)
+            thesis = self._repo.thesis_by_id_for_case(
+                case_id, thesis_id, cutoff=basis.cutoff
+            )
             if thesis is None:
                 raise NotFoundError("thesis not found in research case")
         else:
-            thesis = self._repo.latest_thesis_for_case(case_id)
+            thesis = self._repo.latest_thesis_for_case(
+                case_id, cutoff=basis.cutoff
+            )
 
-        theses = self._repo.theses_for_case(case_id)
+        theses = self._repo.theses_for_case(case_id, cutoff=basis.cutoff)
         focus_thesis_id = str(thesis.id) if thesis is not None else ""
 
         assessment_dto = None
@@ -96,9 +112,12 @@ class CaseReadQueries:
         gaps: list[str] = []
 
         if thesis is not None:
+            allowed_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
             for link in self._repo.visible_links(
                 thesis_id=thesis.id, cutoff=basis.cutoff
             ):
+                if link.review_state not in allowed_states:
+                    continue
                 evidence.setdefault(link.role, []).append(
                     self._evidence_record(link)
                 )
@@ -107,7 +126,7 @@ class CaseReadQueries:
                 thesis.id, cutoff=basis.cutoff
             )
             if assessment is not None:
-                assessment_dto = self._assessment(assessment, thesis.id)
+                assessment_dto = self._assessment(assessment, thesis.id, basis.cutoff)
                 gaps = list(assessment.gaps)
 
             causal_chain = [
@@ -116,7 +135,9 @@ class CaseReadQueries:
                     sequence=step.sequence,
                     description=step.description,
                 )
-                for step in self._repo.causal_steps_for_thesis(thesis.id)
+                for step in self._repo.causal_steps_for_thesis(
+                    thesis.id, cutoff=basis.cutoff
+                )
             ]
 
         return DossierResponse(
@@ -156,11 +177,13 @@ class CaseReadQueries:
     def _evidence_record(self, link) -> EvidenceRecordDTO:
         statement = self._repo.get_statement(link.source_statement_id)
         span = self._repo.span_for_statement(link.source_statement_id)
+        # A missing statement/span is a ledger integrity break; expose it as
+        # explicit nulls rather than fabricating empty text.
         return EvidenceRecordDTO(
             link_id=str(link.id),
             statement_id=str(link.source_statement_id),
-            statement_text=statement.normalized_text if statement else "",
-            statement_kind=statement.kind if statement else "",
+            statement_text=statement.normalized_text if statement else None,
+            statement_kind=statement.kind if statement else None,
             span_id=str(span.id) if span else None,
             verbatim_text=span.verbatim_text if span else None,
             locator=span.locator if span else None,
@@ -172,8 +195,12 @@ class CaseReadQueries:
             review_state=link.review_state,
         )
 
-    def _assessment(self, assessment, thesis_id: uuid.UUID) -> AssessmentDTO:
-        review = self._repo.latest_review_for_assessment(assessment.id)
+    def _assessment(
+        self, assessment, thesis_id: uuid.UUID, cutoff: datetime
+    ) -> AssessmentDTO:
+        review = self._repo.latest_review_for_assessment(
+            assessment.id, cutoff=cutoff
+        )
         review_dto = None
         if review is not None:
             review_dto = {
@@ -211,5 +238,5 @@ class CaseReadQueries:
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=UTC)
             return created_at, uuid.UUID(data["id"])
-        except (ValueError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("malformed cursor") from exc
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ValidationFailedError("malformed cursor") from exc

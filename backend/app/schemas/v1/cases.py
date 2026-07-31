@@ -24,8 +24,8 @@ class ThesisSummaryDTO(V1Model):
 class EvidenceRecordDTO(V1Model):
     link_id: str
     statement_id: str
-    statement_text: str
-    statement_kind: str
+    statement_text: str | None
+    statement_kind: str | None
     span_id: str | None
     verbatim_text: str | None
     locator: dict[str, Any] | None

@@ -270,25 +270,34 @@ class ResearchRepository:
         return self._session.get(ResearchCase, case_id)
 
     def latest_thesis_for_case(
-        self, research_case_id: uuid.UUID
+        self,
+        research_case_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
     ) -> Thesis | None:
-        return self._session.scalar(
+        query = (
             select(Thesis)
             .where(Thesis.research_case_id == research_case_id)
             .order_by(Thesis.created_at.desc())
-            .limit(1)
         )
+        if cutoff is not None:
+            query = query.where(Thesis.created_at <= cutoff)
+        return self._session.scalar(query.limit(1))
 
     def theses_for_case(
-        self, research_case_id: uuid.UUID
+        self,
+        research_case_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
     ) -> list[Thesis]:
-        return list(
-            self._session.scalars(
-                select(Thesis)
-                .where(Thesis.research_case_id == research_case_id)
-                .order_by(Thesis.created_at)
-            )
+        query = (
+            select(Thesis)
+            .where(Thesis.research_case_id == research_case_id)
+            .order_by(Thesis.created_at)
         )
+        if cutoff is not None:
+            query = query.where(Thesis.created_at <= cutoff)
+        return list(self._session.scalars(query))
 
     def cases_page(
         self,
@@ -309,13 +318,20 @@ class ResearchRepository:
         return list(self._session.scalars(query.limit(limit + 1)))
 
     def thesis_by_id_for_case(
-        self, case_id: uuid.UUID, thesis_id: uuid.UUID
+        self,
+        case_id: uuid.UUID,
+        thesis_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
     ) -> Thesis | None:
-        return self._session.scalar(
+        query = (
             select(Thesis)
             .where(Thesis.id == thesis_id)
             .where(Thesis.research_case_id == case_id)
         )
+        if cutoff is not None:
+            query = query.where(Thesis.created_at <= cutoff)
+        return self._session.scalar(query)
 
     def latest_assessment_for_thesis(
         self,
@@ -342,25 +358,34 @@ class ResearchRepository:
         )
 
     def latest_review_for_assessment(
-        self, assessment_id: uuid.UUID
+        self,
+        assessment_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
     ) -> ReviewDecision | None:
-        return self._session.scalar(
+        query = (
             select(ReviewDecision)
             .where(ReviewDecision.ai_assessment_id == assessment_id)
             .order_by(ReviewDecision.created_at.desc())
-            .limit(1)
         )
+        if cutoff is not None:
+            query = query.where(ReviewDecision.created_at <= cutoff)
+        return self._session.scalar(query.limit(1))
 
     def causal_steps_for_thesis(
-        self, thesis_id: uuid.UUID
+        self,
+        thesis_id: uuid.UUID,
+        *,
+        cutoff: datetime | None = None,
     ) -> list[CausalStep]:
-        return list(
-            self._session.scalars(
-                select(CausalStep)
-                .where(CausalStep.thesis_id == thesis_id)
-                .order_by(CausalStep.sequence)
-            )
+        query = (
+            select(CausalStep)
+            .where(CausalStep.thesis_id == thesis_id)
+            .order_by(CausalStep.sequence)
         )
+        if cutoff is not None:
+            query = query.where(CausalStep.created_at <= cutoff)
+        return list(self._session.scalars(query))
 
     def causal_edges_for_steps(
         self, step_ids: list[uuid.UUID]
