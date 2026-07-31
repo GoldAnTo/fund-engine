@@ -990,6 +990,13 @@ async function assertResearchPlanProductContract(page, marker) {
   const secondaryText = marker.locator("[data-secondary-text]");
   assert.ok(await secondaryText.count() > 0, "secondary IDs and timestamps must be explicitly marked");
   assert.ok(await secondaryText.evaluateAll((elements) => elements.every((element) => Number.parseFloat(getComputedStyle(element).fontSize) >= 11)), "marked secondary text must remain at least 11px");
+  assert.equal(await secondaryText.evaluateAll((elements) => elements.some((element) => /待人工审核|关系待人工审核|已纳入复用|未纳入复用|候选/u.test(element.textContent))), false, "review and reuse status must not be folded into secondary provenance text");
+  const reviewStatuses = marker.locator("[data-review-status]");
+  assert.ok(await reviewStatuses.count() > 0, "review statuses must be explicit core labels");
+  assert.ok(await reviewStatuses.evaluateAll((elements) => elements.every((element) => Number.parseFloat(getComputedStyle(element).fontSize) >= 13)), "review statuses must remain at least 13px");
+  for (const status of ["待人工审核", "关系待人工审核"]) {
+    assert.ok(await marker.getByText(status, { exact: true }).first().isVisible(), `${status} must be separately visible`);
+  }
   const requiredVisibleCopy = [
     "复用",
     "移除",
@@ -1019,7 +1026,51 @@ async function assertResearchPlanProductContract(page, marker) {
     assert.ok(rect.top >= 0 && rect.bottom <= 1000, `${copy} must be inside the 1600x1000 viewport: ${JSON.stringify(rect)}`);
   }
 
+  const assetList = marker.locator(".asset-list");
+  assert.doesNotMatch(await assetList.innerText(), /完整清单/u, "asset region must not promise an inaccessible complete list");
+  const previousPage = marker.getByRole("button", { name: "上一页资产" });
+  const nextPage = marker.getByRole("button", { name: "下一页资产" });
+  const pageStatus = marker.locator("[data-asset-page-status]");
   const reuseCount = marker.locator("[data-reuse-count]");
+  const candidateCount = marker.locator("[data-candidate-count]");
+  assert.equal(await pageStatus.getAttribute("aria-live"), "polite", "asset page changes must be announced");
+  assert.equal(Number(await reuseCount.textContent()), 9);
+  assert.equal(Number(await candidateCount.textContent()), 2);
+  assert.ok(await previousPage.isDisabled(), "asset previous page must be disabled at the first page");
+  assert.ok(!await nextPage.isDisabled(), "asset next page must be enabled before the last page");
+  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 3 页");
+  const visitedAssetIds = new Set(await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId)));
+
+  await nextPage.press("Enter");
+  assert.equal((await pageStatus.textContent()).trim(), "第 2 / 3 页", "keyboard pagination must reach page 2");
+  for (const id of await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId))) visitedAssetIds.add(id);
+  const secondPageSelected = marker.locator('[data-asset-id="DOC-MSFT-FY25Q3"] [data-toggle-asset]');
+  assert.equal(await secondPageSelected.getAttribute("aria-pressed"), "true", "a non-first-page selected asset must retain fixture selection");
+  await secondPageSelected.press("Enter");
+  assert.equal(await secondPageSelected.getAttribute("aria-pressed"), "false", "a non-first-page selected asset must be removable");
+  assert.equal(Number(await reuseCount.textContent()), 8, "removing a page-2 asset must update the global selected count");
+  assert.equal(Number(await candidateCount.textContent()), 3, "removing a page-2 asset must update the global candidate count");
+
+  await nextPage.press("Enter");
+  assert.equal((await pageStatus.textContent()).trim(), "第 3 / 3 页", "keyboard pagination must reach page 3");
+  for (const id of await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId))) visitedAssetIds.add(id);
+  assert.ok(await nextPage.isDisabled(), "asset next page must be disabled at the last page");
+  const laterCandidate = marker.locator('[data-asset-id="ST-003"] [data-toggle-asset]');
+  assert.equal(await laterCandidate.getAttribute("aria-pressed"), "false", "ST-003 must remain an explicit later-page candidate");
+  await laterCandidate.press("Enter");
+  assert.equal(await laterCandidate.getAttribute("aria-pressed"), "true", "a later-page candidate must be reusable");
+  assert.equal(Number(await reuseCount.textContent()), 9, "reusing a page-3 candidate must update the global selected count");
+  assert.equal(Number(await candidateCount.textContent()), 2, "reusing a page-3 candidate must update the global candidate count");
+  assert.deepEqual([...visitedAssetIds].sort(), ["DOC-BRCM-FY25Q2", "DOC-MSFT-FY25Q3", "DOC-NVDA-FY26Q1", "DOC-TSMC-2025M05", "EL-001", "EL-002", "M-NVDA-DC-REV", "M-TSMC-M05-YOY", "ST-001", "ST-002", "ST-003"].sort(), "asset pagination must expose exactly all 11 unique assets");
+
+  await previousPage.press("Enter");
+  assert.equal(await marker.locator('[data-asset-id="DOC-MSFT-FY25Q3"] [data-toggle-asset]').getAttribute("aria-pressed"), "false", "removed selection must persist when page 2 is revisited");
+  await nextPage.press("Enter");
+  assert.equal(await marker.locator('[data-asset-id="ST-003"] [data-toggle-asset]').getAttribute("aria-pressed"), "true", "candidate reuse must persist when page 3 is revisited");
+  await previousPage.press("Enter");
+  await previousPage.press("Enter");
+  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 3 页");
+
   const initialCount = Number(await reuseCount.textContent());
   const candidate = marker.locator('[data-asset-id="DOC-BRCM-FY25Q2"] [data-toggle-asset]');
   await candidate.press("Enter");

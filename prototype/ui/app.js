@@ -856,6 +856,16 @@
     `;
   }
 
+  function renderPlanAsset(asset) {
+    return `
+      <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}">
+        <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong data-core-text>${escapeHTML(asset.label)}</strong><p data-secondary-text>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
+        <div class="asset-review"><span data-core-text data-review-status>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-core-text data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
+        <button type="button" class="plan-button quiet" data-toggle-asset aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
+      </article>
+    `;
+  }
+
   function renderPlan() {
     const view = planState.buildResearchPlanViewModel(data);
     const selectedCount = view.existingAssets.filter((asset) => asset.selected).length;
@@ -881,16 +891,9 @@
 
         <div class="plan-regions">
           <section class="plan-region assets-region" data-plan-region="assets" aria-labelledby="plan-assets-title">
-            <header><div><p class="section-kicker">内部复用</p><h2 id="plan-assets-title">已有资料与数据</h2></div><p><strong data-reuse-count>${selectedCount}</strong> / ${view.existingAssets.length} 已选</p></header>
-            <div class="asset-list" data-hidden-selected-count="${view.hiddenSelectedAssetCount}">
-              ${view.representativeAssets.map((asset) => `
-                <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}">
-                  <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong data-core-text>${escapeHTML(asset.label)}</strong><p data-secondary-text>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
-                  <div class="asset-review"><span data-core-text>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-core-text data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
-                  <button type="button" class="plan-button quiet" data-toggle-asset aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
-                </article>
-              `).join("")}
-              <p class="asset-aggregate" data-core-text>另有 ${view.hiddenSelectedAssetCount} 项已选资产${view.hiddenCandidateAssetCount ? `，${view.hiddenCandidateAssetCount} 项候选资产` : ""}；均保留冻结引用，可在完整清单核对。</p>
+            <header><div><p class="section-kicker">内部复用</p><h2 id="plan-assets-title">已有资料与数据</h2></div><div class="asset-header-tools"><p><strong data-reuse-count>${selectedCount}</strong> 已选 · <strong data-candidate-count>${view.existingAssets.length - selectedCount}</strong> 候选</p><div class="asset-pagination" aria-label="资产分页"><button type="button" data-asset-page="previous" aria-label="上一页资产" disabled>‹</button><span data-asset-page-status aria-live="polite">第 1 / ${Math.ceil(view.orderedAssets.length / view.assetPageSize)} 页</span><button type="button" data-asset-page="next" aria-label="下一页资产">›</button></div></div></header>
+            <div class="asset-list">
+              ${view.orderedAssets.slice(0, view.assetPageSize).map(renderPlanAsset).join("")}
             </div>
           </section>
 
@@ -920,7 +923,7 @@
           <section class="plan-region" data-plan-region="pending" aria-labelledby="plan-pending-title">
             <header><div><p class="section-kicker">人工关口</p><h2 id="plan-pending-title">待审核结果</h2></div><p>${view.pendingResults.length} 项</p></header>
             <div class="compact-result-list">
-              ${view.pendingResults.map((item) => `<article><span class="plan-state-mark" aria-hidden="true">审</span><div><strong data-core-text>${escapeHTML(item.targetLabel)}</strong><p data-core-text>${escapeHTML(item.task)}</p><small data-secondary-text>来源 ${escapeHTML(item.sourceId)} · ${escapeHTML(item.sourceVersion)} · ${escapeHTML(item.reviewLabel)}</small></div></article>`).join("")}
+              ${view.pendingResults.map((item) => `<article><span class="plan-state-mark" aria-hidden="true">审</span><div><strong data-core-text>${escapeHTML(item.targetLabel)}</strong><p data-core-text>${escapeHTML(item.task)}</p><div class="pending-provenance"><small data-secondary-text>来源 ${escapeHTML(item.sourceId)} · ${escapeHTML(item.sourceVersion)}</small><span data-core-text data-review-status>${escapeHTML(item.reviewLabel)}</span></div></div></article>`).join("")}
             </div>
           </section>
 
@@ -947,19 +950,44 @@
     `;
   }
 
-  function bindResearchPlan(root) {
+  function bindResearchPlan(root, view) {
     const live = root.querySelector("[data-plan-live]");
     const announce = (message) => { live.textContent = message; };
+    const selectedAssets = new Map(view.orderedAssets.map((asset) => [asset.id, asset.selected]));
+    const assetList = root.querySelector(".asset-list");
+    const pageCount = Math.ceil(view.orderedAssets.length / view.assetPageSize);
+    let assetPage = 0;
+    const updateAssetCounts = () => {
+      const selectedCount = [...selectedAssets.values()].filter(Boolean).length;
+      root.querySelector("[data-reuse-count]").textContent = selectedCount;
+      root.querySelector("[data-candidate-count]").textContent = selectedAssets.size - selectedCount;
+    };
+    const renderAssetPage = () => {
+      const start = assetPage * view.assetPageSize;
+      assetList.innerHTML = view.orderedAssets.slice(start, start + view.assetPageSize)
+        .map((asset) => renderPlanAsset({ ...asset, selected: selectedAssets.get(asset.id) }))
+        .join("");
+      root.querySelector("[data-asset-page-status]").textContent = `第 ${assetPage + 1} / ${pageCount} 页`;
+      root.querySelector('[data-asset-page="previous"]').disabled = assetPage === 0;
+      root.querySelector('[data-asset-page="next"]').disabled = assetPage === pageCount - 1;
+    };
     root.addEventListener("click", (event) => {
+      const pageButton = event.target.closest("[data-asset-page]");
+      if (pageButton && !pageButton.disabled) {
+        assetPage += pageButton.dataset.assetPage === "next" ? 1 : -1;
+        renderAssetPage();
+        announce(`资产清单已切换到第 ${assetPage + 1} 页，共 ${pageCount} 页`);
+        return;
+      }
       const assetButton = event.target.closest("[data-toggle-asset]");
       if (assetButton) {
         const selected = assetButton.getAttribute("aria-pressed") !== "true";
         assetButton.setAttribute("aria-pressed", String(selected));
         assetButton.textContent = selected ? "移除" : "复用";
         const row = assetButton.closest("[data-asset-id]");
+        selectedAssets.set(row.dataset.assetId, selected);
         row.querySelector("[data-reuse-status]").textContent = selected ? "已纳入复用" : "未纳入复用";
-        const hiddenSelectedCount = Number(root.querySelector(".asset-list").dataset.hiddenSelectedCount);
-        root.querySelector("[data-reuse-count]").textContent = hiddenSelectedCount + root.querySelectorAll('[data-toggle-asset][aria-pressed="true"]').length;
+        updateAssetCounts();
         announce(`${row.dataset.assetId}${selected ? "已纳入" : "已移出"}本地复用选择`);
         return;
       }
@@ -1034,7 +1062,7 @@
       </div>
     `;
     if (screen === "new-research") bindNewResearchForm(data);
-    if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"));
+    if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"), planState.buildResearchPlanViewModel(data));
   }
 
   renderShell(requestedScreen());

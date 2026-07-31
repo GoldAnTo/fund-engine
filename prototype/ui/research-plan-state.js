@@ -91,7 +91,8 @@
     const existingAssets = buildExistingAssets(fixture);
     const representativeAssetIds = ["DOC-BRCM-FY25Q2", "ST-001", "M-NVDA-DC-REV", "EL-001"];
     const representativeAssets = representativeAssetIds.map((id) => existingAssets.find((asset) => asset.id === id));
-    const visibleSelectedCount = representativeAssets.filter((asset) => asset.selected).length;
+    const representativeSet = new Set(representativeAssetIds);
+    const orderedAssets = [...representativeAssets, ...existingAssets.filter((asset) => !representativeSet.has(asset.id))];
     const metrics = indexById(fixture.metrics);
     return {
       case: {
@@ -102,9 +103,8 @@
         revision: plan.revision,
       },
       existingAssets,
-      representativeAssets,
-      hiddenSelectedAssetCount: existingAssets.filter((asset) => asset.selected).length - visibleSelectedCount,
-      hiddenCandidateAssetCount: existingAssets.filter((asset) => !asset.selected).length - representativeAssets.filter((asset) => !asset.selected).length,
+      orderedAssets,
+      assetPageSize: 4,
       providerQueries: plan.plannedProviderQueries.map((query) => ({ ...query })),
       collection: {
         reused: collectionGroups.reused_frozen ?? [],
