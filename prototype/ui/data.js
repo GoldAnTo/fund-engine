@@ -1,7 +1,13 @@
 (function () {
   "use strict";
 
-  window.PROTOTYPE_DATA = Object.freeze({
+  function deepFreeze(value) {
+    if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+    for (const child of Object.values(value)) deepFreeze(child);
+    return Object.freeze(value);
+  }
+
+  window.PROTOTYPE_DATA = deepFreeze({
     case: {
       id: "RC-AIC-2025-01",
       title: "AI 算力需求能否穿透至可验证的收入与持仓表达",
@@ -324,7 +330,15 @@
       { id: "PR-002", provider: "Issuer IR", outcome: "success", observedAt: "2025-06-30T18:14:00+08:00", detail: "3 releases preserved with source versions" },
       { id: "PR-003", provider: "Market data quota", outcome: "quota_failure", observedAt: "2025-06-30T18:20:00+08:00", detail: "Daily call limit exceeded; no inferred replacement values" },
       { id: "PR-004", provider: "Licensed holdings feed", outcome: "permission_gap", observedAt: "2025-06-30T18:22:00+08:00", detail: "Current credential lacks historical holdings permission" },
-      { id: "PR-005", provider: "Research operations", outcome: "manual_upload", observedAt: "2025-06-30T18:35:00+08:00", detail: "Fund reports uploaded and queued for review" },
+      {
+        id: "PR-005",
+        provider: "Research operations",
+        outcome: "manual_upload",
+        observedAt: "2025-06-30T18:35:00+08:00",
+        sourceVersion: "fund-report-2025q1-v2",
+        reviewQueueId: "RQ-002",
+        detail: "Fund reports uploaded and queued for review",
+      },
     ],
   });
 }());

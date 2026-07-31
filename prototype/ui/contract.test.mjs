@@ -48,6 +48,21 @@ export function assertFixtureContract(data) {
   assert.equal(Object.keys(data).sort().join(","), expectedKeys.join(","), "fixture must expose exactly the 12 contracted top-level keys");
   assert.equal(data.case.cutoff, "2025-06-30", "fixture cutoff must remain frozen at 2025-06-30");
   assert.equal(data.case.snapshotId, "RS-2025-06-30-v3", "fixture current snapshot must remain RS-2025-06-30-v3");
+
+  const requiredRecordIds = {
+    companies: ["CO-NVDA", "CO-TSM"],
+    funds: ["FUND-ETF-AI-INFRA", "FUND-SEMI-INDEX"],
+    reviewQueue: ["RQ-001", "RQ-002"],
+    statements: ["ST-001", "ST-002", "ST-003"],
+    evidenceLinks: ["EL-001", "EL-002", "EL-003"],
+  };
+  for (const [group, requiredIds] of Object.entries(requiredRecordIds)) {
+    const actualIds = new Set(data[group].map((record) => record.id));
+    for (const id of requiredIds) {
+      assert.ok(actualIds.has(id), `fixture ${group} must include ${id}`);
+    }
+  }
+
   assert.equal(data.theses.length, 3, "fixture must contain exactly three theses");
   for (const thesis of data.theses) {
     for (const field of ["supportCondition", "falsifier", "nextValidationEvent"]) {
@@ -74,9 +89,48 @@ export function assertFixtureContract(data) {
     }
   }
 
+  const documentsById = new Map(data.documents.map((record) => [record.id, record]));
+  const statementsById = new Map(data.statements.map((record) => [record.id, record]));
+  const thesesById = new Map(data.theses.map((record) => [record.id, record]));
+  const factorsById = new Map(data.factors.map((record) => [record.id, record]));
+  const companiesById = new Map(data.companies.map((record) => [record.id, record]));
+  const fundsById = new Map(data.funds.map((record) => [record.id, record]));
+  const reviewQueueById = new Map(data.reviewQueue.map((record) => [record.id, record]));
+
+  for (const statement of data.statements) {
+    assert.ok(documentsById.has(statement.documentId), `${statement.id} must reference an existing document ${statement.documentId}`);
+  }
+  for (const link of data.evidenceLinks) {
+    assert.ok(statementsById.has(link.statementId), `${link.id} must reference an existing statement ${link.statementId}`);
+    const targetExists = (link.thesisId && thesesById.has(link.thesisId))
+      || (link.factorId && factorsById.has(link.factorId));
+    assert.ok(targetExists, `${link.id} must reference an existing thesis or factor`);
+  }
+  const evidenceStates = new Set(data.evidenceLinks.map((link) => link.reviewState));
+  assert.ok(evidenceStates.has("reviewed"), "fixture evidence links must include reviewed evidence");
+  assert.ok(evidenceStates.has("pending_review"), "fixture evidence links must include pending evidence");
+
   assert.ok(data.funds.length > 0, "fixture must include at least one fund mapping");
   for (const fund of data.funds) {
     assert.match(fund.disclosureDate, /^\d{4}-\d{2}-\d{2}$/u, `${fund.id} must include a disclosure date`);
+    assert.equal(fund.mappingRole, "holding-disclosure-only", `${fund.id} must remain an explicit holding disclosure mapping`);
+    assert.ok(companiesById.has(fund.companyId), `${fund.id} must reference an existing company ${fund.companyId}`);
+  }
+
+  const reviewTargets = new Map([
+    ...data.documents,
+    ...data.statements,
+    ...data.evidenceLinks,
+    ...data.metrics,
+    ...data.companies,
+    ...data.funds,
+    ...data.theses,
+    ...data.factors,
+  ].map((record) => [record.id, record]));
+  for (const item of data.reviewQueue) {
+    const target = reviewTargets.get(item.targetId);
+    assert.ok(target, `${item.id} must reference an existing review target ${item.targetId}`);
+    assert.equal(item.sourceVersion, target.sourceVersion, `${item.id} must retain the target source version`);
   }
   assert.equal(data.snapshots.length, 3, "fixture must contain exactly three snapshots");
   assert.equal(data.snapshots.filter((snapshot) => snapshot.id === data.case.snapshotId).length, 1, "fixture must contain exactly one current snapshot");
@@ -91,6 +145,20 @@ export function assertFixtureContract(data) {
   for (const outcome of ["success", "quota_failure", "permission_gap", "manual_upload"]) {
     assert.ok(providerOutcomes.has(outcome), `fixture provider runs must include ${outcome}`);
   }
+  for (const run of data.providerRuns.filter((item) => item.outcome === "manual_upload")) {
+    const queueItem = reviewQueueById.get(run.reviewQueueId);
+    assert.ok(queueItem, `${run.id} manual upload must link to an existing review queue item`);
+    assert.equal(run.sourceVersion, queueItem.sourceVersion, `${run.id} manual upload source must match its review queue item`);
+    assert.ok(fundsById.has(queueItem.targetId), `${run.id} manual upload review target must be a known fund disclosure`);
+  }
+}
+
+function assertDeepFrozen(value, location = "PROTOTYPE_DATA") {
+  if (!value || typeof value !== "object") return;
+  assert.ok(Object.isFrozen(value), `${location} must be frozen`);
+  for (const [key, child] of Object.entries(value)) {
+    assertDeepFrozen(child, `${location}.${key}`);
+  }
 }
 
 async function assertFixtureDataContract() {
@@ -98,6 +166,23 @@ async function assertFixtureDataContract() {
   vm.runInNewContext(await readFile(path.join(UI_DIR, "data.js"), "utf8"), sandbox);
   const data = sandbox.window.PROTOTYPE_DATA;
   assertFixtureContract(data);
+  assertDeepFrozen(data);
+
+  const originalCutoff = data.case.cutoff;
+  try {
+    data.case.cutoff = "2099-12-31";
+  } catch {
+    // Strict-mode assignment may throw; classic consumers may fail silently.
+  }
+  assert.equal(data.case.cutoff, originalCutoff, "nested cutoff mutation must not change the fixture");
+
+  const originalThesisCount = data.theses.length;
+  try {
+    data.theses.push({ id: "TH-MUTATION" });
+  } catch {
+    // Frozen arrays throw in strict consumers; final-value assertion is authoritative.
+  }
+  assert.equal(data.theses.length, originalThesisCount, "nested thesis push must not change the fixture");
 
   const missingTopLevel = structuredClone(data);
   delete missingTopLevel.providerRuns;
@@ -113,7 +198,27 @@ async function assertFixtureDataContract() {
 
   const missingFunds = structuredClone(data);
   missingFunds.funds = [];
-  assert.throws(() => assertFixtureContract(missingFunds), /at least one fund/u);
+  assert.throws(() => assertFixtureContract(missingFunds), /fixture funds must include/u);
+
+  const brokenStatement = structuredClone(data);
+  brokenStatement.statements[0].documentId = "DOC-MISSING";
+  assert.throws(() => assertFixtureContract(brokenStatement), /existing document DOC-MISSING/u);
+
+  const brokenEvidenceTarget = structuredClone(data);
+  brokenEvidenceTarget.evidenceLinks[0].thesisId = "TH-MISSING";
+  assert.throws(() => assertFixtureContract(brokenEvidenceTarget), /existing thesis or factor/u);
+
+  const brokenHolding = structuredClone(data);
+  brokenHolding.funds[0].companyId = "CO-MISSING";
+  assert.throws(() => assertFixtureContract(brokenHolding), /existing company CO-MISSING/u);
+
+  const noPendingEvidence = structuredClone(data);
+  for (const link of noPendingEvidence.evidenceLinks) link.reviewState = "reviewed";
+  assert.throws(() => assertFixtureContract(noPendingEvidence), /pending evidence/u);
+
+  const unlinkedUpload = structuredClone(data);
+  delete unlinkedUpload.providerRuns.find((run) => run.outcome === "manual_upload").reviewQueueId;
+  assert.throws(() => assertFixtureContract(unlinkedUpload), /manual upload must link/u);
 }
 
 function assertAssessmentScoringSemantics() {
@@ -221,14 +326,27 @@ async function assertServerFilesystemBoundary() {
   const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-root-"));
   const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-outside-"));
   let server;
+  let symlinkSkipReason;
   try {
     await writeFile(path.join(fixtureRoot, "index.html"), "fixture home");
     await writeFile(path.join(outsideRoot, "secret.txt"), "must not be served");
-    await symlink(path.join(outsideRoot, "secret.txt"), path.join(fixtureRoot, "escape.txt"));
+    try {
+      await symlink(path.join(outsideRoot, "secret.txt"), path.join(fixtureRoot, "escape.txt"));
+    } catch (error) {
+      const windowsSymlinkErrors = new Set(["EPERM", "EACCES", "EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "UNKNOWN"]);
+      if (process.platform !== "win32" || !windowsSymlinkErrors.has(error.code)) throw error;
+      symlinkSkipReason = `${error.code}: Windows symlink creation is unavailable without the required permission/support`;
+    }
     server = await startPrototypeServer({ rootDir: fixtureRoot });
 
-    const escaped = await fetch(`${server.baseURL}/escape.txt`);
-    assert.equal(escaped.status, 403, "symlink targets outside the served root must be rejected");
+    const traversal = await fetch(`${server.baseURL}/%2e%2e%2fcapture.mjs`);
+    assert.equal(traversal.status, 403, "encoded lexical traversal must be rejected");
+    if (symlinkSkipReason) {
+      console.warn(`SKIP symlink escape assertion: ${symlinkSkipReason}`);
+    } else {
+      const escaped = await fetch(`${server.baseURL}/escape.txt`);
+      assert.equal(escaped.status, 403, "symlink targets outside the served root must be rejected");
+    }
     const missing = await fetch(`${server.baseURL}/missing.txt`);
     assert.equal(missing.status, 404, "missing files must remain a controlled 404");
   } finally {
@@ -314,6 +432,38 @@ async function assertTeardownContract() {
   assert.equal(observedError, primaryError, "teardown must preserve the primary callback error");
   assert.deepEqual(events, ["callback", "browser-close", "server-close"], "browser and server teardown must both run in order");
   assert.deepEqual(primaryError.teardownErrors, [browserCloseError, serverCloseError], "teardown failures must remain inspectable on the primary error");
+
+  for (const thrownValue of [
+    Object.freeze(new Error("frozen primary")),
+    Object.preventExtensions(new Error("non-extensible primary")),
+    0,
+  ]) {
+    const teardownEvents = [];
+    const isolatedDependencies = {
+      startServer: async () => ({
+        baseURL: "http://127.0.0.1:1",
+        close: async () => {
+          teardownEvents.push("server-close");
+          throw new Error("isolated server close failure");
+        },
+      }),
+      launchBrowser: async () => ({
+        newContext: async () => ({ newPage: async () => ({}) }),
+        close: async () => {
+          teardownEvents.push("browser-close");
+          throw new Error("isolated browser close failure");
+        },
+      }),
+    };
+    let isolatedObserved = Symbol("not thrown");
+    try {
+      await withPrototypeBrowser(async () => { throw thrownValue; }, isolatedDependencies);
+    } catch (error) {
+      isolatedObserved = error;
+    }
+    assert.ok(Object.is(isolatedObserved, thrownValue), "teardown must rethrow the exact frozen or primitive primary value");
+    assert.deepEqual(teardownEvents, ["browser-close", "server-close"], "both teardown paths must run for frozen or primitive primary values");
+  }
 }
 
 async function assertBrowserContract(routes) {

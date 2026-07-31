@@ -175,6 +175,7 @@ export async function withPrototypeBrowser(callback, {
   let browser;
   let result;
   let primaryError;
+  let hasPrimaryError = false;
   try {
     server = await startServer();
     browser = await launchBrowser();
@@ -183,6 +184,7 @@ export async function withPrototypeBrowser(callback, {
     result = await callback({ baseURL: server.baseURL, browser, context, page });
   } catch (error) {
     primaryError = error;
+    hasPrimaryError = true;
   }
 
   const teardownErrors = [];
@@ -201,8 +203,11 @@ export async function withPrototypeBrowser(callback, {
     }
   }
 
-  if (primaryError) {
-    if (teardownErrors.length) {
+  if (hasPrimaryError) {
+    const canAttachTeardownErrors = primaryError !== null
+      && (typeof primaryError === "object" || typeof primaryError === "function")
+      && Object.isExtensible(primaryError);
+    if (teardownErrors.length && canAttachTeardownErrors) {
       Object.defineProperty(primaryError, "teardownErrors", {
         configurable: true,
         value: teardownErrors,
