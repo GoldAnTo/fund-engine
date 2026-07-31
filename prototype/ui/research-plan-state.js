@@ -88,6 +88,11 @@
           (groups[task.state] ??= []).push(task);
           return groups;
         }, {});
+    const existingAssets = buildExistingAssets(fixture);
+    const representativeAssetIds = ["DOC-BRCM-FY25Q2", "ST-001", "M-NVDA-DC-REV", "EL-001"];
+    const representativeAssets = representativeAssetIds.map((id) => existingAssets.find((asset) => asset.id === id));
+    const visibleSelectedCount = representativeAssets.filter((asset) => asset.selected).length;
+    const metrics = indexById(fixture.metrics);
     return {
       case: {
         id: fixture.case.id,
@@ -96,7 +101,10 @@
         cutoff: fixture.case.cutoff,
         revision: plan.revision,
       },
-      existingAssets: buildExistingAssets(fixture),
+      existingAssets,
+      representativeAssets,
+      hiddenSelectedAssetCount: existingAssets.filter((asset) => asset.selected).length - visibleSelectedCount,
+      hiddenCandidateAssetCount: existingAssets.filter((asset) => !asset.selected).length - representativeAssets.filter((asset) => !asset.selected).length,
       providerQueries: plan.plannedProviderQueries.map((query) => ({ ...query })),
       collection: {
         reused: collectionGroups.reused_frozen ?? [],
@@ -110,13 +118,13 @@
         ...plan.positiveEvidenceSearches.map((item) => ({ ...item, type: "positive" })),
         ...plan.negativeEvidenceSearches.map((item) => ({ ...item, type: "negative" })),
       ],
+      resultMetrics: plan.resultMetricIds.map((id) => ({ ...metrics.get(id) })),
       failures: fixture.providerRuns
         .filter((run) => failureOutcomes.has(run.outcome))
         .map((run) => ({ ...run })),
       manualUploads: fixture.providerRuns
         .filter((run) => run.outcome === "manual_upload")
         .map((run) => ({ ...run })),
-      resultMetricIds: [...plan.resultMetricIds],
     };
   }
 

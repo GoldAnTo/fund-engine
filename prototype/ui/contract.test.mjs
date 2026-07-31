@@ -967,6 +967,58 @@ async function assertResearchPlanProductContract(page, marker) {
   assert.doesNotMatch(providerText, /industry_analysis_view|announcement_filing_fulltext|fund_holding_detail|juyuan|capability_probe|probe_required/u, "plan must not leak raw provider enums");
   assert.ok(await marker.getByRole("button", { name: "复用" }).first().isVisible(), "explicit candidate reuse must be a real visible action");
 
+  for (const selector of [".asset-list", ".provider-plan-list", ".collection-list", ".compact-result-list", ".gap-list", ".failure-list"]) {
+    const measurement = await marker.locator(selector).evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overflowY: getComputedStyle(element).overflowY,
+    }));
+    assert.ok(measurement.scrollHeight <= measurement.clientHeight + 1, `${selector} must show all desktop content without internal scrolling: ${JSON.stringify(measurement)}`);
+    assert.ok(!["auto", "scroll", "hidden", "clip"].includes(measurement.overflowY), `${selector} must not hide desktop overflow: ${JSON.stringify(measurement)}`);
+  }
+  for (const region of ["assets", "providers", "collection", "pending", "gaps", "failures"]) {
+    const coreText = marker.locator(`[data-plan-region="${region}"] [data-core-text]`);
+    assert.ok(await coreText.count() > 0, `${region} must mark its core readable text`);
+    const undersized = await coreText.evaluateAll((elements) => elements
+      .map((element) => ({ text: element.textContent.trim(), size: Number.parseFloat(getComputedStyle(element).fontSize) }))
+      .filter((item) => item.size < 13));
+    assert.deepEqual(undersized, [], `${region} core text must be at least 13px: ${JSON.stringify(undersized)}`);
+  }
+  assert.ok(await marker.locator('.provider-plan-row dt').evaluateAll((elements) => elements.every((element) => Number.parseFloat(getComputedStyle(element).fontSize) >= 13)), "provider field labels must be core 13px text");
+  assert.ok(await marker.locator('.plan-case-facts dt, .type-label').evaluateAll((elements) => elements.every((element) => Number.parseFloat(getComputedStyle(element).fontSize) >= 13)), "case and structural type labels must be at least 13px");
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= 1000), "plan desktop document must fit the 1000px capture height");
+  const secondaryText = marker.locator("[data-secondary-text]");
+  assert.ok(await secondaryText.count() > 0, "secondary IDs and timestamps must be explicitly marked");
+  assert.ok(await secondaryText.evaluateAll((elements) => elements.every((element) => Number.parseFloat(getComputedStyle(element).fontSize) >= 11)), "marked secondary text must remain at least 11px");
+  const requiredVisibleCopy = [
+    "复用",
+    "移除",
+    "NVIDIA 数据中心业务收入",
+    "391 亿美元",
+    "2026 财年第一季度",
+    "台积电月度营收同比增幅",
+    "34.8%",
+    "2025 年 5 月",
+    "核对 AI 收入口径、对应交付期与分部归属",
+    "确认基金份额类别与报告期持仓口径",
+    "审核证据与目标之间的关系",
+    "云厂商 AI 资本开支、订单积压与分部收入同向披露",
+    "资本开支下调、交付延迟、订单取消或收入口径不匹配",
+    "数据中心电力与并网周期",
+    "高投入但相关收入确认滞后",
+    "市场数据接口 · 配额受限",
+    "持仓数据接口 · 权限缺口",
+    "研究资料补录 · 人工补录",
+    "材料已进入待审核结果，不需要重试。",
+    "当前没有运行中的获取任务",
+  ];
+  for (const copy of requiredVisibleCopy) {
+    const item = marker.getByText(copy, { exact: true }).first();
+    assert.ok(await item.isVisible(), `${copy} must be visible at 1600px`);
+    const rect = await item.evaluate((element) => element.getBoundingClientRect().toJSON());
+    assert.ok(rect.top >= 0 && rect.bottom <= 1000, `${copy} must be inside the 1600x1000 viewport: ${JSON.stringify(rect)}`);
+  }
+
   const reuseCount = marker.locator("[data-reuse-count]");
   const initialCount = Number(await reuseCount.textContent());
   const candidate = marker.locator('[data-asset-id="DOC-BRCM-FY25Q2"] [data-toggle-asset]');

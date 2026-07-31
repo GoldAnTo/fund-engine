@@ -860,13 +860,13 @@
     const view = planState.buildResearchPlanViewModel(data);
     const selectedCount = view.existingAssets.filter((asset) => asset.selected).length;
     const renderCollectionItems = (items, state, label) => items.map((item) => `
-      <li data-collection-state="${escapeHTML(state)}"><span class="plan-state-mark" aria-hidden="true">${escapeHTML(label.slice(0, 1))}</span><div><strong>${escapeHTML(label)}</strong><p>${escapeHTML(item.label)}</p><small>截止 ${escapeHTML(item.cutoff)}</small></div></li>
+      <li data-collection-state="${escapeHTML(state)}"><span class="plan-state-mark" aria-hidden="true">${escapeHTML(label.slice(0, 1))}</span><div><strong data-core-text>${escapeHTML(label)}</strong><p data-core-text>${escapeHTML(item.label)}</p><small data-secondary-text>截止 ${escapeHTML(item.cutoff)}</small></div></li>
     `).join("");
+    const renderGapItems = (items) => items.map((gap) => `<div class="gap-entry" data-gap-id="${escapeHTML(gap.id)}"><div><strong data-core-text>${escapeHTML(gap.label)}</strong><p data-core-text>${escapeHTML(gap.scope)} · <span data-gap-status>待获取</span></p></div><button type="button" class="plan-button quiet" data-toggle-gap aria-pressed="false">暂时无法获得</button></div>`).join("");
     return `
       <section class="screen research-plan-screen" data-screen="plan">
         <header class="plan-case-header" data-plan-case-header>
           <div>
-            <p class="eyebrow">Evidence collection orchestration</p>
             <h1>研究计划与证据获取</h1>
             <p class="lede">同一案例内核对复用、外部获取、审核和缺口；所有操作仅改变本页原型状态。</p>
           </div>
@@ -882,14 +882,15 @@
         <div class="plan-regions">
           <section class="plan-region assets-region" data-plan-region="assets" aria-labelledby="plan-assets-title">
             <header><div><p class="section-kicker">内部复用</p><h2 id="plan-assets-title">已有资料与数据</h2></div><p><strong data-reuse-count>${selectedCount}</strong> / ${view.existingAssets.length} 已选</p></header>
-            <div class="asset-list">
-              ${view.existingAssets.map((asset) => `
+            <div class="asset-list" data-hidden-selected-count="${view.hiddenSelectedAssetCount}">
+              ${view.representativeAssets.map((asset) => `
                 <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}">
-                  <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong>${escapeHTML(asset.label)}</strong><p>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
-                  <div class="asset-review"><span>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
+                  <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong data-core-text>${escapeHTML(asset.label)}</strong><p data-secondary-text>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
+                  <div class="asset-review"><span data-core-text>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-core-text data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
                   <button type="button" class="plan-button quiet" data-toggle-asset aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
                 </article>
               `).join("")}
+              <p class="asset-aggregate" data-core-text>另有 ${view.hiddenSelectedAssetCount} 项已选资产${view.hiddenCandidateAssetCount ? `，${view.hiddenCandidateAssetCount} 项候选资产` : ""}；均保留冻结引用，可在完整清单核对。</p>
             </div>
           </section>
 
@@ -898,9 +899,9 @@
             <div class="provider-plan-list">
               ${view.providerQueries.map((query) => `
                 <article class="provider-plan-row">
-                  <div class="provider-title"><span class="plan-state-mark" aria-hidden="true">探</span><div><strong>${escapeHTML(displayLabel(PRESENTATION.providerNames, query.provider, "外部数据适配器"))}适配器</strong><p>能力目录：${escapeHTML(displayLabel(PRESENTATION.providerCapabilities, query.capability, "待分类能力"))}</p></div></div>
-                  <dl><div><dt>查询目的</dt><dd>${escapeHTML(query.purpose)}</dd></div><div><dt>日期范围</dt><dd>${escapeHTML(query.dateScope.start)} 至 ${escapeHTML(query.dateScope.end)} · 截止 ${escapeHTML(query.cutoff)}</dd></div><div><dt>拟冻结产物</dt><dd>${escapeHTML(query.intendedArtifact)}</dd></div><div><dt>计划状态</dt><dd>${escapeHTML(displayLabel(PRESENTATION.planStates, query.status, "待规划"))} · ${escapeHTML(displayLabel(PRESENTATION.exposureStates, query.exposureStatus, "能力状态待确认"))}</dd></div></dl>
-                  <p class="provider-meaning">失败含义：探测失败只表示本次未取得能力证据，不推断接口、参数或替代值。</p>
+                  <div class="provider-title"><span class="plan-state-mark" aria-hidden="true">探</span><div><strong data-core-text>${escapeHTML(displayLabel(PRESENTATION.providerNames, query.provider, "外部数据适配器"))}适配器</strong><p data-core-text>能力目录：${escapeHTML(displayLabel(PRESENTATION.providerCapabilities, query.capability, "待分类能力"))}</p></div></div>
+                  <dl><div><dt data-core-text>查询目的</dt><dd data-core-text>${escapeHTML(query.purpose)}</dd></div><div><dt data-core-text>日期范围</dt><dd data-core-text>${escapeHTML(query.dateScope.start)} 至 ${escapeHTML(query.dateScope.end)} · 截止 ${escapeHTML(query.cutoff)}</dd></div><div><dt data-core-text>拟冻结产物</dt><dd data-core-text>${escapeHTML(query.intendedArtifact)}</dd></div><div><dt data-core-text>计划状态</dt><dd data-core-text>${escapeHTML(displayLabel(PRESENTATION.planStates, query.status, "待规划"))} · ${escapeHTML(displayLabel(PRESENTATION.exposureStates, query.exposureStatus, "能力状态待确认"))}</dd></div></dl>
+                  <p class="provider-meaning" data-core-text>失败含义：探测失败只表示本次未取得能力证据，不推断接口、参数或替代值。</p>
                 </article>
               `).join("")}
             </div>
@@ -912,29 +913,32 @@
               ${renderCollectionItems(view.collection.reused, "reused_frozen", "已复用并冻结")}
               ${renderCollectionItems(view.collection.awaitingProbe, "awaiting_capability_probe", "等待能力探测")}
               ${renderCollectionItems(view.collection.blocked, "blocked_permission", "权限阻塞")}
-              ${view.collection.running.length ? renderCollectionItems(view.collection.running, "running", "正在获取") : '<li class="empty-running" data-empty-running><span aria-hidden="true">○</span><strong>当前没有运行中的获取任务</strong></li>'}
+              ${view.collection.running.length ? renderCollectionItems(view.collection.running, "running", "正在获取") : '<li class="empty-running" data-empty-running><span aria-hidden="true">○</span><strong data-core-text>当前没有运行中的获取任务</strong></li>'}
             </ul>
           </section>
 
           <section class="plan-region" data-plan-region="pending" aria-labelledby="plan-pending-title">
             <header><div><p class="section-kicker">人工关口</p><h2 id="plan-pending-title">待审核结果</h2></div><p>${view.pendingResults.length} 项</p></header>
             <div class="compact-result-list">
-              ${view.pendingResults.map((item) => `<article><span class="plan-state-mark" aria-hidden="true">审</span><div><strong>${escapeHTML(item.targetLabel)}</strong><p>${escapeHTML(item.task)}</p><small>来源 ${escapeHTML(item.sourceId)} · ${escapeHTML(item.sourceVersion)} · ${escapeHTML(item.reviewLabel)}</small></div></article>`).join("")}
+              ${view.pendingResults.map((item) => `<article><span class="plan-state-mark" aria-hidden="true">审</span><div><strong data-core-text>${escapeHTML(item.targetLabel)}</strong><p data-core-text>${escapeHTML(item.task)}</p><small data-secondary-text>来源 ${escapeHTML(item.sourceId)} · ${escapeHTML(item.sourceVersion)} · ${escapeHTML(item.reviewLabel)}</small></div></article>`).join("")}
             </div>
           </section>
 
           <section class="plan-region" data-plan-region="gaps" aria-labelledby="plan-gaps-title">
             <header><div><p class="section-kicker">待补证</p><h2 id="plan-gaps-title">证据缺口</h2></div><a class="plan-text-link" href="?screen=new-research">调整范围</a></header>
             <div class="gap-list">
-              ${view.gaps.map((gap) => `<article data-gap-id="${escapeHTML(gap.id)}"><div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.gapTypes, gap.type, "证据缺口"))}</span><strong>${escapeHTML(gap.label)}</strong><p>${escapeHTML(gap.scope)} · <span data-gap-status>待获取</span></p></div><button type="button" class="plan-button quiet" data-toggle-gap aria-pressed="false">暂时无法获得</button></article>`).join("")}
+              <article><span class="type-label">因素缺口</span><div class="gap-group">${renderGapItems(view.gaps.filter((gap) => gap.type === "factor"))}</div></article>
+              <article><span class="type-label">正面检索</span><div class="gap-group">${renderGapItems(view.gaps.filter((gap) => gap.type === "positive"))}</div></article>
+              <article><span class="type-label">反面检索</span><div class="gap-group">${renderGapItems(view.gaps.filter((gap) => gap.type === "negative"))}</div></article>
+              <article class="metric-summary"><span class="type-label">结果指标</span>${view.resultMetrics.map((metric) => `<div><strong data-core-text>${escapeHTML(displayLabel(PRESENTATION.planMetricNames, metric.name, "关键业务指标"))}</strong><p><span data-core-text>${escapeHTML(displayLabel(PRESENTATION.metricValues, metric.value, metric.value))}</span> · <span data-core-text>${escapeHTML(displayLabel(PRESENTATION.metricPeriods, metric.period, metric.period))}</span></p></div>`).join("")}</article>
             </div>
           </section>
 
           <section class="plan-region" data-plan-region="failures" aria-labelledby="plan-failures-title">
             <header><div><p class="section-kicker">历史运行结果</p><h2 id="plan-failures-title">失败、额度与权限</h2></div><label class="plan-upload"><span>上传材料</span><input type="file" accept=".pdf,.doc,.docx,.xlsx,.csv,.txt"></label></header>
-            <p class="upload-status" data-upload-status>尚未选择本地材料；不会自动上传。</p>
+            <p class="upload-status" data-core-text data-upload-status>尚未选择本地材料；不会自动上传。</p>
             <div class="failure-list">
-              ${[...view.failures, ...view.manualUploads].map((run) => `<article data-provider-run="${escapeHTML(run.id)}" data-provider-outcome="${escapeHTML(run.outcome)}"><div><span class="type-label">历史结果</span><strong>${escapeHTML(displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口"))} · ${escapeHTML(displayLabel(PRESENTATION.providerOutcomes, run.outcome, "运行异常"))}</strong><p>${escapeHTML(run.observedAt)} · ${escapeHTML(displayLabel(PRESENTATION.providerDetails, run.detail, "该次历史运行未形成可复用结果，未推断替代值。"))}</p><small data-retry-status>${run.outcome === "manual_upload" ? "材料已进入待审核结果，不需要重试。" : "仅记录历史失败，不代表未来计划或替代方案。"}</small></div>${run.outcome === "manual_upload" ? "" : '<button type="button" class="plan-button" data-retry-run>重试</button>'}</article>`).join("")}
+              ${[...view.failures, ...view.manualUploads].map((run) => `<article data-provider-run="${escapeHTML(run.id)}" data-provider-outcome="${escapeHTML(run.outcome)}"><div><strong data-core-text>${escapeHTML(displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口"))} · ${escapeHTML(displayLabel(PRESENTATION.providerOutcomes, run.outcome, "运行异常"))}</strong><time data-secondary-text>${escapeHTML(run.observedAt)}</time><p data-core-text>${escapeHTML(displayLabel(PRESENTATION.providerDetails, run.detail, "该次历史运行未形成可复用结果，未推断替代值。"))}</p><small data-core-text data-retry-status>${run.outcome === "manual_upload" ? "材料已进入待审核结果，不需要重试。" : "仅记录历史失败，不代表未来计划或替代方案。"}</small></div>${run.outcome === "manual_upload" ? "" : '<button type="button" class="plan-button" data-retry-run>重试</button>'}</article>`).join("")}
             </div>
           </section>
         </div>
@@ -954,7 +958,8 @@
         assetButton.textContent = selected ? "移除" : "复用";
         const row = assetButton.closest("[data-asset-id]");
         row.querySelector("[data-reuse-status]").textContent = selected ? "已纳入复用" : "未纳入复用";
-        root.querySelector("[data-reuse-count]").textContent = root.querySelectorAll('[data-toggle-asset][aria-pressed="true"]').length;
+        const hiddenSelectedCount = Number(root.querySelector(".asset-list").dataset.hiddenSelectedCount);
+        root.querySelector("[data-reuse-count]").textContent = hiddenSelectedCount + root.querySelectorAll('[data-toggle-asset][aria-pressed="true"]').length;
         announce(`${row.dataset.assetId}${selected ? "已纳入" : "已移出"}本地复用选择`);
         return;
       }
