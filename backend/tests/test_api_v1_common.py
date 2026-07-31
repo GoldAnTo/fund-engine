@@ -1,6 +1,10 @@
-"""Versioned API seam: health, request IDs and the stable error envelope."""
+"""Versioned API seam: health, request IDs, error envelope, and historical basis."""
+
+from datetime import UTC, datetime
 
 import pytest
+
+from app.queries.basis import HistoricalBasis
 
 
 def test_v1_health_exposes_schema_version(api_client):
@@ -23,3 +27,16 @@ def test_v1_not_found_uses_stable_error_envelope(api_client):
     payload = response.json()
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["request_id"] == response.headers["x-request-id"]
+
+
+def test_basis_normalizes_naive_cutoff_to_utc():
+    basis = HistoricalBasis.from_cutoff(datetime(2024, 5, 31, 12, 0))
+    assert basis.cutoff == datetime(2024, 5, 31, 12, 0, tzinfo=UTC)
+    assert basis.is_historical is True
+
+
+def test_basis_current_uses_injected_clock():
+    now = datetime(2026, 7, 31, 4, 0, tzinfo=UTC)
+    basis = HistoricalBasis.from_cutoff(None, now=lambda: now)
+    assert basis.cutoff == now
+    assert basis.is_historical is False
