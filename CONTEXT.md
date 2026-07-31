@@ -17,8 +17,16 @@ An immutable provisional AI judgment about a Thesis based on a frozen evidence s
 _Avoid_: Final conclusion, confidence score
 
 **ReviewDecision**:
-An immutable human decision that confirms, modifies, or rejects an AIAssessment and records the reason without replacing the original AI output.
-_Avoid_: Edit, approval flag
+An immutable human decision that confirms, modifies, or rejects a Proposal or an AIAssessment and records the reason without replacing the machine output.
+_Avoid_: Edit, approval flag, mutable review state
+
+**Proposal**:
+An immutable machine or human suggestion to create a SourceStatement, EvidenceLink, CausalEdge, EntityAlignment, or AIAssessment. A Proposal is not a formal research relationship until a ReviewDecision publishes a reviewed version.
+_Avoid_: Evidence, approved relation, automatic fact
+
+**HistoricalBasis**:
+The explicit cutoff and ledger/projection watermarks used to answer what information was visible at a point in time across evidence, graph, search, valuation, and holding disclosures.
+_Avoid_: Latest state, search snapshot
 
 ## Sources and Evidence
 
