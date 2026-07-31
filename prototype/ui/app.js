@@ -2,6 +2,14 @@
   "use strict";
 
   const data = window.PROTOTYPE_DATA;
+  const researchState = window.NEW_RESEARCH_STATE;
+  const {
+    DRAFT_FIELDS,
+    confirmationStorageKey,
+    createConfirmationRecord,
+    evidenceReviewStateForDraft,
+    readConfirmationRecord,
+  } = researchState;
   const app = document.querySelector("#app");
 
   const NAV_ITEMS = [
@@ -308,69 +316,7 @@
     `;
   }
 
-  const CONFIRMATION_SCHEMA_VERSION = 1;
-  const DRAFT_FIELDS = Object.freeze(["statement", "observationPeriod", "supportCondition", "falsifier", "nextValidationEvent"]);
   const RECOVERY_MESSAGE = "未找到已确认草稿，请重新确认初始命题";
-
-  function confirmationStorageKey(caseId) {
-    return `new-research-confirmation:v${CONFIRMATION_SCHEMA_VERSION}:${caseId}`;
-  }
-
-  function normalizeDraftText(value) {
-    if (typeof value !== "string") return undefined;
-    const normalized = value.trim();
-    return normalized && normalized.length <= 2000 ? normalized : undefined;
-  }
-
-  function normalizeConfirmationRecord(candidate, fixture) {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
-    if (candidate.schemaVersion !== CONFIRMATION_SCHEMA_VERSION || candidate.caseId !== fixture.case.id) return undefined;
-    if (candidate.snapshotId !== fixture.case.snapshotId || candidate.cutoff !== fixture.case.cutoff) return undefined;
-    if (candidate.researchPlanRevision !== fixture.case.researchPlan.revision) return undefined;
-    if (!Array.isArray(candidate.theses) || candidate.theses.length < 1 || candidate.theses.length > 3) return undefined;
-
-    const normalizedTheses = [];
-    const observedIds = new Set();
-    const fixtureTheses = indexById(fixture.theses);
-    for (let index = 0; index < candidate.theses.length; index += 1) {
-      const draft = candidate.theses[index];
-      const id = normalizeDraftText(draft?.id);
-      if (!id || !/^[A-Z0-9][A-Z0-9-]{2,63}$/u.test(id) || observedIds.has(id)) return undefined;
-      observedIds.add(id);
-      const trustedFixtureOrigin = fixtureTheses.get(id)?.draftOrigin;
-      const draftOrigin = draft?.draftOrigin;
-      if (!new Set(["ai", "human"]).has(draftOrigin)) return undefined;
-      if (trustedFixtureOrigin ? draftOrigin !== trustedFixtureOrigin : draftOrigin !== "human") return undefined;
-      const normalized = { id, draftOrigin };
-      for (const field of DRAFT_FIELDS) {
-        normalized[field] = normalizeDraftText(draft[field]);
-        if (!normalized[field]) return undefined;
-      }
-      normalizedTheses.push(normalized);
-    }
-    return {
-      schemaVersion: CONFIRMATION_SCHEMA_VERSION,
-      caseId: fixture.case.id,
-      snapshotId: fixture.case.snapshotId,
-      cutoff: fixture.case.cutoff,
-      researchPlanRevision: fixture.case.researchPlan.revision,
-      theses: normalizedTheses,
-    };
-  }
-
-  function readConfirmationRecord(fixture) {
-    const key = confirmationStorageKey(fixture.case.id);
-    try {
-      const raw = window.sessionStorage.getItem(key);
-      if (!raw) return undefined;
-      const normalized = normalizeConfirmationRecord(JSON.parse(raw), fixture);
-      if (!normalized) window.sessionStorage.removeItem(key);
-      return normalized;
-    } catch {
-      try { window.sessionStorage.removeItem(key); } catch { /* Storage may be unavailable. */ }
-      return undefined;
-    }
-  }
 
   function canonicalResearchURL(step) {
     return step === 3 ? "?screen=new-research&step=3" : "?screen=new-research";
@@ -380,7 +326,7 @@
     const params = new URLSearchParams(window.location.search);
     const stepValues = params.getAll("step");
     const requestsStepThree = stepValues.length === 1 && stepValues[0] === "3";
-    const confirmation = readConfirmationRecord(fixture);
+    const confirmation = readConfirmationRecord(window.sessionStorage, fixture);
     const activeStep = requestsStepThree && confirmation ? 3 : 2;
     const recoveryMessage = requestsStepThree && !confirmation ? RECOVERY_MESSAGE : undefined;
     const canonicalURL = canonicalResearchURL(activeStep);
@@ -416,18 +362,30 @@
     const fixtureTheses = indexById(fixture.theses);
     const thesisDrafts = confirmation?.theses ?? fixture.theses.map((thesis) => ({
       id: thesis.id,
-      draftOrigin: thesis.draftOrigin,
+      origin: thesis.origin,
+      lastEditedBy: "ai",
+      title: thesis.title,
       statement: thesis.statement,
-      observationPeriod: studyRange,
+      observationStart: thesis.observationStart,
+      observationEnd: thesis.observationEnd,
       supportCondition: thesis.supportCondition,
       falsifier: thesis.falsifier,
       nextValidationEvent: thesis.nextValidationEvent,
     }));
-    const theses = thesisDrafts.map((draft, index) => ({
-      ...fixtureTheses.get(draft.id),
-      title: fixtureTheses.get(draft.id)?.title ?? `新增命题 ${index + 1}`,
-      ...draft,
-    }));
+    const theses = thesisDrafts.map((draft) => {
+      const trustedFixture = fixtureTheses.get(draft.id);
+      const evidenceLabels = {
+        reviewed_links_present: "已有已审核关系",
+        pending_relationship_review: "已有已审核关系 · 另有待审核关系",
+        no_evidence_links: "尚无证据关系",
+      };
+      return {
+        ...trustedFixture,
+        ...draft,
+        wasConfirmed: Boolean(confirmation),
+        evidenceReviewLabel: evidenceLabels[evidenceReviewStateForDraft(draft.id, fixture)],
+      };
+    });
 
     return {
       case: fixture.case,
@@ -458,35 +416,55 @@
 
   function renderThesisEditor(thesis, index, aiLabel) {
     const fieldPrefix = `thesis-${thesis.id.toLowerCase()}`;
-    const isAiDraft = thesis.draftOrigin === "ai";
-    const originLabel = isAiDraft ? aiLabel : "人工草稿 · 待确认";
+    const isAiDraft = thesis.origin === "ai";
+    const originLabel = thesis.wasConfirmed
+      ? (isAiDraft
+        ? (thesis.lastEditedBy === "human" ? "AI 起草 · 人工已修改 · 待重新确认" : "AI 起草 · 已确认过 · 待重新确认")
+        : "人工起草 · 已确认过 · 待重新确认")
+      : (isAiDraft ? aiLabel : "人工草稿 · 待确认");
+    const fieldError = (field) => `<p class="draft-field-error" id="${fieldPrefix}-${field}-error" data-field-error="${field}" hidden></p>`;
     return `
-      <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}" data-draft-origin="${escapeHTML(thesis.draftOrigin)}">
-        <legend><span data-thesis-number>命题 ${index + 1}</span>${escapeHTML(thesis.title)}</legend>
+      <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}" data-origin="${escapeHTML(thesis.origin)}" data-was-confirmed="${thesis.wasConfirmed ? "true" : "false"}">
+        <legend><span data-thesis-number>命题 ${index + 1}</span></legend>
         <div class="thesis-editor-tools">
           <span class="draft-origin-label" data-draft-origin-label${isAiDraft ? " data-ai-suggestion-label" : ""}>${escapeHTML(originLabel)}</span>
           <button class="remove-thesis-action" type="button" data-remove-thesis aria-label="删除命题 ${index + 1}" aria-describedby="thesis-minimum-description">删除</button>
         </div>
         <div class="thesis-fields">
+          <label class="title-field" for="${fieldPrefix}-title">
+            <span>命题标题</span>
+            <input id="${fieldPrefix}-title" data-field="title" value="${escapeHTML(thesis.title)}" aria-describedby="${fieldPrefix}-title-error">
+            ${fieldError("title")}
+          </label>
           <label class="statement-field" for="${fieldPrefix}-statement">
             <span>命题表述</span>
-            <textarea id="${fieldPrefix}-statement" data-field="statement" rows="2">${escapeHTML(thesis.statement)}</textarea>
+            <textarea id="${fieldPrefix}-statement" data-field="statement" rows="2" aria-describedby="${fieldPrefix}-statement-error">${escapeHTML(thesis.statement)}</textarea>
+            ${fieldError("statement")}
           </label>
-          <label for="${fieldPrefix}-period">
-            <span>观察期间</span>
-            <input id="${fieldPrefix}-period" data-field="observationPeriod" value="${escapeHTML(thesis.observationPeriod)}">
+          <label class="date-field" for="${fieldPrefix}-observation-start">
+            <span>观察开始</span>
+            <input id="${fieldPrefix}-observation-start" type="date" data-field="observationStart" value="${escapeHTML(thesis.observationStart)}" aria-describedby="${fieldPrefix}-observationStart-error">
+            ${fieldError("observationStart")}
+          </label>
+          <label class="date-field" for="${fieldPrefix}-observation-end">
+            <span>观察结束</span>
+            <input id="${fieldPrefix}-observation-end" type="date" data-field="observationEnd" value="${escapeHTML(thesis.observationEnd)}" aria-describedby="${fieldPrefix}-observationEnd-error">
+            ${fieldError("observationEnd")}
           </label>
           <label class="event-field" for="${fieldPrefix}-event">
             <span>下一验证事件</span>
-            <textarea id="${fieldPrefix}-event" data-field="nextValidationEvent" rows="2">${escapeHTML(thesis.nextValidationEvent)}</textarea>
+            <textarea id="${fieldPrefix}-event" data-field="nextValidationEvent" rows="2" aria-describedby="${fieldPrefix}-nextValidationEvent-error">${escapeHTML(thesis.nextValidationEvent)}</textarea>
+            ${fieldError("nextValidationEvent")}
           </label>
           <label for="${fieldPrefix}-support">
             <span>支持条件</span>
-            <textarea id="${fieldPrefix}-support" data-field="supportCondition" rows="2">${escapeHTML(thesis.supportCondition)}</textarea>
+            <textarea id="${fieldPrefix}-support" data-field="supportCondition" rows="2" aria-describedby="${fieldPrefix}-supportCondition-error">${escapeHTML(thesis.supportCondition)}</textarea>
+            ${fieldError("supportCondition")}
           </label>
           <label for="${fieldPrefix}-falsifier">
             <span>反证条件</span>
-            <textarea id="${fieldPrefix}-falsifier" data-field="falsifier" rows="2">${escapeHTML(thesis.falsifier)}</textarea>
+            <textarea id="${fieldPrefix}-falsifier" data-field="falsifier" rows="2" aria-describedby="${fieldPrefix}-falsifier-error">${escapeHTML(thesis.falsifier)}</textarea>
+            ${fieldError("falsifier")}
           </label>
         </div>
       </fieldset>
@@ -504,17 +482,23 @@
     return `<li data-step-state="${state}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHTML(label)}</li>`;
   }
 
+  function confirmedDraftLabel(thesis) {
+    if (thesis.origin === "human") return "人工起草 · 已确认";
+    return thesis.lastEditedBy === "human" ? "AI 起草 · 人工修改并确认" : "AI 起草 · 人工已确认";
+  }
+
   function renderThesisStage(view, currentStep) {
     if (currentStep > 2) {
       return `
         <section class="thesis-complete-summary" aria-labelledby="confirmed-theses-title">
-          <div><p>第 2 步 · 已完成</p><h2 id="confirmed-theses-title">初始命题已确认</h2></div>
+          <div><p>第 2 步 · 已完成</p><h2 id="confirmed-theses-title">初始命题已确认</h2><small class="confirmation-boundary">命题确认不等于证据关系已审核</small></div>
           <ol data-confirmed-theses>${view.theses.map((thesis) => `
             <li>
               <strong>${escapeHTML(thesis.title)}</strong>
               <span>${escapeHTML(thesis.statement)}</span>
-              <small data-draft-origin-label>${escapeHTML(thesis.draftOrigin === "ai" ? view.case.aiLabel : "人工草稿 · 待确认")}</small>
-              <small>观察期间：${escapeHTML(thesis.observationPeriod)}</small>
+              <small data-draft-origin-label>${escapeHTML(confirmedDraftLabel(thesis))}</small>
+              <small data-evidence-review-state>证据关系：${escapeHTML(thesis.evidenceReviewLabel)}</small>
+              <small>观察期间：${escapeHTML(thesis.observationStart)} 至 ${escapeHTML(thesis.observationEnd)}</small>
               <small>支持条件：${escapeHTML(thesis.supportCondition)}</small>
               <small>反证条件：${escapeHTML(thesis.falsifier)}</small>
               <small>下一验证事件：${escapeHTML(thesis.nextValidationEvent)}</small>
@@ -542,8 +526,9 @@
           <div class="thesis-count-guidance">
             <p class="thesis-limit-note" id="thesis-limit-description">已达 3 条上限；删除后可新增</p>
             <p class="thesis-minimum-note" id="thesis-minimum-description" hidden>至少保留 1 条初始命题</p>
+            <p class="ai-assist-note" id="ai-assist-description">当前原型展示既有 AI 拆分结果，不执行重新生成</p>
           </div>
-          <button class="new-research-secondary-action" type="button">AI 协助拆分</button>
+          <button class="new-research-secondary-action" type="button" disabled aria-describedby="ai-assist-description">AI 协助拆分</button>
           <button class="new-research-secondary-action" type="button" data-add-thesis disabled aria-describedby="thesis-limit-description">新增命题</button>
           <button class="primary-action" data-primary-action type="submit">确认命题并继续</button>
         </div>
@@ -622,22 +607,15 @@
     `;
   }
 
-  function collectConfirmationRecord(form, fixture) {
+  function collectDrafts(form) {
     const theses = [...form.querySelectorAll("[data-thesis-editor]")].map((editor) => {
-      const draft = { id: editor.dataset.thesisId, draftOrigin: editor.dataset.draftOrigin };
+      const draft = { id: editor.dataset.thesisId, origin: editor.dataset.origin };
       for (const field of DRAFT_FIELDS) {
         draft[field] = editor.querySelector(`[data-field="${field}"]`)?.value;
       }
       return draft;
     });
-    return normalizeConfirmationRecord({
-      schemaVersion: CONFIRMATION_SCHEMA_VERSION,
-      caseId: fixture.case.id,
-      snapshotId: fixture.case.snapshotId,
-      cutoff: fixture.case.cutoff,
-      researchPlanRevision: fixture.case.researchPlan.revision,
-      theses,
-    }, fixture);
+    return theses;
   }
 
   function applyConfirmationRecordToForm(form, record) {
@@ -647,6 +625,43 @@
       if (!draft) continue;
       for (const field of DRAFT_FIELDS) editor.querySelector(`[data-field="${field}"]`).value = draft[field];
     }
+  }
+
+  const DRAFT_ERROR_MESSAGES = Object.freeze({
+    required: "此字段为必填项",
+    invalid_date: "请输入真实有效的日期",
+    reversed_range: "开始日期不能晚于结束日期",
+    before_research_period: "开始日期不能早于研究范围",
+    after_research_period: "结束日期不能晚于研究范围",
+  });
+
+  function clearDraftValidation(form) {
+    for (const control of form.querySelectorAll("[data-field]")) control.removeAttribute("aria-invalid");
+    for (const message of form.querySelectorAll("[data-field-error]")) {
+      message.hidden = true;
+      message.textContent = "";
+    }
+  }
+
+  function showDraftValidation(form, errors) {
+    clearDraftValidation(form);
+    let firstInvalid;
+    const editors = [...form.querySelectorAll("[data-thesis-editor]")];
+    for (const [index, fieldErrors] of Object.entries(errors)) {
+      if (index === "_record") continue;
+      const editor = editors[Number(index)];
+      if (!editor) continue;
+      for (const [field, code] of Object.entries(fieldErrors)) {
+        const control = editor.querySelector(`[data-field="${field}"]`);
+        const message = editor.querySelector(`[data-field-error="${field}"]`);
+        if (!control || !message) continue;
+        control.setAttribute("aria-invalid", "true");
+        message.textContent = DRAFT_ERROR_MESSAGES[code] ?? "此字段无效";
+        message.hidden = false;
+        firstInvalid ??= control;
+      }
+    }
+    firstInvalid?.focus();
   }
 
   function updateThesisEditorControls(form) {
@@ -678,10 +693,11 @@
     form.dataset.nextDraftSequence = String(sequence + 1);
     const blankDraft = {
       id,
-      draftOrigin: "human",
-      title: "新增命题",
+      origin: "human",
+      title: "",
       statement: "",
-      observationPeriod: "",
+      observationStart: "",
+      observationEnd: "",
       supportCondition: "",
       falsifier: "",
       nextValidationEvent: "",
@@ -689,7 +705,7 @@
     const container = form.querySelector(".thesis-editors");
     container.insertAdjacentHTML("beforeend", renderThesisEditor(blankDraft, container.children.length, fixture.case.aiLabel));
     updateThesisEditorControls(form);
-    container.lastElementChild.querySelector('[data-field="statement"]').focus();
+    container.lastElementChild.querySelector('[data-field="title"]').focus();
   }
 
   function bindNewResearchForm(fixture) {
@@ -708,15 +724,32 @@
       const addButton = event.target.closest("[data-add-thesis]");
       if (addButton && !addButton.disabled) appendBlankThesisEditor(form, fixture);
     });
+    form.addEventListener("input", (event) => {
+      const control = event.target.closest("[data-field]");
+      const editor = control?.closest("[data-thesis-editor]");
+      if (!editor) return;
+      const originLabel = editor.querySelector("[data-draft-origin-label]");
+      if (editor.dataset.origin === "ai") {
+        originLabel.textContent = editor.dataset.wasConfirmed === "true"
+          ? "AI 起草 · 人工已修改 · 待重新确认"
+          : "AI 草案 · 人工已修改 · 待确认";
+      } else if (editor.dataset.wasConfirmed === "true") {
+        originLabel.textContent = "人工起草 · 已修改 · 待重新确认";
+      }
+    });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const error = form.querySelector("[data-form-error]");
-      const record = collectConfirmationRecord(form, fixture);
-      if (!record) {
+      const result = createConfirmationRecord(collectDrafts(form), fixture);
+      if (!result.record) {
+        showDraftValidation(form, result.errors);
         error.hidden = false;
-        error.textContent = "请完整填写 1–3 条命题的命题表述、观察期间、支持条件、反证条件与下一验证事件。";
+        error.textContent = "请修正已标记的命题字段后再确认。";
         return;
       }
+      const record = result.record;
+      clearDraftValidation(form);
+      error.hidden = true;
       try {
         window.sessionStorage.setItem(confirmationStorageKey(fixture.case.id), JSON.stringify(record));
       } catch {

@@ -996,7 +996,7 @@ a {
 .thesis-editor legend {
   display: block;
   width: 100%;
-  padding: 0 110px 0 0;
+  padding: 0;
   color: var(--ink);
   font-size: 13px;
   font-weight: 750;
@@ -1017,13 +1017,16 @@ a {
   font-weight: 750;
 }
 
+.thesis-editor[data-origin="human"] .draft-origin-label {
+  color: var(--body-strong);
+}
+
 .thesis-editor-tools {
-  position: absolute;
-  top: 7px;
-  right: 14px;
   display: flex;
   gap: 7px;
   align-items: center;
+  justify-content: flex-end;
+  min-height: 21px;
 }
 
 .remove-thesis-action {
@@ -1054,9 +1057,9 @@ a {
 
 .thesis-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 7px 9px;
-  margin-top: 9px;
+  margin-top: 2px;
 }
 
 .thesis-fields label {
@@ -1065,8 +1068,19 @@ a {
   gap: 3px;
 }
 
+.thesis-fields .title-field,
 .thesis-fields .statement-field {
-  grid-column: 1 / -1;
+  grid-column: span 3;
+}
+
+.thesis-fields .date-field {
+  grid-column: span 3;
+}
+
+.thesis-fields .event-field,
+.thesis-fields label[for$="-support"],
+.thesis-fields label[for$="-falsifier"] {
+  grid-column: span 2;
 }
 
 .thesis-fields label > span {
@@ -1115,6 +1129,21 @@ a {
   outline-offset: 2px;
 }
 
+.thesis-fields [aria-invalid="true"] {
+  border-color: var(--state-contradict);
+}
+
+.draft-field-error {
+  margin: 0;
+  color: var(--state-contradict);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.draft-field-error[hidden] {
+  display: none;
+}
+
 .new-research-form-actions {
   justify-content: flex-end;
   gap: 9px;
@@ -1124,6 +1153,13 @@ a {
 
 .thesis-limit-note {
   margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ai-assist-note {
+  margin: 2px 0 0;
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.4;
@@ -1227,6 +1263,14 @@ a {
 .thesis-complete-summary li span,
 .thesis-complete-summary li small {
   display: block;
+}
+
+.confirmation-boundary {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .thesis-complete-summary li span,
@@ -1555,8 +1599,12 @@ a {
   }
 
   .question-summary .summary-question,
+  .thesis-fields .title-field,
   .thesis-fields .statement-field,
-  .thesis-fields .event-field {
+  .thesis-fields .date-field,
+  .thesis-fields .event-field,
+  .thesis-fields label[for$="-support"],
+  .thesis-fields label[for$="-falsifier"] {
     grid-column: auto;
   }
 

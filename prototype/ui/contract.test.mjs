@@ -232,8 +232,13 @@ export function assertFixtureContract(data) {
   }
 
   assert.equal(data.theses.length, 3, "fixture must contain exactly three theses");
+  const validThesisEvidenceStates = new Set(["reviewed_links_present", "pending_relationship_review", "no_evidence_links"]);
   for (const thesis of data.theses) {
-    assert.equal(thesis.draftOrigin, "ai", `${thesis.id} fixture draft must explicitly declare AI origin`);
+    assert.equal(thesis.origin, "ai", `${thesis.id} fixture draft must explicitly declare AI origin`);
+    assert.equal(Object.hasOwn(thesis, "reviewState"), false, `${thesis.id} must not conflate Thesis draft state with evidence-link review state`);
+    assert.ok(validThesisEvidenceStates.has(thesis.evidenceReviewState), `${thesis.id} must expose an explicit evidence relationship review state`);
+    assert.equal(thesis.observationStart, "2025-01-01", `${thesis.id} must expose a structured observation start`);
+    assert.equal(thesis.observationEnd, "2027-12-31", `${thesis.id} must expose a structured observation end`);
     for (const field of ["supportCondition", "falsifier", "nextValidationEvent"]) {
       assert.ok(thesis[field], `${thesis.id} must include ${field}`);
     }
@@ -287,6 +292,13 @@ export function assertFixtureContract(data) {
   const evidenceStates = new Set(data.evidenceLinks.map((link) => link.reviewState));
   assert.ok(evidenceStates.has("reviewed"), "fixture evidence links must include reviewed evidence");
   assert.ok(evidenceStates.has("pending_review"), "fixture evidence links must include pending evidence");
+  for (const thesis of data.theses) {
+    const links = data.evidenceLinks.filter((link) => link.thesisId === thesis.id);
+    const expectedState = links.some((link) => link.reviewState === "pending_review")
+      ? "pending_relationship_review"
+      : (links.some((link) => link.reviewState === "reviewed") ? "reviewed_links_present" : "no_evidence_links");
+    assert.equal(thesis.evidenceReviewState, expectedState, `${thesis.id} evidenceReviewState must match its evidence-link review facts`);
+  }
 
   assert.ok(data.funds.length > 0, "fixture must include at least one fund mapping");
   for (const fund of data.funds) {
@@ -431,6 +443,84 @@ async function assertFixtureDataContract() {
   assert.throws(() => assertFixtureContract(historicalProviderSuccess), /must remain planned rather than historical success/u);
 }
 
+async function assertNewResearchStateDateContract() {
+  const sandbox = { window: {} };
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "data.js"), "utf8"), sandbox);
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"), sandbox);
+  const state = sandbox.window.NEW_RESEARCH_STATE;
+  assert.ok(Object.isFrozen(state), "new-research state API must be a narrow frozen global");
+  assert.equal(state.isStrictISODate("2025-01-01"), true);
+  for (const invalid of ["2025-1-01", "2025-02-30", "not-a-date", ""] ) {
+    assert.equal(state.isStrictISODate(invalid), false, `${invalid || "empty date"} must fail strict ISO date validation`);
+  }
+
+  const period = sandbox.window.PROTOTYPE_DATA.case.researchPeriod;
+  assert.deepEqual({ ...state.validateObservationRange("2025-01-01", "2027-12-31", period) }, {}, "research period boundaries must be valid");
+  assert.deepEqual({ ...state.validateObservationRange("2025-04-01", "2026-06-30", period) }, {}, "an in-range subperiod must be valid");
+  assert.equal(state.validateObservationRange("2025-02-30", "2025-03-01", period).observationStart, "invalid_date");
+  assert.equal(state.validateObservationRange("2026-01-02", "2026-01-01", period).observationStart, "reversed_range");
+  assert.equal(state.validateObservationRange("2024-12-31", "2025-02-01", period).observationStart, "before_research_period");
+  assert.equal(state.validateObservationRange("2026-01-01", "2028-01-01", period).observationEnd, "after_research_period");
+}
+
+async function loadNewResearchStateFixture() {
+  const sandbox = { window: {} };
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "data.js"), "utf8"), sandbox);
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"), sandbox);
+  return { data: sandbox.window.PROTOTYPE_DATA, state: sandbox.window.NEW_RESEARCH_STATE };
+}
+
+async function assertNewResearchStateSessionContract() {
+  const { data, state } = await loadNewResearchStateFixture();
+  assert.deepEqual([...state.EVIDENCE_REVIEW_STATES], ["reviewed_links_present", "pending_relationship_review", "no_evidence_links"], "state API must keep evidence-review vocabulary separate from confirmation state");
+  assert.equal(state.evidenceReviewStateForDraft("TH-AIC-01", data), "reviewed_links_present");
+  assert.equal(state.evidenceReviewStateForDraft("TH-DRAFT-1", data), "no_evidence_links", "human drafts must not inherit fixture evidence review");
+  const rawFixtureDraft = (thesis) => ({
+    id: thesis.id,
+    origin: thesis.origin,
+    title: thesis.title,
+    statement: thesis.statement,
+    observationStart: thesis.observationStart,
+    observationEnd: thesis.observationEnd,
+    supportCondition: thesis.supportCondition,
+    falsifier: thesis.falsifier,
+    nextValidationEvent: thesis.nextValidationEvent,
+  });
+  const unchanged = rawFixtureDraft(data.theses[0]);
+  const modified = { ...rawFixtureDraft(data.theses[1]), statement: `${data.theses[1].statement} 人工补充` };
+  const human = {
+    id: "TH-DRAFT-1",
+    origin: "human",
+    title: "人工新增命题",
+    statement: "人工新增命题表述",
+    observationStart: "2025-03-01",
+    observationEnd: "2026-09-30",
+    supportCondition: "人工支持条件",
+    falsifier: "人工反证条件",
+    nextValidationEvent: "人工下一验证事件",
+  };
+  const created = state.createConfirmationRecord([unchanged, modified, human], data);
+  assert.deepEqual({ ...created.errors }, {}, "three complete drafts must create a confirmation record");
+  assert.equal(created.record.confirmationState, "confirmed", "confirmation state must belong to the record");
+  assert.deepEqual([...created.record.theses].map((draft) => draft.origin), ["ai", "ai", "human"]);
+  assert.deepEqual([...created.record.theses].map((draft) => draft.lastEditedBy), ["ai", "human", "human"]);
+  assert.equal(created.record.theses[2].title, "人工新增命题");
+  assert.equal(created.record.theses[2].observationStart, "2025-03-01");
+  assert.equal(created.record.theses[2].observationEnd, "2026-09-30");
+  assert.equal(Object.hasOwn(created.record.theses[2], "observationPeriod"), false, "session record must not persist a formatted period string");
+  assert.ok(state.normalizeConfirmationRecord(created.record, data), "a created record must round-trip through stored-record validation");
+
+  const tamperedEdit = structuredClone(created.record);
+  tamperedEdit.theses[0].lastEditedBy = "human";
+  assert.equal(state.normalizeConfirmationRecord(tamperedEdit, data), undefined, "tampered edit attribution must invalidate stored confirmation");
+  const forgedAi = structuredClone(created.record);
+  forgedAi.theses[2].origin = "ai";
+  forgedAi.theses[2].lastEditedBy = "ai";
+  assert.equal(state.normalizeConfirmationRecord(forgedAi, data), undefined, "a non-fixture draft must never claim AI origin");
+  const tamperedConfirmation = { ...created.record, confirmationState: "pending" };
+  assert.equal(state.normalizeConfirmationRecord(tamperedConfirmation, data), undefined, "tampered confirmation state must invalidate stored confirmation");
+}
+
 function assertAssessmentScoringSemantics() {
   const factualPercentages = [
     "数据中心收入同比增长 34.8%。",
@@ -478,7 +568,7 @@ function selectedRoutes(argv) {
 }
 
 async function assertSourceContract() {
-  const requiredFiles = ["index.html", "styles.css", "data.js", "app.js", "capture.mjs"];
+  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "app.js", "capture.mjs"];
   for (const filename of requiredFiles) {
     await assert.doesNotReject(
       access(path.join(UI_DIR, filename)),
@@ -486,8 +576,9 @@ async function assertSourceContract() {
     );
   }
 
-  const [html, app, styles, readme] = await Promise.all([
+  const [html, stateSource, app, styles, readme] = await Promise.all([
     readFile(path.join(UI_DIR, "index.html"), "utf8"),
+    readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "app.js"), "utf8"),
     readFile(path.join(UI_DIR, "styles.css"), "utf8"),
     readFile(path.join(UI_DIR, "README.md"), "utf8"),
@@ -496,7 +587,13 @@ async function assertSourceContract() {
   assert.match(html, /<main\s+id=["']app["']/u, "index.html must expose <main id=\"app\">");
   assert.match(html, /<link[^>]+href=["']\.\/styles\.css["']/u, "index.html must load ./styles.css");
   assert.match(html, /<script[^>]+src=["']\.\/data\.js["'][^>]*><\/script>/u, "index.html must load classic ./data.js");
+  assert.match(html, /<script[^>]+src=["']\.\/new-research-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./new-research-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/app\.js["'][^>]*><\/script>/u, "index.html must load classic ./app.js");
+  assert.ok(html.indexOf("./data.js") < html.indexOf("./new-research-state.js") && html.indexOf("./new-research-state.js") < html.indexOf("./app.js"), "new-research state must load between fixture data and rendering");
+  for (const stateFunction of ["isStrictISODate", "validateObservationRange", "createConfirmationRecord", "normalizeConfirmationRecord", "readConfirmationRecord"]) {
+    assert.match(stateSource, new RegExp(`function ${stateFunction}\\(`, "u"), `state module must own ${stateFunction}`);
+    assert.doesNotMatch(app, new RegExp(`function ${stateFunction}\\(`, "u"), `app.js must not duplicate ${stateFunction}`);
+  }
 
   for (const screen of REQUIRED_SCREENS) {
     assert.match(app, new RegExp(`["']${screen}["']\\s*:`, "u"), `SCREEN_RENDERERS must expose ${screen}`);
@@ -809,6 +906,8 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   const fixtureTheses = await page.evaluate(() => window.PROTOTYPE_DATA.theses.map((thesis) => ({
     title: thesis.title,
     statement: thesis.statement,
+    observationStart: thesis.observationStart,
+    observationEnd: thesis.observationEnd,
     supportCondition: thesis.supportCondition,
     falsifier: thesis.falsifier,
     nextValidationEvent: thesis.nextValidationEvent,
@@ -816,22 +915,30 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   for (let index = 0; index < fixtureTheses.length; index += 1) {
     const editor = editors.nth(index);
     const editorText = await editor.textContent();
-    for (const label of ["观察期间", "支持条件", "反证条件", "下一验证事件"]) {
+    for (const label of ["命题标题", "观察开始", "观察结束", "支持条件", "反证条件", "下一验证事件"]) {
       assert.ok(editorText.includes(label), `thesis editor ${index + 1} must include ${label}`);
     }
     for (const value of Object.values(fixtureTheses[index])) {
       assert.ok(editorText.includes(value) || await editor.locator(`[value="${value.replaceAll('"', '\\"')}"]`).count(), `thesis editor ${index + 1} must use fixture value ${value}`);
     }
     assert.equal(await editor.locator("label").count() >= 5, true, `thesis editor ${index + 1} fields must use labels`);
-    assert.equal(await editor.getAttribute("data-draft-origin"), "ai", `fixture thesis ${index + 1} must preserve explicit AI origin`);
+    assert.equal(await editor.getAttribute("data-origin"), "ai", `fixture thesis ${index + 1} must preserve explicit AI origin`);
     assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
+    assert.equal(await editor.locator('[data-field="title"]').inputValue(), fixtureTheses[index].title, "fixture title must be a real editable value");
+    assert.equal(await editor.locator('input[type="date"]').count(), 2, "each editor must expose two native date controls");
+    assert.ok(await editor.locator('input[type="date"]').evaluateAll((items) => items.every((item) => item.getBoundingClientRect().width >= 150)), "native date controls must be wide enough to display a complete YYYY/MM/DD date");
   }
   const draftControls = form.locator('input:not([type="hidden"]), textarea');
-  assert.equal(await draftControls.count(), 15, "three Thesis editors must expose exactly five draft controls each");
+  assert.equal(await draftControls.count(), 21, "three Thesis editors must expose exactly seven draft controls each");
   assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => !control.hasAttribute("name"))), "visible draft controls must not submit names into the GET URL");
   assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => control.dataset.field)), "visible draft controls must identify fields through data-field");
   assert.deepEqual(await editors.evaluateAll((items) => items.map((item) => item.dataset.thesisId)), ["TH-AIC-01", "TH-AIC-02", "TH-AIC-03"]);
-  assert.equal(await form.getByRole("button", { name: "AI 协助拆分", exact: true }).count(), 1, "AI help must be a single secondary action");
+  const aiAssist = form.getByRole("button", { name: "AI 协助拆分", exact: true });
+  assert.equal(await aiAssist.count(), 1, "AI help must be a single secondary action");
+  assert.ok(await aiAssist.isDisabled(), "AI assist must not remain an enabled no-op");
+  const aiAssistDescription = await aiAssist.getAttribute("aria-describedby");
+  assert.equal((await form.locator(`#${aiAssistDescription}`).textContent()).trim(), "当前原型展示既有 AI 拆分结果，不执行重新生成");
+  assert.ok(await form.locator(`#${aiAssistDescription}`).isVisible(), "disabled AI assist explanation must remain visible");
   const addThesis = form.getByRole("button", { name: "新增命题", exact: true });
   assert.equal(await addThesis.count(), 1, "thesis actions must expose a real add control");
   assert.ok(await addThesis.isDisabled(), "add Thesis must be disabled when all three fixture theses are present");
@@ -894,18 +1001,21 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.ok(sizes.length > 0 && sizes.every((size) => size >= 13), `${selector} core copy must render at 13px or larger`);
   }
 
-  const firstStatement = editors.nth(0).locator('[data-field="statement"]');
-  await firstStatement.focus();
+  const firstTitle = editors.nth(0).locator('[data-field="title"]');
+  await firstTitle.focus();
   await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "observationPeriod", "Tab must move from statement to observation period");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "statement", "Tab must move from title to statement");
   await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "nextValidationEvent", "Tab must continue to the adjacent next-event field");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "observationStart", "Tab must continue to observation start");
+  assert.deepEqual(
+    await editors.first().locator("[data-field]").evaluateAll((items) => items.map((item) => item.dataset.field)),
+    ["title", "statement", "observationStart", "observationEnd", "nextValidationEvent", "supportCondition", "falsifier"],
+    "draft controls must retain a logical DOM order even though native date internals have browser-specific Tab stops",
+  );
+  assert.ok(await editors.first().locator("[data-field]").evaluateAll((items) => items.every((item) => item.tabIndex >= 0)), "all draft controls must be keyboard focusable");
+  await editors.last().locator('[data-field="falsifier"]').focus();
   await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "supportCondition", "Tab must continue through the logical Thesis field order");
-  const aiAssist = form.getByRole("button", { name: "AI 协助拆分", exact: true });
-  await aiAssist.focus();
-  await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), "确认命题并继续", "Tab must skip the disabled add control and reach the primary action");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), "确认命题并继续", "Tab must skip disabled AI/add controls and reach the primary action");
 
   await page.setViewportSize({ width: 375, height: 812 });
   const narrowLayout = await page.evaluate(() => ({
@@ -947,11 +1057,15 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.equal(await assetStage.locator("[data-preview-state]").count(), 0, "current assets stage must not carry a not-complete preview badge");
     assert.equal(await assetStage.locator("[data-current-stage]").count(), 1, "current assets stage must visibly explain its current state");
     assert.ok((await progressedMarker.locator("[data-confirmed-theses]").textContent()).includes(expectedDraftText), "step 3 must render the validated confirmation record");
+    assert.ok((await progressedMarker.textContent()).includes("命题确认不等于证据关系已审核"), "Thesis confirmation and evidence review must remain visibly separate");
+    assert.equal(await progressedMarker.locator('[data-confirmed-theses] [data-draft-origin-label]').filter({ hasText: "待确认" }).count(), 0, "confirmed Thesis labels must not retain pending wording");
+    assert.equal(await progressedMarker.locator('[data-confirmed-theses] [data-draft-origin-label]').filter({ hasText: "未经人工复核" }).count(), 0, "confirmed Thesis labels must not retain unreviewed wording");
   }
 
   await defaultRemoveButtons.first().focus();
   await page.keyboard.press("Enter");
   assert.equal(await form.locator("[data-thesis-editor]").count(), 2, "keyboard removal must reduce the draft to two theses");
+  assert.equal(await form.locator('[data-thesis-editor]').first().locator('[data-field="title"]').inputValue(), fixtureTheses[1].title, "removal must preserve the next stable draft title rather than synthesizing one from position");
   assert.equal((await page.evaluate(() => document.activeElement?.textContent)).trim(), "新增命题", "keyboard removal must move focus to the now-enabled add control");
   assert.ok(!await addThesis.isDisabled(), "add Thesis must enable below the three-Thesis maximum");
   assert.equal((await form.locator(`#${addDescriptionId}`).textContent()).trim(), "当前 2 条；可新增至 3 条");
@@ -970,8 +1084,17 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(savedTwoRecord.snapshotId, "RS-2025-06-30-v3", "confirmation record must bind to the immutable snapshot");
   assert.equal(savedTwoRecord.cutoff, "2025-06-30", "confirmation record must bind to the evidence cutoff");
   assert.equal(savedTwoRecord.researchPlanRevision, "RP-AIC-2025-01-v1", "confirmation record must bind to the research plan revision");
+  assert.equal(savedTwoRecord.confirmationState, "confirmed", "confirmationState must be record-level state");
   assert.equal(savedTwoRecord.theses.length, 2, "confirmation validator must accept two complete Thesis drafts");
-  assert.deepEqual(savedTwoRecord.theses.map((thesis) => thesis.draftOrigin), ["ai", "ai"], "confirmation must preserve AI origin after removal");
+  assert.deepEqual(savedTwoRecord.theses.map((thesis) => thesis.origin), ["ai", "ai"], "confirmation must preserve AI origin after removal");
+  assert.deepEqual(savedTwoRecord.theses.map((thesis) => thesis.lastEditedBy), ["human", "ai"], "editing fixture text must derive human edit attribution without changing origin");
+  assert.deepEqual(savedTwoRecord.theses.map((thesis) => [thesis.observationStart, thesis.observationEnd]), [["2025-01-01", "2027-12-31"], ["2025-01-01", "2027-12-31"]]);
+  const firstConfirmationLabels = await page.locator('[data-confirmed-theses] [data-draft-origin-label]').allTextContents();
+  assert.ok(firstConfirmationLabels.includes("AI 起草 · 人工修改并确认"));
+  assert.ok(firstConfirmationLabels.includes("AI 起草 · 人工已确认"));
+  const firstEvidenceStates = await page.locator('[data-confirmed-theses] [data-evidence-review-state]').allTextContents();
+  assert.ok(firstEvidenceStates.includes("证据关系：尚无证据关系"));
+  assert.ok(firstEvidenceStates.includes("证据关系：已有已审核关系 · 另有待审核关系"), "reviewed and pending evidence relations must remain distinct from Thesis confirmation");
   assert.equal(savedTwoRecord.theses[0].statement, clickEdit, "confirmation record must normalize surrounding whitespace");
 
   await page.reload({ waitUntil: "networkidle" });
@@ -980,6 +1103,14 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(new URL(page.url()).search, "?screen=new-research", "Back from confirmed step 3 must return to canonical step 2");
   assert.equal(await page.locator('[data-screen="new-research"] [data-field="statement"]').first().inputValue(), clickEdit, "Back to step 2 must repopulate the validated confirmation record");
   assert.equal(await page.locator('[data-screen="new-research"] [data-thesis-editor]').count(), 2, "Back must preserve a two-Thesis confirmation");
+  assert.deepEqual(
+    await page.locator('[data-screen="new-research"] [data-draft-origin-label]').allTextContents(),
+    ["AI 起草 · 人工已修改 · 待重新确认", "AI 起草 · 已确认过 · 待重新确认"],
+    "Back must preserve human edit provenance while returning both AI-origin drafts to pending confirmation",
+  );
+  const restoredUnchangedAi = page.locator('[data-screen="new-research"] [data-thesis-editor]').nth(1);
+  await restoredUnchangedAi.locator('[data-field="title"]').fill(`${fixtureTheses[2].title}（再次编辑）`);
+  assert.equal((await restoredUnchangedAi.locator('[data-draft-origin-label]').textContent()).trim(), "AI 起草 · 人工已修改 · 待重新确认", "post-back input must immediately mark a previously confirmed AI draft dirty");
 
   const stepTwoForm = page.locator('[data-screen="new-research"] form[aria-label="初始命题"]');
   await stepTwoForm.locator("[data-remove-thesis]").last().click();
@@ -998,7 +1129,8 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(oneEdit);
   const savedOneRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
   assert.equal(savedOneRecord.theses.length, 1, "confirmation validator must accept one complete Thesis draft");
-  assert.equal(savedOneRecord.theses[0].draftOrigin, "ai", "one-Thesis confirmation must preserve AI origin");
+  assert.equal(savedOneRecord.theses[0].origin, "ai", "one-Thesis confirmation must preserve AI origin");
+  assert.equal(savedOneRecord.theses[0].lastEditedBy, "human");
   await page.reload({ waitUntil: "networkidle" });
   await assertStepThreeState(oneEdit);
   await page.goBack({ waitUntil: "networkidle" });
@@ -1007,8 +1139,10 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
 
   async function fillBlankEditor(editor, suffix) {
     const values = {
+      title: `人工新增标题 ${suffix}`,
       statement: `新增命题表述 ${suffix}`,
-      observationPeriod: "2025-01-01 至 2027-12-31",
+      observationStart: "2025-03-01",
+      observationEnd: "2026-09-30",
       nextValidationEvent: `新增下一验证事件 ${suffix}`,
       supportCondition: `新增支持条件 ${suffix}`,
       falsifier: `新增反证条件 ${suffix}`,
@@ -1020,23 +1154,44 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await addFromOne.focus();
   await page.keyboard.press("Enter");
   assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 2, "keyboard add must restore a second blank Thesis editor");
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "statement", "adding a Thesis must focus its first draft field");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "title", "adding a Thesis must focus its first draft field");
   const firstHumanEditor = oneThesisForm.locator("[data-thesis-editor]").last();
-  assert.equal(await firstHumanEditor.getAttribute("data-draft-origin"), "human", "manual add must create an explicit human-origin draft");
+  assert.equal(await firstHumanEditor.getAttribute("data-origin"), "human", "manual add must create an explicit human-origin draft");
   assert.equal((await firstHumanEditor.locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
   assert.equal(await firstHumanEditor.locator("[data-ai-suggestion-label]").count(), 0, "a human-origin fieldset must contain no AI-authorship label");
   await oneThesisForm.locator("[data-primary-action]").click();
   assert.equal(new URL(page.url()).search, "?screen=new-research", "an incomplete added Thesis must not advance the workflow");
+  const emptyHumanTitle = firstHumanEditor.locator('[data-field="title"]');
+  assert.equal(await emptyHumanTitle.getAttribute("aria-invalid"), "true", "empty human title must receive field-level invalid state");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "title", "first invalid field must receive focus");
+  const emptyTitleErrorId = await emptyHumanTitle.getAttribute("aria-describedby");
+  assert.ok(await firstHumanEditor.locator(`#${emptyTitleErrorId}`).isVisible(), "empty title must reference a visible field error");
   assert.equal(
     (await oneThesisForm.locator("[data-form-error]").textContent()).trim(),
-    "请完整填写 1–3 条命题的命题表述、观察期间、支持条件、反证条件与下一验证事件。",
-    "the invalid-draft alert must name every required field",
+    "请修正已标记的命题字段后再确认。",
+    "the invalid-draft summary must direct the user to field-level errors",
   );
   await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "A");
+  await firstHumanEditor.locator('[data-field="observationStart"]').fill("2026-01-02");
+  await firstHumanEditor.locator('[data-field="observationEnd"]').fill("2026-01-01");
+  await oneThesisForm.locator("[data-primary-action]").click();
+  assert.equal(await firstHumanEditor.locator('[data-field="observationStart"]').getAttribute("aria-invalid"), "true", "reversed dates must receive field-level invalid state");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "observationStart", "reversed date validation must focus the first invalid date");
+  const reversedDateErrorId = await firstHumanEditor.locator('[data-field="observationStart"]').getAttribute("aria-describedby");
+  assert.ok(await firstHumanEditor.locator(`#${reversedDateErrorId}`).isVisible(), "reversed date must reference a visible field error");
+  await firstHumanEditor.locator('[data-field="observationStart"]').fill("2025-03-01");
+  await firstHumanEditor.locator('[data-field="observationEnd"]').fill("2026-09-30");
+  await firstHumanEditor.locator('[data-field="falsifier"]').fill("");
+  await oneThesisForm.locator("[data-primary-action]").click();
+  assert.equal(await firstHumanEditor.locator('[data-field="falsifier"]').getAttribute("aria-invalid"), "true", "empty falsifier must receive field-level invalid state");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "falsifier", "empty falsifier must receive focus");
+  const falsifierErrorId = await firstHumanEditor.locator('[data-field="falsifier"]').getAttribute("aria-describedby");
+  assert.ok(await firstHumanEditor.locator(`#${falsifierErrorId}`).isVisible(), "empty falsifier must reference a visible field error");
+  await firstHumanEditor.locator('[data-field="falsifier"]').fill("新增反证条件 A");
   await addFromOne.click();
   assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 3, "pointer add must restore the three-Thesis maximum");
   const secondHumanEditor = oneThesisForm.locator("[data-thesis-editor]").last();
-  assert.equal(await secondHumanEditor.getAttribute("data-draft-origin"), "human");
+  assert.equal(await secondHumanEditor.getAttribute("data-origin"), "human");
   assert.equal((await secondHumanEditor.locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
   assert.equal(await secondHumanEditor.locator("[data-ai-suggestion-label]").count(), 0);
   await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "B");
@@ -1047,7 +1202,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
 
   const enterEdit = "Enter 确认后的唯一支持条件";
   await oneThesisForm.locator('[data-field="supportCondition"]').nth(1).fill(enterEdit);
-  await oneThesisForm.locator('[data-field="observationPeriod"]').first().focus();
+  await oneThesisForm.locator('[data-field="observationStart"]').first().focus();
   await Promise.all([
     page.waitForURL((url) => url.search === "?screen=new-research&step=3"),
     page.keyboard.press("Enter"),
@@ -1055,16 +1210,28 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(enterEdit);
   const savedRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
   assert.equal(savedRecord.theses.length, 3, "confirmation validator must accept three complete unique Thesis drafts");
-  assert.deepEqual(savedRecord.theses.map((thesis) => thesis.draftOrigin), ["ai", "human", "human"], "confirmation must preserve mixed trusted origins");
+  assert.deepEqual(savedRecord.theses.map((thesis) => thesis.origin), ["ai", "human", "human"], "confirmation must preserve mixed trusted origins");
+  assert.deepEqual(savedRecord.theses.map((thesis) => thesis.lastEditedBy), ["human", "human", "human"]);
+  assert.deepEqual(savedRecord.theses.map((thesis) => thesis.title), [fixtureTheses[1].title, "人工新增标题 A", "人工新增标题 B"], "editable titles must persist without synthesis from ID or position");
+  assert.deepEqual(await page.locator('[data-confirmed-theses] [data-draft-origin-label]').allTextContents(), ["AI 起草 · 人工修改并确认", "人工起草 · 已确认", "人工起草 · 已确认"]);
+  assert.equal(await page.locator('[data-confirmed-theses] [data-evidence-review-state]').filter({ hasText: "尚无证据关系" }).count(), 3, "fixture without a linked relation and human drafts must not inherit Thesis confirmation as evidence review");
 
   await page.reload({ waitUntil: "networkidle" });
   await assertStepThreeState(enterEdit);
   await page.goBack({ waitUntil: "networkidle" });
   const restoredOriginEditors = page.locator('[data-screen="new-research"] [data-thesis-editor]');
-  assert.deepEqual(await restoredOriginEditors.evaluateAll((items) => items.map((item) => item.dataset.draftOrigin)), ["ai", "human", "human"], "Back after refresh must preserve each draft origin");
+  assert.deepEqual(await restoredOriginEditors.evaluateAll((items) => items.map((item) => item.dataset.origin)), ["ai", "human", "human"], "Back after refresh must preserve each draft origin");
+  assert.deepEqual(await restoredOriginEditors.locator('[data-field="title"]').evaluateAll((items) => items.map((item) => item.value)), [fixtureTheses[1].title, "人工新增标题 A", "人工新增标题 B"], "Back after refresh must preserve editable titles");
   assert.equal(await restoredOriginEditors.nth(0).locator("[data-ai-suggestion-label]").count(), 1);
   assert.equal(await restoredOriginEditors.nth(1).locator("[data-ai-suggestion-label]").count(), 0);
-  assert.equal((await restoredOriginEditors.nth(1).locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
+  assert.equal((await restoredOriginEditors.nth(1).locator("[data-draft-origin-label]").textContent()).trim(), "人工起草 · 已确认过 · 待重新确认");
+  assert.deepEqual(
+    await restoredOriginEditors.locator("[data-draft-origin-label]").allTextContents(),
+    ["AI 起草 · 人工已修改 · 待重新确认", "人工起草 · 已确认过 · 待重新确认", "人工起草 · 已确认过 · 待重新确认"],
+    "Back after mixed confirmation must preserve prior-confirmation edit-mode labels",
+  );
+  await restoredOriginEditors.nth(1).locator('[data-field="title"]').fill("人工新增标题 A（再次编辑）");
+  assert.equal((await restoredOriginEditors.nth(1).locator("[data-draft-origin-label]").textContent()).trim(), "人工起草 · 已修改 · 待重新确认", "post-back human input must immediately mark the draft dirty");
 
   await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
   await assertStepThreeState(enterEdit);
@@ -1102,8 +1269,14 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     JSON.stringify({ ...savedRecord, snapshotId: "RS-STALE" }),
     JSON.stringify({ ...savedRecord, cutoff: "2025-03-31" }),
     JSON.stringify({ ...savedRecord, researchPlanRevision: "RP-STALE" }),
-    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, draftOrigin: "robot" } : thesis) }),
-    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, draftOrigin: undefined } : thesis) }),
+    JSON.stringify({ ...savedRecord, confirmationState: "pending" }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, origin: "robot" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, origin: undefined } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, lastEditedBy: "system" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, observationStart: "2025-02-30" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, observationStart: "2026-01-02", observationEnd: "2026-01-01" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, observationStart: "2024-12-31" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, observationEnd: "2028-01-01" } : thesis) }),
     JSON.stringify({ ...savedRecord, theses: [] }),
     JSON.stringify({ ...savedRecord, theses: [...savedRecord.theses, { ...savedRecord.theses[0], id: "TH-DRAFT-OVERFLOW" }] }),
     JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 1 ? { ...thesis, id: savedRecord.theses[0].id } : thesis) }),
@@ -1461,6 +1634,8 @@ async function main() {
   const routes = selectedRoutes(process.argv.slice(2));
   assertAssessmentScoringSemantics();
   await assertFixtureDataContract();
+  await assertNewResearchStateDateContract();
+  await assertNewResearchStateSessionContract();
   await assertSourceContract();
   await assertCaptureRemediationContract();
   await assertMalformedURLContract();
