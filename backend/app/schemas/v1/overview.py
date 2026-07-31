@@ -11,6 +11,13 @@ from app.schemas.v1.cases import AssessmentDTO, CaseSummaryDTO
 from app.schemas.v1.common import HistoricalBasisDTO, V1Model
 
 
+# Strict union mirroring the review_state values emitted by the ledger.
+# Frontend uses this label to distinguish human-reviewed evidence from AI
+# proposals; unknown values must surface as a contract error, not a
+# rewritten fallback.
+ReviewState = Literal["machine_generated", "reviewed", "rejected"]
+
+
 class OverviewTotalsDTO(V1Model):
     evidence_total: int
     pending_review: int
@@ -23,7 +30,7 @@ class KeyChangeDTO(V1Model):
     text: str
     occurred_at: str
     source_label: str
-    review_state: str | None
+    review_state: ReviewState | None
 
 
 class OverviewResponse(V1Model):

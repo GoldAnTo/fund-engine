@@ -211,7 +211,7 @@ def test_overview_pending_review_counts_all_unreviewed_assessments(
     )
     # latest assessment is reviewed
     assessment_service.review(
-        new.id, outcome="approved", conclusion="supported", reason="ok"
+        new.id, outcome="confirmed", conclusion="supported", reason="ok"
     )
 
     response = api_client.get(

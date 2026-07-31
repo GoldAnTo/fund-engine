@@ -32,18 +32,26 @@ app.include_router(cases_router)
 app.include_router(v1_router)
 
 
-def _v1_error_envelope(
-    code: str, message: str, request_id: str, details: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    return {
-        "schema_version": "v1",
-        "error": {
-            "code": code,
-            "message": message,
-            "request_id": request_id,
-            "details": details or {},
-        },
-    }
+def _v1_error_response(
+    code: str,
+    message: str,
+    request_id: str,
+    details: dict[str, Any] | None = None,
+    status_code: int = 500,
+) -> JSONResponse:
+    """Build the v1 error envelope by serializing the Pydantic ErrorEnvelope
+    model directly. Using the model as the single source of truth (instead
+    of constructing a raw dict) ensures the runtime response cannot drift
+    from the schema declared in OpenAPI.
+    """
+    envelope = ErrorEnvelope(
+        error={"code": code, "message": message, "request_id": request_id, "details": details or {}}
+    ).model_dump(mode="json")
+    return JSONResponse(
+        status_code=status_code,
+        content=envelope,
+        headers={"x-request-id": request_id},
+    )
 
 
 @app.middleware("http")
@@ -58,10 +66,11 @@ async def request_id_middleware(request: Request, call_next):
         # carrying the request-id, so no 500 ever lacks the correlation header.
         # Internal text/stack must not leak to the client (design 7.3).
         logger.exception("Unhandled exception (request_id=%s)", request_id)
-        response = JSONResponse(
+        response = _v1_error_response(
+            "internal_error",
+            "internal error",
+            request_id,
             status_code=500,
-            content=_v1_error_envelope("internal_error", "internal error", request_id),
-            headers={"x-request-id": request_id},
         )
     response.headers["x-request-id"] = request_id
     return response
@@ -70,22 +79,22 @@ async def request_id_middleware(request: Request, call_next):
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
     request_id = getattr(request.state, "request_id", "")
-    return JSONResponse(
+    return _v1_error_response(
+        "not_found",
+        str(exc) or "not found",
+        request_id,
         status_code=404,
-        content=_v1_error_envelope("not_found", str(exc) or "not found", request_id),
-        headers={"x-request-id": request_id},
     )
 
 
 @app.exception_handler(ValidationFailedError)
 async def validation_failed_error_handler(request: Request, exc: ValidationFailedError):
     request_id = getattr(request.state, "request_id", "")
-    return JSONResponse(
+    return _v1_error_response(
+        "validation_failed",
+        str(exc) or "validation failed",
+        request_id,
         status_code=422,
-        content=_v1_error_envelope(
-            "validation_failed", str(exc) or "validation failed", request_id
-        ),
-        headers={"x-request-id": request_id},
     )
 
 
@@ -101,15 +110,12 @@ async def request_validation_error_handler(
             status_code=422,
             content={"detail": jsonable_encoder(exc.errors())},
         )
-    return JSONResponse(
+    return _v1_error_response(
+        "validation_failed",
+        "request validation failed",
+        request_id,
+        details={"errors": jsonable_encoder(exc.errors())},
         status_code=422,
-        content=_v1_error_envelope(
-            "validation_failed",
-            "request validation failed",
-            request_id,
-            {"errors": jsonable_encoder(exc.errors())},
-        ),
-        headers={"x-request-id": request_id},
     )
 
 

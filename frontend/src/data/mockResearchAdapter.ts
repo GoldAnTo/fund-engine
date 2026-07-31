@@ -89,6 +89,7 @@ const OVERVIEW: WorkspaceOverview = {
       detail: "单柜 72 颗 Blackwell GPU，相比 H100 在 FP4 推理性能上有显著提升，对液冷与电源提出新要求。",
       occurred_at: "2024-05-24",
       source_label: "NVIDIA",
+      review_state: "machine_generated",
     },
     {
       id: "kc2",
@@ -97,6 +98,7 @@ const OVERVIEW: WorkspaceOverview = {
       detail: "新增产能主要被英伟达、AMD 与博通锁定，对外可分配给中小客户的产能仍然紧张。",
       occurred_at: "2024-05-23",
       source_label: "工商时报",
+      review_state: "reviewed",
     },
     {
       id: "kc3",
@@ -105,6 +107,7 @@ const OVERVIEW: WorkspaceOverview = {
       detail: "首次明确液冷为先进计算关键支撑技术，对国内液冷厂商释放中长期需求信号。",
       occurred_at: "2024-05-21",
       source_label: "工信部",
+      review_state: "reviewed",
     },
     {
       id: "kc4",
@@ -113,6 +116,7 @@ const OVERVIEW: WorkspaceOverview = {
       detail: "数据中心出口许可申请出现积压，部分订单交付节奏被推迟。",
       occurred_at: "2024-05-22",
       source_label: "海关总署",
+      review_state: "reviewed",
     },
     {
       id: "kc5",
@@ -121,6 +125,7 @@ const OVERVIEW: WorkspaceOverview = {
       detail: "采购量与单台价值同步提升，国产液冷厂商份额有望显著扩大。",
       occurred_at: "2024-05-20",
       source_label: "招标公告",
+      review_state: "machine_generated",
     },
   ],
   framework: FRAMEWORK,

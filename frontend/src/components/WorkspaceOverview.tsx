@@ -71,7 +71,11 @@ export function WorkspaceOverview({ data }: Props) {
               </header>
               <ul className="key-changes">
                 {data.key_changes.map((c) => (
-                  <li key={c.id} data-tag={c.tag}>
+                  <li
+                    key={c.id}
+                    data-tag={c.tag}
+                    data-review={c.review_state ?? undefined}
+                  >
                     <span className="key-change__tag" data-tag={c.tag}>
                       {c.tag}
                     </span>
@@ -82,6 +86,18 @@ export function WorkspaceOverview({ data }: Props) {
                         <span className="key-change__source">{c.source_label}</span>
                         <span className="dot">·</span>
                         <span>{c.occurred_at}</span>
+                        {c.review_state && (
+                          <span
+                            className="key-change__review"
+                            data-review={c.review_state}
+                          >
+                            {c.review_state === "reviewed"
+                              ? "已人工复核"
+                              : c.review_state === "machine_generated"
+                                ? "AI 提议"
+                                : "已拒绝"}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </li>

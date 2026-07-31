@@ -729,14 +729,12 @@
           "review": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ReviewDecisionDTO"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Review"
+            ]
           }
         },
         "additionalProperties": false,
@@ -1523,7 +1521,12 @@
           "review_state": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "machine_generated",
+                  "reviewed",
+                  "rejected"
+                ]
               },
               {
                 "type": "null"
@@ -1662,6 +1665,52 @@
           "major_gaps"
         ],
         "title": "OverviewTotalsDTO"
+      },
+      "ReviewDecisionDTO": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "conclusion",
+          "reason",
+          "reviewer",
+          "reviewed_at"
+        ],
+        "title": "ReviewDecisionDTO"
       },
       "SearchGroupDTO": {
         "properties": {

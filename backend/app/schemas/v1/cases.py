@@ -5,6 +5,17 @@ from typing import Any, Literal
 from app.schemas.v1.common import CursorPage, HistoricalBasisDTO, V1Model
 
 
+ReviewOutcome = Literal["confirmed", "modified", "rejected"]
+
+
+class ReviewDecisionDTO(V1Model):
+    outcome: ReviewOutcome
+    conclusion: str | None
+    reason: str
+    reviewer: str
+    reviewed_at: str
+
+
 class CaseSummaryDTO(V1Model):
     id: str
     title: str
@@ -44,7 +55,7 @@ class AssessmentDTO(V1Model):
     rationale: str
     gaps: list[str]
     provisional: bool
-    review: dict[str, Any] | None
+    review: ReviewDecisionDTO | None
 
 
 class CausalStepDTO(V1Model):

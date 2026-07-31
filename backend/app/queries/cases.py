@@ -30,6 +30,7 @@ from app.schemas.v1.cases import (
     CausalStepDTO,
     DossierResponse,
     EvidenceRecordDTO,
+    ReviewDecisionDTO,
     ThesisSummaryDTO,
 )
 from app.schemas.v1.common import CursorPage
@@ -215,13 +216,13 @@ class CaseReadQueries:
         )
         review_dto = None
         if review is not None:
-            review_dto = {
-                "outcome": review.outcome,
-                "conclusion": review.conclusion,
-                "reason": review.reason,
-                "reviewer": review.reviewer,
-                "reviewed_at": _iso(review.created_at),
-            }
+            review_dto = ReviewDecisionDTO(
+                outcome=review.outcome,
+                conclusion=review.conclusion,
+                reason=review.reason,
+                reviewer=review.reviewer,
+                reviewed_at=_iso(review.created_at) or "",
+            )
         return AssessmentDTO(
             id=str(assessment.id),
             thesis_id=str(thesis_id),

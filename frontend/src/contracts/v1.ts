@@ -201,10 +201,7 @@ export interface components {
             gaps: string[];
             /** Provisional */
             provisional: boolean;
-            /** Review */
-            review: {
-                [key: string]: unknown;
-            } | null;
+            review: components["schemas"]["ReviewDecisionDTO"] | null;
         };
         /** CaseListResponse */
         CaseListResponse: {
@@ -481,7 +478,7 @@ export interface components {
             /** Source Label */
             source_label: string;
             /** Review State */
-            review_state: string | null;
+            review_state: ("machine_generated" | "reviewed" | "rejected") | null;
         };
         /** OverviewResponse */
         OverviewResponse: {
@@ -526,6 +523,22 @@ export interface components {
             pending_review: number;
             /** Major Gaps */
             major_gaps: number;
+        };
+        /** ReviewDecisionDTO */
+        ReviewDecisionDTO: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Conclusion */
+            conclusion: string | null;
+            /** Reason */
+            reason: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reviewed At */
+            reviewed_at: string;
         };
         /** SearchGroupDTO */
         SearchGroupDTO: {

@@ -76,7 +76,7 @@ describe("HttpResearchAdapter", () => {
         gaps: [],
         provisional: true,
         review: {
-          outcome: "approved",
+          outcome: "modified",
           conclusion: "supported",
           reason: "ok",
           reviewer: "alice",
@@ -313,5 +313,170 @@ describe("HttpResearchAdapter", () => {
       String(c[0]).includes("/overview")
     );
     expect(String(overviewCall?.[0])).toContain("case_id=case-9");
+  });
+
+  it("overview key_changes propagate review_state (AI vs human)", async () => {
+    const caseList = {
+      schema_version: "v1",
+      items: [
+        {
+          id: "case-1",
+          title: "c",
+          topic: "t",
+          created_by: "u",
+          created_at: "2024-01-01T00:00:00Z",
+          updated_at: "2024-01-01T00:00:00Z",
+        },
+      ],
+      page: { has_more: false },
+    };
+    const overviewDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      case: caseList.items[0],
+      thesis: null,
+      assessment: null,
+      key_changes: [
+        {
+          id: "k1",
+          tag: "新增",
+          text: "AI proposal",
+          occurred_at: "2024-05-01T00:00:00Z",
+          source_label: "ai",
+          review_state: "machine_generated",
+        },
+        {
+          id: "k2",
+          tag: "新增",
+          text: "Human reviewed",
+          occurred_at: "2024-05-02T00:00:00Z",
+          source_label: "human",
+          review_state: "reviewed",
+        },
+      ],
+      framework: [],
+      totals: { evidence_total: 2, pending_review: 1, major_gaps: 0 },
+      task_queue: [],
+      evidence_changes: [],
+      activity: [],
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/research-cases")) return jsonResponse(caseList);
+      if (url.includes("/overview")) return jsonResponse(overviewDto);
+      return jsonResponse({}, false, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const overview = await adapter.getOverview();
+    expect(overview.key_changes[0].review_state).toBe("machine_generated");
+    expect(overview.key_changes[1].review_state).toBe("reviewed");
+  });
+
+  it("search maps case deep links to the React /cases/ route (not graph)", async () => {
+    const search = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      groups: [
+        {
+          object_type: "case",
+          hits: [
+            {
+              object_type: "case",
+              object_id: "c-1",
+              title: "t",
+              snippet: "s",
+              case_id: "c-1",
+              review_state: null,
+              available_at: null,
+              deep_link: "/research-cases/c-1",
+            },
+          ],
+        },
+      ],
+      page: { has_more: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(search)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const hits = await adapter.search("ab");
+    expect(hits[0].navigate_to).toBe("/cases/c-1");
+  });
+
+  it("search maps graph deep links to the React /relationships/ route", async () => {
+    const search = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      groups: [
+        {
+          object_type: "case",
+          hits: [
+            {
+              object_type: "case",
+              object_id: "c-1",
+              title: "t",
+              snippet: "s",
+              case_id: "c-1",
+              review_state: null,
+              available_at: null,
+              deep_link: "/research-cases/c-1/graph",
+            },
+          ],
+        },
+      ],
+      page: { has_more: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(search)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const hits = await adapter.search("ab");
+    expect(hits[0].navigate_to).toBe("/relationships/c-1");
+  });
+
+  it("rejects unknown review outcome (does not silently coerce to human_confirmed)", async () => {
+    const dossierDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      case: {
+        id: "case-1",
+        title: "t",
+        topic: "t",
+        created_by: "u",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+      theses: [],
+      focus_thesis_id: "t-1",
+      assessment: {
+        id: "a-1",
+        thesis_id: "t-1",
+        conclusion: "supported",
+        rationale: "r",
+        gaps: [],
+        provisional: true,
+        review: {
+          outcome: "approved",
+          conclusion: null,
+          reason: "r",
+          reviewer: "u",
+          reviewed_at: "2024-05-01T00:00:00Z",
+        },
+      },
+      causal_chain: [],
+      evidence: {},
+      competitive_explanations: [],
+      gaps: [],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(dossierDto)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await expect(adapter.getCaseDossier("case-1")).rejects.toMatchObject({
+      kind: "backend_unavailable",
+    });
   });
 });

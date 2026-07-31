@@ -15,6 +15,8 @@ import type {
   ResearchCaseDossier,
   ResearchCaseSummary,
   ResearchClient,
+  ReviewDecisionView,
+  ReviewOutcome,
   SearchHit,
   SourceDocumentView,
   StatementKind,
@@ -64,18 +66,23 @@ const VALID_EVIDENCE_ROLES: readonly EvidenceRole[] = [
 // Backend search deep_link paths are prefixed with /research-cases/... but
 // the React routes are /cases/... and /relationships/...; rewrite to the
 // real frontend routes so clicks do not hit the wildcard redirect.
+// Exact-match patterns only: case-level, dossier, graph.
 function rewriteDeepLink(deepLink: string): string {
-  if (
-    deepLink.startsWith("/research-cases/") &&
-    deepLink.endsWith("/dossier")
-  ) {
-    return deepLink
-      .replace(/^\/research-cases\//, "/cases/")
-      .replace(/\/dossier$/, "");
-  }
   if (deepLink.startsWith("/research-cases/")) {
-    // graph route. Frontend exposes /relationships/:caseId.
-    return deepLink.replace(/^\/research-cases\//, "/relationships/");
+    if (deepLink.endsWith("/dossier")) {
+      // /research-cases/{id}/dossier -> /cases/{id}
+      return deepLink
+        .replace(/^\/research-cases\//, "/cases/")
+        .replace(/\/dossier$/, "");
+    }
+    if (deepLink.endsWith("/graph")) {
+      // /research-cases/{id}/graph -> /relationships/{id}
+      return deepLink
+        .replace(/^\/research-cases\//, "/relationships/")
+        .replace(/\/graph$/, "");
+    }
+    // /research-cases/{id} -> /cases/{id}
+    return deepLink.replace(/^\/research-cases\//, "/cases/");
   }
   return deepLink;
 }
@@ -201,6 +208,16 @@ export class HttpResearchAdapter implements ResearchClient {
     );
   }
 
+  private mapReviewOutcome(value: string): ReviewOutcome {
+    if (value === "confirmed" || value === "modified" || value === "rejected") {
+      return value;
+    }
+    throw new PageStateError(
+      "backend_unavailable",
+      `unknown review outcome: ${value}`,
+    );
+  }
+
   private mapNodeKind(value: string): NodeKind {
     if ((VALID_NODE_KINDS as readonly string[]).includes(value)) {
       return value as NodeKind;
@@ -253,6 +270,19 @@ export class HttpResearchAdapter implements ResearchClient {
     _focusThesisId: string,
   ): ThesisAssessment | null {
     if (!dto) return null;
+    let review: ReviewDecisionView | null = null;
+    if (dto.review) {
+      // conclusion is a free-form string in the ReviewDecision model;
+      // accept any non-empty value to preserve ledger honesty without
+      // inventing a typed enum that does not exist on the backend.
+      review = {
+        outcome: this.mapReviewOutcome(dto.review.outcome),
+        conclusion: dto.review.conclusion ?? null,
+        reason: dto.review.reason,
+        reviewer: dto.review.reviewer,
+        reviewed_at: dto.review.reviewed_at,
+      };
+    }
     return {
       id: dto.id,
       thesis_id: dto.thesis_id,
@@ -261,7 +291,7 @@ export class HttpResearchAdapter implements ResearchClient {
       bullets: [],
       gaps: dto.gaps ?? [],
       provisional: dto.provisional,
-      review: dto.review,
+      review,
       major_gap: null,
       status_label: "",
       supply_chain_level: "",
@@ -435,6 +465,9 @@ export class HttpResearchAdapter implements ResearchClient {
         detail: "",
         occurred_at: kc.occurred_at,
         source_label: kc.source_label,
+        review_state: kc.review_state
+          ? this.mapReviewState(kc.review_state)
+          : null,
       })),
       framework: dto.framework
         .filter(

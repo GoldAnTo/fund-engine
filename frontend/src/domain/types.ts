@@ -39,6 +39,14 @@ export type StatementKind =
 
 export type ReviewOutcome = "confirmed" | "modified" | "rejected";
 
+export interface ReviewDecisionView {
+  outcome: ReviewOutcome;
+  conclusion: string | null;
+  reason: string;
+  reviewer: string;
+  reviewed_at: string;
+}
+
 // ── Status markers ────────────────────────────────────────────────────────
 export type ObjectStatus =
   | "ai_pending_review"
@@ -64,6 +72,7 @@ export interface KeyChangeItem {
   detail: string;
   occurred_at: string;
   source_label: string;
+  review_state: ReviewState | null;
 }
 
 export interface ResearchFrameworkNode {
@@ -140,7 +149,7 @@ export interface ThesisAssessment {
   bullets: string[];
   gaps: string[];
   provisional: boolean;
-  review: Record<string, unknown> | null;
+  review: ReviewDecisionView | null;
   major_gap: string | null;
   status_label: string;
   supply_chain_level: string;
