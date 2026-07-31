@@ -44,6 +44,12 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _to_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
 class CaseReadQueries:
     """Read-only case list and dossier assembly."""
 
@@ -118,8 +124,13 @@ class CaseReadQueries:
             ):
                 if link.review_state not in allowed_states:
                     continue
+                statement = self._repo.get_statement(link.source_statement_id)
+                # A link whose statement did not exist at the cutoff would leak
+                # future text; skip it (historical replay, design 10).
+                if statement is None or _to_aware(statement.created_at) > basis.cutoff:
+                    continue
                 evidence.setdefault(link.role, []).append(
-                    self._evidence_record(link)
+                    self._evidence_record(link, statement)
                 )
 
             assessment = self._repo.latest_assessment_for_thesis(
@@ -174,8 +185,9 @@ class CaseReadQueries:
             created_at=_iso(thesis.created_at),
         )
 
-    def _evidence_record(self, link) -> EvidenceRecordDTO:
-        statement = self._repo.get_statement(link.source_statement_id)
+    def _evidence_record(self, link, statement=None) -> EvidenceRecordDTO:
+        if statement is None:
+            statement = self._repo.get_statement(link.source_statement_id)
         span = self._repo.span_for_statement(link.source_statement_id)
         # A missing statement/span is a ledger integrity break; expose it as
         # explicit nulls rather than fabricating empty text.

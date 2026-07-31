@@ -23,6 +23,7 @@ class KeyChangeDTO(V1Model):
     text: str
     occurred_at: str
     source_label: str
+    review_state: str | None
 
 
 class OverviewResponse(V1Model):

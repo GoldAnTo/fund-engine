@@ -373,6 +373,26 @@ class ResearchRepository:
             .limit(1)
         )
 
+    def assessments_for_thesis(
+        self,
+        thesis_id: uuid.UUID,
+        *,
+        cutoff: datetime,
+    ) -> list[AIAssessment]:
+        """All AI assessments for a thesis created on or before *cutoff*."""
+        return list(
+            self._session.scalars(
+                select(AIAssessment)
+                .join(
+                    EvidenceSnapshot,
+                    AIAssessment.snapshot_id == EvidenceSnapshot.id,
+                )
+                .where(EvidenceSnapshot.thesis_id == thesis_id)
+                .where(AIAssessment.created_at <= cutoff)
+                .order_by(AIAssessment.created_at.desc())
+            )
+        )
+
     def latest_review_for_assessment(
         self,
         assessment_id: uuid.UUID,
