@@ -762,6 +762,14 @@ async function assertOverviewProductContract(page, marker) {
 
 async function assertBrowserContract(routes) {
   const { captureViewportPng, withPrototypeBrowser } = await import("./capture.mjs");
+  const directNavLabels = new Map([
+    ["overview", "工作台"],
+    ["case", "研究案例"],
+    ["library", "资料与知识"],
+    ["data", "数据中心"],
+    ["review", "审核中心"],
+    ["versions", "监测与更新"],
+  ]);
 
   await withPrototypeBrowser(async ({ baseURL, page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
@@ -771,6 +779,18 @@ async function assertBrowserContract(routes) {
       const marker = page.locator(`[data-screen="${screen}"]`);
       await marker.waitFor({ state: "visible" });
       assert.equal(await marker.count(), 1, `${screen} must render exactly one [data-screen] marker`);
+
+      const currentPageLinks = page.locator('.nav-rail a[aria-current="page"]');
+      const expectedNavLabel = directNavLabels.get(screen);
+      assert.equal(
+        await currentPageLinks.count(),
+        expectedNavLabel ? 1 : 0,
+        `${screen} must mark a nav page current only when its route exactly matches a nav destination`,
+      );
+      if (expectedNavLabel) {
+        assert.equal((await currentPageLinks.locator("span:last-child").textContent()).trim(), expectedNavLabel);
+        assert.equal(await currentPageLinks.getAttribute("href"), `?screen=${screen}`);
+      }
 
       const overflow = await page.evaluate(() => ({
         body: document.body.scrollWidth - document.body.clientWidth,

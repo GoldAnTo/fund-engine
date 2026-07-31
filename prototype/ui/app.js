@@ -306,7 +306,7 @@
   }
 
   function renderShell(screen) {
-    const activeNav = NAV_ITEMS.find((item) => item.screen === screen)?.screen ?? "overview";
+    const activeNav = NAV_ITEMS.find((item) => item.screen === screen)?.screen;
     app.innerHTML = `
       <div class="app-shell">
         <aside class="nav-rail" aria-label="主导航">
