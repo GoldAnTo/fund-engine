@@ -19,17 +19,23 @@ def list_documents(
     q: str | None = None,
     cutoff: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = None,
     db: Session = Depends(get_db),
 ):
     return DocumentReadQueries(db).list_documents(
         query=q,
         basis=HistoricalBasis.from_cutoff(cutoff),
         limit=limit,
+        cursor=cursor,
     )
 
 
 @router.get("/{version_id}", response_model=DocumentDetailResponse)
 def document_detail(
-    version_id: uuid.UUID, db: Session = Depends(get_db)
+    version_id: uuid.UUID,
+    research_mode: bool = False,
+    db: Session = Depends(get_db),
 ):
-    return DocumentReadQueries(db).detail(version_id=version_id)
+    return DocumentReadQueries(db).detail(
+        version_id=version_id, research_mode=research_mode
+    )

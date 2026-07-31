@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import DocumentVersion, SourceSpan
@@ -76,21 +76,39 @@ class DocumentRepository:
     # ------------------------------------------------------------------ readers
 
     def visible_versions(
-        self, *, cutoff: datetime, limit: int
+        self,
+        *,
+        cutoff: datetime,
+        limit: int,
+        query: str | None = None,
+        cursor_at: datetime | None = None,
+        cursor_id: uuid.UUID | None = None,
     ) -> list[DocumentVersion]:
         # A version is visible at cutoff only if it was available AND acquired
         # by then; filtering only available_at would allow hindsight leakage.
-        return list(
-            self._session.scalars(
-                select(DocumentVersion)
-                .where(DocumentVersion.available_at <= cutoff)
-                .where(DocumentVersion.acquired_at <= cutoff)
-                .order_by(
-                    DocumentVersion.available_at.desc(), DocumentVersion.id.desc()
-                )
-                .limit(limit + 1)
-            )
+        # `query` is pushed down to SQL so limit+1 reflects the filtered set.
+        stmt = select(DocumentVersion).where(
+            DocumentVersion.available_at <= cutoff,
+            DocumentVersion.acquired_at <= cutoff,
         )
+        if query:
+            stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
+        if cursor_at is not None and cursor_id is not None:
+            # Order is (available_at DESC, id DESC); fetch rows strictly before
+            # the cursor tuple.
+            stmt = stmt.where(
+                or_(
+                    DocumentVersion.available_at < cursor_at,
+                    and_(
+                        DocumentVersion.available_at == cursor_at,
+                        DocumentVersion.id < cursor_id,
+                    ),
+                )
+            )
+        stmt = stmt.order_by(
+            DocumentVersion.available_at.desc(), DocumentVersion.id.desc()
+        ).limit(limit + 1)
+        return list(self._session.scalars(stmt))
 
     def spans_for_version(self, version_id: uuid.UUID) -> list[SourceSpan]:
         return list(
