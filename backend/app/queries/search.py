@@ -63,18 +63,22 @@ class LedgerSearchQueries:
         allowed_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
 
         groups: list[SearchGroupDTO] = []
+        has_more = False
         for object_type in _VALID_TYPES:
             if object_type not in requested:
                 continue
             hits = self._search_type(
                 object_type, needle, cutoff, limit, allowed_states
             )
+            if len(hits) > limit:
+                has_more = True
+                hits = hits[:limit]
             groups.append(SearchGroupDTO(object_type=object_type, hits=hits))
 
         return SearchResponse(
             basis=basis.to_dto(),
             groups=groups,
-            page=CursorPage(has_more=False),
+            page=CursorPage(has_more=has_more),
         )
 
     def _search_type(
@@ -90,7 +94,7 @@ class LedgerSearchQueries:
                 select(ResearchCase)
                 .where(func.lower(ResearchCase.title).like(needle))
                 .where(ResearchCase.created_at <= cutoff)
-                .limit(limit)
+                .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
@@ -109,9 +113,11 @@ class LedgerSearchQueries:
         if object_type == "thesis":
             rows = self._session.scalars(
                 select(Thesis)
+                .join(ResearchCase, ResearchCase.id == Thesis.research_case_id)
                 .where(func.lower(Thesis.statement).like(needle))
                 .where(Thesis.created_at <= cutoff)
-                .limit(limit)
+                .where(ResearchCase.created_at <= cutoff)
+                .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
@@ -135,11 +141,15 @@ class LedgerSearchQueries:
                     EvidenceLink.source_statement_id == SourceStatement.id,
                 )
                 .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+                .join(ResearchCase, ResearchCase.id == Thesis.research_case_id)
                 .where(func.lower(SourceStatement.normalized_text).like(needle))
                 .where(EvidenceLink.available_at <= cutoff)
                 .where(EvidenceLink.created_at <= cutoff)
+                .where(SourceStatement.created_at <= cutoff)
+                .where(Thesis.created_at <= cutoff)
+                .where(ResearchCase.created_at <= cutoff)
                 .where(EvidenceLink.review_state.in_(list(allowed_states)))
-                .limit(limit)
+                .limit(limit + 1)
             )
             hits: list[SearchHitDTO] = []
             for statement, link, thesis in rows:
@@ -162,7 +172,7 @@ class LedgerSearchQueries:
                 select(Company)
                 .where(func.lower(Company.name).like(needle))
                 .where(Company.created_at <= cutoff)
-                .limit(limit)
+                .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
@@ -183,7 +193,7 @@ class LedgerSearchQueries:
                 select(Stock)
                 .where(func.lower(Stock.name).like(needle))
                 .where(Stock.created_at <= cutoff)
-                .limit(limit)
+                .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
@@ -204,7 +214,7 @@ class LedgerSearchQueries:
             select(Fund)
             .where(func.lower(Fund.name).like(needle))
             .where(Fund.created_at <= cutoff)
-            .limit(limit)
+            .limit(limit + 1)
         )
         return [
             SearchHitDTO(
