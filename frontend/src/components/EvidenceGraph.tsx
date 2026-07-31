@@ -175,7 +175,7 @@ export function EvidenceGraph({ data, onSelectEvidence, onSelectNode }: Props) {
             },
           },
         ],
-        layout: { name: "cose" },
+        layout: { name: "cose", animate: false },
       });
       cy.on("tap", "edge", (evt) => onSelectEvidence(evt.target.id()));
       cy.on("tap", "node", (evt) => {
