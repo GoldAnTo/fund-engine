@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readdirSync } from "node:fs";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,42 @@ export function captureRemediation(kind) {
   throw new TypeError(`Unknown capture failure kind: ${kind}`);
 }
 
+export function assertViewportFit({ scrollWidth, scrollHeight }, viewport = VIEWPORT) {
+  if (scrollWidth > viewport.width) {
+    throw new RangeError(`Document width ${scrollWidth} exceeds viewport width ${viewport.width}`);
+  }
+  if (scrollHeight > viewport.height) {
+    throw new RangeError(`Document height ${scrollHeight} exceeds viewport height ${viewport.height}`);
+  }
+}
+
+export function assertPngDimensions(png, viewport = VIEWPORT) {
+  const signature = "89504e470d0a1a0a";
+  if (png.length < 24 || png.subarray(0, 8).toString("hex") !== signature || png.subarray(12, 16).toString("ascii") !== "IHDR") {
+    throw new TypeError("Capture did not produce a PNG with an IHDR header");
+  }
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (width !== viewport.width || height !== viewport.height) {
+    throw new RangeError(`PNG dimensions ${width}x${height} do not match viewport ${viewport.width}x${viewport.height}`);
+  }
+}
+
+export async function captureViewportPng(page) {
+  const dimensions = await page.evaluate(() => ({
+    scrollWidth: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
+    scrollHeight: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+  }));
+  assertViewportFit(dimensions);
+  const png = await page.screenshot({ type: "png", fullPage: false });
+  assertPngDimensions(png);
+  return png;
+}
+
+export function createTransientCaptureDirectory() {
+  return mkdtemp(path.join(os.tmpdir(), "research-prototype-capture-"));
+}
+
 function findPlaywrightNode() {
   if (Number(process.versions.node.split(".")[0]) >= 20) return null;
   const versionsDir = path.join(process.env.NVM_DIR ?? path.join(os.homedir(), ".nvm"), "versions", "node");
@@ -38,37 +74,56 @@ function findPlaywrightNode() {
     .find(Boolean);
 }
 
-function reexecCLIForPlaywright() {
+export function reexecWithCompatibleNode(argv = process.argv) {
   const compatibleNode = findPlaywrightNode();
   if (compatibleNode === null) return false;
   if (!compatibleNode) throw new Error("Playwright requires Node.js 20 or higher");
-  const child = spawnSync(compatibleNode, process.argv.slice(1), { stdio: "inherit" });
+  const child = spawnSync(compatibleNode, argv.slice(1), { stdio: "inherit" });
   if (child.error) throw child.error;
   process.exitCode = child.status ?? 1;
   return true;
 }
 
-function safeFilePath(requestURL) {
-  const pathname = decodeURIComponent(new URL(requestURL, "http://localhost").pathname);
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const candidate = path.resolve(UI_DIR, relative);
-  return candidate === UI_DIR || candidate.startsWith(`${UI_DIR}${path.sep}`) ? candidate : null;
+function isWithinRoot(candidate, rootDir) {
+  return candidate === rootDir || candidate.startsWith(`${rootDir}${path.sep}`);
 }
 
-export async function startPrototypeServer() {
+function safeFilePath(requestURL, rootDir) {
+  const pathname = decodeURIComponent(new URL(requestURL, "http://localhost").pathname);
+  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const candidate = path.resolve(rootDir, relative);
+  return isWithinRoot(candidate, rootDir) ? candidate : null;
+}
+
+export async function startPrototypeServer({ rootDir = UI_DIR } = {}) {
+  const servedRoot = await realpath(rootDir);
   const server = createServer(async (request, response) => {
-    const filePath = safeFilePath(request.url ?? "/");
+    let filePath;
+    try {
+      filePath = safeFilePath(request.url ?? "/", servedRoot);
+    } catch (error) {
+      if (error instanceof URIError || error instanceof TypeError) {
+        response.writeHead(400).end("Bad request");
+        return;
+      }
+      throw error;
+    }
     if (!filePath) {
       response.writeHead(403).end("Forbidden");
       return;
     }
 
     try {
-      const info = await stat(filePath);
+      const resolvedFile = await realpath(filePath);
+      if (!isWithinRoot(resolvedFile, servedRoot)) {
+        response.writeHead(403).end("Forbidden");
+        return;
+      }
+      const info = await stat(resolvedFile);
       if (!info.isFile()) throw new Error("Not a file");
-      const body = await readFile(filePath);
+      const body = await readFile(resolvedFile);
       response.writeHead(200, {
-        "content-type": MIME_TYPES[path.extname(filePath)] ?? "application/octet-stream",
+        "content-type": MIME_TYPES[path.extname(resolvedFile)] ?? "application/octet-stream",
         "cache-control": "no-store",
       });
       response.end(body);
@@ -112,18 +167,53 @@ export async function launchPrototypeBrowser() {
   }
 }
 
-export async function withPrototypeBrowser(callback) {
-  const server = await startPrototypeServer();
+export async function withPrototypeBrowser(callback, {
+  startServer = startPrototypeServer,
+  launchBrowser = launchPrototypeBrowser,
+} = {}) {
+  let server;
   let browser;
+  let result;
+  let primaryError;
   try {
-    browser = await launchPrototypeBrowser();
+    server = await startServer();
+    browser = await launchBrowser();
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
     const page = await context.newPage();
-    return await callback({ baseURL: server.baseURL, browser, context, page });
-  } finally {
-    if (browser) await browser.close();
-    await server.close();
+    result = await callback({ baseURL: server.baseURL, browser, context, page });
+  } catch (error) {
+    primaryError = error;
   }
+
+  const teardownErrors = [];
+  if (browser) {
+    try {
+      await browser.close();
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+  }
+  if (server) {
+    try {
+      await server.close();
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+  }
+
+  if (primaryError) {
+    if (teardownErrors.length) {
+      Object.defineProperty(primaryError, "teardownErrors", {
+        configurable: true,
+        value: teardownErrors,
+      });
+    }
+    throw primaryError;
+  }
+  if (teardownErrors.length) {
+    throw new AggregateError(teardownErrors, "Prototype browser teardown failed");
+  }
+  return result;
 }
 
 function parseScreens(argv) {
@@ -140,15 +230,16 @@ function parseScreens(argv) {
 
 async function runCLI() {
   const selection = parseScreens(process.argv.slice(2));
+  const outputDir = selection.mode === "capture" ? await createTransientCaptureDirectory() : null;
   await withPrototypeBrowser(async ({ baseURL, page }) => {
     for (const screen of selection.screens) {
       await page.goto(`${baseURL}/?screen=${screen}`, { waitUntil: "networkidle" });
       await page.locator(`[data-screen="${screen}"]`).waitFor({ state: "visible" });
       if (selection.mode === "capture") {
-        const output = path.join(UI_DIR, "generated", `${screen}.png`);
-        await mkdir(path.dirname(output), { recursive: true });
-        await page.screenshot({ path: output, fullPage: true });
-        console.log(`${screen} -> ${path.relative(process.cwd(), output)}`);
+        const output = path.join(outputDir, `${screen}.png`);
+        const png = await captureViewportPng(page);
+        await writeFile(output, png);
+        console.log(`${screen} -> ${output}`);
       }
     }
   });
@@ -157,7 +248,7 @@ async function runCLI() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (!reexecCLIForPlaywright()) {
+    if (!reexecWithCompatibleNode()) {
       runCLI().catch((error) => {
         console.error(error.message);
         process.exitCode = 1;

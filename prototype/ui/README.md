@@ -45,8 +45,12 @@ node prototype/ui/capture.mjs --screens overview
 
 `--screens shell` verifies the 1600 × 1000, DPR 1 shell without writing an image. The test command accepts `shell`, `all`, or a comma-separated list of route IDs.
 
-Capture output maps each capture-ready route to `prototype/ui/generated/<screen>.png`. In Task 1 only `overview` is capture-ready; `--screens all` therefore means all capture-ready screens, not every placeholder route. Explicit requests for placeholder routes fail instead of producing misleading final images.
+In Task 1 only `overview` is capture-ready; `--screens all` therefore means all capture-ready screens, not every placeholder route. Explicit requests for placeholder routes fail instead of producing misleading final images.
+
+Every image capture uses the fixed viewport rather than a full-page screenshot. Capture fails before writing if document `scrollWidth` exceeds `1600` or `scrollHeight` exceeds `1000`; content is never silently clipped. The resulting PNG buffer is accepted only when its IHDR dimensions are exactly `1600 × 1000`.
+
+Task 1 has no final screenshot mapping. Explicit capture commands write to a newly created OS temp directory and print the absolute output path. A later screen implementation may add a deliberate mapping to its named prototype PNG path after that screen is complete.
 
 ## Generated-artifact rule
 
-Files under `prototype/ui/generated/` are reproducible local artifacts and must not be committed. Final design PNGs are added only by the task that implements and verifies the corresponding screen renderer.
+Transient and test captures stay outside the repository in the OS temp directory, so `git add prototype/ui` cannot stage them. Final design PNGs are added only by the task that implements, verifies, and explicitly maps the corresponding screen renderer.

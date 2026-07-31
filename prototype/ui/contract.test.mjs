@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import vm from "node:vm";
+import { reexecWithCompatibleNode } from "./capture.mjs";
 
 const UI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REQUIRED_SCREENS = [
@@ -28,6 +28,92 @@ const FORBIDDEN_ASSESSMENT_PATTERNS = [
 
 export function assessmentScoringViolations(text) {
   return FORBIDDEN_ASSESSMENT_PATTERNS.filter((pattern) => pattern.test(text));
+}
+
+export function assertFixtureContract(data) {
+  const expectedKeys = [
+    "case",
+    "theses",
+    "factors",
+    "documents",
+    "statements",
+    "evidenceLinks",
+    "metrics",
+    "companies",
+    "funds",
+    "reviewQueue",
+    "snapshots",
+    "providerRuns",
+  ].sort();
+  assert.equal(Object.keys(data).sort().join(","), expectedKeys.join(","), "fixture must expose exactly the 12 contracted top-level keys");
+  assert.equal(data.case.cutoff, "2025-06-30", "fixture cutoff must remain frozen at 2025-06-30");
+  assert.equal(data.case.snapshotId, "RS-2025-06-30-v3", "fixture current snapshot must remain RS-2025-06-30-v3");
+  assert.equal(data.theses.length, 3, "fixture must contain exactly three theses");
+  for (const thesis of data.theses) {
+    for (const field of ["supportCondition", "falsifier", "nextValidationEvent"]) {
+      assert.ok(thesis[field], `${thesis.id} must include ${field}`);
+    }
+  }
+
+  const requiredFactorGroups = ["demand", "supply", "transmission", "constraints", "alternatives", "contradiction"];
+  const factorGroups = new Set(data.factors.map((factor) => factor.group));
+  for (const group of requiredFactorGroups) {
+    assert.ok(factorGroups.has(group), `fixture factors must cover ${group}`);
+  }
+
+  const provenanceFields = ["sourceVersion", "sourceSpan", "publishedAt", "availableAt", "reviewState", "snapshotMembership"];
+  for (const group of ["documents", "statements", "evidenceLinks", "metrics"]) {
+    assert.ok(data[group].length > 0, `fixture must include at least one ${group} record`);
+    for (const record of data[group]) {
+      for (const field of provenanceFields) {
+        assert.ok(record[field], `${group}/${record.id} must include ${field}`);
+      }
+      assert.ok(record.snapshotMembership.length > 0, `${group}/${record.id} must belong to at least one snapshot`);
+      assert.ok(record.publishedAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be published by the cutoff`);
+      assert.ok(record.availableAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be available by the cutoff`);
+    }
+  }
+
+  assert.ok(data.funds.length > 0, "fixture must include at least one fund mapping");
+  for (const fund of data.funds) {
+    assert.match(fund.disclosureDate, /^\d{4}-\d{2}-\d{2}$/u, `${fund.id} must include a disclosure date`);
+  }
+  assert.equal(data.snapshots.length, 3, "fixture must contain exactly three snapshots");
+  assert.equal(data.snapshots.filter((snapshot) => snapshot.id === data.case.snapshotId).length, 1, "fixture must contain exactly one current snapshot");
+  const priorSnapshots = data.snapshots.filter((snapshot) => snapshot.id !== data.case.snapshotId);
+  assert.equal(priorSnapshots.length, 2, "fixture must preserve exactly two prior frozen snapshots");
+  for (const snapshot of priorSnapshots) {
+    assert.ok(snapshot.frozenAt, `${snapshot.id} must retain its freeze timestamp`);
+    assert.ok(snapshot.cutoff < data.case.cutoff, `${snapshot.id} must predate the current cutoff`);
+  }
+
+  const providerOutcomes = new Set(data.providerRuns.map((run) => run.outcome));
+  for (const outcome of ["success", "quota_failure", "permission_gap", "manual_upload"]) {
+    assert.ok(providerOutcomes.has(outcome), `fixture provider runs must include ${outcome}`);
+  }
+}
+
+async function assertFixtureDataContract() {
+  const sandbox = { window: {} };
+  vm.runInNewContext(await readFile(path.join(UI_DIR, "data.js"), "utf8"), sandbox);
+  const data = sandbox.window.PROTOTYPE_DATA;
+  assertFixtureContract(data);
+
+  const missingTopLevel = structuredClone(data);
+  delete missingTopLevel.providerRuns;
+  assert.throws(() => assertFixtureContract(missingTopLevel), /exactly the 12/u);
+
+  const missingProvenance = structuredClone(data);
+  delete missingProvenance.metrics[0].sourceSpan;
+  assert.throws(() => assertFixtureContract(missingProvenance), /metrics\/M-NVDA-DC-REV.*sourceSpan/u);
+
+  const missingCurrentSnapshot = structuredClone(data);
+  missingCurrentSnapshot.snapshots = missingCurrentSnapshot.snapshots.filter((snapshot) => snapshot.id !== data.case.snapshotId);
+  assert.throws(() => assertFixtureContract(missingCurrentSnapshot), /exactly three snapshots/u);
+
+  const missingFunds = structuredClone(data);
+  missingFunds.funds = [];
+  assert.throws(() => assertFixtureContract(missingFunds), /at least one fund/u);
 }
 
 function assertAssessmentScoringSemantics() {
@@ -58,31 +144,6 @@ function assertAssessmentScoringSemantics() {
       `Evidence/relevance scoring language must remain forbidden: ${score}`,
     );
   }
-}
-
-function playwrightNode() {
-  if (Number(process.versions.node.split(".")[0]) >= 20) return null;
-  const versionsDir = path.join(process.env.NVM_DIR ?? path.join(os.homedir(), ".nvm"), "versions", "node");
-  let versions = [];
-  try {
-    versions = readdirSync(versionsDir).sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
-  } catch {
-    return undefined;
-  }
-  return versions
-    .filter((version) => Number(version.replace(/^v/u, "").split(".")[0]) >= 20)
-    .map((version) => path.join(versionsDir, version, "bin", "node"))
-    .find(Boolean);
-}
-
-function reexecForPlaywright() {
-  const compatibleNode = playwrightNode();
-  if (compatibleNode === null) return false;
-  if (!compatibleNode) throw new Error("Playwright requires Node.js 20 or higher");
-  const child = spawnSync(compatibleNode, process.argv.slice(1), { stdio: "inherit" });
-  if (child.error) throw child.error;
-  process.exitCode = child.status ?? 1;
-  return true;
 }
 
 function selectedRoutes(argv) {
@@ -129,6 +190,11 @@ async function assertSourceContract() {
   assert.match(readme, /bundled Chromium/iu, "README must document the bundled Chromium path");
   assert.match(readme, /system (?:Google )?Chrome/iu, "README must document the system Chrome fallback");
   assert.match(readme, /npx playwright install chromium/u, "README must document browser-runtime remediation");
+  assert.match(readme, /OS temp directory/iu, "README must place transient captures in the OS temp directory");
+  assert.doesNotMatch(readme, /prototype\/ui\/generated/u, "README must not map transient captures into the repository");
+  assert.match(readme, /scrollWidth.*1600/u, "README must document the horizontal fit gate");
+  assert.match(readme, /scrollHeight.*1000/u, "README must document the vertical fit gate");
+  assert.match(readme, /IHDR.*1600.*1000/u, "README must document PNG dimension verification");
 }
 
 async function assertCaptureRemediationContract() {
@@ -139,8 +205,119 @@ async function assertCaptureRemediationContract() {
   assert.doesNotMatch(captureRemediation("browser"), /^cd frontend && npm ci$/u);
 }
 
-async function assertBrowserContract(routes) {
+async function assertMalformedURLContract() {
+  const { startPrototypeServer } = await import("./capture.mjs");
+  const server = await startPrototypeServer();
+  try {
+    const response = await fetch(`${server.baseURL}/%E0%A4%A`);
+    assert.equal(response.status, 400, "malformed URL encoding must return HTTP 400");
+  } finally {
+    await server.close();
+  }
+}
+
+async function assertServerFilesystemBoundary() {
+  const { startPrototypeServer } = await import("./capture.mjs");
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-root-"));
+  const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-outside-"));
+  let server;
+  try {
+    await writeFile(path.join(fixtureRoot, "index.html"), "fixture home");
+    await writeFile(path.join(outsideRoot, "secret.txt"), "must not be served");
+    await symlink(path.join(outsideRoot, "secret.txt"), path.join(fixtureRoot, "escape.txt"));
+    server = await startPrototypeServer({ rootDir: fixtureRoot });
+
+    const escaped = await fetch(`${server.baseURL}/escape.txt`);
+    assert.equal(escaped.status, 403, "symlink targets outside the served root must be rejected");
+    const missing = await fetch(`${server.baseURL}/missing.txt`);
+    assert.equal(missing.status, 404, "missing files must remain a controlled 404");
+  } finally {
+    if (server) await server.close();
+    await Promise.all([
+      rm(fixtureRoot, { recursive: true, force: true }),
+      rm(outsideRoot, { recursive: true, force: true }),
+    ]);
+  }
+}
+
+async function assertCaptureDimensionAndOutputContract() {
+  const {
+    assertPngDimensions,
+    assertViewportFit,
+    createTransientCaptureDirectory,
+  } = await import("./capture.mjs");
+  assert.equal(typeof assertViewportFit, "function", "capture.mjs must export assertViewportFit");
+  assert.equal(typeof assertPngDimensions, "function", "capture.mjs must export assertPngDimensions");
+  assert.equal(typeof createTransientCaptureDirectory, "function", "capture.mjs must export createTransientCaptureDirectory");
+
+  assert.doesNotThrow(() => assertViewportFit({ scrollWidth: 1600, scrollHeight: 1000 }));
+  assert.throws(
+    () => assertViewportFit({ scrollWidth: 1601, scrollHeight: 1000 }),
+    /1601.*1600/u,
+  );
+  assert.throws(
+    () => assertViewportFit({ scrollWidth: 1600, scrollHeight: 1001 }),
+    /1001.*1000/u,
+  );
+
+  const pngHeader = Buffer.alloc(24);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(pngHeader, 0);
+  pngHeader.write("IHDR", 12, "ascii");
+  pngHeader.writeUInt32BE(1600, 16);
+  pngHeader.writeUInt32BE(1000, 20);
+  assert.doesNotThrow(() => assertPngDimensions(pngHeader));
+  pngHeader.writeUInt32BE(1001, 20);
+  assert.throws(() => assertPngDimensions(pngHeader), /1600x1001.*1600x1000/u);
+
+  const outputDir = await createTransientCaptureDirectory();
+  try {
+    assert.ok(outputDir.startsWith(`${os.tmpdir()}${path.sep}`), "transient captures must live in the OS temp directory");
+    assert.ok(!outputDir.startsWith(`${UI_DIR}${path.sep}`), "transient captures must not be stageable under prototype/ui");
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+}
+
+async function assertTeardownContract() {
   const { withPrototypeBrowser } = await import("./capture.mjs");
+  const events = [];
+  const primaryError = new Error("primary callback failure");
+  const browserCloseError = new Error("browser close failure");
+  const serverCloseError = new Error("server close failure");
+  const dependencies = {
+    startServer: async () => ({
+      baseURL: "http://127.0.0.1:1",
+      close: async () => {
+        events.push("server-close");
+        throw serverCloseError;
+      },
+    }),
+    launchBrowser: async () => ({
+      newContext: async () => ({ newPage: async () => ({}) }),
+      close: async () => {
+        events.push("browser-close");
+        throw browserCloseError;
+      },
+    }),
+  };
+
+  let observedError;
+  try {
+    await withPrototypeBrowser(async () => {
+      events.push("callback");
+      throw primaryError;
+    }, dependencies);
+  } catch (error) {
+    observedError = error;
+  }
+
+  assert.equal(observedError, primaryError, "teardown must preserve the primary callback error");
+  assert.deepEqual(events, ["callback", "browser-close", "server-close"], "browser and server teardown must both run in order");
+  assert.deepEqual(primaryError.teardownErrors, [browserCloseError, serverCloseError], "teardown failures must remain inspectable on the primary error");
+}
+
+async function assertBrowserContract(routes) {
+  const { captureViewportPng, withPrototypeBrowser } = await import("./capture.mjs");
 
   await withPrototypeBrowser(async ({ baseURL, page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
@@ -160,6 +337,13 @@ async function assertBrowserContract(routes) {
       const assessments = await page.locator("[data-evidence-assessment]").allTextContents();
       if (screen === "overview") {
         assert.ok(assessments.length > 0, "overview must expose a non-vacuous [data-evidence-assessment] example");
+        await captureViewportPng(page);
+        await page.evaluate(() => { document.body.style.minHeight = "1001px"; });
+        await assert.rejects(
+          captureViewportPng(page),
+          /Document height 1001 exceeds viewport height 1000/u,
+        );
+        await page.evaluate(() => { document.body.style.minHeight = ""; });
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
@@ -171,11 +355,16 @@ async function assertBrowserContract(routes) {
 }
 
 async function main() {
-  if (reexecForPlaywright()) return;
+  if (reexecWithCompatibleNode()) return;
   const routes = selectedRoutes(process.argv.slice(2));
   assertAssessmentScoringSemantics();
+  await assertFixtureDataContract();
   await assertSourceContract();
   await assertCaptureRemediationContract();
+  await assertMalformedURLContract();
+  await assertServerFilesystemBoundary();
+  await assertCaptureDimensionAndOutputContract();
+  await assertTeardownContract();
   await assertBrowserContract(routes);
   console.log(`PASS prototype contract: ${routes.join(", ")}`);
 }
