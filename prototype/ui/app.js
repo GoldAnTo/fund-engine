@@ -5,12 +5,14 @@
   const researchState = window.NEW_RESEARCH_STATE;
   const {
     DRAFT_FIELDS,
+    FIELD_LIMITS,
     confirmationStorageKey,
     createConfirmationRecord,
     evidenceReviewStateForDraft,
     readConfirmationRecord,
   } = researchState;
   const app = document.querySelector("#app");
+  let teardownNewResearchAutosize = () => {};
 
   const NAV_ITEMS = [
     { label: "工作台", screen: "overview", icon: "台" },
@@ -433,12 +435,12 @@
         <div class="thesis-fields">
           <label class="title-field" for="${fieldPrefix}-title">
             <span>命题标题</span>
-            <input id="${fieldPrefix}-title" data-field="title" value="${escapeHTML(thesis.title)}" aria-describedby="${fieldPrefix}-title-error">
+            <input id="${fieldPrefix}-title" data-field="title" value="${escapeHTML(thesis.title)}" maxlength="${FIELD_LIMITS.title}" aria-describedby="${fieldPrefix}-title-error">
             ${fieldError("title")}
           </label>
           <label class="statement-field" for="${fieldPrefix}-statement">
             <span>命题表述</span>
-            <textarea id="${fieldPrefix}-statement" data-field="statement" rows="2" aria-describedby="${fieldPrefix}-statement-error">${escapeHTML(thesis.statement)}</textarea>
+            <textarea id="${fieldPrefix}-statement" data-field="statement" rows="2" maxlength="${FIELD_LIMITS.statement}" aria-describedby="${fieldPrefix}-statement-error">${escapeHTML(thesis.statement)}</textarea>
             ${fieldError("statement")}
           </label>
           <label class="date-field" for="${fieldPrefix}-observation-start">
@@ -453,17 +455,17 @@
           </label>
           <label class="event-field" for="${fieldPrefix}-event">
             <span>下一验证事件</span>
-            <textarea id="${fieldPrefix}-event" data-field="nextValidationEvent" rows="2" aria-describedby="${fieldPrefix}-nextValidationEvent-error">${escapeHTML(thesis.nextValidationEvent)}</textarea>
+            <textarea id="${fieldPrefix}-event" data-field="nextValidationEvent" rows="2" maxlength="${FIELD_LIMITS.nextValidationEvent}" aria-describedby="${fieldPrefix}-nextValidationEvent-error">${escapeHTML(thesis.nextValidationEvent)}</textarea>
             ${fieldError("nextValidationEvent")}
           </label>
           <label for="${fieldPrefix}-support">
             <span>支持条件</span>
-            <textarea id="${fieldPrefix}-support" data-field="supportCondition" rows="2" aria-describedby="${fieldPrefix}-supportCondition-error">${escapeHTML(thesis.supportCondition)}</textarea>
+            <textarea id="${fieldPrefix}-support" data-field="supportCondition" rows="2" maxlength="${FIELD_LIMITS.supportCondition}" aria-describedby="${fieldPrefix}-supportCondition-error">${escapeHTML(thesis.supportCondition)}</textarea>
             ${fieldError("supportCondition")}
           </label>
           <label for="${fieldPrefix}-falsifier">
             <span>反证条件</span>
-            <textarea id="${fieldPrefix}-falsifier" data-field="falsifier" rows="2" aria-describedby="${fieldPrefix}-falsifier-error">${escapeHTML(thesis.falsifier)}</textarea>
+            <textarea id="${fieldPrefix}-falsifier" data-field="falsifier" rows="2" maxlength="${FIELD_LIMITS.falsifier}" aria-describedby="${fieldPrefix}-falsifier-error">${escapeHTML(thesis.falsifier)}</textarea>
             ${fieldError("falsifier")}
           </label>
         </div>
@@ -638,6 +640,43 @@
     for (const textarea of root.querySelectorAll("[data-thesis-editor] textarea")) autoSizeThesisTextarea(textarea);
   }
 
+  function bindResponsiveTextareaAutosize(form) {
+    const container = form.querySelector(".thesis-editors");
+    let lastWidth = container.getBoundingClientRect().width;
+    let animationFrame;
+    const schedule = () => {
+      if (animationFrame !== undefined) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = undefined;
+        autoSizeThesisTextareas(form);
+      });
+    };
+    const widthChanged = (width) => {
+      if (Math.abs(width - lastWidth) < 0.5) return;
+      lastWidth = width;
+      schedule();
+    };
+
+    if (typeof window.ResizeObserver === "function") {
+      const observer = new window.ResizeObserver((entries) => {
+        const entry = entries.find((item) => item.target === container);
+        if (entry) widthChanged(entry.contentRect.width);
+      });
+      observer.observe(container);
+      return () => {
+        observer.disconnect();
+        if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      };
+    }
+
+    const onResize = () => widthChanged(container.getBoundingClientRect().width);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+    };
+  }
+
   const DRAFT_ERROR_MESSAGES = Object.freeze({
     required: "此字段为必填项",
     invalid_date: "请输入真实有效的日期",
@@ -667,7 +706,9 @@
         const message = editor.querySelector(`[data-field-error="${field}"]`);
         if (!control || !message) continue;
         control.setAttribute("aria-invalid", "true");
-        message.textContent = DRAFT_ERROR_MESSAGES[code] ?? "此字段无效";
+        message.textContent = code === "too_long"
+          ? `内容超过允许长度（最多 ${FIELD_LIMITS[field]} 个字符）`
+          : (DRAFT_ERROR_MESSAGES[code] ?? "此字段无效");
         message.hidden = false;
         firstInvalid ??= control;
       }
@@ -726,6 +767,7 @@
     if (!form) return;
     updateThesisEditorControls(form);
     autoSizeThesisTextareas(form);
+    teardownNewResearchAutosize = bindResponsiveTextareaAutosize(form);
     form.addEventListener("click", (event) => {
       const removeButton = event.target.closest("[data-remove-thesis]");
       if (removeButton) {
@@ -811,6 +853,8 @@
   }
 
   function renderShell(screen) {
+    teardownNewResearchAutosize();
+    teardownNewResearchAutosize = () => {};
     const activeNav = NAV_ITEMS.find((item) => item.screen === screen)?.screen;
     app.innerHTML = `
       <div class="app-shell">

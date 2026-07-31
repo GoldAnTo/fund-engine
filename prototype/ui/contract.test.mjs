@@ -472,6 +472,7 @@ async function loadNewResearchStateFixture() {
 
 async function assertNewResearchStateSessionContract() {
   const { data, state } = await loadNewResearchStateFixture();
+  assert.deepEqual({ ...state.FIELD_LIMITS }, { title: 120, statement: 2000, nextValidationEvent: 2000, supportCondition: 2000, falsifier: 2000 }, "state API must expose honest field limits");
   assert.deepEqual([...state.EVIDENCE_REVIEW_STATES], ["reviewed_links_present", "pending_relationship_review", "no_evidence_links"], "state API must keep evidence-review vocabulary separate from confirmation state");
   assert.equal(state.evidenceReviewStateForDraft("TH-AIC-01", data), "reviewed_links_present");
   assert.equal(state.evidenceReviewStateForDraft("TH-DRAFT-1", data), "no_evidence_links", "human drafts must not inherit fixture evidence review");
@@ -509,6 +510,19 @@ async function assertNewResearchStateSessionContract() {
   assert.equal(created.record.theses[2].observationEnd, "2026-09-30");
   assert.equal(Object.hasOwn(created.record.theses[2], "observationPeriod"), false, "session record must not persist a formatted period string");
   assert.ok(state.normalizeConfirmationRecord(created.record, data), "a created record must round-trip through stored-record validation");
+  assert.equal(created.record.schemaVersion, 2, "changed record shape must use confirmation schema v2");
+  assert.match(state.confirmationStorageKey(data.case.id), /^new-research-confirmation:v2:/u);
+
+  for (const [field, limit] of Object.entries(state.FIELD_LIMITS)) {
+    const boundaryDraft = { ...human, id: `TH-BOUNDARY-${field.toUpperCase()}`, [field]: "字".repeat(limit) };
+    assert.ok(state.createConfirmationRecord([boundaryDraft], data).record, `${field} must accept its exact character boundary`);
+    const overlengthDraft = { ...boundaryDraft, [field]: "字".repeat(limit + 1) };
+    assert.equal(state.createConfirmationRecord([overlengthDraft], data).errors[0][field], "too_long", `${field} boundary +1 must produce too_long`);
+  }
+  const storedOverlength = structuredClone(created.record);
+  storedOverlength.theses[2].statement = "字".repeat(state.FIELD_LIMITS.statement + 1);
+  assert.equal(state.normalizeConfirmationRecord(storedOverlength, data), undefined, "stored overlength drafts must be rejected");
+  assert.equal(state.normalizeConfirmationRecord({ ...created.record, schemaVersion: 1 }, data), undefined, "old v1 records must not validate as current confirmations");
 
   const tamperedEdit = structuredClone(created.record);
   tamperedEdit.theses[0].lastEditedBy = "human";
@@ -844,6 +858,10 @@ async function assertVisibleThesisTextareasFit(root, context) {
   return measurements;
 }
 
+async function waitForResponsiveTextareaLayout(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
 async function assertNewResearchProductContract(page, marker, baseURL) {
   await page.evaluate(() => sessionStorage.clear());
   await page.reload({ waitUntil: "networkidle" });
@@ -939,6 +957,8 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.equal(await editor.getAttribute("data-origin"), "ai", `fixture thesis ${index + 1} must preserve explicit AI origin`);
     assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
     assert.equal(await editor.locator('[data-field="title"]').inputValue(), fixtureTheses[index].title, "fixture title must be a real editable value");
+    assert.equal(await editor.locator('[data-field="title"]').getAttribute("maxlength"), "120");
+    assert.ok(await editor.locator("textarea").evaluateAll((items) => items.every((item) => item.maxLength === 2000)), "all Thesis textareas must expose the 2000-character limit");
     assert.equal(await editor.locator('input[type="date"]').count(), 2, "each editor must expose two native date controls");
     assert.ok(await editor.locator('input[type="date"]').evaluateAll((items) => items.every((item) => item.getBoundingClientRect().width >= 150)), "native date controls must be wide enough to display a complete YYYY/MM/DD date");
   }
@@ -979,6 +999,14 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await primaryActions.count(), 1, "step 2 must expose one primary form action");
   assert.equal((await primaryActions.textContent()).trim(), "确认命题并继续");
   assert.equal(await primaryActions.getAttribute("type"), "submit");
+  const overlengthTitle = editors.first().locator('[data-field="title"]');
+  await overlengthTitle.evaluate((element) => {
+    element.value = "字".repeat(121);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await primaryActions.click();
+  assert.equal((await editors.first().locator('[data-field-error="title"]').textContent()).trim(), "内容超过允许长度（最多 120 个字符）", "overlength title must not be mislabeled as required");
+  await overlengthTitle.fill(fixtureTheses[0].title);
 
   for (const preview of ["assets", "plan"]) {
     const region = marker.locator(`[data-step-preview="${preview}"]`);
@@ -1039,7 +1067,11 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await page.keyboard.press("Tab");
   assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), "确认命题并继续", "Tab must skip disabled AI/add controls and reach the primary action");
 
+  const responsiveLongValue = "当研究编辑器从桌面三栏切换到移动端单栏，再返回桌面布局时，这段较长但合法的反证文本必须保持完整可读，不能因为断点变化而恢复为旧高度或出现内部滚动。";
   await page.setViewportSize({ width: 375, height: 812 });
+  await waitForResponsiveTextareaLayout(page);
+  await longTextarea.fill(responsiveLongValue);
+  await assertVisibleThesisTextareasFit(form, "1600 to 375 responsive transition with long input");
   const narrowLayout = await page.evaluate(() => ({
     bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
     documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -1056,6 +1088,18 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.ok(box && box.y >= 0 && box.y + box.height <= 812, "each lower new-research control or preview fact must be bringable inside the 375px viewport");
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(form, "375 to 1600 responsive transition with long input");
+  const responsiveDesktopHeight = await longTextarea.evaluate((element) => element.clientHeight);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(form, "1600 back to 375 responsive transition with long input");
+  assert.ok(await longTextarea.evaluate((element) => element.clientHeight) < responsiveDesktopHeight, "responsive autosize must shrink a long textarea when its column becomes wider");
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(form, "second 375 to 1600 responsive transition with long input");
+  await longTextarea.fill(originalLongTextareaValue);
+  await assertVisibleThesisTextareasFit(form, "responsive long input restored before confirmation");
 
   async function assertStepThreeState(expectedDraftText) {
     const url = new URL(page.url());
@@ -1101,7 +1145,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(clickEdit);
   const storageKey = await page.evaluate(() => window.PROTOTYPE_NEW_RESEARCH.confirmationStorageKey(window.PROTOTYPE_DATA.case.id));
   const savedTwoRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
-  assert.equal(savedTwoRecord.schemaVersion, 1, "confirmation record must expose an explicit schemaVersion");
+  assert.equal(savedTwoRecord.schemaVersion, 2, "changed confirmation record must expose schemaVersion 2");
   assert.equal(savedTwoRecord.caseId, "RC-AIC-2025-01", "confirmation record must be keyed to the active case");
   assert.equal(savedTwoRecord.snapshotId, "RS-2025-06-30-v3", "confirmation record must bind to the immutable snapshot");
   assert.equal(savedTwoRecord.cutoff, "2025-06-30", "confirmation record must bind to the evidence cutoff");
@@ -1126,6 +1170,15 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await page.locator('[data-screen="new-research"] [data-field="statement"]').first().inputValue(), clickEdit, "Back to step 2 must repopulate the validated confirmation record");
   assert.equal(await page.locator('[data-screen="new-research"] [data-thesis-editor]').count(), 2, "Back must preserve a two-Thesis confirmation");
   await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "back-restored confirmation");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "back-restored confirmation at 375");
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "back-restored confirmation returned to 1600");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await waitForResponsiveTextareaLayout(page);
+  await assertVisibleThesisTextareasFit(page.locator('[data-screen="new-research"] form[aria-label="初始命题"]'), "back-restored confirmation returned to 375");
   assert.deepEqual(
     await page.locator('[data-screen="new-research"] [data-draft-origin-label]').allTextContents(),
     ["AI 起草 · 人工已修改 · 待重新确认", "AI 起草 · 已确认过 · 待重新确认"],
@@ -1285,6 +1338,14 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await page.evaluate((key) => sessionStorage.removeItem(key), storageKey);
   await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
   await assertRecoveredStepTwo(true);
+
+  const legacyStorageKey = storageKey.replace(":v2:", ":v1:");
+  await page.evaluate(({ legacyKey, record }) => {
+    sessionStorage.setItem(legacyKey, JSON.stringify({ ...record, schemaVersion: 1 }));
+  }, { legacyKey: legacyStorageKey, record: savedRecord });
+  await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
+  await assertRecoveredStepTwo(true);
+  await page.evaluate((legacyKey) => sessionStorage.removeItem(legacyKey), legacyStorageKey);
 
   for (const rawRecord of [
     "{not-json",

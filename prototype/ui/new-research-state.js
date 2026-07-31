@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CONFIRMATION_SCHEMA_VERSION = 1;
+  const CONFIRMATION_SCHEMA_VERSION = 2;
   const DRAFT_FIELDS = Object.freeze([
     "title",
     "statement",
@@ -15,6 +15,13 @@
   const ORIGINS = Object.freeze(["ai", "human"]);
   const LAST_EDITORS = Object.freeze(["ai", "human", "system"]);
   const EVIDENCE_REVIEW_STATES = Object.freeze(["reviewed_links_present", "pending_relationship_review", "no_evidence_links"]);
+  const FIELD_LIMITS = Object.freeze({
+    title: 120,
+    statement: 2000,
+    nextValidationEvent: 2000,
+    supportCondition: 2000,
+    falsifier: 2000,
+  });
 
   function isStrictISODate(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
@@ -37,10 +44,12 @@
     return `new-research-confirmation:v${CONFIRMATION_SCHEMA_VERSION}:${caseId}`;
   }
 
-  function normalizeText(value) {
-    if (typeof value !== "string") return undefined;
+  function normalizeText(value, limit) {
+    if (typeof value !== "string") return { error: "required" };
     const normalized = value.trim();
-    return normalized && normalized.length <= 2000 ? normalized : undefined;
+    if (!normalized) return { error: "required" };
+    if (normalized.length > limit) return { error: "too_long" };
+    return { value: normalized };
   }
 
   function indexFixtureTheses(fixture) {
@@ -59,7 +68,7 @@
 
   function validateDraft(candidate, fixture) {
     const errors = {};
-    const id = normalizeText(candidate?.id);
+    const id = typeof candidate?.id === "string" ? candidate.id.trim() : undefined;
     if (!id || !/^[A-Z0-9][A-Z0-9-]{2,63}$/u.test(id)) errors.id = "invalid_id";
 
     const trustedFixture = id ? indexFixtureTheses(fixture).get(id) : undefined;
@@ -70,8 +79,9 @@
 
     const normalized = { id, origin };
     for (const field of TEXT_FIELDS) {
-      normalized[field] = normalizeText(candidate?.[field]);
-      if (!normalized[field]) errors[field] = "required";
+      const result = normalizeText(candidate?.[field], FIELD_LIMITS[field]);
+      normalized[field] = result.value;
+      if (result.error) errors[field] = result.error;
     }
     normalized.observationStart = candidate?.observationStart;
     normalized.observationEnd = candidate?.observationEnd;
@@ -159,6 +169,7 @@
     CONFIRMATION_SCHEMA_VERSION,
     DRAFT_FIELDS,
     EVIDENCE_REVIEW_STATES,
+    FIELD_LIMITS,
     confirmationStorageKey,
     createConfirmationRecord,
     evidenceReviewStateForDraft,

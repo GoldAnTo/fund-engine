@@ -12,6 +12,8 @@ The shell navigation uses the six stable product areas. Some routes intentionall
 
 `data.js` exposes one deterministic `window.PROTOTYPE_DATA` fixture for the AI-compute ResearchCase at cutoff `2025-06-30` and frozen snapshot `RS-2025-06-30-v3`. It is demonstration data, not a live research result. Point-in-time metadata and review state are explicit; AI-authored text remains labeled `AI 草案 · 未经人工复核`.
 
+`new-research-state.js` owns the new-research draft contract. Confirmed drafts use session schema `v2` and the `new-research-confirmation:v2:<caseId>` key; earlier keys cannot unlock a later step. Title and body limits are exported by the state module and mirrored by the visible form controls. Textarea height is recalculated after content and responsive-width changes so the fixed desktop capture does not hide required draft text.
+
 ## Runtime and install preflight
 
 Playwright requires Node 20 or newer. When the shell command starts under an older Node release, the harness re-executes through an installed compatible NVM runtime when one is present; otherwise it reports the runtime requirement without modifying dependencies.
