@@ -28,6 +28,8 @@ export interface GraphNode {
   id: string;
   kind: NodeKind;
   label: string;
+  sequence?: number;
+  description?: string;
   [key: string]: unknown;
 }
 

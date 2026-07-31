@@ -336,6 +336,35 @@ HOLDINGS: list[dict] = [
      "source": "fund-report-2025H1"},
 ]
 
+# ---------------------------------------------------------------------------
+# Causal chain for the focus thesis (T3: 寒武纪兑现出货并支撑估值).
+#
+# A human-authored, reviewed causal chain describing how global AI compute
+# demand transmits through domestic-chip substitution to Cambricon shipment,
+# revenue, and finally valuation support.  Attached to T3 because the
+# workbench renders the latest thesis's causal chain, and T3 (the Cambricon
+# thesis, created last) is the latest thesis for the case.
+# ---------------------------------------------------------------------------
+
+CAUSAL_THESIS = "T3"
+CAUSAL_CREATOR_TYPE = "human"
+CAUSAL_REVIEW_STATE = "reviewed"
+
+CAUSAL_STEPS: list[dict] = [
+    {"seq": 1, "description": "全球 AI 算力需求爆发（大模型训练+推理）"},
+    {"seq": 2, "description": "国产算力芯片需求提升（自主可控政策驱动）"},
+    {"seq": 3, "description": "寒武纪思元系列芯片出货量增长"},
+    {"seq": 4, "description": "寒武纪营收兑现且毛利率改善"},
+    {"seq": 5, "description": "寒武纪估值获得业绩支撑"},
+]
+
+CAUSAL_EDGES: list[dict] = [
+    {"from": 1, "to": 2, "rationale": "算力需求爆发传导至国产替代需求"},
+    {"from": 2, "to": 3, "rationale": "国产需求提升推动寒武纪出货"},
+    {"from": 3, "to": 4, "rationale": "出货量增长带动营收兑现"},
+    {"from": 4, "to": 5, "rationale": "营收兑现支撑当前估值"},
+]
+
 
 # ---------------------------------------------------------------------------
 # Fixture parsing
@@ -401,6 +430,7 @@ def seed(session: Session) -> None:
     research_service = ResearchService(ResearchRepository(session))
     assessment_service = AssessmentService(ResearchRepository(session))
     instruments = InstrumentRepository(session)
+    research_repo = ResearchRepository(session)
 
     # 1. Freeze every fixture file into a DocumentVersion + SourceSpans.
     span_index: dict[tuple[str, int, int], object] = {}
@@ -543,6 +573,28 @@ def seed(session: Session) -> None:
             published_at=spec["published_at"],
             source=spec["source"],
         )
+
+    # 9. Causal chain for the focus thesis (human-authored, reviewed).
+    #    Idempotent: skip when causal steps already exist for the thesis so
+    #    re-running the seed on a populated ledger does not duplicate rows
+    #    (CausalStep/CausalEdge are append-only and cannot be upserted).
+    causal_thesis = theses[CAUSAL_THESIS]
+    if not research_repo.causal_steps_for_thesis(causal_thesis.id):
+        step_by_seq: dict[int, object] = {}
+        for spec in CAUSAL_STEPS:
+            step_by_seq[spec["seq"]] = research_repo.add_causal_step(
+                thesis_id=causal_thesis.id,
+                description=spec["description"],
+                sequence=spec["seq"],
+            )
+        for spec in CAUSAL_EDGES:
+            research_repo.add_causal_edge(
+                source_step_id=step_by_seq[spec["from"]].id,
+                target_step_id=step_by_seq[spec["to"]].id,
+                rationale=spec["rationale"],
+                creator_type=CAUSAL_CREATOR_TYPE,
+                review_state=CAUSAL_REVIEW_STATE,
+            )
 
 
 # ---------------------------------------------------------------------------
