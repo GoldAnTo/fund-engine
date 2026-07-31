@@ -41,7 +41,7 @@ class EvidenceProposer:
         if thesis is None:
             raise ValueError(f"thesis {thesis_id} not found")
 
-        statements = list(session.scalars(select(SourceStatement)))
+        statements = list(session.scalars(select(SourceStatement).limit(20)))
 
         input_ref = {
             "thesis_id": str(thesis_id),

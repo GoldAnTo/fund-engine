@@ -70,7 +70,20 @@ class LLMClient:
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content
-        return json.loads(content)
+        # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
+        if "</think>" in content:
+            content = content.split("</think>", 1)[1].strip()
+        # 提取首个 JSON 对象（兼容模型偶尔加 markdown 包裹或多余文本）
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1:
+            content = content[start : end + 1]
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            from json_repair import loads as repair_loads
+
+            return repair_loads(content)
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ from app.models.ledger import AIRun, DocumentVersion, ResearchCase, Thesis
 from app.models.ledger import Base
 
 
-def run_engine(session: Session, case: ResearchCase) -> None:
+def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False) -> None:
     """Run extract -> propose -> assess for *case* and print a summary."""
     client = LLMClient.from_env()
     extractor = StatementExtractor(client)
@@ -38,16 +38,20 @@ def run_engine(session: Session, case: ResearchCase) -> None:
     generator = AssessmentGenerator(client)
 
     mode = "mock" if client._mock else f"live ({client.model_version})"
-    print(f"AI research engine — mode: {mode}")
+    print(f"AI research engine - mode: {mode}")
     print(f"Case: {case.title} ({case.id})\n")
 
     # 1. Extract statements from every document version.
-    versions = list(session.scalars(select(DocumentVersion)))
-    total_statements = 0
-    for version in versions:
-        statements = extractor.extract(version.id, session)
-        total_statements += len(statements)
-    print(f"[extract] {total_statements} statements from {len(versions)} documents")
+    if not skip_extract:
+        versions = list(session.scalars(select(DocumentVersion)))
+        total_statements = 0
+        for version in versions:
+            statements = extractor.extract(version.id, session)
+            total_statements += len(statements)
+        session.commit()
+        print(f"[extract] {total_statements} statements from {len(versions)} documents")
+    else:
+        print("[extract] skipped (using existing statements)")
 
     # 2. Propose evidence links for every thesis in the case.
     theses = list(
@@ -98,6 +102,11 @@ def main() -> None:
         action="store_true",
         help="Seed the frozen AI-compute case before running the engine.",
     )
+    parser.add_argument(
+        "--skip-extract",
+        action="store_true",
+        help="Skip extraction (use existing statements in the ledger).",
+    )
     args = parser.parse_args()
 
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_ai.db")
@@ -123,7 +132,7 @@ def main() -> None:
                     "no ResearchCase found — pass --seed to create one first"
                 )
 
-        run_engine(session, case)
+        run_engine(session, case, skip_extract=args.skip_extract)
         session.commit()
 
 
