@@ -47,42 +47,115 @@
 
   function renderOverview() {
     const activeCase = data.case;
-    const reviewed = data.evidenceLinks.filter((item) => item.reviewState === "reviewed").length;
-    const pending = data.evidenceLinks.filter((item) => item.reviewState === "pending_review").length;
+    const pendingReview = data.reviewQueue[0];
+    const pendingEvidence = data.evidenceLinks.find((item) => item.reviewState === "pending_review");
+    const blockerThesis = data.theses.find((item) => item.reviewState === "pending_review");
+    const contradiction = data.factors.find((item) => item.group === "contradiction");
+    const revisedMetric = data.metrics.find((item) => item.id === "M-NVDA-DC-REV");
+    const providerFailures = data.providerRuns.filter((item) => ["quota_failure", "permission_gap"].includes(item.outcome));
+    const recentSnapshot = data.snapshots.find((item) => item.id === activeCase.snapshotId);
+    const hasPriorMetricVersion = revisedMetric.snapshotMembership.some((snapshotId) => snapshotId !== activeCase.snapshotId);
 
     return `
       <section class="screen" data-screen="overview">
-        ${screenHeader("ResearchCase workspace", "从可证伪问题开始，而不是从材料数量开始", "同一研究案例承载历史与当前工作；截止日限定可见证据，冻结快照保留当时判断。")}
-        <div class="overview-grid">
-          <article class="paper-card">
-            <div class="meta-row">
-              <strong>${escapeHTML(activeCase.id)}</strong>
-              <span>截止 ${escapeHTML(activeCase.cutoff)}</span>
-              <span>快照 ${escapeHTML(activeCase.snapshotId)}</span>
+        <div class="overview-heading">
+          <div>
+            <p class="eyebrow">Research workspace</p>
+            <h1>研究总览</h1>
+            <p class="lede">先处理阻塞判断的工作，再沿冻结版本继续同一个 ResearchCase。</p>
+          </div>
+          <a class="primary-action" data-primary-action href="?screen=new-research">新建研究</a>
+        </div>
+
+        <section class="queue-section" aria-labelledby="research-queue-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">当前工作焦点</p>
+              <h2 id="research-queue-title">ResearchCase 队列</h2>
             </div>
-            <p class="case-question">${escapeHTML(activeCase.question)}</p>
-            <div class="status-row">
-              ${badge(`${reviewed} 条已复核`, "reviewed", "已复核状态")}
-              ${badge(`${pending} 条待审核`, "warning", "待审核状态")}
-              ${badge(data.case.aiLabel, "ai-draft", "人工复核前的 AI 草案")}
+            <p>按下一步行动排序 · 仅显示一个持续研究案例</p>
+          </div>
+
+          <article class="case-row selected" data-research-case-row aria-selected="true">
+            <div class="case-main">
+              <div class="case-identity">
+                <span class="case-id">${escapeHTML(activeCase.id)}</span>
+                ${badge("进行中 · 待验证", "warning", "研究案例状态：进行中，待验证")}
+              </div>
+              <h3>${escapeHTML(activeCase.title)}</h3>
+              <p class="case-question">${escapeHTML(activeCase.question)}</p>
+              <dl class="case-facts">
+                <div><dt>截止日</dt><dd>${escapeHTML(activeCase.cutoff)}</dd></div>
+                <div><dt>当前快照</dt><dd>${escapeHTML(activeCase.snapshotId)}</dd></div>
+                <div><dt>人工复核状态</dt><dd data-state-label>待人工审核 · ${escapeHTML(activeCase.state)}</dd></div>
+              </dl>
+              <div class="assessment compact-assessment" data-evidence-assessment>
+                <strong>${escapeHTML(activeCase.aiLabel)}</strong>
+                <p>${escapeHTML(activeCase.provisionalAssessment)}</p>
+              </div>
             </div>
-            <div class="assessment" data-evidence-assessment>
-              <strong>${escapeHTML(data.case.aiLabel)}</strong>
-              <p>${escapeHTML(activeCase.provisionalAssessment)}</p>
+            <div class="case-decision">
+              <p class="decision-label">主要阻塞</p>
+              <h4>${escapeHTML(blockerThesis.title)}</h4>
+              <p>${escapeHTML(pendingReview.task)}</p>
+              <div class="decision-source">
+                <span>${escapeHTML(pendingEvidence.id)}</span>
+                <span>${escapeHTML(pendingEvidence.sourceVersion)}</span>
+              </div>
+              <a class="next-action" data-next-action href="?screen=review">审核订单到收入关系 <span aria-hidden="true">→</span></a>
             </div>
           </article>
-          <aside class="paper-card">
-            <h2>下一步验证</h2>
-            <div class="mini-stack">
-              ${data.theses.map((thesis) => `
-                <div class="mini-item">
-                  <h3>${escapeHTML(thesis.title)}</h3>
-                  <p>${escapeHTML(thesis.nextValidationEvent)}</p>
+        </section>
+
+        <section class="status-section" aria-labelledby="status-lanes-title">
+          <div class="section-heading compact-heading">
+            <div>
+              <p class="section-kicker">需要注意</p>
+              <h2 id="status-lanes-title">研究状态线</h2>
+            </div>
+            <p>所有状态均保留来源标识，不以颜色代替含义</p>
+          </div>
+          <div class="status-lanes">
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(pendingReview.id)}">
+              <div class="lane-heading"><span class="lane-mark warning" aria-hidden="true">审</span><h3>待审核关系</h3></div>
+              <p class="lane-state" data-state-label>待人工审核</p>
+              <strong>${escapeHTML(pendingReview.task)}</strong>
+              <p class="lane-detail">${escapeHTML(pendingReview.targetId)} · ${escapeHTML(pendingReview.sourceVersion)}</p>
+            </article>
+
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(contradiction.id)}">
+              <div class="lane-heading"><span class="lane-mark contradict" aria-hidden="true">反</span><h3>新反面证据</h3></div>
+              <p class="lane-state" data-state-label>候选反证 · 待关联来源</p>
+              <strong>${escapeHTML(contradiction.label)}</strong>
+              <p class="lane-detail">${escapeHTML(contradiction.id)} · ${escapeHTML(contradiction.status)}</p>
+            </article>
+
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(revisedMetric.id)}">
+              <div class="lane-heading"><span class="lane-mark gap" aria-hidden="true">缺</span><h3>数据修订与缺口</h3></div>
+              <p class="lane-state" data-state-label>${hasPriorMetricVersion ? "已有跨版本口径" : "缺少前次快照对照"}</p>
+              <strong>${escapeHTML(revisedMetric.name)} · ${escapeHTML(revisedMetric.value)}</strong>
+              <p class="lane-detail">${escapeHTML(revisedMetric.period)} · ${escapeHTML(revisedMetric.sourceVersion)}</p>
+            </article>
+
+            <article class="status-lane provider-lane" data-support-lane data-source-id="${escapeHTML(providerFailures.map((item) => item.id).join(","))}">
+              <div class="lane-heading"><span class="lane-mark provider" aria-hidden="true">源</span><h3>Provider 状态</h3></div>
+              ${providerFailures.map((run) => `
+                <div class="provider-item">
+                  <p class="lane-state" data-state-label>${escapeHTML(run.outcome)}</p>
+                  <strong>${escapeHTML(run.provider)}</strong>
+                  <p class="lane-detail">${escapeHTML(run.detail)}</p>
                 </div>
               `).join("")}
-            </div>
-          </aside>
-        </div>
+            </article>
+
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(recentSnapshot.id)}">
+              <div class="lane-heading"><span class="lane-mark frozen" aria-hidden="true">冻</span><h3>最近冻结版本</h3></div>
+              <p class="lane-state" data-state-label>${escapeHTML(recentSnapshot.label)} · 已冻结</p>
+              <strong>${escapeHTML(recentSnapshot.id)}</strong>
+              <p class="lane-detail">截止 ${escapeHTML(recentSnapshot.cutoff)}<br>冻结于 ${escapeHTML(recentSnapshot.frozenAt)}</p>
+            </article>
+          </div>
+        </section>
       </section>
     `;
   }

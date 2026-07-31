@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const UI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const VIEWPORT = { width: 1600, height: 1000 };
-const CAPTURE_READY_SCREENS = ["overview"];
+const FINAL_CAPTURE_TARGETS = Object.freeze({
+  overview: path.resolve(UI_DIR, "../设计原型1.png"),
+});
+const CAPTURE_READY_SCREENS = Object.freeze(Object.keys(FINAL_CAPTURE_TARGETS));
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -57,6 +60,12 @@ export async function captureViewportPng(page) {
 
 export function createTransientCaptureDirectory() {
   return mkdtemp(path.join(os.tmpdir(), "research-prototype-capture-"));
+}
+
+export function captureTargetForScreen(screen) {
+  const target = FINAL_CAPTURE_TARGETS[screen];
+  if (!target) throw new Error(`Capture renderer not implemented: ${screen}`);
+  return target;
 }
 
 function findPlaywrightNode() {
@@ -235,13 +244,12 @@ function parseScreens(argv) {
 
 async function runCLI() {
   const selection = parseScreens(process.argv.slice(2));
-  const outputDir = selection.mode === "capture" ? await createTransientCaptureDirectory() : null;
   await withPrototypeBrowser(async ({ baseURL, page }) => {
     for (const screen of selection.screens) {
       await page.goto(`${baseURL}/?screen=${screen}`, { waitUntil: "networkidle" });
       await page.locator(`[data-screen="${screen}"]`).waitFor({ state: "visible" });
       if (selection.mode === "capture") {
-        const output = path.join(outputDir, `${screen}.png`);
+        const output = captureTargetForScreen(screen);
         const png = await captureViewportPng(page);
         await writeFile(output, png);
         console.log(`${screen} -> ${output}`);

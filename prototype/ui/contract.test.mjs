@@ -480,6 +480,23 @@ async function assertCaptureDimensionAndOutputContract() {
   }
 }
 
+async function assertFinalCaptureRegistryContract() {
+  const { captureTargetForScreen } = await import("./capture.mjs");
+  assert.equal(typeof captureTargetForScreen, "function", "capture.mjs must export captureTargetForScreen");
+  assert.equal(
+    captureTargetForScreen("overview"),
+    path.resolve(UI_DIR, "../设计原型1.png"),
+    "overview must map exactly to prototype/设计原型1.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => screen !== "overview")) {
+    assert.throws(
+      () => captureTargetForScreen(placeholder),
+      /Capture renderer not implemented/u,
+      `${placeholder} placeholder must not map to a final PNG`,
+    );
+  }
+}
+
 async function assertTeardownContract() {
   const { withPrototypeBrowser } = await import("./capture.mjs");
   const events = [];
@@ -550,6 +567,59 @@ async function assertTeardownContract() {
   }
 }
 
+async function assertOverviewProductContract(page, marker) {
+  const overviewText = await marker.textContent();
+  for (const concept of [
+    "新建研究",
+    "ResearchCase 队列",
+    "待审核关系",
+    "新反面证据",
+    "数据修订与缺口",
+    "Provider 状态",
+    "最近冻结版本",
+  ]) {
+    assert.ok(overviewText.includes(concept), `overview must visibly include ${concept}`);
+  }
+
+  const primaryActions = marker.locator("[data-primary-action]");
+  assert.equal(await primaryActions.count(), 1, "overview must expose exactly one primary action");
+  assert.equal((await primaryActions.first().textContent()).trim(), "新建研究", "overview primary action must be 新建研究");
+
+  const caseRows = marker.locator("[data-research-case-row]");
+  assert.ok(await caseRows.count() > 0, "overview must render at least one ResearchCase queue row");
+  for (let index = 0; index < await caseRows.count(); index += 1) {
+    const nextActions = caseRows.nth(index).locator("[data-next-action]");
+    assert.equal(await nextActions.count(), 1, `ResearchCase row ${index + 1} must expose exactly one next action`);
+    assert.ok((await nextActions.first().textContent()).trim(), `ResearchCase row ${index + 1} next action must be visible`);
+  }
+
+  const selectedCase = marker.locator('[data-research-case-row][aria-selected="true"]');
+  assert.equal(await selectedCase.count(), 1, "overview must have exactly one selected ResearchCase row");
+  const selectedText = await selectedCase.textContent();
+  for (const fixtureFact of [
+    "AI 算力需求能否穿透至可验证的收入与持仓表达",
+    "截至 2025-06-30，AI 算力资本开支能否通过已披露订单、交付与收入，形成可审计且仍需持续验证的产业链判断？",
+    "截止日",
+    "2025-06-30",
+    "RS-2025-06-30-v3",
+    "人工复核状态",
+    "主要阻塞",
+  ]) {
+    assert.ok(selectedText.includes(fixtureFact), `selected ResearchCase must visibly include ${fixtureFact}`);
+  }
+
+  const supportLaneSourceIds = await marker.locator("[data-support-lane][data-source-id]").evaluateAll((elements) => (
+    elements.map((element) => element.dataset.sourceId)
+  ));
+  for (const sourceId of ["RQ-001", "F-X-01", "M-NVDA-DC-REV", "PR-003,PR-004", "RS-2025-06-30-v3"]) {
+    assert.ok(supportLaneSourceIds.includes(sourceId), `overview support lane must remain tied to fixture source ${sourceId}`);
+  }
+
+  const explicitStates = await marker.locator("[data-state-label]").allTextContents();
+  assert.ok(explicitStates.length >= 5, "overview must label operational states in text, not color alone");
+  assert.ok(explicitStates.every((label) => label.trim().length > 0), "overview state labels must be non-empty");
+}
+
 async function assertBrowserContract(routes) {
   const { captureViewportPng, withPrototypeBrowser } = await import("./capture.mjs");
 
@@ -570,6 +640,7 @@ async function assertBrowserContract(routes) {
 
       const assessments = await page.locator("[data-evidence-assessment]").allTextContents();
       if (screen === "overview") {
+        await assertOverviewProductContract(page, marker);
         assert.ok(assessments.length > 0, "overview must expose a non-vacuous [data-evidence-assessment] example");
         await captureViewportPng(page);
         await page.evaluate(() => { document.body.style.minHeight = "1001px"; });
@@ -598,6 +669,7 @@ async function main() {
   await assertMalformedURLContract();
   await assertServerFilesystemBoundary();
   await assertCaptureDimensionAndOutputContract();
+  await assertFinalCaptureRegistryContract();
   await assertTeardownContract();
   await assertBrowserContract(routes);
   console.log(`PASS prototype contract: ${routes.join(", ")}`);
