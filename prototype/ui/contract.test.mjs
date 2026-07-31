@@ -30,6 +30,21 @@ export function assessmentScoringViolations(text) {
   return FORBIDDEN_ASSESSMENT_PATTERNS.filter((pattern) => pattern.test(text));
 }
 
+export function indexUniqueById(records, collectionName) {
+  const index = new Map();
+  for (const record of records) {
+    assert.ok(record?.id, `${collectionName} records must include an id`);
+    assert.ok(!index.has(record.id), `duplicate id ${record.id} in ${collectionName}`);
+    index.set(record.id, record);
+  }
+  return index;
+}
+
+export function isSkippableWindowsSymlinkError(error, platform = process.platform) {
+  const permissionOrCapabilityCodes = new Set(["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"]);
+  return platform === "win32" && permissionOrCapabilityCodes.has(error?.code);
+}
+
 export function assertFixtureContract(data) {
   const expectedKeys = [
     "case",
@@ -49,6 +64,23 @@ export function assertFixtureContract(data) {
   assert.equal(data.case.cutoff, "2025-06-30", "fixture cutoff must remain frozen at 2025-06-30");
   assert.equal(data.case.snapshotId, "RS-2025-06-30-v3", "fixture current snapshot must remain RS-2025-06-30-v3");
 
+  const idCollections = [
+    "theses",
+    "factors",
+    "documents",
+    "statements",
+    "evidenceLinks",
+    "metrics",
+    "companies",
+    "funds",
+    "reviewQueue",
+    "snapshots",
+    "providerRuns",
+  ];
+  const indexes = Object.fromEntries(
+    idCollections.map((collectionName) => [collectionName, indexUniqueById(data[collectionName], collectionName)]),
+  );
+
   const requiredRecordIds = {
     companies: ["CO-NVDA", "CO-TSM"],
     funds: ["FUND-ETF-AI-INFRA", "FUND-SEMI-INDEX"],
@@ -57,9 +89,8 @@ export function assertFixtureContract(data) {
     evidenceLinks: ["EL-001", "EL-002", "EL-003"],
   };
   for (const [group, requiredIds] of Object.entries(requiredRecordIds)) {
-    const actualIds = new Set(data[group].map((record) => record.id));
     for (const id of requiredIds) {
-      assert.ok(actualIds.has(id), `fixture ${group} must include ${id}`);
+      assert.ok(indexes[group].has(id), `fixture ${group} must include ${id}`);
     }
   }
 
@@ -84,27 +115,40 @@ export function assertFixtureContract(data) {
         assert.ok(record[field], `${group}/${record.id} must include ${field}`);
       }
       assert.ok(record.snapshotMembership.length > 0, `${group}/${record.id} must belong to at least one snapshot`);
+      for (const snapshotId of record.snapshotMembership) {
+        assert.ok(indexes.snapshots.has(snapshotId), `${group}/${record.id} references unknown snapshot ${snapshotId}`);
+      }
       assert.ok(record.publishedAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be published by the cutoff`);
       assert.ok(record.availableAt.slice(0, 10) <= data.case.cutoff, `${group}/${record.id} must be available by the cutoff`);
     }
   }
 
-  const documentsById = new Map(data.documents.map((record) => [record.id, record]));
-  const statementsById = new Map(data.statements.map((record) => [record.id, record]));
-  const thesesById = new Map(data.theses.map((record) => [record.id, record]));
-  const factorsById = new Map(data.factors.map((record) => [record.id, record]));
-  const companiesById = new Map(data.companies.map((record) => [record.id, record]));
-  const fundsById = new Map(data.funds.map((record) => [record.id, record]));
-  const reviewQueueById = new Map(data.reviewQueue.map((record) => [record.id, record]));
+  const documentsById = indexes.documents;
+  const statementsById = indexes.statements;
+  const thesesById = indexes.theses;
+  const factorsById = indexes.factors;
+  const companiesById = indexes.companies;
+  const fundsById = indexes.funds;
+  const reviewQueueById = indexes.reviewQueue;
 
   for (const statement of data.statements) {
     assert.ok(documentsById.has(statement.documentId), `${statement.id} must reference an existing document ${statement.documentId}`);
   }
   for (const link of data.evidenceLinks) {
     assert.ok(statementsById.has(link.statementId), `${link.id} must reference an existing statement ${link.statementId}`);
-    const targetExists = (link.thesisId && thesesById.has(link.thesisId))
-      || (link.factorId && factorsById.has(link.factorId));
-    assert.ok(targetExists, `${link.id} must reference an existing thesis or factor`);
+    const hasThesisTarget = Object.hasOwn(link, "thesisId");
+    const hasFactorTarget = Object.hasOwn(link, "factorId");
+    if (hasThesisTarget) {
+      assert.ok(thesesById.has(link.thesisId), `${link.id} references unknown thesis ${link.thesisId}`);
+    }
+    if (hasFactorTarget) {
+      assert.ok(factorsById.has(link.factorId), `${link.id} references unknown factor ${link.factorId}`);
+    }
+    assert.equal(
+      Number(hasThesisTarget) + Number(hasFactorTarget),
+      1,
+      `${link.id} must include exactly one target reference`,
+    );
   }
   const evidenceStates = new Set(data.evidenceLinks.map((link) => link.reviewState));
   assert.ok(evidenceStates.has("reviewed"), "fixture evidence links must include reviewed evidence");
@@ -194,7 +238,7 @@ async function assertFixtureDataContract() {
 
   const missingCurrentSnapshot = structuredClone(data);
   missingCurrentSnapshot.snapshots = missingCurrentSnapshot.snapshots.filter((snapshot) => snapshot.id !== data.case.snapshotId);
-  assert.throws(() => assertFixtureContract(missingCurrentSnapshot), /exactly three snapshots/u);
+  assert.throws(() => assertFixtureContract(missingCurrentSnapshot), /unknown snapshot RS-2025-06-30-v3/u);
 
   const missingFunds = structuredClone(data);
   missingFunds.funds = [];
@@ -206,7 +250,7 @@ async function assertFixtureDataContract() {
 
   const brokenEvidenceTarget = structuredClone(data);
   brokenEvidenceTarget.evidenceLinks[0].thesisId = "TH-MISSING";
-  assert.throws(() => assertFixtureContract(brokenEvidenceTarget), /existing thesis or factor/u);
+  assert.throws(() => assertFixtureContract(brokenEvidenceTarget), /unknown thesis TH-MISSING/u);
 
   const brokenHolding = structuredClone(data);
   brokenHolding.funds[0].companyId = "CO-MISSING";
@@ -219,6 +263,22 @@ async function assertFixtureDataContract() {
   const unlinkedUpload = structuredClone(data);
   delete unlinkedUpload.providerRuns.find((run) => run.outcome === "manual_upload").reviewQueueId;
   assert.throws(() => assertFixtureContract(unlinkedUpload), /manual upload must link/u);
+
+  const duplicateStatement = structuredClone(data);
+  duplicateStatement.statements.push(structuredClone(duplicateStatement.statements[0]));
+  assert.throws(() => assertFixtureContract(duplicateStatement), /duplicate id ST-001 in statements/u);
+
+  const missingSnapshotMembership = structuredClone(data);
+  missingSnapshotMembership.documents[0].snapshotMembership = ["RS-MISSING"];
+  assert.throws(() => assertFixtureContract(missingSnapshotMembership), /unknown snapshot RS-MISSING/u);
+
+  const maskedInvalidFactor = structuredClone(data);
+  maskedInvalidFactor.evidenceLinks[0].factorId = "F-MISSING";
+  assert.throws(() => assertFixtureContract(maskedInvalidFactor), /unknown factor F-MISSING/u);
+
+  const multipleValidTargets = structuredClone(data);
+  multipleValidTargets.evidenceLinks[0].factorId = "F-D-01";
+  assert.throws(() => assertFixtureContract(multipleValidTargets), /exactly one target reference/u);
 }
 
 function assertAssessmentScoringSemantics() {
@@ -322,6 +382,12 @@ async function assertMalformedURLContract() {
 }
 
 async function assertServerFilesystemBoundary() {
+  assert.equal(isSkippableWindowsSymlinkError({ code: "EPERM" }, "win32"), true);
+  assert.equal(isSkippableWindowsSymlinkError({ code: "EACCES" }, "win32"), true);
+  assert.equal(isSkippableWindowsSymlinkError({ code: "EINVAL" }, "win32"), false);
+  assert.equal(isSkippableWindowsSymlinkError({ code: "UNKNOWN" }, "win32"), false);
+  assert.equal(isSkippableWindowsSymlinkError({ code: "EPERM" }, "darwin"), false);
+
   const { startPrototypeServer } = await import("./capture.mjs");
   const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-root-"));
   const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "prototype-server-outside-"));
@@ -333,8 +399,7 @@ async function assertServerFilesystemBoundary() {
     try {
       await symlink(path.join(outsideRoot, "secret.txt"), path.join(fixtureRoot, "escape.txt"));
     } catch (error) {
-      const windowsSymlinkErrors = new Set(["EPERM", "EACCES", "EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "UNKNOWN"]);
-      if (process.platform !== "win32" || !windowsSymlinkErrors.has(error.code)) throw error;
+      if (!isSkippableWindowsSymlinkError(error)) throw error;
       symlinkSkipReason = `${error.code}: Windows symlink creation is unavailable without the required permission/support`;
     }
     server = await startPrototypeServer({ rootDir: fixtureRoot });
