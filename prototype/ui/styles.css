@@ -829,6 +829,15 @@ a {
     outline-offset: 2px;
   }
 
+  .mobile-nav summary:hover {
+    border-color: var(--selected-border);
+    background: var(--selected-surface);
+  }
+
+  .mobile-nav summary:active {
+    background: var(--next-action-active);
+  }
+
   .mobile-nav-links {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -842,6 +851,15 @@ a {
     border-color: var(--border);
     color: var(--ink);
     background: var(--paper);
+  }
+
+  .mobile-nav .nav-link:not([aria-current="page"]):hover {
+    border-color: var(--selected-border);
+    background: var(--status-surface);
+  }
+
+  .mobile-nav .nav-link:not([aria-current="page"]):active {
+    background: var(--next-action-active);
   }
 
   .mobile-nav .nav-link[aria-current="page"] {

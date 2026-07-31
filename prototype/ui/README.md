@@ -49,7 +49,7 @@ node prototype/ui/capture.mjs --screens overview
 
 Every image capture uses the fixed viewport rather than a full-page screenshot. Capture fails before writing if document `scrollWidth` exceeds `1600` or `scrollHeight` exceeds `1000`; content is never silently clipped. The resulting PNG buffer is accepted only when its IHDR dimensions are exactly `1600 × 1000`.
 
-Before replacing a mapped final image, capture parses every PNG chunk to exact EOF, checks each chunk's CRC32, requires the complete IHDR/IDAT/IEND structure, validates the IDAT zlib stream, and checks decoded non-interlaced scanline length and filter bytes. It then writes a validated temporary sibling and uses an atomic rename over the final target; a failed validation, write, or rename leaves the existing final unchanged and removes the temporary file.
+Before replacing a mapped final image, capture parses every PNG chunk to exact EOF, checks each chunk's CRC32, requires the complete IHDR/IDAT/IEND structure, and accepts only Playwright's RGB8, color-type 2, non-interlaced profile. IDAT zlib decompression is bounded to one byte above the expected scanline length, after which capture requires the exact decoded length and valid filter bytes. It then writes a validated temporary sibling and uses an atomic rename over the final target; a failed validation, write, or rename leaves the existing final unchanged and removes the temporary file.
 
 ## Generated-artifact rule
 

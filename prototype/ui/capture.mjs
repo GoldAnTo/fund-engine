@@ -48,19 +48,6 @@ function pngCrc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function expectedNonInterlacedScanlineLength({ width, height, bitDepth, colorType }) {
-  const channelsByColorType = new Map([
-    [0, 1],
-    [2, 3],
-    [3, 1],
-    [4, 2],
-    [6, 4],
-  ]);
-  const channels = channelsByColorType.get(colorType);
-  if (!channels) throw new TypeError(`Unsupported PNG color type ${colorType}`);
-  return (Math.ceil((width * channels * bitDepth) / 8) + 1) * height;
-}
-
 export function assertPngDimensions(png, viewport = VIEWPORT) {
   const signature = "89504e470d0a1a0a";
   if (!Buffer.isBuffer(png) || png.length < 8 || png.subarray(0, 8).toString("hex") !== signature) {
@@ -104,6 +91,9 @@ export function assertPngDimensions(png, viewport = VIEWPORT) {
       if (!header.width || !header.height || header.compression !== 0 || header.filter !== 0 || ![0, 1].includes(header.interlace)) {
         throw new TypeError("PNG IHDR fields are invalid");
       }
+      if (header.bitDepth !== 8 || header.colorType !== 2 || header.interlace !== 0) {
+        throw new TypeError("PNG must use the Playwright RGB8 non-interlaced profile");
+      }
     } else if (type === "IDAT") {
       if (!header || sawIend || idatEnded) throw new TypeError("PNG IDAT chunks must be contiguous after IHDR");
       if (length > 0) idatParts.push(data);
@@ -130,23 +120,21 @@ export function assertPngDimensions(png, viewport = VIEWPORT) {
     throw new RangeError(`PNG dimensions ${width}x${height} do not match viewport ${viewport.width}x${viewport.height}`);
   }
 
+  const expectedLength = height * (1 + (width * 3));
   let decoded;
   try {
-    decoded = inflateSync(Buffer.concat(idatParts));
+    decoded = inflateSync(Buffer.concat(idatParts), { maxOutputLength: expectedLength + 1 });
   } catch (error) {
     const wrapped = new TypeError("PNG IDAT zlib stream is invalid");
     wrapped.cause = error;
     throw wrapped;
   }
-  if (header.interlace === 0) {
-    const expectedLength = expectedNonInterlacedScanlineLength(header);
-    if (decoded.length !== expectedLength) {
-      throw new TypeError(`PNG decoded scanline length ${decoded.length} does not match expected ${expectedLength}`);
-    }
-    const rowLength = expectedLength / height;
-    for (let row = 0; row < height; row += 1) {
-      if (decoded[row * rowLength] > 4) throw new TypeError(`PNG scanline ${row} has an invalid filter byte`);
-    }
+  if (decoded.length !== expectedLength) {
+    throw new TypeError(`PNG decoded scanline length ${decoded.length} does not match expected ${expectedLength}`);
+  }
+  const rowLength = 1 + (width * 3);
+  for (let row = 0; row < height; row += 1) {
+    if (decoded[row * rowLength] > 4) throw new TypeError(`PNG scanline ${row} has an invalid filter byte`);
   }
 }
 

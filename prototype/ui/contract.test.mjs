@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
+import { deflateSync } from "node:zlib";
 import { reexecWithCompatibleNode } from "./capture.mjs";
 
 const UI_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -65,6 +66,26 @@ function replaceFirstIdatWithInvalidZlib(png) {
   assert.ok(idat, "valid PNG test fixture must contain IDAT");
   const invalidIdat = makePngChunk("IDAT", Buffer.from([0x78, 0x9c, 0x00]));
   return Buffer.concat([png.subarray(0, idat.offset), invalidIdat, png.subarray(idat.end)]);
+}
+
+function replaceIhdrProfile(png, overrides) {
+  const ihdr = rawPngChunks(png).find((chunk) => chunk.type === "IHDR");
+  assert.ok(ihdr, "valid PNG test fixture must contain IHDR");
+  const data = Buffer.from(png.subarray(ihdr.offset + 8, ihdr.end - 4));
+  if (Object.hasOwn(overrides, "bitDepth")) data[8] = overrides.bitDepth;
+  if (Object.hasOwn(overrides, "colorType")) data[9] = overrides.colorType;
+  if (Object.hasOwn(overrides, "interlace")) data[12] = overrides.interlace;
+  return Buffer.concat([png.subarray(0, ihdr.offset), makePngChunk("IHDR", data), png.subarray(ihdr.end)]);
+}
+
+function replaceAllIdatData(png, decodedData) {
+  const idats = rawPngChunks(png).filter((chunk) => chunk.type === "IDAT");
+  assert.ok(idats.length > 0, "valid PNG test fixture must contain IDAT");
+  return Buffer.concat([
+    png.subarray(0, idats[0].offset),
+    makePngChunk("IDAT", deflateSync(decodedData)),
+    png.subarray(idats.at(-1).end),
+  ]);
 }
 
 export function assessmentScoringViolations(text) {
@@ -428,6 +449,15 @@ async function assertSourceContract() {
   ]) {
     assert.match(styles, new RegExp(selector.replaceAll(".", "\\."), "u"), `${selector} must have an explicit interaction state`);
   }
+  for (const [selector, baseSelector] of [
+    [".mobile-nav summary:hover", ".mobile-nav summary {"],
+    [".mobile-nav summary:active", ".mobile-nav summary {"],
+    ['.mobile-nav .nav-link:not([aria-current="page"]):hover', ".mobile-nav .nav-link {"],
+    ['.mobile-nav .nav-link:not([aria-current="page"]):active', ".mobile-nav .nav-link {"],
+  ]) {
+    const stateIndex = styles.indexOf(`${selector} {`);
+    assert.ok(stateIndex > styles.indexOf(baseSelector), `${selector} must appear after its mobile base rule`);
+  }
 
   assert.match(readme, /Node 20/u, "README must document the compatible Node runtime");
   assert.match(readme, /bundled Chromium/iu, "README must document the bundled Chromium path");
@@ -440,6 +470,8 @@ async function assertSourceContract() {
   assert.match(readme, /CRC32/u, "README must document per-chunk CRC32 validation");
   assert.match(readme, /zlib/iu, "README must document IDAT zlib validation");
   assert.match(readme, /scanline/iu, "README must document decoded scanline validation");
+  assert.match(readme, /RGB8[^\n]+non-interlaced/iu, "README must document the strict Playwright PNG profile");
+  assert.match(readme, /bounded[^\n]+expected scanline length/iu, "README must document bounded PNG decompression");
   assert.doesNotMatch(readme, /Task 1 has no final screenshot mapping/u, "README must not retain the obsolete Task 1 capture boundary");
   assert.match(readme, /scrollWidth.*1600/u, "README must document the horizontal fit gate");
   assert.match(readme, /scrollHeight.*1000/u, "README must document the vertical fit gate");
@@ -547,6 +579,8 @@ async function assertAtomicFinalCaptureContract() {
   badLength.writeUInt32BE(Math.min(0xffffffff, firstIdat.length + png.length), firstIdat.offset);
   const badCrc = Buffer.from(png);
   badCrc[iend.end - 1] ^= 0xff;
+  const expectedDecodedLength = 1000 * (1 + (1600 * 3));
+  const oversizedInflate = replaceAllIdatData(png, Buffer.alloc(expectedDecodedLength + 2));
   const invalidPngs = new Map([
     ["truncated", png.subarray(0, png.length - 1)],
     ["missing IEND", png.subarray(0, iend.offset)],
@@ -554,12 +588,26 @@ async function assertAtomicFinalCaptureContract() {
     ["bad chunk length", badLength],
     ["bad CRC", badCrc],
     ["invalid zlib with valid CRC", replaceFirstIdatWithInvalidZlib(png)],
+    ["interlaced profile with non-Adam7 data", replaceIhdrProfile(png, { interlace: 1 })],
+    ["palette profile with illegal bit depth and no PLTE", replaceIhdrProfile(png, { colorType: 3, bitDepth: 16 })],
+    ["unsupported RGBA profile", replaceIhdrProfile(png, { colorType: 6, bitDepth: 8 })],
+    ["zlib output beyond the RGB8 scanline bound", oversizedInflate],
   ]);
 
   try {
     for (const [label, invalidPng] of invalidPngs) {
       await writeFile(target, original);
-      await assert.rejects(writeFinalCaptureAtomically(target, invalidPng), undefined, `${label} PNG must be rejected`);
+      let rejection;
+      try {
+        await writeFinalCaptureAtomically(target, invalidPng);
+      } catch (error) {
+        rejection = error;
+      }
+      assert.ok(rejection, `${label} PNG must be rejected`);
+      if (label === "zlib output beyond the RGB8 scanline bound") {
+        assert.equal(rejection.message, "PNG IDAT zlib stream is invalid", "oversized inflate must fail inside the bounded zlib operation");
+        assert.equal(rejection.cause?.code, "ERR_BUFFER_TOO_LARGE", "oversized inflate must use maxOutputLength rather than allocate the full output");
+      }
       assert.deepEqual(await readFile(target), original, `${label} validation failure must leave existing final bytes unchanged`);
       assert.deepEqual(await readdir(fixtureDir), ["final.png"], `${label} validation failure must create no temporary sibling`);
     }
