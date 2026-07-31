@@ -12,9 +12,11 @@ The shell navigation uses the six stable product areas. Some routes intentionall
 
 `data.js` exposes one deterministic `window.PROTOTYPE_DATA` fixture for the AI-compute ResearchCase at cutoff `2025-06-30` and frozen snapshot `RS-2025-06-30-v3`. It is demonstration data, not a live research result. Point-in-time metadata and review state are explicit; AI-authored text remains labeled `AI 草案 · 未经人工复核`.
 
-## Install preflight
+## Runtime and install preflight
 
-The harness uses the repository's existing Playwright installation. If it is unavailable, run exactly:
+Playwright requires Node 20 or newer. When the shell command starts under an older Node release, the harness re-executes through an installed compatible NVM runtime when one is present; otherwise it reports the runtime requirement without modifying dependencies.
+
+The harness imports the repository's Playwright dependency from `frontend/node_modules`. If that dependency is unavailable, run exactly:
 
 ```sh
 cd frontend && npm ci
@@ -22,7 +24,13 @@ cd frontend && npm ci
 
 No package files are owned by this prototype.
 
-Playwright requires Node 20 or newer. When the shell command starts under an older Node release, the harness re-executes through an installed compatible NVM runtime when one is present; otherwise it reports the runtime requirement without modifying dependencies.
+Browser launch first uses Playwright's bundled Chromium. If that executable is absent, capture falls back to system Google Chrome. If neither browser runtime is available, install bundled Chromium with:
+
+```sh
+cd frontend && npx playwright install chromium
+```
+
+Installing system Google Chrome is the alternative fallback. Browser-runtime failures do not suggest `npm ci`, because reinstalling the JavaScript dependency does not guarantee a browser executable.
 
 ## Test and capture
 

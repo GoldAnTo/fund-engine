@@ -15,6 +15,14 @@ const MIME_TYPES = {
   ".js": "text/javascript; charset=utf-8",
 };
 
+export function captureRemediation(kind) {
+  if (kind === "dependency") return "cd frontend && npm ci";
+  if (kind === "browser") {
+    return "Browser runtime unavailable. Run: cd frontend && npx playwright install chromium; alternatively install system Google Chrome.";
+  }
+  throw new TypeError(`Unknown capture failure kind: ${kind}`);
+}
+
 function findPlaywrightNode() {
   if (Number(process.versions.node.split(".")[0]) >= 20) return null;
   const versionsDir = path.join(process.env.NVM_DIR ?? path.join(os.homedir(), ".nvm"), "versions", "node");
@@ -86,7 +94,7 @@ export async function launchPrototypeBrowser() {
     const playwrightURL = new URL("../../frontend/node_modules/playwright/index.mjs", import.meta.url);
     ({ chromium } = await import(playwrightURL.href));
   } catch (error) {
-    const wrapped = new Error("cd frontend && npm ci");
+    const wrapped = new Error(captureRemediation("dependency"));
     wrapped.cause = error;
     throw wrapped;
   }
@@ -97,7 +105,7 @@ export async function launchPrototypeBrowser() {
     try {
       return await chromium.launch({ channel: "chrome", headless: true });
     } catch (channelError) {
-      const wrapped = new Error("cd frontend && npm ci");
+      const wrapped = new Error(captureRemediation("browser"));
       wrapped.cause = new AggregateError([bundledError, channelError], "No Chromium runtime available");
       throw wrapped;
     }
