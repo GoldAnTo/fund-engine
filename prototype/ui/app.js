@@ -344,8 +344,59 @@
     `;
   }
 
+  function researchStepState(step, currentStep) {
+    if (step < currentStep) return "completed";
+    if (step === currentStep) return "current";
+    return "upcoming";
+  }
+
+  function renderResearchStep(label, step, currentStep) {
+    const state = researchStepState(step, currentStep);
+    return `<li data-step-state="${state}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHTML(label)}</li>`;
+  }
+
+  function requestedResearchStep() {
+    return new URLSearchParams(window.location.search).get("step") === "3" ? 3 : 2;
+  }
+
+  function renderThesisStage(view, currentStep) {
+    if (currentStep > 2) {
+      return `
+        <section class="thesis-complete-summary" aria-labelledby="confirmed-theses-title">
+          <div><p>第 2 步 · 已完成</p><h2 id="confirmed-theses-title">初始命题已确认</h2></div>
+          <ol>${view.theses.map((thesis) => `<li>${escapeHTML(thesis.title)}</li>`).join("")}</ol>
+        </section>
+      `;
+    }
+
+    return `
+      <form class="thesis-form" aria-label="初始命题" method="get">
+        <input type="hidden" name="screen" value="new-research">
+        <input type="hidden" name="step" value="3">
+        <div class="form-heading">
+          <div><p>第 2 步 · 当前</p><h2>初始命题</h2></div>
+          <div class="form-guidance">
+            <strong>初始命题支持 1–3 条</strong>
+            <p>先写清什么会支持，什么会推翻，以及下次去哪里验证。</p>
+          </div>
+        </div>
+        <div class="thesis-editors">
+          ${view.theses.map((thesis, index) => renderThesisEditor(thesis, index, view.studyRange, view.case.aiLabel)).join("")}
+        </div>
+        <div class="form-actions">
+          <p class="thesis-limit-note" id="thesis-limit-description">已达 3 条上限；删除或合并后可新增</p>
+          <button class="secondary-action" type="button">AI 协助拆分</button>
+          <button class="secondary-action" type="button" disabled aria-describedby="thesis-limit-description">新增命题</button>
+          <button class="primary-action" data-primary-action type="submit">确认命题并继续</button>
+        </div>
+      </form>
+    `;
+  }
+
   function renderNewResearch() {
     const view = buildNewResearchViewModel(data);
+    const currentStep = requestedResearchStep();
+    const assetsAreCurrent = currentStep === 3;
     return `
       <main class="screen new-research-screen" data-screen="new-research">
         <header class="new-research-heading">
@@ -359,10 +410,10 @@
 
         <nav class="step-navigation" aria-label="新建研究步骤">
           <ol data-research-steps>
-            <li data-step-state="completed">研究问题</li>
-            <li data-step-state="current" aria-current="step">初始命题</li>
-            <li data-step-state="upcoming">已有资产</li>
-            <li data-step-state="upcoming">研究计划</li>
+            ${renderResearchStep("研究问题", 1, currentStep)}
+            ${renderResearchStep("初始命题", 2, currentStep)}
+            ${renderResearchStep("已有资产", 3, currentStep)}
+            ${renderResearchStep("研究计划", 4, currentStep)}
           </ol>
         </nav>
 
@@ -381,23 +432,11 @@
           </dl>
         </section>
 
-        <form class="thesis-form" aria-label="初始命题">
-          <div class="form-heading">
-            <div><p>第 2 步 · 当前</p><h2>初始命题</h2></div>
-            <p>先写清什么会支持，什么会推翻，以及下次去哪里验证。</p>
-          </div>
-          <div class="thesis-editors">
-            ${view.theses.map((thesis, index) => renderThesisEditor(thesis, index, view.studyRange, view.case.aiLabel)).join("")}
-          </div>
-          <div class="form-actions">
-            <button class="secondary-action" type="button">AI 协助拆分</button>
-            <button class="primary-action" data-primary-action type="submit">确认命题并继续</button>
-          </div>
-        </form>
+        ${renderThesisStage(view, currentStep)}
 
-        <div class="step-previews">
-          <section data-step-preview="assets" aria-labelledby="assets-preview-title">
-            <header><div><p>第 3 步</p><h2 id="assets-preview-title">已有资产</h2></div><span data-preview-state>尚未完成 · 下一步预览</span></header>
+        <div class="step-previews${assetsAreCurrent ? " has-current-stage" : ""}">
+          <section class="${assetsAreCurrent ? "current-step-stage" : ""}" data-step-stage="assets"${assetsAreCurrent ? " data-step-current" : ' data-step-preview="assets"'} aria-labelledby="assets-preview-title">
+            <header><div><p>第 3 步${assetsAreCurrent ? " · 当前" : ""}</p><h2 id="assets-preview-title">已有资产</h2></div>${assetsAreCurrent ? '<span data-current-stage>当前阶段 · 选择可复用资产</span>' : '<span data-preview-state>尚未完成 · 下一步预览</span>'}</header>
             <ul>
               <li><strong>可复用文档</strong><span>${view.assets.documents.length} 份</span></li>
               <li><strong>可复用陈述</strong><span>${view.assets.statements.length} 条</span></li>

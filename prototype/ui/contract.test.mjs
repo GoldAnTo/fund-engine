@@ -673,7 +673,7 @@ async function assertFinalCaptureRegistryContract() {
   }
 }
 
-async function assertNewResearchProductContract(page, marker) {
+async function assertNewResearchProductContract(page, marker, baseURL) {
   const creationContext = await page.evaluate(() => ({
     view: window.PROTOTYPE_NEW_RESEARCH?.buildNewResearchViewModel(window.PROTOTYPE_DATA),
     fixtureCase: window.PROTOTYPE_DATA.case,
@@ -729,6 +729,7 @@ async function assertNewResearchProductContract(page, marker) {
 
   const form = marker.getByRole("form", { name: "初始命题" });
   assert.equal(await form.count(), 1, "step 2 must be one semantic named form");
+  assert.equal(await form.getByText("初始命题支持 1–3 条", { exact: true }).count(), 1, "new-research must visibly explain the 1–3 initial Thesis range");
   const editors = form.locator("fieldset[data-thesis-editor]");
   assert.equal(await editors.count(), 3, "new-research must use all three fixture theses");
   const fixtureTheses = await page.evaluate(() => window.PROTOTYPE_DATA.theses.map((thesis) => ({
@@ -751,6 +752,16 @@ async function assertNewResearchProductContract(page, marker) {
     assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
   }
   assert.equal(await form.getByRole("button", { name: "AI 协助拆分", exact: true }).count(), 1, "AI help must be a single secondary action");
+  const addThesis = form.getByRole("button", { name: "新增命题", exact: true });
+  assert.equal(await addThesis.count(), 1, "thesis actions must expose a real add control");
+  assert.ok(await addThesis.isDisabled(), "add Thesis must be disabled when all three fixture theses are present");
+  const addDescriptionId = await addThesis.getAttribute("aria-describedby");
+  assert.ok(addDescriptionId, "disabled add Thesis control must reference an accessible explanation");
+  assert.equal(
+    (await form.locator(`#${addDescriptionId}`).textContent()).trim(),
+    "已达 3 条上限；删除或合并后可新增",
+    "disabled add Thesis explanation must state how the limit can be cleared",
+  );
   const primaryActions = form.locator("[data-primary-action]");
   assert.equal(await primaryActions.count(), 1, "step 2 must expose one primary form action");
   assert.equal((await primaryActions.textContent()).trim(), "确认命题并继续");
@@ -785,6 +796,51 @@ async function assertNewResearchProductContract(page, marker) {
   assert.ok(narrowLayout.bodyOverflow <= 0 && narrowLayout.documentOverflow <= 0, `new-research must fit 375px without horizontal overflow: ${JSON.stringify(narrowLayout)}`);
   assert.ok(narrowLayout.formBottom > 0 && narrowLayout.formBottom <= narrowLayout.documentHeight, "new-research form action must remain reachable at 375px");
   await page.setViewportSize({ width: 1600, height: 1000 });
+
+  async function assertStepThreeState(trigger) {
+    await trigger();
+    const url = new URL(page.url());
+    assert.equal(url.searchParams.get("screen"), "new-research", "form progression must preserve the new-research route");
+    assert.equal(url.searchParams.get("step"), "3", "form progression must set step=3");
+    const progressedMarker = page.locator('[data-screen="new-research"]');
+    const progressedSteps = progressedMarker.locator("ol[data-research-steps] > li");
+    assert.equal(await progressedSteps.locator('[aria-current="step"]').count(), 0, "aria-current must remain on the step item after progression");
+    assert.equal(await progressedMarker.locator('ol[data-research-steps] > li[aria-current="step"]').count(), 1, "step 3 must be the sole current step");
+    assert.equal(await progressedSteps.nth(1).getAttribute("data-step-state"), "completed", "step 2 must become completed after progression");
+    assert.equal(await progressedSteps.nth(2).getAttribute("aria-current"), "step", "step 3 must become current after progression");
+    assert.equal(await progressedSteps.nth(2).getAttribute("data-step-state"), "current");
+    const assetStage = progressedMarker.locator('[data-step-stage="assets"]');
+    assert.equal(await assetStage.count(), 1, "step 3 must render the existing-assets section as a stage");
+    assert.equal(await assetStage.getAttribute("data-step-preview"), null, "current assets stage must not remain marked as a preview");
+    assert.equal(await assetStage.locator("[data-preview-state]").count(), 0, "current assets stage must not carry a not-complete preview badge");
+    assert.equal(await assetStage.locator("[data-current-stage]").count(), 1, "current assets stage must visibly explain its current state");
+  }
+
+  await assertStepThreeState(async () => {
+    await Promise.all([
+      page.waitForURL((url) => url.searchParams.get("screen") === "new-research" && url.searchParams.get("step") === "3"),
+      primaryActions.click(),
+    ]);
+  });
+
+  await page.goto(`${baseURL}/?screen=new-research`, { waitUntil: "networkidle" });
+  await assertStepThreeState(async () => {
+    const observationPeriod = page.locator('[data-screen="new-research"] input[id$="-period"]').first();
+    await observationPeriod.focus();
+    await Promise.all([
+      page.waitForURL((url) => url.searchParams.get("screen") === "new-research" && url.searchParams.get("step") === "3"),
+      page.keyboard.press("Enter"),
+    ]);
+  });
+
+  await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
+  await assertStepThreeState(async () => {});
+
+  await page.goto(`${baseURL}/?screen=new-research&step=not-a-step`, { waitUntil: "networkidle" });
+  const fallbackSteps = page.locator('[data-screen="new-research"] ol[data-research-steps] > li');
+  assert.equal(await fallbackSteps.nth(1).getAttribute("aria-current"), "step", "invalid step must safely fall back to step 2");
+  assert.equal(await fallbackSteps.nth(1).getAttribute("data-step-state"), "current");
+  assert.equal(await fallbackSteps.nth(2).getAttribute("data-step-state"), "upcoming");
 }
 
 async function assertTeardownContract() {
@@ -1062,7 +1118,7 @@ async function assertBrowserContract(routes) {
         await page.evaluate(() => { document.body.style.minHeight = ""; });
       }
       if (screen === "new-research") {
-        await assertNewResearchProductContract(page, marker);
+        await assertNewResearchProductContract(page, marker, baseURL);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
