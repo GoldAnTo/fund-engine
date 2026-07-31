@@ -28,6 +28,8 @@ SourceStatementKind = Literal[
 ]
 ReviewOutcome = Literal["confirmed", "modified", "rejected"]
 ReviewState = Literal["machine_generated", "reviewed", "rejected"]
+AIRunKind = Literal["extract", "propose", "assess"]
+AIRunStatus = Literal["success", "failed"]
 
 IMMUTABLE_TABLES = frozenset(
     {
@@ -49,6 +51,7 @@ IMMUTABLE_TABLES = frozenset(
         "valuation_snapshots",
         "holding_disclosures",
         "theme_roles",
+        "ai_runs",
     }
 )
 
@@ -390,4 +393,30 @@ class ThemeRole(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
+    )
+
+
+class AIRun(Base):
+    """Append-only audit record for every AI research-engine invocation.
+
+    Each extract/propose/assess call writes exactly one row, capturing the
+    model and prompt versions used, a summary of inputs/outputs, and the
+    final status (success or failed).  Failed runs carry the error message.
+    """
+
+    __tablename__ = "ai_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_ref: Mapped[dict] = mapped_column(JSON, nullable=False)
+    output_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
