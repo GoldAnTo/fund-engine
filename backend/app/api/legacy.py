@@ -1,8 +1,8 @@
-"""Research-case read endpoints.
+"""Legacy research-case read endpoints (pre-v1).
 
-Exposes the focused workbench read model.  The workbench is assembled directly
-from the append-only ledger; it never depends on the Neo4j projection and never
-exposes a recommendation, target price, or buy/sell signal.
+The workbench read model is assembled directly from the append-only ledger.
+This route is kept for backward compatibility and is intentionally isolated
+from the versioned /api/v1 contract. New consumers should use /api/v1.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services.workbench import WorkbenchService
 
-router = APIRouter(prefix="/api/research-cases", tags=["research-cases"])
+router = APIRouter(prefix="/api/research-cases", tags=["research-cases-legacy"])
 
 
 @router.get("/{case_id}/workbench")

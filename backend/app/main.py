@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.cases import router as cases_router
+from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.errors import NotFoundError, ValidationFailedError
 
