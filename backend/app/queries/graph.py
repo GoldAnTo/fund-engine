@@ -69,6 +69,7 @@ class RelationshipGraphQueries:
         nodes: dict[str, GraphNodeDTO] = {}
         edges: list[GraphEdgeDTO] = []
         adjacency: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        seen_edges: set[str] = set()
 
         def add_node(obj_id, kind: str, label: str, **props) -> str:
             key = str(obj_id)
@@ -79,9 +80,13 @@ class RelationshipGraphQueries:
             return key
 
         def add_edge(edge_id, semantic_kind: str, source, target, **extra) -> None:
+            eid = str(edge_id)
+            if eid in seen_edges:
+                return
+            seen_edges.add(eid)
             src, tgt = str(source), str(target)
             edge = GraphEdgeDTO(
-                id=str(edge_id),
+                id=eid,
                 semantic_kind=semantic_kind,
                 source=src,
                 target=tgt,
@@ -142,21 +147,36 @@ class RelationshipGraphQueries:
                     available_at=_iso(link.available_at),
                 )
 
-            prev_step = None
-            for step in self._research.causal_steps_for_thesis(
+            steps = self._research.causal_steps_for_thesis(
                 thesis.id, cutoff=basis.cutoff
-            ):
-                add_node(
-                    step.id, "step", step.description, sequence=step.sequence
+            )
+            step_ids = [s.id for s in steps]
+            for step in steps:
+                add_node(step.id, "step", step.description, sequence=step.sequence)
+                # Deterministic thesis->step containment attaches the causal
+                # chain to the main graph (derived from CausalStep.thesis_id,
+                # NOT a fabricated causal relation).
+                add_edge(
+                    f"contains_step:{thesis.id}:{step.id}",
+                    "contains_step",
+                    thesis.id,
+                    step.id,
                 )
-                if prev_step is not None:
-                    add_edge(
-                        f"causal:{prev_step.id}:{step.id}",
-                        "causal",
-                        prev_step.id,
-                        step.id,
-                    )
-                prev_step = step
+            # Real causal edges only, with ledger ID, direction, rationale and
+            # review state. Never infer a relation from step sequence.
+            for ce in self._research.causal_edges_for_steps(step_ids):
+                if _to_aware(ce.created_at) > basis.cutoff:
+                    continue
+                if ce.review_state not in allowed_states:
+                    continue
+                add_edge(
+                    ce.id,
+                    "causal",
+                    ce.source_step_id,
+                    ce.target_step_id,
+                    review_state=ce.review_state,
+                    properties={"rationale": ce.rationale},
+                )
 
         # 4-5. theme roles -> company -> stock (company_stock edges)
         cutoff_date = basis.cutoff.date()
@@ -165,6 +185,7 @@ class RelationshipGraphQueries:
             for tr in self._instruments.theme_roles_for_case(case.id)
             if (tr.applicable_from is None or tr.applicable_from <= cutoff_date)
             and (tr.applicable_to is None or tr.applicable_to >= cutoff_date)
+            and _to_aware(tr.created_at) <= basis.cutoff
         ]
         company_ids = {tr.company_id for tr in theme_roles}
         companies = {
@@ -200,7 +221,11 @@ class RelationshipGraphQueries:
                 for disclosure in self._instruments.holding_disclosures_for_stocks(
                     [stock.id]
                 ):
-                    if _to_aware(disclosure.published_at) > basis.cutoff:
+                    if (
+                        _to_aware(disclosure.published_at) > basis.cutoff
+                        or _to_aware(disclosure.acquired_at) > basis.cutoff
+                        or _to_aware(disclosure.created_at) > basis.cutoff
+                    ):
                         continue
                     fund = self._instruments.fund_by_id(disclosure.fund_id)
                     if fund is None:
@@ -221,7 +246,10 @@ class RelationshipGraphQueries:
                 for snap in self._instruments.valuation_snapshots_for_stocks(
                     [stock.id]
                 ):
-                    if snap.as_of_date > cutoff_date:
+                    if (
+                        snap.as_of_date > cutoff_date
+                        or _to_aware(snap.created_at) > basis.cutoff
+                    ):
                         continue
                     add_node(
                         snap.id,
