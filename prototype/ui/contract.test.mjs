@@ -233,6 +233,7 @@ export function assertFixtureContract(data) {
 
   assert.equal(data.theses.length, 3, "fixture must contain exactly three theses");
   for (const thesis of data.theses) {
+    assert.equal(thesis.draftOrigin, "ai", `${thesis.id} fixture draft must explicitly declare AI origin`);
     for (const field of ["supportCondition", "falsifier", "nextValidationEvent"]) {
       assert.ok(thesis[field], `${thesis.id} must include ${field}`);
     }
@@ -804,6 +805,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await form.getByText("初始命题支持 1–3 条", { exact: true }).count(), 1, "new-research must visibly explain the 1–3 initial Thesis range");
   const editors = form.locator("fieldset[data-thesis-editor]");
   assert.equal(await editors.count(), 3, "new-research must use all three fixture theses");
+  assert.equal(await form.getByText("AI 草案 · 未经人工复核", { exact: true }).count(), 3, "default fixture editors must expose exactly three AI-origin labels");
   const fixtureTheses = await page.evaluate(() => window.PROTOTYPE_DATA.theses.map((thesis) => ({
     title: thesis.title,
     statement: thesis.statement,
@@ -821,6 +823,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
       assert.ok(editorText.includes(value) || await editor.locator(`[value="${value.replaceAll('"', '\\"')}"]`).count(), `thesis editor ${index + 1} must use fixture value ${value}`);
     }
     assert.equal(await editor.locator("label").count() >= 5, true, `thesis editor ${index + 1} fields must use labels`);
+    assert.equal(await editor.getAttribute("data-draft-origin"), "ai", `fixture thesis ${index + 1} must preserve explicit AI origin`);
     assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
   }
   const draftControls = form.locator('input:not([type="hidden"]), textarea');
@@ -968,6 +971,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(savedTwoRecord.cutoff, "2025-06-30", "confirmation record must bind to the evidence cutoff");
   assert.equal(savedTwoRecord.researchPlanRevision, "RP-AIC-2025-01-v1", "confirmation record must bind to the research plan revision");
   assert.equal(savedTwoRecord.theses.length, 2, "confirmation validator must accept two complete Thesis drafts");
+  assert.deepEqual(savedTwoRecord.theses.map((thesis) => thesis.draftOrigin), ["ai", "ai"], "confirmation must preserve AI origin after removal");
   assert.equal(savedTwoRecord.theses[0].statement, clickEdit, "confirmation record must normalize surrounding whitespace");
 
   await page.reload({ waitUntil: "networkidle" });
@@ -994,6 +998,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(oneEdit);
   const savedOneRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
   assert.equal(savedOneRecord.theses.length, 1, "confirmation validator must accept one complete Thesis draft");
+  assert.equal(savedOneRecord.theses[0].draftOrigin, "ai", "one-Thesis confirmation must preserve AI origin");
   await page.reload({ waitUntil: "networkidle" });
   await assertStepThreeState(oneEdit);
   await page.goBack({ waitUntil: "networkidle" });
@@ -1016,6 +1021,10 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await page.keyboard.press("Enter");
   assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 2, "keyboard add must restore a second blank Thesis editor");
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "statement", "adding a Thesis must focus its first draft field");
+  const firstHumanEditor = oneThesisForm.locator("[data-thesis-editor]").last();
+  assert.equal(await firstHumanEditor.getAttribute("data-draft-origin"), "human", "manual add must create an explicit human-origin draft");
+  assert.equal((await firstHumanEditor.locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
+  assert.equal(await firstHumanEditor.locator("[data-ai-suggestion-label]").count(), 0, "a human-origin fieldset must contain no AI-authorship label");
   await oneThesisForm.locator("[data-primary-action]").click();
   assert.equal(new URL(page.url()).search, "?screen=new-research", "an incomplete added Thesis must not advance the workflow");
   assert.equal(
@@ -1026,6 +1035,10 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "A");
   await addFromOne.click();
   assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 3, "pointer add must restore the three-Thesis maximum");
+  const secondHumanEditor = oneThesisForm.locator("[data-thesis-editor]").last();
+  assert.equal(await secondHumanEditor.getAttribute("data-draft-origin"), "human");
+  assert.equal((await secondHumanEditor.locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
+  assert.equal(await secondHumanEditor.locator("[data-ai-suggestion-label]").count(), 0);
   await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "B");
   const restoredIds = await oneThesisForm.locator("[data-thesis-editor]").evaluateAll((items) => items.map((item) => item.dataset.thesisId));
   assert.equal(new Set(restoredIds).size, 3, "restored Thesis editors must use unique draft IDs");
@@ -1042,6 +1055,16 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   await assertStepThreeState(enterEdit);
   const savedRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
   assert.equal(savedRecord.theses.length, 3, "confirmation validator must accept three complete unique Thesis drafts");
+  assert.deepEqual(savedRecord.theses.map((thesis) => thesis.draftOrigin), ["ai", "human", "human"], "confirmation must preserve mixed trusted origins");
+
+  await page.reload({ waitUntil: "networkidle" });
+  await assertStepThreeState(enterEdit);
+  await page.goBack({ waitUntil: "networkidle" });
+  const restoredOriginEditors = page.locator('[data-screen="new-research"] [data-thesis-editor]');
+  assert.deepEqual(await restoredOriginEditors.evaluateAll((items) => items.map((item) => item.dataset.draftOrigin)), ["ai", "human", "human"], "Back after refresh must preserve each draft origin");
+  assert.equal(await restoredOriginEditors.nth(0).locator("[data-ai-suggestion-label]").count(), 1);
+  assert.equal(await restoredOriginEditors.nth(1).locator("[data-ai-suggestion-label]").count(), 0);
+  assert.equal((await restoredOriginEditors.nth(1).locator("[data-draft-origin-label]").textContent()).trim(), "人工草稿 · 待确认");
 
   await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
   await assertStepThreeState(enterEdit);
@@ -1079,6 +1102,8 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     JSON.stringify({ ...savedRecord, snapshotId: "RS-STALE" }),
     JSON.stringify({ ...savedRecord, cutoff: "2025-03-31" }),
     JSON.stringify({ ...savedRecord, researchPlanRevision: "RP-STALE" }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, draftOrigin: "robot" } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, draftOrigin: undefined } : thesis) }),
     JSON.stringify({ ...savedRecord, theses: [] }),
     JSON.stringify({ ...savedRecord, theses: [...savedRecord.theses, { ...savedRecord.theses[0], id: "TH-DRAFT-OVERFLOW" }] }),
     JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 1 ? { ...thesis, id: savedRecord.theses[0].id } : thesis) }),

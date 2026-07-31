@@ -43,6 +43,7 @@
     theses: [
       {
         id: "TH-AIC-01",
+        draftOrigin: "ai",
         title: "云厂商资本开支形成持续算力需求",
         statement: "主要云厂商已披露的资本开支与 AI 基础设施投入在截止日前保持扩张。",
         supportCondition: "至少两家主要云厂商在正式披露中同时给出资本开支扩张与 AI 基础设施用途。",
@@ -53,6 +54,7 @@
       },
       {
         id: "TH-AIC-02",
+        draftOrigin: "ai",
         title: "先进芯片与互连供给决定交付斜率",
         statement: "晶圆、先进封装与高速互连约束影响系统交付节奏，不能仅凭需求推断收入。",
         supportCondition: "供应商披露扩产、交期或产能利用信息，并能与交付指标交叉核对。",
@@ -63,6 +65,7 @@
       },
       {
         id: "TH-AIC-03",
+        draftOrigin: "ai",
         title: "订单到收入的传导需要独立披露验证",
         statement: "只有经审核的订单、交付、收入确认链条，才能支持需求向公司业绩传导。",
         supportCondition: "同一主体的订单或积压、实际交付与分部收入均有点时披露，且口径可对齐。",

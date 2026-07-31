@@ -331,12 +331,17 @@
 
     const normalizedTheses = [];
     const observedIds = new Set();
+    const fixtureTheses = indexById(fixture.theses);
     for (let index = 0; index < candidate.theses.length; index += 1) {
       const draft = candidate.theses[index];
       const id = normalizeDraftText(draft?.id);
       if (!id || !/^[A-Z0-9][A-Z0-9-]{2,63}$/u.test(id) || observedIds.has(id)) return undefined;
       observedIds.add(id);
-      const normalized = { id };
+      const trustedFixtureOrigin = fixtureTheses.get(id)?.draftOrigin;
+      const draftOrigin = draft?.draftOrigin;
+      if (!new Set(["ai", "human"]).has(draftOrigin)) return undefined;
+      if (trustedFixtureOrigin ? draftOrigin !== trustedFixtureOrigin : draftOrigin !== "human") return undefined;
+      const normalized = { id, draftOrigin };
       for (const field of DRAFT_FIELDS) {
         normalized[field] = normalizeDraftText(draft[field]);
         if (!normalized[field]) return undefined;
@@ -411,6 +416,7 @@
     const fixtureTheses = indexById(fixture.theses);
     const thesisDrafts = confirmation?.theses ?? fixture.theses.map((thesis) => ({
       id: thesis.id,
+      draftOrigin: thesis.draftOrigin,
       statement: thesis.statement,
       observationPeriod: studyRange,
       supportCondition: thesis.supportCondition,
@@ -452,11 +458,13 @@
 
   function renderThesisEditor(thesis, index, aiLabel) {
     const fieldPrefix = `thesis-${thesis.id.toLowerCase()}`;
+    const isAiDraft = thesis.draftOrigin === "ai";
+    const originLabel = isAiDraft ? aiLabel : "人工草稿 · 待确认";
     return `
-      <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}">
+      <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}" data-draft-origin="${escapeHTML(thesis.draftOrigin)}">
         <legend><span data-thesis-number>命题 ${index + 1}</span>${escapeHTML(thesis.title)}</legend>
         <div class="thesis-editor-tools">
-          <span class="ai-suggestion-label" data-ai-suggestion-label>${escapeHTML(aiLabel)}</span>
+          <span class="draft-origin-label" data-draft-origin-label${isAiDraft ? " data-ai-suggestion-label" : ""}>${escapeHTML(originLabel)}</span>
           <button class="remove-thesis-action" type="button" data-remove-thesis aria-label="删除命题 ${index + 1}" aria-describedby="thesis-minimum-description">删除</button>
         </div>
         <div class="thesis-fields">
@@ -505,6 +513,7 @@
             <li>
               <strong>${escapeHTML(thesis.title)}</strong>
               <span>${escapeHTML(thesis.statement)}</span>
+              <small data-draft-origin-label>${escapeHTML(thesis.draftOrigin === "ai" ? view.case.aiLabel : "人工草稿 · 待确认")}</small>
               <small>观察期间：${escapeHTML(thesis.observationPeriod)}</small>
               <small>支持条件：${escapeHTML(thesis.supportCondition)}</small>
               <small>反证条件：${escapeHTML(thesis.falsifier)}</small>
@@ -615,7 +624,7 @@
 
   function collectConfirmationRecord(form, fixture) {
     const theses = [...form.querySelectorAll("[data-thesis-editor]")].map((editor) => {
-      const draft = { id: editor.dataset.thesisId };
+      const draft = { id: editor.dataset.thesisId, draftOrigin: editor.dataset.draftOrigin };
       for (const field of DRAFT_FIELDS) {
         draft[field] = editor.querySelector(`[data-field="${field}"]`)?.value;
       }
@@ -669,6 +678,7 @@
     form.dataset.nextDraftSequence = String(sequence + 1);
     const blankDraft = {
       id,
+      draftOrigin: "human",
       title: "新增命题",
       statement: "",
       observationPeriod: "",

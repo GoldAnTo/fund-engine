@@ -1011,7 +1011,7 @@ a {
   letter-spacing: .06em;
 }
 
-.ai-suggestion-label {
+.draft-origin-label {
   color: var(--state-ai-draft);
   font-size: 11px;
   font-weight: 750;
@@ -1585,7 +1585,7 @@ a {
     padding-right: 0;
   }
 
-  .ai-suggestion-label {
+  .draft-origin-label {
     position: static;
     display: block;
     margin-top: 4px;
