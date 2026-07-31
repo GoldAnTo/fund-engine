@@ -40,8 +40,11 @@
       permission_gap: "权限缺口",
     }),
     providerNames: Object.freeze({
+      "SEC EDGAR": "监管披露",
+      "Issuer IR": "公司投资者关系披露",
       "Market data quota": "市场数据接口",
       "Licensed holdings feed": "持仓数据接口",
+      "Research operations": "研究资料补录",
     }),
     providerDetails: Object.freeze({
       "Daily call limit exceeded; no inferred replacement values": "当日调用额度已用尽，未使用推测值替代。",
@@ -281,6 +284,143 @@
     `;
   }
 
+  function buildNewResearchViewModel(fixture) {
+    const reviewedLinks = fixture.evidenceLinks.filter((link) => link.reviewState === "reviewed");
+    const providerQueries = fixture.providerRuns.map((run) => (
+      displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口")
+    ));
+
+    return {
+      case: fixture.case,
+      researchPeriod: fixture.case.researchPeriod,
+      studyRange: `${fixture.case.researchPeriod.start} 至 ${fixture.case.researchPeriod.end}`,
+      researchObject: fixture.case.researchObject,
+      phenomenon: fixture.case.phenomenon,
+      theses: fixture.theses,
+      assets: {
+        documents: fixture.documents,
+        statements: fixture.statements,
+        metrics: fixture.metrics,
+        reviewedLinks,
+        relatedCase: fixture.case,
+      },
+      plan: {
+        providerQueries: [...new Set(providerQueries)],
+        resultData: fixture.metrics,
+        gaps: fixture.factors.filter((factor) => ["constraints", "contradiction"].includes(factor.group)),
+      },
+    };
+  }
+
+  function renderThesisEditor(thesis, index, studyRange, aiLabel) {
+    const fieldPrefix = `thesis-${index + 1}`;
+    return `
+      <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}">
+        <legend><span>命题 ${index + 1}</span>${escapeHTML(thesis.title)}</legend>
+        <span class="ai-suggestion-label" data-ai-suggestion-label>${escapeHTML(aiLabel)}</span>
+        <div class="thesis-fields">
+          <label class="statement-field" for="${fieldPrefix}-statement">
+            <span>命题表述</span>
+            <textarea id="${fieldPrefix}-statement" name="${fieldPrefix}-statement" rows="2">${escapeHTML(thesis.statement)}</textarea>
+          </label>
+          <label for="${fieldPrefix}-period">
+            <span>观察期间</span>
+            <input id="${fieldPrefix}-period" name="${fieldPrefix}-period" value="${escapeHTML(studyRange)}">
+          </label>
+          <label for="${fieldPrefix}-support">
+            <span>支持条件</span>
+            <textarea id="${fieldPrefix}-support" name="${fieldPrefix}-support" rows="2">${escapeHTML(thesis.supportCondition)}</textarea>
+          </label>
+          <label for="${fieldPrefix}-falsifier">
+            <span>反证条件</span>
+            <textarea id="${fieldPrefix}-falsifier" name="${fieldPrefix}-falsifier" rows="2">${escapeHTML(thesis.falsifier)}</textarea>
+          </label>
+          <label class="event-field" for="${fieldPrefix}-event">
+            <span>下一验证事件</span>
+            <input id="${fieldPrefix}-event" name="${fieldPrefix}-event" value="${escapeHTML(thesis.nextValidationEvent)}">
+          </label>
+        </div>
+      </fieldset>
+    `;
+  }
+
+  function renderNewResearch() {
+    const view = buildNewResearchViewModel(data);
+    return `
+      <main class="screen new-research-screen" data-screen="new-research">
+        <header class="new-research-heading">
+          <div>
+            <p class="eyebrow">New industry proposition</p>
+            <h1>新建产业研究</h1>
+            <p class="lede">把一个行业判断拆成可验证、可反证的命题；当前仅确认初始命题，不代表系统已得出结论。</p>
+          </div>
+          <span class="draft-boundary">当前阶段 · 命题待人工确认</span>
+        </header>
+
+        <nav class="step-navigation" aria-label="新建研究步骤">
+          <ol data-research-steps>
+            <li data-step-state="completed">研究问题</li>
+            <li data-step-state="current" aria-current="step">初始命题</li>
+            <li data-step-state="upcoming">已有资产</li>
+            <li data-step-state="upcoming">研究计划</li>
+          </ol>
+        </nav>
+
+        <section class="question-summary" data-question-summary aria-labelledby="question-summary-title">
+          <div class="summary-title">
+            <span class="step-status-mark" aria-hidden="true">✓</span>
+            <div><p>第 1 步 · 已完成</p><h2 id="question-summary-title">研究问题摘要</h2></div>
+          </div>
+          <dl>
+            <div class="summary-question"><dt>研究名称</dt><dd>${escapeHTML(view.case.title)}</dd></div>
+            <div class="summary-question"><dt>核心问题</dt><dd>${escapeHTML(view.case.question)}</dd></div>
+            <div><dt>研究对象</dt><dd>${escapeHTML(view.researchObject)}</dd></div>
+            <div><dt>待解释现象</dt><dd>${escapeHTML(view.phenomenon)}</dd></div>
+            <div><dt>研究时间范围</dt><dd data-summary-field="research-range">${escapeHTML(view.studyRange)}</dd></div>
+            <div><dt>证据截止日</dt><dd data-summary-field="evidence-cutoff">仅纳入 ${escapeHTML(view.case.cutoff)} 当日及之前可用证据</dd></div>
+          </dl>
+        </section>
+
+        <form class="thesis-form" aria-label="初始命题">
+          <div class="form-heading">
+            <div><p>第 2 步 · 当前</p><h2>初始命题</h2></div>
+            <p>先写清什么会支持，什么会推翻，以及下次去哪里验证。</p>
+          </div>
+          <div class="thesis-editors">
+            ${view.theses.map((thesis, index) => renderThesisEditor(thesis, index, view.studyRange, view.case.aiLabel)).join("")}
+          </div>
+          <div class="form-actions">
+            <button class="secondary-action" type="button">AI 协助拆分</button>
+            <button class="primary-action" data-primary-action type="submit">确认命题并继续</button>
+          </div>
+        </form>
+
+        <div class="step-previews">
+          <section data-step-preview="assets" aria-labelledby="assets-preview-title">
+            <header><div><p>第 3 步</p><h2 id="assets-preview-title">已有资产</h2></div><span data-preview-state>尚未完成 · 下一步预览</span></header>
+            <ul>
+              <li><strong>可复用文档</strong><span>${view.assets.documents.length} 份</span></li>
+              <li><strong>可复用陈述</strong><span>${view.assets.statements.length} 条</span></li>
+              <li><strong>可复用数据</strong><span>${view.assets.metrics.length} 项</span></li>
+              <li><strong>已复核关系</strong><span>${view.assets.reviewedLinks.length} 条</span></li>
+              <li><strong>相关案例资产</strong><span>${escapeHTML(view.assets.relatedCase.id)}</span></li>
+            </ul>
+          </section>
+          <section data-step-preview="plan" aria-labelledby="plan-preview-title">
+            <header><div><p>第 4 步</p><h2 id="plan-preview-title">研究计划</h2></div><span data-preview-state>尚未完成 · 下一步预览</span></header>
+            <ul>
+              <li><strong>计划内部复用</strong><span>文档、陈述与已复核关系</span></li>
+              <li><strong>提供方查询</strong><span>拟查询：${escapeHTML(view.plan.providerQueries.slice(0, 2).join("、"))}</span></li>
+              <li><strong>正面与反面证据搜索</strong><span>两个方向将同时纳入</span></li>
+              <li><strong>结果数据</strong><span>拟提取：${escapeHTML(view.plan.resultData.map((metric) => metric.value).join(" · "))}</span></li>
+              <li><strong>当前缺口</strong><span>${escapeHTML(view.plan.gaps.map((gap) => gap.label).join("、"))}</span></li>
+            </ul>
+          </section>
+        </div>
+      </main>
+    `;
+  }
+
   function renderPlaceholder(screen) {
     const [title, description] = PLACEHOLDERS[screen];
     return `
@@ -299,7 +439,7 @@
 
   const SCREEN_RENDERERS = {
     "overview": renderOverview,
-    "new-research": () => renderPlaceholder("new-research"),
+    "new-research": renderNewResearch,
     "plan": () => renderPlaceholder("plan"),
     "case": () => renderPlaceholder("case"),
     "graph": () => renderPlaceholder("graph"),
@@ -346,4 +486,5 @@
   renderShell(requestedScreen());
   window.SCREEN_RENDERERS = SCREEN_RENDERERS;
   window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
+  window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel });
 }());

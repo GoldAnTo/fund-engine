@@ -125,6 +125,21 @@ export function assertFixtureContract(data) {
   assert.equal(Object.keys(data).sort().join(","), expectedKeys.join(","), "fixture must expose exactly the 12 contracted top-level keys");
   assert.equal(data.case.cutoff, "2025-06-30", "fixture cutoff must remain frozen at 2025-06-30");
   assert.equal(data.case.snapshotId, "RS-2025-06-30-v3", "fixture current snapshot must remain RS-2025-06-30-v3");
+  assert.equal(
+    data.case.researchObject,
+    "从云厂商资本开支，经芯片、互连与系统交付，到分部收入的 AI 算力产业链",
+    "fixture must expose the approved AI-compute research object",
+  );
+  assert.equal(
+    data.case.phenomenon,
+    "AI 资本开支持续扩张，但订单、交付与收入确认的节奏出现分化",
+    "fixture must expose the approved phenomenon to explain",
+  );
+  assert.equal(data.case.researchPeriod?.start, "2025-01-01", "fixture must expose the approved research period start");
+  assert.equal(data.case.researchPeriod?.end, "2027-12-31", "fixture must expose the approved research period end");
+  assert.ok(data.case.researchPeriod.start <= data.case.researchPeriod.end, "research period start must not exceed its end");
+  assert.notEqual(data.case.researchPeriod.start, data.snapshots.at(-1).cutoff, "research period start must not be synthesized from a prior snapshot cutoff");
+  assert.notEqual(data.case.researchPeriod.end, data.case.cutoff, "research period end must remain independent from the evidence cutoff");
 
   const idCollections = [
     "theses",
@@ -644,13 +659,132 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型1.png"),
     "overview must map exactly to prototype/设计原型1.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => screen !== "overview")) {
+  assert.equal(
+    captureTargetForScreen("new-research"),
+    path.resolve(UI_DIR, "../设计原型3-新建研究.png"),
+    "new-research must map exactly to prototype/设计原型3-新建研究.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertNewResearchProductContract(page, marker) {
+  const creationContext = await page.evaluate(() => ({
+    view: window.PROTOTYPE_NEW_RESEARCH?.buildNewResearchViewModel(window.PROTOTYPE_DATA),
+    fixtureCase: window.PROTOTYPE_DATA.case,
+    snapshotCutoffs: window.PROTOTYPE_DATA.snapshots.map((snapshot) => snapshot.cutoff),
+  }));
+  assert.equal(creationContext.view.researchObject, creationContext.fixtureCase.researchObject, "creation screen must render researchObject directly from the case fixture");
+  assert.equal(creationContext.view.phenomenon, creationContext.fixtureCase.phenomenon, "creation screen must render phenomenon directly from the case fixture");
+  assert.deepEqual(creationContext.view.researchPeriod, creationContext.fixtureCase.researchPeriod, "creation screen must preserve the explicit researchPeriod fields");
+  assert.equal(creationContext.view.studyRange, "2025-01-01 至 2027-12-31", "creation screen must format the approved independent research period");
+  assert.ok(!creationContext.snapshotCutoffs.includes(creationContext.fixtureCase.researchPeriod.start), "creation period start must not come from snapshot cutoffs");
+  assert.ok(!creationContext.snapshotCutoffs.includes(creationContext.fixtureCase.researchPeriod.end), "creation period end must not come from snapshot cutoffs");
+  const stepRail = marker.locator("ol[data-research-steps]");
+  assert.equal(await stepRail.count(), 1, "new-research must expose one ordered four-step rail");
+  const steps = stepRail.locator(":scope > li");
+  assert.equal(await steps.count(), 4, "new-research must expose exactly four ordered steps");
+  assert.deepEqual(
+    (await steps.allTextContents()).map((text) => text.trim()),
+    ["研究问题", "初始命题", "已有资产", "研究计划"],
+    "new-research step labels and order are contractual",
+  );
+  assert.equal(await steps.filter({ has: page.locator('[aria-current="step"]') }).count(), 0, "aria-current belongs on the active step item itself");
+  assert.equal(await steps.locator('[aria-current="step"]').count(), 0, "step descendants must not own aria-current");
+  assert.equal(await steps.filter({ hasNot: page.locator("*") }).count(), 4, "step labels must remain direct readable text");
+  assert.equal(await steps.nth(1).getAttribute("aria-current"), "step", "step 2 must be the current step");
+  assert.equal(await steps.nth(0).getAttribute("data-step-state"), "completed", "step 1 must be explicitly completed");
+  assert.equal(await steps.nth(1).getAttribute("data-step-state"), "current", "step 2 must be explicitly current");
+  assert.equal(await steps.nth(2).getAttribute("data-step-state"), "upcoming", "step 3 must remain upcoming");
+  assert.equal(await steps.nth(3).getAttribute("data-step-state"), "upcoming", "step 4 must remain upcoming");
+
+  const summary = marker.locator("[data-question-summary]");
+  assert.equal(await summary.count(), 1, "completed research question must be summarized once");
+  const summaryText = await summary.textContent();
+  for (const fact of [
+    "研究名称",
+    "AI 算力需求能否穿透至可验证的收入与持仓表达",
+    "核心问题",
+    "研究对象",
+    "从云厂商资本开支，经芯片、互连与系统交付，到分部收入的 AI 算力产业链",
+    "待解释现象",
+    "AI 资本开支持续扩张，但订单、交付与收入确认的节奏出现分化",
+    "研究时间范围",
+    "2025-01-01 至 2027-12-31",
+    "证据截止日",
+    "2025-06-30",
+  ]) {
+    assert.ok(summaryText.includes(fact), `question summary must visibly include ${fact}`);
+  }
+  assert.notEqual(
+    (await summary.locator('[data-summary-field="research-range"]').textContent()).trim(),
+    (await summary.locator('[data-summary-field="evidence-cutoff"]').textContent()).trim(),
+    "research time range and evidence cutoff must remain distinct fields",
+  );
+
+  const form = marker.getByRole("form", { name: "初始命题" });
+  assert.equal(await form.count(), 1, "step 2 must be one semantic named form");
+  const editors = form.locator("fieldset[data-thesis-editor]");
+  assert.equal(await editors.count(), 3, "new-research must use all three fixture theses");
+  const fixtureTheses = await page.evaluate(() => window.PROTOTYPE_DATA.theses.map((thesis) => ({
+    title: thesis.title,
+    statement: thesis.statement,
+    supportCondition: thesis.supportCondition,
+    falsifier: thesis.falsifier,
+    nextValidationEvent: thesis.nextValidationEvent,
+  })));
+  for (let index = 0; index < fixtureTheses.length; index += 1) {
+    const editor = editors.nth(index);
+    const editorText = await editor.textContent();
+    for (const label of ["观察期间", "支持条件", "反证条件", "下一验证事件"]) {
+      assert.ok(editorText.includes(label), `thesis editor ${index + 1} must include ${label}`);
+    }
+    for (const value of Object.values(fixtureTheses[index])) {
+      assert.ok(editorText.includes(value) || await editor.locator(`[value="${value.replaceAll('"', '\\"')}"]`).count(), `thesis editor ${index + 1} must use fixture value ${value}`);
+    }
+    assert.equal(await editor.locator("label").count() >= 5, true, `thesis editor ${index + 1} fields must use labels`);
+    assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
+  }
+  assert.equal(await form.getByRole("button", { name: "AI 协助拆分", exact: true }).count(), 1, "AI help must be a single secondary action");
+  const primaryActions = form.locator("[data-primary-action]");
+  assert.equal(await primaryActions.count(), 1, "step 2 must expose one primary form action");
+  assert.equal((await primaryActions.textContent()).trim(), "确认命题并继续");
+  assert.equal(await primaryActions.getAttribute("type"), "submit");
+
+  for (const preview of ["assets", "plan"]) {
+    const region = marker.locator(`[data-step-preview="${preview}"]`);
+    assert.equal(await region.count(), 1, `new-research must expose the ${preview} compact preview`);
+    assert.equal((await region.locator("[data-preview-state]").textContent()).trim(), "尚未完成 · 下一步预览");
+  }
+  const pageText = await marker.textContent();
+  for (const concept of [
+    "可复用文档", "可复用陈述", "可复用数据", "已复核关系", "相关案例资产",
+    "计划内部复用", "提供方查询", "正面与反面证据搜索", "结果数据", "当前缺口",
+  ]) {
+    assert.ok(pageText.includes(concept), `new-research preview must visibly include ${concept}`);
+  }
+  for (const forbidden of [
+    "awaiting_validation", "pending_review", "reviewed", "quota_failure", "permission_gap",
+    "Daily call limit exceeded", "Current credential lacks historical holdings permission",
+  ]) {
+    assert.ok(!pageText.includes(forbidden), `new-research must not expose internal value: ${forbidden}`);
+  }
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const narrowLayout = await page.evaluate(() => ({
+    bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+    documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    formBottom: document.querySelector('[data-primary-action]').getBoundingClientRect().bottom,
+    documentHeight: document.documentElement.scrollHeight,
+  }));
+  assert.ok(narrowLayout.bodyOverflow <= 0 && narrowLayout.documentOverflow <= 0, `new-research must fit 375px without horizontal overflow: ${JSON.stringify(narrowLayout)}`);
+  assert.ok(narrowLayout.formBottom > 0 && narrowLayout.formBottom <= narrowLayout.documentHeight, "new-research form action must remain reachable at 375px");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertTeardownContract() {
@@ -926,6 +1060,9 @@ async function assertBrowserContract(routes) {
           /Document height 1001 exceeds viewport height 1000/u,
         );
         await page.evaluate(() => { document.body.style.minHeight = ""; });
+      }
+      if (screen === "new-research") {
+        await assertNewResearchProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
