@@ -140,6 +140,31 @@ export function assertFixtureContract(data) {
   assert.ok(data.case.researchPeriod.start <= data.case.researchPeriod.end, "research period start must not exceed its end");
   assert.notEqual(data.case.researchPeriod.start, data.snapshots.at(-1).cutoff, "research period start must not be synthesized from a prior snapshot cutoff");
   assert.notEqual(data.case.researchPeriod.end, data.case.cutoff, "research period end must remain independent from the evidence cutoff");
+  const researchPlan = data.case.researchPlan;
+  assert.ok(researchPlan, "case must expose an explicit researchPlan");
+  assert.equal(
+    Object.keys(researchPlan).sort().join(","),
+    ["currentGapFactorIds", "negativeEvidenceSearches", "plannedProviderQueries", "positiveEvidenceSearches", "resultMetricIds", "reusableAssets", "revision"].sort().join(","),
+    "researchPlan must expose the six explicit planning concerns",
+  );
+  assert.equal(researchPlan.revision, "RP-AIC-2025-01-v1", "researchPlan must expose an explicit immutable revision");
+  assert.equal(
+    Object.keys(researchPlan.reusableAssets).sort().join(","),
+    ["documentIds", "evidenceLinkIds", "metricIds", "relatedCaseIds", "statementIds"].sort().join(","),
+    "researchPlan reusableAssets must retain typed fixture references",
+  );
+  assert.ok(researchPlan.positiveEvidenceSearches.length > 0, "researchPlan must plan positive evidence searches");
+  assert.ok(researchPlan.negativeEvidenceSearches.length > 0, "researchPlan must plan negative evidence searches");
+  assert.equal(
+    researchPlan.plannedProviderQueries.map((query) => query.capability).sort().join(","),
+    ["announcement_filing_fulltext", "fund_holding_detail", "industry_analysis_view"].join(","),
+    "researchPlan must explicitly cover the first-case Juyuan capabilities",
+  );
+  for (const query of researchPlan.plannedProviderQueries) {
+    assert.equal(query.provider, "juyuan", `${query.id} must remain Juyuan-centered`);
+    assert.equal(query.mode, "capability_probe", `${query.id} must remain a capability probe`);
+    assert.equal(query.status, "planned", `${query.id} must remain planned rather than historical success`);
+  }
 
   const idCollections = [
     "theses",
@@ -157,6 +182,26 @@ export function assertFixtureContract(data) {
   const indexes = Object.fromEntries(
     idCollections.map((collectionName) => [collectionName, indexUniqueById(data[collectionName], collectionName)]),
   );
+  const reusableReferences = [
+    ["documentIds", "documents"],
+    ["statementIds", "statements"],
+    ["metricIds", "metrics"],
+    ["evidenceLinkIds", "evidenceLinks"],
+  ];
+  for (const [planField, collectionName] of reusableReferences) {
+    for (const id of researchPlan.reusableAssets[planField]) {
+      assert.ok(indexes[collectionName].has(id), `researchPlan ${planField} references unknown ${collectionName} record ${id}`);
+    }
+  }
+  for (const caseId of researchPlan.reusableAssets.relatedCaseIds) {
+    assert.equal(caseId, data.case.id, `researchPlan relatedCaseIds references unknown case ${caseId}`);
+  }
+  for (const metricId of researchPlan.resultMetricIds) {
+    assert.ok(indexes.metrics.has(metricId), `researchPlan resultMetricIds references unknown metric ${metricId}`);
+  }
+  for (const factorId of researchPlan.currentGapFactorIds) {
+    assert.ok(indexes.factors.has(factorId), `researchPlan currentGapFactorIds references unknown factor ${factorId}`);
+  }
   for (const collectionName of idCollections) {
     for (const record of data[collectionName]) {
       if (!Object.hasOwn(record, "snapshotMembership")) continue;
@@ -375,6 +420,14 @@ async function assertFixtureDataContract() {
   const multipleValidTargets = structuredClone(data);
   multipleValidTargets.evidenceLinks[0].factorId = "F-D-01";
   assert.throws(() => assertFixtureContract(multipleValidTargets), /exactly one target reference/u);
+
+  const unknownPlanMetric = structuredClone(data);
+  unknownPlanMetric.case.researchPlan.resultMetricIds = ["M-MISSING"];
+  assert.throws(() => assertFixtureContract(unknownPlanMetric), /researchPlan resultMetricIds references unknown metric M-MISSING/u);
+
+  const historicalProviderSuccess = structuredClone(data);
+  historicalProviderSuccess.case.researchPlan.plannedProviderQueries[0].status = "success";
+  assert.throws(() => assertFixtureContract(historicalProviderSuccess), /must remain planned rather than historical success/u);
 }
 
 function assertAssessmentScoringSemantics() {
@@ -453,6 +506,12 @@ async function assertSourceContract() {
   assert.doesNotMatch(styles, /\.assessment\s*\{[^}]*border-left:/su, "AI assessment must not use a colored side stripe");
   for (const token of ["--action-surface", "--decision-surface", "--status-surface", "--gap-accent", "--provider-accent", "--frozen-accent"]) {
     assert.match(styles, new RegExp(`${token}:`, "u"), `styles must define semantic token ${token}`);
+  }
+  assert.match(styles, /@scope\s*\(\.new-research-screen\)/u, "new-research styles must be isolated beneath the screen root");
+  assert.doesNotMatch(styles, /(^|\n)\.secondary-action/u, "new-research must not leak a generic .secondary-action selector");
+  assert.doesNotMatch(styles, /(^|\n)\.form-actions/u, "new-research must not leak a generic .form-actions selector");
+  for (const token of ["--workflow-border", "--workflow-muted-border", "--workflow-text", "--workflow-surface", "--workflow-hover-border"]) {
+    assert.match(styles, new RegExp(`${token}:`, "u"), `new-research must promote repeated color literals to ${token}`);
   }
   for (const selector of [
     ".primary-action:hover",
@@ -674,8 +733,14 @@ async function assertFinalCaptureRegistryContract() {
 }
 
 async function assertNewResearchProductContract(page, marker, baseURL) {
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload({ waitUntil: "networkidle" });
   const creationContext = await page.evaluate(() => ({
     view: window.PROTOTYPE_NEW_RESEARCH?.buildNewResearchViewModel(window.PROTOTYPE_DATA),
+    viewWithoutProviderRuns: window.PROTOTYPE_NEW_RESEARCH?.buildNewResearchViewModel({
+      ...window.PROTOTYPE_DATA,
+      providerRuns: [],
+    }),
     fixtureCase: window.PROTOTYPE_DATA.case,
     snapshotCutoffs: window.PROTOTYPE_DATA.snapshots.map((snapshot) => snapshot.cutoff),
   }));
@@ -685,6 +750,8 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(creationContext.view.studyRange, "2025-01-01 至 2027-12-31", "creation screen must format the approved independent research period");
   assert.ok(!creationContext.snapshotCutoffs.includes(creationContext.fixtureCase.researchPeriod.start), "creation period start must not come from snapshot cutoffs");
   assert.ok(!creationContext.snapshotCutoffs.includes(creationContext.fixtureCase.researchPeriod.end), "creation period end must not come from snapshot cutoffs");
+  assert.deepEqual(creationContext.view.plan, creationContext.viewWithoutProviderRuns.plan, "new-research plan must not derive from providerRuns history");
+  assert.equal(creationContext.view.activeStep, 2, "missing step must normalize to active step 2");
   const stepRail = marker.locator("ol[data-research-steps]");
   assert.equal(await stepRail.count(), 1, "new-research must expose one ordered four-step rail");
   const steps = stepRail.locator(":scope > li");
@@ -706,6 +773,7 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.equal(await defaultStageStatus.count(), 1, "new-research must expose one stage status derived from its active step");
   assert.equal((await defaultStageStatus.textContent()).trim(), "当前阶段 · 命题待人工确认");
   assert.equal((await steps.nth(1).textContent()).trim(), "初始命题", "default header status must align with the current rail item");
+  assert.equal((await marker.locator(".eyebrow").textContent()).trim(), "新建产业命题", "new-research eyebrow must be localized in Chinese");
 
   const summary = marker.locator("[data-question-summary]");
   assert.equal(await summary.count(), 1, "completed research question must be summarized once");
@@ -755,6 +823,11 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.equal(await editor.locator("label").count() >= 5, true, `thesis editor ${index + 1} fields must use labels`);
     assert.equal((await editor.locator("[data-ai-suggestion-label]").textContent()).trim(), "AI 草案 · 未经人工复核");
   }
+  const draftControls = form.locator('input:not([type="hidden"]), textarea');
+  assert.equal(await draftControls.count(), 15, "three Thesis editors must expose exactly five draft controls each");
+  assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => !control.hasAttribute("name"))), "visible draft controls must not submit names into the GET URL");
+  assert.ok(await draftControls.evaluateAll((controls) => controls.every((control) => control.dataset.field)), "visible draft controls must identify fields through data-field");
+  assert.deepEqual(await editors.evaluateAll((items) => items.map((item) => item.dataset.thesisId)), ["TH-AIC-01", "TH-AIC-02", "TH-AIC-03"]);
   assert.equal(await form.getByRole("button", { name: "AI 协助拆分", exact: true }).count(), 1, "AI help must be a single secondary action");
   const addThesis = form.getByRole("button", { name: "新增命题", exact: true });
   assert.equal(await addThesis.count(), 1, "thesis actions must expose a real add control");
@@ -763,9 +836,13 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   assert.ok(addDescriptionId, "disabled add Thesis control must reference an accessible explanation");
   assert.equal(
     (await form.locator(`#${addDescriptionId}`).textContent()).trim(),
-    "已达 3 条上限；删除或合并后可新增",
+    "已达 3 条上限；删除后可新增",
     "disabled add Thesis explanation must state how the limit can be cleared",
   );
+  assert.ok(await form.locator(`#${addDescriptionId}`).isVisible(), "disabled add Thesis description must remain visibly available");
+  const defaultRemoveButtons = form.locator("[data-remove-thesis]");
+  assert.equal(await defaultRemoveButtons.count(), 3, "each default Thesis editor must expose an honest remove control");
+  assert.ok(await defaultRemoveButtons.evaluateAll((buttons) => buttons.every((button) => !button.disabled)), "all remove controls must be enabled while more than one Thesis remains");
   const primaryActions = form.locator("[data-primary-action]");
   assert.equal(await primaryActions.count(), 1, "step 2 must expose one primary form action");
   assert.equal((await primaryActions.textContent()).trim(), "确认命题并继续");
@@ -783,29 +860,73 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
   ]) {
     assert.ok(pageText.includes(concept), `new-research preview must visibly include ${concept}`);
   }
+  for (const plannedCopy of [
+    "聚源 · 行业分析观点 · 能力探测（计划）",
+    "聚源 · 公告财报原文 · 能力探测（计划）",
+    "聚源 · 基金持股明细 · 能力探测（计划）",
+    "NVIDIA 数据中心业务收入 · 391 亿美元 · 2026 财年第一季度",
+    "台积电月度营收同比增幅 · 34.8% · 2025 年 5 月",
+  ]) {
+    assert.ok(pageText.includes(plannedCopy), `new-research must render explicit localized plan copy: ${plannedCopy}`);
+  }
   for (const forbidden of [
     "awaiting_validation", "pending_review", "reviewed", "quota_failure", "permission_gap",
     "Daily call limit exceeded", "Current credential lacks historical holdings permission",
+    "industry_analysis_view", "announcement_filing_fulltext", "fund_holding_detail", "capability_probe",
+    "$39.1bn", "FY2026 Q1",
   ]) {
     assert.ok(!pageText.includes(forbidden), `new-research must not expose internal value: ${forbidden}`);
   }
+
+  const bodySizeSelectors = [
+    ".form-guidance",
+    ".thesis-fields label > span",
+    ".thesis-fields input",
+    ".thesis-fields textarea",
+    ".step-previews li strong",
+    ".step-previews li span",
+  ];
+  for (const selector of bodySizeSelectors) {
+    const sizes = await marker.locator(selector).evaluateAll((elements) => elements.map((element) => Number.parseFloat(getComputedStyle(element).fontSize)));
+    assert.ok(sizes.length > 0 && sizes.every((size) => size >= 13), `${selector} core copy must render at 13px or larger`);
+  }
+
+  const firstStatement = editors.nth(0).locator('[data-field="statement"]');
+  await firstStatement.focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "observationPeriod", "Tab must move from statement to observation period");
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "nextValidationEvent", "Tab must continue to the adjacent next-event field");
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "supportCondition", "Tab must continue through the logical Thesis field order");
+  const aiAssist = form.getByRole("button", { name: "AI 协助拆分", exact: true });
+  await aiAssist.focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), "确认命题并继续", "Tab must skip the disabled add control and reach the primary action");
 
   await page.setViewportSize({ width: 375, height: 812 });
   const narrowLayout = await page.evaluate(() => ({
     bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
     documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    formBottom: document.querySelector('[data-primary-action]').getBoundingClientRect().bottom,
-    documentHeight: document.documentElement.scrollHeight,
   }));
   assert.ok(narrowLayout.bodyOverflow <= 0 && narrowLayout.documentOverflow <= 0, `new-research must fit 375px without horizontal overflow: ${JSON.stringify(narrowLayout)}`);
-  assert.ok(narrowLayout.formBottom > 0 && narrowLayout.formBottom <= narrowLayout.documentHeight, "new-research form action must remain reachable at 375px");
+  for (const target of [
+    primaryActions,
+    marker.locator('[data-step-preview="assets"] header'),
+    marker.locator('[data-step-preview="plan"] header'),
+    marker.locator('[data-step-preview="plan"] li').last(),
+  ]) {
+    await target.scrollIntoViewIfNeeded();
+    const box = await target.boundingBox();
+    assert.ok(box && box.y >= 0 && box.y + box.height <= 812, "each lower new-research control or preview fact must be bringable inside the 375px viewport");
+  }
   await page.setViewportSize({ width: 1600, height: 1000 });
 
-  async function assertStepThreeState(trigger) {
-    await trigger();
+  async function assertStepThreeState(expectedDraftText) {
     const url = new URL(page.url());
-    assert.equal(url.searchParams.get("screen"), "new-research", "form progression must preserve the new-research route");
-    assert.equal(url.searchParams.get("step"), "3", "form progression must set step=3");
+    assert.equal(url.search, "?screen=new-research&step=3", "confirmed progression URL must contain exactly the canonical screen and step keys");
+    assert.deepEqual([...url.searchParams.keys()], ["screen", "step"], "confirmed progression URL must expose no draft field keys");
+    assert.ok(!page.url().includes(encodeURIComponent(expectedDraftText)), "confirmed progression URL must not leak draft text");
     const progressedMarker = page.locator('[data-screen="new-research"]');
     const progressedSteps = progressedMarker.locator("ol[data-research-steps] > li");
     assert.equal(await progressedSteps.locator('[aria-current="step"]').count(), 0, "aria-current must remain on the step item after progression");
@@ -822,39 +943,165 @@ async function assertNewResearchProductContract(page, marker, baseURL) {
     assert.equal(await assetStage.getAttribute("data-step-preview"), null, "current assets stage must not remain marked as a preview");
     assert.equal(await assetStage.locator("[data-preview-state]").count(), 0, "current assets stage must not carry a not-complete preview badge");
     assert.equal(await assetStage.locator("[data-current-stage]").count(), 1, "current assets stage must visibly explain its current state");
+    assert.ok((await progressedMarker.locator("[data-confirmed-theses]").textContent()).includes(expectedDraftText), "step 3 must render the validated confirmation record");
   }
 
-  await assertStepThreeState(async () => {
-    await Promise.all([
-      page.waitForURL((url) => url.searchParams.get("screen") === "new-research" && url.searchParams.get("step") === "3"),
-      primaryActions.click(),
-    ]);
-  });
+  await defaultRemoveButtons.first().focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await form.locator("[data-thesis-editor]").count(), 2, "keyboard removal must reduce the draft to two theses");
+  assert.equal((await page.evaluate(() => document.activeElement?.textContent)).trim(), "新增命题", "keyboard removal must move focus to the now-enabled add control");
+  assert.ok(!await addThesis.isDisabled(), "add Thesis must enable below the three-Thesis maximum");
+  assert.equal((await form.locator(`#${addDescriptionId}`).textContent()).trim(), "当前 2 条；可新增至 3 条");
 
-  await page.goto(`${baseURL}/?screen=new-research`, { waitUntil: "networkidle" });
-  await assertStepThreeState(async () => {
-    const observationPeriod = page.locator('[data-screen="new-research"] input[id$="-period"]').first();
-    await observationPeriod.focus();
-    await Promise.all([
-      page.waitForURL((url) => url.searchParams.get("screen") === "new-research" && url.searchParams.get("step") === "3"),
-      page.keyboard.press("Enter"),
-    ]);
-  });
+  const clickEdit = "点击确认后的唯一命题文本";
+  await form.locator('[data-field="statement"]').first().fill(`  ${clickEdit}  `);
+  await Promise.all([
+    page.waitForURL((url) => url.search === "?screen=new-research&step=3"),
+    primaryActions.click(),
+  ]);
+  await assertStepThreeState(clickEdit);
+  const storageKey = await page.evaluate(() => window.PROTOTYPE_NEW_RESEARCH.confirmationStorageKey(window.PROTOTYPE_DATA.case.id));
+  const savedTwoRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
+  assert.equal(savedTwoRecord.schemaVersion, 1, "confirmation record must expose an explicit schemaVersion");
+  assert.equal(savedTwoRecord.caseId, "RC-AIC-2025-01", "confirmation record must be keyed to the active case");
+  assert.equal(savedTwoRecord.snapshotId, "RS-2025-06-30-v3", "confirmation record must bind to the immutable snapshot");
+  assert.equal(savedTwoRecord.cutoff, "2025-06-30", "confirmation record must bind to the evidence cutoff");
+  assert.equal(savedTwoRecord.researchPlanRevision, "RP-AIC-2025-01-v1", "confirmation record must bind to the research plan revision");
+  assert.equal(savedTwoRecord.theses.length, 2, "confirmation validator must accept two complete Thesis drafts");
+  assert.equal(savedTwoRecord.theses[0].statement, clickEdit, "confirmation record must normalize surrounding whitespace");
+
+  await page.reload({ waitUntil: "networkidle" });
+  await assertStepThreeState(clickEdit);
+  await page.goBack({ waitUntil: "networkidle" });
+  assert.equal(new URL(page.url()).search, "?screen=new-research", "Back from confirmed step 3 must return to canonical step 2");
+  assert.equal(await page.locator('[data-screen="new-research"] [data-field="statement"]').first().inputValue(), clickEdit, "Back to step 2 must repopulate the validated confirmation record");
+  assert.equal(await page.locator('[data-screen="new-research"] [data-thesis-editor]').count(), 2, "Back must preserve a two-Thesis confirmation");
+
+  const stepTwoForm = page.locator('[data-screen="new-research"] form[aria-label="初始命题"]');
+  await stepTwoForm.locator("[data-remove-thesis]").last().click();
+  assert.equal(await stepTwoForm.locator("[data-thesis-editor]").count(), 1, "remove must support a genuine one-Thesis draft");
+  const soleRemove = stepTwoForm.locator("[data-remove-thesis]");
+  assert.ok(await soleRemove.isDisabled(), "the final Thesis must not be removable");
+  const minimumDescriptionId = await soleRemove.getAttribute("aria-describedby");
+  assert.equal((await stepTwoForm.locator(`#${minimumDescriptionId}`).textContent()).trim(), "至少保留 1 条初始命题");
+  assert.ok(await stepTwoForm.locator(`#${minimumDescriptionId}`).isVisible(), "minimum Thesis explanation must be visible");
+  const oneEdit = "仅保留一条后的确认命题";
+  await stepTwoForm.locator('[data-field="statement"]').fill(oneEdit);
+  await Promise.all([
+    page.waitForURL((url) => url.search === "?screen=new-research&step=3"),
+    stepTwoForm.locator("[data-primary-action]").click(),
+  ]);
+  await assertStepThreeState(oneEdit);
+  const savedOneRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
+  assert.equal(savedOneRecord.theses.length, 1, "confirmation validator must accept one complete Thesis draft");
+  await page.reload({ waitUntil: "networkidle" });
+  await assertStepThreeState(oneEdit);
+  await page.goBack({ waitUntil: "networkidle" });
+  const oneThesisForm = page.locator('[data-screen="new-research"] form[aria-label="初始命题"]');
+  assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 1, "Back must preserve a one-Thesis confirmation");
+
+  async function fillBlankEditor(editor, suffix) {
+    const values = {
+      statement: `新增命题表述 ${suffix}`,
+      observationPeriod: "2025-01-01 至 2027-12-31",
+      nextValidationEvent: `新增下一验证事件 ${suffix}`,
+      supportCondition: `新增支持条件 ${suffix}`,
+      falsifier: `新增反证条件 ${suffix}`,
+    };
+    for (const [field, value] of Object.entries(values)) await editor.locator(`[data-field="${field}"]`).fill(value);
+  }
+
+  const addFromOne = oneThesisForm.getByRole("button", { name: "新增命题", exact: true });
+  await addFromOne.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 2, "keyboard add must restore a second blank Thesis editor");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.field), "statement", "adding a Thesis must focus its first draft field");
+  await oneThesisForm.locator("[data-primary-action]").click();
+  assert.equal(new URL(page.url()).search, "?screen=new-research", "an incomplete added Thesis must not advance the workflow");
+  assert.equal(
+    (await oneThesisForm.locator("[data-form-error]").textContent()).trim(),
+    "请完整填写 1–3 条命题的命题表述、观察期间、支持条件、反证条件与下一验证事件。",
+    "the invalid-draft alert must name every required field",
+  );
+  await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "A");
+  await addFromOne.click();
+  assert.equal(await oneThesisForm.locator("[data-thesis-editor]").count(), 3, "pointer add must restore the three-Thesis maximum");
+  await fillBlankEditor(oneThesisForm.locator("[data-thesis-editor]").last(), "B");
+  const restoredIds = await oneThesisForm.locator("[data-thesis-editor]").evaluateAll((items) => items.map((item) => item.dataset.thesisId));
+  assert.equal(new Set(restoredIds).size, 3, "restored Thesis editors must use unique draft IDs");
+  assert.ok(await addFromOne.isDisabled(), "add Thesis must disable again at the maximum");
+  assert.equal((await oneThesisForm.locator(`#${addDescriptionId}`).textContent()).trim(), "已达 3 条上限；删除后可新增");
+
+  const enterEdit = "Enter 确认后的唯一支持条件";
+  await oneThesisForm.locator('[data-field="supportCondition"]').nth(1).fill(enterEdit);
+  await oneThesisForm.locator('[data-field="observationPeriod"]').first().focus();
+  await Promise.all([
+    page.waitForURL((url) => url.search === "?screen=new-research&step=3"),
+    page.keyboard.press("Enter"),
+  ]);
+  await assertStepThreeState(enterEdit);
+  const savedRecord = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)), storageKey);
+  assert.equal(savedRecord.theses.length, 3, "confirmation validator must accept three complete unique Thesis drafts");
 
   await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
-  await assertStepThreeState(async () => {});
+  await assertStepThreeState(enterEdit);
 
-  await page.goto(`${baseURL}/?screen=new-research&step=not-a-step`, { waitUntil: "networkidle" });
-  const fallbackSteps = page.locator('[data-screen="new-research"] ol[data-research-steps] > li');
-  assert.equal(await fallbackSteps.nth(1).getAttribute("aria-current"), "step", "invalid step must safely fall back to step 2");
-  assert.equal(await fallbackSteps.nth(1).getAttribute("data-step-state"), "current");
-  assert.equal(await fallbackSteps.nth(2).getAttribute("data-step-state"), "upcoming");
-  assert.equal(
-    (await page.locator('[data-screen="new-research"] [data-stage-status]').textContent()).trim(),
-    "当前阶段 · 命题待人工确认",
-    "invalid step header must align with the normalized step 2 fallback",
-  );
-  assert.equal(await page.locator('[data-screen="new-research"] form[aria-label="初始命题"]').count(), 1, "invalid step fallback must render the step 2 section");
+  const escapedRecord = structuredClone(savedRecord);
+  escapedRecord.theses[0].statement = '<img src=x onerror="window.__draftXss = true">';
+  await page.evaluate(({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)), { key: storageKey, record: escapedRecord });
+  await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
+  assert.equal(await page.locator('[data-confirmed-theses] img').count(), 0, "stored draft markup must render only as escaped text");
+  assert.equal(await page.evaluate(() => window.__draftXss), undefined, "stored draft markup must never execute");
+
+  async function assertRecoveredStepTwo(expectedMessage = false) {
+    assert.equal(new URL(page.url()).search, "?screen=new-research", "unconfirmed or invalid state must canonicalize to step 2");
+    const recoveredMarker = page.locator('[data-screen="new-research"]');
+    const recoveredSteps = recoveredMarker.locator("ol[data-research-steps] > li");
+    assert.equal(await recoveredSteps.nth(1).getAttribute("aria-current"), "step");
+    assert.equal(await recoveredSteps.nth(1).getAttribute("data-step-state"), "current");
+    assert.notEqual(await recoveredSteps.nth(1).getAttribute("data-step-state"), "completed", "step 2 must not fabricate completion");
+    assert.equal(await recoveredSteps.nth(2).getAttribute("data-step-state"), "upcoming");
+    assert.equal(await recoveredMarker.locator('[data-step-current]').count(), 0, "assets must not become current without confirmation");
+    assert.equal(await recoveredMarker.locator('[data-recovery-message]').count(), expectedMessage ? 1 : 0);
+    if (expectedMessage) {
+      assert.equal((await recoveredMarker.locator('[data-recovery-message]').textContent()).trim(), "未找到已确认草稿，请重新确认初始命题");
+    }
+  }
+
+  await page.evaluate((key) => sessionStorage.removeItem(key), storageKey);
+  await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
+  await assertRecoveredStepTwo(true);
+
+  for (const rawRecord of [
+    "{not-json",
+    JSON.stringify({ ...savedRecord, caseId: "RC-WRONG-CASE" }),
+    JSON.stringify({ ...savedRecord, schemaVersion: 0 }),
+    JSON.stringify({ ...savedRecord, snapshotId: "RS-STALE" }),
+    JSON.stringify({ ...savedRecord, cutoff: "2025-03-31" }),
+    JSON.stringify({ ...savedRecord, researchPlanRevision: "RP-STALE" }),
+    JSON.stringify({ ...savedRecord, theses: [] }),
+    JSON.stringify({ ...savedRecord, theses: [...savedRecord.theses, { ...savedRecord.theses[0], id: "TH-DRAFT-OVERFLOW" }] }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 1 ? { ...thesis, id: savedRecord.theses[0].id } : thesis) }),
+    JSON.stringify({ ...savedRecord, theses: savedRecord.theses.map((thesis, index) => index === 0 ? { ...thesis, falsifier: "" } : thesis) }),
+  ]) {
+    await page.evaluate(({ key, raw }) => sessionStorage.setItem(key, raw), { key: storageKey, raw: rawRecord });
+    await page.goto(`${baseURL}/?screen=new-research&step=3`, { waitUntil: "networkidle" });
+    await assertRecoveredStepTwo(true);
+  }
+
+  await page.evaluate((key) => sessionStorage.removeItem(key), storageKey);
+  for (const search of [
+    "?screen=new-research",
+    "?screen=new-research&step=2",
+    "?screen=new-research&step=1",
+    "?screen=new-research&step=4",
+    "?screen=new-research&step=-1",
+    "?screen=new-research&step=bad",
+    "?screen=new-research&step=3&step=3",
+  ]) {
+    await page.goto(`${baseURL}/${search}`, { waitUntil: "networkidle" });
+    await assertRecoveredStepTwo(false);
+  }
 }
 
 async function assertTeardownContract() {

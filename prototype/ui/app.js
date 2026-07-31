@@ -40,6 +40,7 @@
       permission_gap: "权限缺口",
     }),
     providerNames: Object.freeze({
+      juyuan: "聚源",
       "SEC EDGAR": "监管披露",
       "Issuer IR": "公司投资者关系披露",
       "Market data quota": "市场数据接口",
@@ -52,6 +53,29 @@
     }),
     metricNames: Object.freeze({
       "Data Center revenue": "数据中心收入",
+    }),
+    planMetricNames: Object.freeze({
+      "Data Center revenue": "NVIDIA 数据中心业务收入",
+      "May monthly revenue year-on-year change": "台积电月度营收同比增幅",
+    }),
+    metricValues: Object.freeze({
+      "$39.1bn": "391 亿美元",
+      "34.8%": "34.8%",
+    }),
+    metricPeriods: Object.freeze({
+      "FY2026 Q1": "2026 财年第一季度",
+      "2025-05": "2025 年 5 月",
+    }),
+    providerCapabilities: Object.freeze({
+      industry_analysis_view: "行业分析观点",
+      announcement_filing_fulltext: "公告财报原文",
+      fund_holding_detail: "基金持股明细",
+    }),
+    queryModes: Object.freeze({
+      capability_probe: "能力探测",
+    }),
+    planStates: Object.freeze({
+      planned: "计划",
     }),
   });
 
@@ -284,67 +308,177 @@
     `;
   }
 
-  function normalizeResearchStep(value) {
-    return String(value) === "3" ? 3 : 2;
+  const CONFIRMATION_SCHEMA_VERSION = 1;
+  const DRAFT_FIELDS = Object.freeze(["statement", "observationPeriod", "supportCondition", "falsifier", "nextValidationEvent"]);
+  const RECOVERY_MESSAGE = "未找到已确认草稿，请重新确认初始命题";
+
+  function confirmationStorageKey(caseId) {
+    return `new-research-confirmation:v${CONFIRMATION_SCHEMA_VERSION}:${caseId}`;
   }
 
-  function buildNewResearchViewModel(fixture, requestedStep = 2) {
-    const activeStep = normalizeResearchStep(requestedStep);
-    const reviewedLinks = fixture.evidenceLinks.filter((link) => link.reviewState === "reviewed");
-    const providerQueries = fixture.providerRuns.map((run) => (
-      displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口")
-    ));
+  function normalizeDraftText(value) {
+    if (typeof value !== "string") return undefined;
+    const normalized = value.trim();
+    return normalized && normalized.length <= 2000 ? normalized : undefined;
+  }
+
+  function normalizeConfirmationRecord(candidate, fixture) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
+    if (candidate.schemaVersion !== CONFIRMATION_SCHEMA_VERSION || candidate.caseId !== fixture.case.id) return undefined;
+    if (candidate.snapshotId !== fixture.case.snapshotId || candidate.cutoff !== fixture.case.cutoff) return undefined;
+    if (candidate.researchPlanRevision !== fixture.case.researchPlan.revision) return undefined;
+    if (!Array.isArray(candidate.theses) || candidate.theses.length < 1 || candidate.theses.length > 3) return undefined;
+
+    const normalizedTheses = [];
+    const observedIds = new Set();
+    for (let index = 0; index < candidate.theses.length; index += 1) {
+      const draft = candidate.theses[index];
+      const id = normalizeDraftText(draft?.id);
+      if (!id || !/^[A-Z0-9][A-Z0-9-]{2,63}$/u.test(id) || observedIds.has(id)) return undefined;
+      observedIds.add(id);
+      const normalized = { id };
+      for (const field of DRAFT_FIELDS) {
+        normalized[field] = normalizeDraftText(draft[field]);
+        if (!normalized[field]) return undefined;
+      }
+      normalizedTheses.push(normalized);
+    }
+    return {
+      schemaVersion: CONFIRMATION_SCHEMA_VERSION,
+      caseId: fixture.case.id,
+      snapshotId: fixture.case.snapshotId,
+      cutoff: fixture.case.cutoff,
+      researchPlanRevision: fixture.case.researchPlan.revision,
+      theses: normalizedTheses,
+    };
+  }
+
+  function readConfirmationRecord(fixture) {
+    const key = confirmationStorageKey(fixture.case.id);
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return undefined;
+      const normalized = normalizeConfirmationRecord(JSON.parse(raw), fixture);
+      if (!normalized) window.sessionStorage.removeItem(key);
+      return normalized;
+    } catch {
+      try { window.sessionStorage.removeItem(key); } catch { /* Storage may be unavailable. */ }
+      return undefined;
+    }
+  }
+
+  function canonicalResearchURL(step) {
+    return step === 3 ? "?screen=new-research&step=3" : "?screen=new-research";
+  }
+
+  function resolveNewResearchState(fixture) {
+    const params = new URLSearchParams(window.location.search);
+    const stepValues = params.getAll("step");
+    const requestsStepThree = stepValues.length === 1 && stepValues[0] === "3";
+    const confirmation = readConfirmationRecord(fixture);
+    const activeStep = requestsStepThree && confirmation ? 3 : 2;
+    const recoveryMessage = requestsStepThree && !confirmation ? RECOVERY_MESSAGE : undefined;
+    const canonicalURL = canonicalResearchURL(activeStep);
+    if (window.location.search !== canonicalURL) window.history.replaceState(null, "", canonicalURL);
+    return { activeStep, confirmation, recoveryMessage };
+  }
+
+  function formatPlannedProviderQuery(query) {
+    const provider = displayLabel(PRESENTATION.providerNames, query.provider, "外部数据接口");
+    const capability = displayLabel(PRESENTATION.providerCapabilities, query.capability, "未分类能力");
+    const mode = displayLabel(PRESENTATION.queryModes, query.mode, "读取探测");
+    const status = displayLabel(PRESENTATION.planStates, query.status, "待规划");
+    return `${provider} · ${capability} · ${mode}（${status}）`;
+  }
+
+  function formatPlannedMetric(metric) {
+    return [
+      displayLabel(PRESENTATION.planMetricNames, metric.name, "关键业务指标"),
+      displayLabel(PRESENTATION.metricValues, metric.value, metric.value),
+      displayLabel(PRESENTATION.metricPeriods, metric.period, metric.period),
+    ].join(" · ");
+  }
+
+  function buildNewResearchViewModel(fixture, requestedStep = 2, confirmation) {
+    const activeStep = requestedStep === 3 && confirmation ? 3 : 2;
+    const plan = fixture.case.researchPlan;
+    const documents = indexById(fixture.documents);
+    const statements = indexById(fixture.statements);
+    const metrics = indexById(fixture.metrics);
+    const evidenceLinks = indexById(fixture.evidenceLinks);
+    const factors = indexById(fixture.factors);
+    const studyRange = `${fixture.case.researchPeriod.start} 至 ${fixture.case.researchPeriod.end}`;
+    const fixtureTheses = indexById(fixture.theses);
+    const thesisDrafts = confirmation?.theses ?? fixture.theses.map((thesis) => ({
+      id: thesis.id,
+      statement: thesis.statement,
+      observationPeriod: studyRange,
+      supportCondition: thesis.supportCondition,
+      falsifier: thesis.falsifier,
+      nextValidationEvent: thesis.nextValidationEvent,
+    }));
+    const theses = thesisDrafts.map((draft, index) => ({
+      ...fixtureTheses.get(draft.id),
+      title: fixtureTheses.get(draft.id)?.title ?? `新增命题 ${index + 1}`,
+      ...draft,
+    }));
 
     return {
       case: fixture.case,
       activeStep,
+      confirmation,
       stageStatus: activeStep === 3 ? "当前阶段 · 复用资产待确认" : "当前阶段 · 命题待人工确认",
       researchPeriod: fixture.case.researchPeriod,
-      studyRange: `${fixture.case.researchPeriod.start} 至 ${fixture.case.researchPeriod.end}`,
+      studyRange,
       researchObject: fixture.case.researchObject,
       phenomenon: fixture.case.phenomenon,
-      theses: fixture.theses,
+      theses,
       assets: {
-        documents: fixture.documents,
-        statements: fixture.statements,
-        metrics: fixture.metrics,
-        reviewedLinks,
-        relatedCase: fixture.case,
+        documents: plan.reusableAssets.documentIds.map((id) => documents.get(id)),
+        statements: plan.reusableAssets.statementIds.map((id) => statements.get(id)),
+        metrics: plan.reusableAssets.metricIds.map((id) => metrics.get(id)),
+        reviewedLinks: plan.reusableAssets.evidenceLinkIds.map((id) => evidenceLinks.get(id)),
+        relatedCases: plan.reusableAssets.relatedCaseIds,
       },
       plan: {
-        providerQueries: [...new Set(providerQueries)],
-        resultData: fixture.metrics,
-        gaps: fixture.factors.filter((factor) => ["constraints", "contradiction"].includes(factor.group)),
+        providerQueries: plan.plannedProviderQueries.map(formatPlannedProviderQuery),
+        positiveEvidenceSearches: plan.positiveEvidenceSearches,
+        negativeEvidenceSearches: plan.negativeEvidenceSearches,
+        resultData: plan.resultMetricIds.map((id) => formatPlannedMetric(metrics.get(id))),
+        gaps: plan.currentGapFactorIds.map((id) => factors.get(id)),
       },
     };
   }
 
-  function renderThesisEditor(thesis, index, studyRange, aiLabel) {
-    const fieldPrefix = `thesis-${index + 1}`;
+  function renderThesisEditor(thesis, index, aiLabel) {
+    const fieldPrefix = `thesis-${thesis.id.toLowerCase()}`;
     return `
       <fieldset class="thesis-editor" data-thesis-editor data-thesis-id="${escapeHTML(thesis.id)}">
-        <legend><span>命题 ${index + 1}</span>${escapeHTML(thesis.title)}</legend>
-        <span class="ai-suggestion-label" data-ai-suggestion-label>${escapeHTML(aiLabel)}</span>
+        <legend><span data-thesis-number>命题 ${index + 1}</span>${escapeHTML(thesis.title)}</legend>
+        <div class="thesis-editor-tools">
+          <span class="ai-suggestion-label" data-ai-suggestion-label>${escapeHTML(aiLabel)}</span>
+          <button class="remove-thesis-action" type="button" data-remove-thesis aria-label="删除命题 ${index + 1}" aria-describedby="thesis-minimum-description">删除</button>
+        </div>
         <div class="thesis-fields">
           <label class="statement-field" for="${fieldPrefix}-statement">
             <span>命题表述</span>
-            <textarea id="${fieldPrefix}-statement" name="${fieldPrefix}-statement" rows="2">${escapeHTML(thesis.statement)}</textarea>
+            <textarea id="${fieldPrefix}-statement" data-field="statement" rows="2">${escapeHTML(thesis.statement)}</textarea>
           </label>
           <label for="${fieldPrefix}-period">
             <span>观察期间</span>
-            <input id="${fieldPrefix}-period" name="${fieldPrefix}-period" value="${escapeHTML(studyRange)}">
-          </label>
-          <label for="${fieldPrefix}-support">
-            <span>支持条件</span>
-            <textarea id="${fieldPrefix}-support" name="${fieldPrefix}-support" rows="2">${escapeHTML(thesis.supportCondition)}</textarea>
-          </label>
-          <label for="${fieldPrefix}-falsifier">
-            <span>反证条件</span>
-            <textarea id="${fieldPrefix}-falsifier" name="${fieldPrefix}-falsifier" rows="2">${escapeHTML(thesis.falsifier)}</textarea>
+            <input id="${fieldPrefix}-period" data-field="observationPeriod" value="${escapeHTML(thesis.observationPeriod)}">
           </label>
           <label class="event-field" for="${fieldPrefix}-event">
             <span>下一验证事件</span>
-            <input id="${fieldPrefix}-event" name="${fieldPrefix}-event" value="${escapeHTML(thesis.nextValidationEvent)}">
+            <textarea id="${fieldPrefix}-event" data-field="nextValidationEvent" rows="2">${escapeHTML(thesis.nextValidationEvent)}</textarea>
+          </label>
+          <label for="${fieldPrefix}-support">
+            <span>支持条件</span>
+            <textarea id="${fieldPrefix}-support" data-field="supportCondition" rows="2">${escapeHTML(thesis.supportCondition)}</textarea>
+          </label>
+          <label for="${fieldPrefix}-falsifier">
+            <span>反证条件</span>
+            <textarea id="${fieldPrefix}-falsifier" data-field="falsifier" rows="2">${escapeHTML(thesis.falsifier)}</textarea>
           </label>
         </div>
       </fieldset>
@@ -362,16 +496,21 @@
     return `<li data-step-state="${state}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHTML(label)}</li>`;
   }
 
-  function requestedResearchStep() {
-    return normalizeResearchStep(new URLSearchParams(window.location.search).get("step"));
-  }
-
   function renderThesisStage(view, currentStep) {
     if (currentStep > 2) {
       return `
         <section class="thesis-complete-summary" aria-labelledby="confirmed-theses-title">
           <div><p>第 2 步 · 已完成</p><h2 id="confirmed-theses-title">初始命题已确认</h2></div>
-          <ol>${view.theses.map((thesis) => `<li>${escapeHTML(thesis.title)}</li>`).join("")}</ol>
+          <ol data-confirmed-theses>${view.theses.map((thesis) => `
+            <li>
+              <strong>${escapeHTML(thesis.title)}</strong>
+              <span>${escapeHTML(thesis.statement)}</span>
+              <small>观察期间：${escapeHTML(thesis.observationPeriod)}</small>
+              <small>支持条件：${escapeHTML(thesis.supportCondition)}</small>
+              <small>反证条件：${escapeHTML(thesis.falsifier)}</small>
+              <small>下一验证事件：${escapeHTML(thesis.nextValidationEvent)}</small>
+            </li>
+          `).join("")}</ol>
         </section>
       `;
     }
@@ -388,27 +527,32 @@
           </div>
         </div>
         <div class="thesis-editors">
-          ${view.theses.map((thesis, index) => renderThesisEditor(thesis, index, view.studyRange, view.case.aiLabel)).join("")}
+          ${view.theses.map((thesis, index) => renderThesisEditor(thesis, index, view.case.aiLabel)).join("")}
         </div>
-        <div class="form-actions">
-          <p class="thesis-limit-note" id="thesis-limit-description">已达 3 条上限；删除或合并后可新增</p>
-          <button class="secondary-action" type="button">AI 协助拆分</button>
-          <button class="secondary-action" type="button" disabled aria-describedby="thesis-limit-description">新增命题</button>
+        <div class="new-research-form-actions">
+          <div class="thesis-count-guidance">
+            <p class="thesis-limit-note" id="thesis-limit-description">已达 3 条上限；删除后可新增</p>
+            <p class="thesis-minimum-note" id="thesis-minimum-description" hidden>至少保留 1 条初始命题</p>
+          </div>
+          <button class="new-research-secondary-action" type="button">AI 协助拆分</button>
+          <button class="new-research-secondary-action" type="button" data-add-thesis disabled aria-describedby="thesis-limit-description">新增命题</button>
           <button class="primary-action" data-primary-action type="submit">确认命题并继续</button>
         </div>
+        <p class="form-error" data-form-error role="alert" hidden></p>
       </form>
     `;
   }
 
   function renderNewResearch() {
-    const view = buildNewResearchViewModel(data, requestedResearchStep());
+    const state = resolveNewResearchState(data);
+    const view = buildNewResearchViewModel(data, state.activeStep, state.confirmation);
     const currentStep = view.activeStep;
     const assetsAreCurrent = currentStep === 3;
     return `
       <main class="screen new-research-screen" data-screen="new-research">
         <header class="new-research-heading">
           <div>
-            <p class="eyebrow">New industry proposition</p>
+            <p class="eyebrow">新建产业命题</p>
             <h1>新建产业研究</h1>
             <p class="lede">把一个行业判断拆成可验证、可反证的命题；当前仅确认初始命题，不代表系统已得出结论。</p>
           </div>
@@ -423,6 +567,8 @@
             ${renderResearchStep("研究计划", 4, currentStep)}
           </ol>
         </nav>
+
+        ${state.recoveryMessage ? `<p class="recovery-message" data-recovery-message role="status">${escapeHTML(state.recoveryMessage)}</p>` : ""}
 
         <section class="question-summary" data-question-summary aria-labelledby="question-summary-title">
           <div class="summary-title">
@@ -449,22 +595,128 @@
               <li><strong>可复用陈述</strong><span>${view.assets.statements.length} 条</span></li>
               <li><strong>可复用数据</strong><span>${view.assets.metrics.length} 项</span></li>
               <li><strong>已复核关系</strong><span>${view.assets.reviewedLinks.length} 条</span></li>
-              <li><strong>相关案例资产</strong><span>${escapeHTML(view.assets.relatedCase.id)}</span></li>
+              <li><strong>相关案例资产</strong><span>${escapeHTML(view.assets.relatedCases.join("、"))}</span></li>
             </ul>
           </section>
           <section data-step-preview="plan" aria-labelledby="plan-preview-title">
             <header><div><p>第 4 步</p><h2 id="plan-preview-title">研究计划</h2></div><span data-preview-state>尚未完成 · 下一步预览</span></header>
             <ul>
-              <li><strong>计划内部复用</strong><span>文档、陈述与已复核关系</span></li>
-              <li><strong>提供方查询</strong><span>拟查询：${escapeHTML(view.plan.providerQueries.slice(0, 2).join("、"))}</span></li>
-              <li><strong>正面与反面证据搜索</strong><span>两个方向将同时纳入</span></li>
-              <li><strong>结果数据</strong><span>拟提取：${escapeHTML(view.plan.resultData.map((metric) => metric.value).join(" · "))}</span></li>
-              <li><strong>当前缺口</strong><span>${escapeHTML(view.plan.gaps.map((gap) => gap.label).join("、"))}</span></li>
+              <li data-plan-item="reuse"><strong>计划内部复用</strong><span>文档、陈述与已复核关系</span></li>
+              <li data-plan-item="providers"><strong>提供方查询</strong><span>${view.plan.providerQueries.map((query) => escapeHTML(query)).join("；")}</span></li>
+              <li data-plan-item="evidence"><strong>正面与反面证据搜索</strong><span>正面：${escapeHTML(view.plan.positiveEvidenceSearches.join("、"))}<br>反面：${escapeHTML(view.plan.negativeEvidenceSearches.join("、"))}</span></li>
+              <li data-plan-item="metrics"><strong>结果数据</strong><span>${view.plan.resultData.map((metric) => escapeHTML(metric)).join("；")}</span></li>
+              <li data-plan-item="gaps"><strong>当前缺口</strong><span>${escapeHTML(view.plan.gaps.map((gap) => gap.label).join("、"))}</span></li>
             </ul>
           </section>
         </div>
       </main>
     `;
+  }
+
+  function collectConfirmationRecord(form, fixture) {
+    const theses = [...form.querySelectorAll("[data-thesis-editor]")].map((editor) => {
+      const draft = { id: editor.dataset.thesisId };
+      for (const field of DRAFT_FIELDS) {
+        draft[field] = editor.querySelector(`[data-field="${field}"]`)?.value;
+      }
+      return draft;
+    });
+    return normalizeConfirmationRecord({
+      schemaVersion: CONFIRMATION_SCHEMA_VERSION,
+      caseId: fixture.case.id,
+      snapshotId: fixture.case.snapshotId,
+      cutoff: fixture.case.cutoff,
+      researchPlanRevision: fixture.case.researchPlan.revision,
+      theses,
+    }, fixture);
+  }
+
+  function applyConfirmationRecordToForm(form, record) {
+    const drafts = new Map(record.theses.map((thesis) => [thesis.id, thesis]));
+    for (const editor of form.querySelectorAll("[data-thesis-editor]")) {
+      const draft = drafts.get(editor.dataset.thesisId);
+      if (!draft) continue;
+      for (const field of DRAFT_FIELDS) editor.querySelector(`[data-field="${field}"]`).value = draft[field];
+    }
+  }
+
+  function updateThesisEditorControls(form) {
+    const editors = [...form.querySelectorAll("[data-thesis-editor]")];
+    const addButton = form.querySelector("[data-add-thesis]");
+    const limitNote = form.querySelector("#thesis-limit-description");
+    const minimumNote = form.querySelector("#thesis-minimum-description");
+    editors.forEach((editor, index) => {
+      editor.querySelector("[data-thesis-number]").textContent = `命题 ${index + 1}`;
+      const removeButton = editor.querySelector("[data-remove-thesis]");
+      removeButton.disabled = editors.length === 1;
+      removeButton.setAttribute("aria-label", `删除命题 ${index + 1}`);
+    });
+    addButton.disabled = editors.length >= 3;
+    limitNote.textContent = editors.length >= 3
+      ? "已达 3 条上限；删除后可新增"
+      : `当前 ${editors.length} 条；可新增至 3 条`;
+    minimumNote.hidden = editors.length !== 1;
+  }
+
+  function appendBlankThesisEditor(form, fixture) {
+    const observedIds = new Set([...form.querySelectorAll("[data-thesis-editor]")].map((editor) => editor.dataset.thesisId));
+    let sequence = Number(form.dataset.nextDraftSequence ?? 1);
+    let id = `TH-DRAFT-${sequence}`;
+    while (observedIds.has(id)) {
+      sequence += 1;
+      id = `TH-DRAFT-${sequence}`;
+    }
+    form.dataset.nextDraftSequence = String(sequence + 1);
+    const blankDraft = {
+      id,
+      title: "新增命题",
+      statement: "",
+      observationPeriod: "",
+      supportCondition: "",
+      falsifier: "",
+      nextValidationEvent: "",
+    };
+    const container = form.querySelector(".thesis-editors");
+    container.insertAdjacentHTML("beforeend", renderThesisEditor(blankDraft, container.children.length, fixture.case.aiLabel));
+    updateThesisEditorControls(form);
+    container.lastElementChild.querySelector('[data-field="statement"]').focus();
+  }
+
+  function bindNewResearchForm(fixture) {
+    const form = app.querySelector('.new-research-screen form[aria-label="初始命题"]');
+    if (!form) return;
+    updateThesisEditorControls(form);
+    form.addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-remove-thesis]");
+      if (removeButton) {
+        if (removeButton.disabled || form.querySelectorAll("[data-thesis-editor]").length <= 1) return;
+        removeButton.closest("[data-thesis-editor]").remove();
+        updateThesisEditorControls(form);
+        form.querySelector("[data-add-thesis]").focus();
+        return;
+      }
+      const addButton = event.target.closest("[data-add-thesis]");
+      if (addButton && !addButton.disabled) appendBlankThesisEditor(form, fixture);
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const error = form.querySelector("[data-form-error]");
+      const record = collectConfirmationRecord(form, fixture);
+      if (!record) {
+        error.hidden = false;
+        error.textContent = "请完整填写 1–3 条命题的命题表述、观察期间、支持条件、反证条件与下一验证事件。";
+        return;
+      }
+      try {
+        window.sessionStorage.setItem(confirmationStorageKey(fixture.case.id), JSON.stringify(record));
+      } catch {
+        error.hidden = false;
+        error.textContent = "当前会话无法保存草稿，请检查浏览器存储设置后重试。";
+        return;
+      }
+      applyConfirmationRecordToForm(form, record);
+      window.location.assign(canonicalResearchURL(3));
+    });
   }
 
   function renderPlaceholder(screen) {
@@ -527,10 +779,11 @@
         <div class="work-area">${SCREEN_RENDERERS[screen]()}</div>
       </div>
     `;
+    if (screen === "new-research") bindNewResearchForm(data);
   }
 
   renderShell(requestedScreen());
   window.SCREEN_RENDERERS = SCREEN_RENDERERS;
   window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
-  window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel });
+  window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel, confirmationStorageKey });
 }());
