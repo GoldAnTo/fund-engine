@@ -29,6 +29,7 @@ class DocumentService:
         raw: bytes,
         source_url: str,
         published_at: datetime | None = None,
+        parser_version: str | None = None,
     ) -> DocumentVersion:
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
@@ -47,7 +48,7 @@ class DocumentService:
             published_at=published_at,
             available_at=now,
             acquired_at=now,
-            parser_version=PARSER_VERSION,
+            parser_version=parser_version or PARSER_VERSION,
             supersedes_id=supersedes_id,
         )
 
