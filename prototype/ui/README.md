@@ -45,12 +45,12 @@ node prototype/ui/capture.mjs --screens overview
 
 `--screens shell` verifies the 1600 × 1000, DPR 1 shell without writing an image. The test command accepts `shell`, `all`, or a comma-separated list of route IDs.
 
-In Task 1 only `overview` is capture-ready; `--screens all` therefore means all capture-ready screens, not every placeholder route. Explicit requests for placeholder routes fail instead of producing misleading final images.
+`--screens overview` atomically updates the implemented screen's final capture at `prototype/设计原型1.png`. `--screens all` means all capture-ready screens, not every routed placeholder. Unimplemented screens are rejected instead of producing misleading final images.
 
 Every image capture uses the fixed viewport rather than a full-page screenshot. Capture fails before writing if document `scrollWidth` exceeds `1600` or `scrollHeight` exceeds `1000`; content is never silently clipped. The resulting PNG buffer is accepted only when its IHDR dimensions are exactly `1600 × 1000`.
 
-Task 1 has no final screenshot mapping. Explicit capture commands write to a newly created OS temp directory and print the absolute output path. A later screen implementation may add a deliberate mapping to its named prototype PNG path after that screen is complete.
+Before replacing a mapped final image, capture validates the complete PNG buffer and its dimensions. It then writes a validated temporary sibling and uses an atomic rename over the final target; a failed write or rename leaves the existing final unchanged and removes the temporary file.
 
 ## Generated-artifact rule
 
-Transient and test captures stay outside the repository in the OS temp directory, so `git add prototype/ui` cannot stage them. Final design PNGs are added only by the task that implements, verifies, and explicitly maps the corresponding screen renderer.
+Final design PNGs are written only for implemented, verified renderers with an explicit registry mapping. Contract-test fixtures use the operating system's temporary directory and are cleaned after each assertion.

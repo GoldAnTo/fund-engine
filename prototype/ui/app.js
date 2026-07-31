@@ -24,6 +24,121 @@
     versions: ["版本与更新", "沿用一个持续研究案例，通过截止日和冻结快照回看历史。"],
   };
 
+  const PRESENTATION = Object.freeze({
+    caseStates: Object.freeze({
+      awaiting_validation: "持续验证中",
+    }),
+    reviewStates: Object.freeze({
+      pending_review: "待人工审核",
+      reviewed: "已人工复核",
+    }),
+    factorStates: Object.freeze({
+      candidate: "候选线索",
+    }),
+    providerOutcomes: Object.freeze({
+      quota_failure: "配额受限",
+      permission_gap: "权限缺口",
+    }),
+    providerNames: Object.freeze({
+      "Market data quota": "市场数据接口",
+      "Licensed holdings feed": "持仓数据接口",
+    }),
+    providerDetails: Object.freeze({
+      "Daily call limit exceeded; no inferred replacement values": "当日调用额度已用尽，未使用推测值替代。",
+      "Current credential lacks historical holdings permission": "当前凭证缺少历史持仓读取权限。",
+    }),
+    metricNames: Object.freeze({
+      "Data Center revenue": "数据中心收入",
+    }),
+  });
+
+  function displayLabel(labels, value, fallback) {
+    return labels[value] ?? fallback;
+  }
+
+  function indexById(records) {
+    return new Map(records.map((record) => [record.id, record]));
+  }
+
+  function resolveReviewWorkItem(fixture, reviewItem) {
+    const statements = indexById(fixture.statements);
+    const evidenceLinks = indexById(fixture.evidenceLinks);
+    const theses = indexById(fixture.theses);
+    const factors = indexById(fixture.factors);
+    const directTargets = indexById([
+      ...fixture.documents,
+      ...fixture.statements,
+      ...fixture.evidenceLinks,
+      ...fixture.metrics,
+      ...fixture.companies,
+      ...fixture.funds,
+      ...fixture.theses,
+      ...fixture.factors,
+    ]);
+    const directTarget = directTargets.get(reviewItem.targetId);
+    const evidence = evidenceLinks.get(reviewItem.targetId)
+      ?? fixture.evidenceLinks.find((link) => link.statementId === reviewItem.targetId);
+    const statement = statements.get(reviewItem.targetId)
+      ?? (evidence ? statements.get(evidence.statementId) : undefined);
+    const linkedTarget = evidence
+      ? theses.get(evidence.thesisId) ?? factors.get(evidence.factorId)
+      : undefined;
+    const isFallback = !evidence || !linkedTarget;
+
+    return {
+      workItemId: reviewItem.id,
+      targetId: reviewItem.targetId,
+      task: reviewItem.task,
+      blockerTitle: linkedTarget?.title ?? linkedTarget?.label ?? `待审核事项 ${reviewItem.id}`,
+      sourceId: evidence?.id ?? statement?.id ?? directTarget?.id ?? reviewItem.targetId,
+      sourceVersion: evidence?.sourceVersion ?? statement?.sourceVersion ?? directTarget?.sourceVersion ?? reviewItem.sourceVersion,
+      reviewStatusLabel: displayLabel(PRESENTATION.reviewStates, reviewItem.reviewState, "状态待确认"),
+      actionLabel: `审核：${reviewItem.task}`,
+      actionRoute: `?screen=review&item=${encodeURIComponent(reviewItem.id)}`,
+      isFallback,
+      resolutionScore: Number(Boolean(statement)) + (Number(Boolean(evidence)) * 2) + (Number(Boolean(linkedTarget)) * 4),
+    };
+  }
+
+  function buildOverviewViewModel(fixture) {
+    const workItem = fixture.reviewQueue
+      .map((item) => resolveReviewWorkItem(fixture, item))
+      .sort((left, right) => right.resolutionScore - left.resolutionScore || left.workItemId.localeCompare(right.workItemId))[0];
+    const contradiction = fixture.factors.find((item) => item.group === "contradiction");
+    const metric = fixture.metrics.find((item) => item.id === "M-NVDA-DC-REV") ?? fixture.metrics[0];
+    const recentSnapshot = fixture.snapshots.find((item) => item.id === fixture.case.snapshotId);
+    const hasPriorMetricVersion = metric.snapshotMembership.some((snapshotId) => snapshotId !== fixture.case.snapshotId);
+    const providers = fixture.providerRuns
+      .filter((item) => ["quota_failure", "permission_gap"].includes(item.outcome))
+      .map((run) => ({
+        id: run.id,
+        displayName: displayLabel(PRESENTATION.providerNames, run.provider, "外部数据接口"),
+        outcomeLabel: displayLabel(PRESENTATION.providerOutcomes, run.outcome, "运行异常"),
+        detailLabel: displayLabel(PRESENTATION.providerDetails, run.detail, "提供方返回未分类错误。"),
+      }));
+
+    return {
+      case: fixture.case,
+      caseStateLabel: displayLabel(PRESENTATION.caseStates, fixture.case.state, "案例状态待确认"),
+      workItem,
+      contradiction: {
+        id: contradiction.id,
+        label: contradiction.label,
+        stateLabel: displayLabel(PRESENTATION.factorStates, contradiction.status, "线索状态待确认"),
+      },
+      metric: {
+        id: metric.id,
+        displayName: displayLabel(PRESENTATION.metricNames, metric.name, "关键业务指标"),
+        value: metric.value,
+        period: metric.period,
+        sourceVersion: metric.sourceVersion,
+        gapLabel: hasPriorMetricVersion ? "已有跨版本口径" : "缺少前次快照对照",
+      },
+      providers,
+      recentSnapshot,
+    };
+  }
+
   function escapeHTML(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -46,15 +161,8 @@
   }
 
   function renderOverview() {
-    const activeCase = data.case;
-    const pendingReview = data.reviewQueue[0];
-    const pendingEvidence = data.evidenceLinks.find((item) => item.reviewState === "pending_review");
-    const blockerThesis = data.theses.find((item) => item.reviewState === "pending_review");
-    const contradiction = data.factors.find((item) => item.group === "contradiction");
-    const revisedMetric = data.metrics.find((item) => item.id === "M-NVDA-DC-REV");
-    const providerFailures = data.providerRuns.filter((item) => ["quota_failure", "permission_gap"].includes(item.outcome));
-    const recentSnapshot = data.snapshots.find((item) => item.id === activeCase.snapshotId);
-    const hasPriorMetricVersion = revisedMetric.snapshotMembership.some((snapshotId) => snapshotId !== activeCase.snapshotId);
+    const view = buildOverviewViewModel(data);
+    const activeCase = view.case;
 
     return `
       <section class="screen" data-screen="overview">
@@ -76,18 +184,21 @@
             <p>按下一步行动排序 · 仅显示一个持续研究案例</p>
           </div>
 
-          <article class="case-row selected" data-research-case-row aria-selected="true">
+          <ol class="case-list" aria-label="ResearchCase 队列">
+          <li class="case-row selected" data-research-case-row data-current-case>
+            <span class="sr-only">当前研究案例</span>
             <div class="case-main">
               <div class="case-identity">
                 <span class="case-id">${escapeHTML(activeCase.id)}</span>
-                ${badge("进行中 · 待验证", "warning", "研究案例状态：进行中，待验证")}
+                ${badge(view.caseStateLabel, "warning", `案例状态：${view.caseStateLabel}`)}
               </div>
               <h3>${escapeHTML(activeCase.title)}</h3>
               <p class="case-question">${escapeHTML(activeCase.question)}</p>
               <dl class="case-facts">
                 <div><dt>截止日</dt><dd>${escapeHTML(activeCase.cutoff)}</dd></div>
                 <div><dt>当前快照</dt><dd>${escapeHTML(activeCase.snapshotId)}</dd></div>
-                <div><dt>人工复核状态</dt><dd data-state-label>待人工审核 · ${escapeHTML(activeCase.state)}</dd></div>
+                <div><dt>案例状态</dt><dd data-state-label>${escapeHTML(view.caseStateLabel)}</dd></div>
+                <div><dt>关系审核状态</dt><dd data-state-label>${escapeHTML(view.workItem.reviewStatusLabel)}</dd></div>
               </dl>
               <div class="assessment compact-assessment" data-evidence-assessment>
                 <strong>${escapeHTML(activeCase.aiLabel)}</strong>
@@ -96,15 +207,16 @@
             </div>
             <div class="case-decision">
               <p class="decision-label">主要阻塞</p>
-              <h4>${escapeHTML(blockerThesis.title)}</h4>
-              <p>${escapeHTML(pendingReview.task)}</p>
+              <h4>${escapeHTML(view.workItem.blockerTitle)}</h4>
+              <p>${escapeHTML(view.workItem.task)}</p>
               <div class="decision-source">
-                <span>${escapeHTML(pendingEvidence.id)}</span>
-                <span>${escapeHTML(pendingEvidence.sourceVersion)}</span>
+                <span>${escapeHTML(view.workItem.sourceId)}</span>
+                <span>${escapeHTML(view.workItem.sourceVersion)}</span>
               </div>
-              <a class="next-action" data-next-action href="?screen=review">审核订单到收入关系 <span aria-hidden="true">→</span></a>
+              <a class="next-action" data-next-action href="${escapeHTML(view.workItem.actionRoute)}">${escapeHTML(view.workItem.actionLabel)} <span aria-hidden="true">→</span></a>
             </div>
-          </article>
+          </li>
+          </ol>
         </section>
 
         <section class="status-section" aria-labelledby="status-lanes-title">
@@ -116,43 +228,43 @@
             <p>所有状态均保留来源标识，不以颜色代替含义</p>
           </div>
           <div class="status-lanes">
-            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(pendingReview.id)}">
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(view.workItem.workItemId)}">
               <div class="lane-heading"><span class="lane-mark warning" aria-hidden="true">审</span><h3>待审核关系</h3></div>
-              <p class="lane-state" data-state-label>待人工审核</p>
-              <strong>${escapeHTML(pendingReview.task)}</strong>
-              <p class="lane-detail">${escapeHTML(pendingReview.targetId)} · ${escapeHTML(pendingReview.sourceVersion)}</p>
+              <p class="lane-state" data-state-label>${escapeHTML(view.workItem.reviewStatusLabel)}</p>
+              <strong>${escapeHTML(view.workItem.task)}</strong>
+              <p class="lane-detail">${escapeHTML(view.workItem.targetId)} · ${escapeHTML(view.workItem.sourceVersion)}</p>
             </article>
 
-            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(contradiction.id)}">
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(view.contradiction.id)}">
               <div class="lane-heading"><span class="lane-mark contradict" aria-hidden="true">反</span><h3>新反面证据</h3></div>
-              <p class="lane-state" data-state-label>候选反证 · 待关联来源</p>
-              <strong>${escapeHTML(contradiction.label)}</strong>
-              <p class="lane-detail">${escapeHTML(contradiction.id)} · ${escapeHTML(contradiction.status)}</p>
+              <p class="lane-state" data-state-label>${escapeHTML(view.contradiction.stateLabel)} · 待关联来源</p>
+              <strong>${escapeHTML(view.contradiction.label)}</strong>
+              <p class="lane-detail">${escapeHTML(view.contradiction.id)} · 未进入正式证据关系</p>
             </article>
 
-            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(revisedMetric.id)}">
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(view.metric.id)}">
               <div class="lane-heading"><span class="lane-mark gap" aria-hidden="true">缺</span><h3>数据修订与缺口</h3></div>
-              <p class="lane-state" data-state-label>${hasPriorMetricVersion ? "已有跨版本口径" : "缺少前次快照对照"}</p>
-              <strong>${escapeHTML(revisedMetric.name)} · ${escapeHTML(revisedMetric.value)}</strong>
-              <p class="lane-detail">${escapeHTML(revisedMetric.period)} · ${escapeHTML(revisedMetric.sourceVersion)}</p>
+              <p class="lane-state" data-state-label>${escapeHTML(view.metric.gapLabel)}</p>
+              <strong>${escapeHTML(view.metric.displayName)} · ${escapeHTML(view.metric.value)}</strong>
+              <p class="lane-detail">${escapeHTML(view.metric.period)} · ${escapeHTML(view.metric.sourceVersion)}</p>
             </article>
 
-            <article class="status-lane provider-lane" data-support-lane data-source-id="${escapeHTML(providerFailures.map((item) => item.id).join(","))}">
+            <article class="status-lane provider-lane" data-support-lane data-source-id="${escapeHTML(view.providers.map((item) => item.id).join(","))}">
               <div class="lane-heading"><span class="lane-mark provider" aria-hidden="true">源</span><h3>Provider 状态</h3></div>
-              ${providerFailures.map((run) => `
+              ${view.providers.map((run) => `
                 <div class="provider-item">
-                  <p class="lane-state" data-state-label>${escapeHTML(run.outcome)}</p>
-                  <strong>${escapeHTML(run.provider)}</strong>
-                  <p class="lane-detail">${escapeHTML(run.detail)}</p>
+                  <p class="lane-state" data-state-label>${escapeHTML(run.outcomeLabel)}</p>
+                  <strong>${escapeHTML(run.displayName)}</strong>
+                  <p class="lane-detail">${escapeHTML(run.detailLabel)}</p>
                 </div>
               `).join("")}
             </article>
 
-            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(recentSnapshot.id)}">
+            <article class="status-lane" data-support-lane data-source-id="${escapeHTML(view.recentSnapshot.id)}">
               <div class="lane-heading"><span class="lane-mark frozen" aria-hidden="true">冻</span><h3>最近冻结版本</h3></div>
-              <p class="lane-state" data-state-label>${escapeHTML(recentSnapshot.label)} · 已冻结</p>
-              <strong>${escapeHTML(recentSnapshot.id)}</strong>
-              <p class="lane-detail">截止 ${escapeHTML(recentSnapshot.cutoff)}<br>冻结于 ${escapeHTML(recentSnapshot.frozenAt)}</p>
+              <p class="lane-state" data-state-label>${escapeHTML(view.recentSnapshot.label)} · 已冻结</p>
+              <strong>${escapeHTML(view.recentSnapshot.id)}</strong>
+              <p class="lane-detail">截止 ${escapeHTML(view.recentSnapshot.cutoff)}<br>冻结于 ${escapeHTML(view.recentSnapshot.frozenAt)}</p>
             </article>
           </div>
         </section>
@@ -223,4 +335,5 @@
 
   renderShell(requestedScreen());
   window.SCREEN_RENDERERS = SCREEN_RENDERERS;
+  window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
 }());

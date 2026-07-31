@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -355,9 +355,10 @@ async function assertSourceContract() {
     );
   }
 
-  const [html, app, readme] = await Promise.all([
+  const [html, app, styles, readme] = await Promise.all([
     readFile(path.join(UI_DIR, "index.html"), "utf8"),
     readFile(path.join(UI_DIR, "app.js"), "utf8"),
+    readFile(path.join(UI_DIR, "styles.css"), "utf8"),
     readFile(path.join(UI_DIR, "README.md"), "utf8"),
   ]);
 
@@ -370,12 +371,21 @@ async function assertSourceContract() {
     assert.match(app, new RegExp(`["']${screen}["']\\s*:`, "u"), `SCREEN_RENDERERS must expose ${screen}`);
   }
 
+  assert.equal((styles.match(/\.case-question\s*\{/gu) ?? []).length, 1, "overview must define .case-question only once");
+  assert.doesNotMatch(styles, /border-left:\s*4px/u, "selected ResearchCase must not use a generic colored side stripe");
+  for (const token of ["--action-surface", "--decision-surface", "--status-surface", "--gap-accent", "--provider-accent", "--frozen-accent"]) {
+    assert.match(styles, new RegExp(`${token}:`, "u"), `styles must define semantic token ${token}`);
+  }
+
   assert.match(readme, /Node 20/u, "README must document the compatible Node runtime");
   assert.match(readme, /bundled Chromium/iu, "README must document the bundled Chromium path");
   assert.match(readme, /system (?:Google )?Chrome/iu, "README must document the system Chrome fallback");
   assert.match(readme, /npx playwright install chromium/u, "README must document browser-runtime remediation");
-  assert.match(readme, /OS temp directory/iu, "README must place transient captures in the OS temp directory");
-  assert.doesNotMatch(readme, /prototype\/ui\/generated/u, "README must not map transient captures into the repository");
+  assert.match(readme, /--screens shell[^\n]+without writing/iu, "README must document shell verification as non-writing");
+  assert.match(readme, /--screens overview[^\n]+prototype\/设计原型1\.png/iu, "README must document the overview final capture target");
+  assert.match(readme, /unimplemented screens?[^\n]+rejected/iu, "README must say unimplemented screens are rejected");
+  assert.match(readme, /atomic/iu, "README must document atomic final-image replacement");
+  assert.doesNotMatch(readme, /Task 1 has no final screenshot mapping/u, "README must not retain the obsolete Task 1 capture boundary");
   assert.match(readme, /scrollWidth.*1600/u, "README must document the horizontal fit gate");
   assert.match(readme, /scrollHeight.*1000/u, "README must document the vertical fit gate");
   assert.match(readme, /IHDR.*1600.*1000/u, "README must document PNG dimension verification");
@@ -446,11 +456,9 @@ async function assertCaptureDimensionAndOutputContract() {
   const {
     assertPngDimensions,
     assertViewportFit,
-    createTransientCaptureDirectory,
   } = await import("./capture.mjs");
   assert.equal(typeof assertViewportFit, "function", "capture.mjs must export assertViewportFit");
   assert.equal(typeof assertPngDimensions, "function", "capture.mjs must export assertPngDimensions");
-  assert.equal(typeof createTransientCaptureDirectory, "function", "capture.mjs must export createTransientCaptureDirectory");
 
   assert.doesNotThrow(() => assertViewportFit({ scrollWidth: 1600, scrollHeight: 1000 }));
   assert.throws(
@@ -471,12 +479,43 @@ async function assertCaptureDimensionAndOutputContract() {
   pngHeader.writeUInt32BE(1001, 20);
   assert.throws(() => assertPngDimensions(pngHeader), /1600x1001.*1600x1000/u);
 
-  const outputDir = await createTransientCaptureDirectory();
+}
+
+async function assertAtomicFinalCaptureContract() {
+  const { writeFinalCaptureAtomically } = await import("./capture.mjs");
+  assert.equal(typeof writeFinalCaptureAtomically, "function", "capture.mjs must export writeFinalCaptureAtomically");
+
+  const fixtureDir = await mkdtemp(path.join(os.tmpdir(), "prototype-final-capture-"));
+  const target = path.join(fixtureDir, "final.png");
+  const original = Buffer.from("existing final image");
+  const png = Buffer.alloc(24);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(png, 0);
+  png.write("IHDR", 12, "ascii");
+  png.writeUInt32BE(1600, 16);
+  png.writeUInt32BE(1000, 20);
+
   try {
-    assert.ok(outputDir.startsWith(`${os.tmpdir()}${path.sep}`), "transient captures must live in the OS temp directory");
-    assert.ok(!outputDir.startsWith(`${UI_DIR}${path.sep}`), "transient captures must not be stageable under prototype/ui");
+    await writeFile(target, original);
+    let attemptedRename;
+    await assert.rejects(
+      writeFinalCaptureAtomically(target, png, {
+        renameFile: async (temporaryPath, finalPath) => {
+          attemptedRename = { temporaryPath, finalPath };
+          throw new Error("simulated atomic rename failure");
+        },
+      }),
+      /simulated atomic rename failure/u,
+    );
+    assert.equal(attemptedRename.finalPath, target);
+    assert.equal(path.dirname(attemptedRename.temporaryPath), fixtureDir, "validated temp image must be a sibling of the final target");
+    assert.deepEqual(await readFile(target), original, "failed atomic replacement must leave the existing final unchanged");
+    assert.deepEqual(await readdir(fixtureDir), ["final.png"], "failed atomic replacement must clean its temporary sibling");
+
+    await writeFinalCaptureAtomically(target, png);
+    assert.deepEqual(await readFile(target), png, "successful atomic replacement must preserve the exact validated buffer");
+    assert.deepEqual(await readdir(fixtureDir), ["final.png"], "successful atomic replacement must leave no temporary sibling");
   } finally {
-    await rm(outputDir, { recursive: true, force: true });
+    await rm(fixtureDir, { recursive: true, force: true });
   }
 }
 
@@ -567,7 +606,57 @@ async function assertTeardownContract() {
   }
 }
 
+async function assertOverviewViewModelContract(page) {
+  const result = await page.evaluate(() => {
+    const fixture = window.PROTOTYPE_DATA;
+    const selectors = window.PROTOTYPE_OVERVIEW;
+    const baseline = selectors?.buildOverviewViewModel(fixture);
+
+    const reorderedFixture = structuredClone(fixture);
+    reorderedFixture.reviewQueue.reverse();
+    const reordered = selectors?.buildOverviewViewModel(reorderedFixture);
+
+    const missingChainFixture = structuredClone(fixture);
+    missingChainFixture.evidenceLinks = missingChainFixture.evidenceLinks.filter((link) => link.statementId !== "ST-003");
+    const missingChain = selectors?.buildOverviewViewModel(missingChainFixture);
+
+    const expectedReview = fixture.reviewQueue.find((item) => item.id === "RQ-001");
+    const expectedStatement = fixture.statements.find((item) => item.id === expectedReview.targetId);
+    const expectedEvidence = fixture.evidenceLinks.find((item) => item.statementId === expectedStatement.id);
+    const expectedThesis = fixture.theses.find((item) => item.id === expectedEvidence.thesisId);
+    return {
+      baseline,
+      reordered,
+      missingChain,
+      expected: {
+        workItemId: expectedReview.id,
+        task: expectedReview.task,
+        sourceId: expectedEvidence.id,
+        sourceVersion: expectedEvidence.sourceVersion,
+        blockerTitle: expectedThesis.title,
+      },
+    };
+  });
+
+  assert.ok(result.baseline, "overview must expose a pure buildOverviewViewModel selector");
+  assert.deepEqual(result.reordered.workItem, result.baseline.workItem, "reordering reviewQueue must not mix blocker facts");
+  for (const [field, expected] of Object.entries(result.expected)) {
+    assert.equal(result.baseline.workItem[field], expected, `overview work item must derive ${field} through explicit fixture IDs`);
+  }
+  assert.equal(result.baseline.workItem.reviewStatusLabel, "待人工审核");
+  assert.equal(result.baseline.workItem.actionLabel, `审核：${result.expected.task}`);
+  assert.equal(result.baseline.workItem.actionRoute, `?screen=review&item=${result.expected.workItemId}`);
+  assert.equal(result.baseline.workItem.isFallback, false);
+
+  assert.equal(result.missingChain.workItem.workItemId, result.expected.workItemId);
+  assert.equal(result.missingChain.workItem.isFallback, true, "missing optional relationship chain must be explicit");
+  assert.equal(result.missingChain.workItem.blockerTitle, `待审核事项 ${result.expected.workItemId}`);
+  assert.equal(result.missingChain.workItem.sourceId, "ST-003", "fallback must retain the selected item's own target source");
+  assert.equal(result.missingChain.workItem.sourceVersion, result.expected.sourceVersion);
+}
+
 async function assertOverviewProductContract(page, marker) {
+  await assertOverviewViewModelContract(page);
   const overviewText = await marker.textContent();
   for (const concept of [
     "新建研究",
@@ -593,8 +682,12 @@ async function assertOverviewProductContract(page, marker) {
     assert.ok((await nextActions.first().textContent()).trim(), `ResearchCase row ${index + 1} next action must be visible`);
   }
 
-  const selectedCase = marker.locator('[data-research-case-row][aria-selected="true"]');
+  const queueList = marker.getByRole("list", { name: "ResearchCase 队列" });
+  assert.equal(await queueList.count(), 1, "ResearchCase queue must use list semantics");
+  const selectedCase = queueList.getByRole("listitem");
   assert.equal(await selectedCase.count(), 1, "overview must have exactly one selected ResearchCase row");
+  assert.equal(await selectedCase.locator('[aria-selected]').count(), 0, "plain ResearchCase rows must not use aria-selected");
+  assert.equal(await selectedCase.getByText("当前研究案例", { exact: true }).count(), 1, "current case must have explicit screen-reader text");
   const selectedText = await selectedCase.textContent();
   for (const fixtureFact of [
     "AI 算力需求能否穿透至可验证的收入与持仓表达",
@@ -602,7 +695,8 @@ async function assertOverviewProductContract(page, marker) {
     "截止日",
     "2025-06-30",
     "RS-2025-06-30-v3",
-    "人工复核状态",
+    "案例状态",
+    "关系审核状态",
     "主要阻塞",
   ]) {
     assert.ok(selectedText.includes(fixtureFact), `selected ResearchCase must visibly include ${fixtureFact}`);
@@ -618,6 +712,52 @@ async function assertOverviewProductContract(page, marker) {
   const explicitStates = await marker.locator("[data-state-label]").allTextContents();
   assert.ok(explicitStates.length >= 5, "overview must label operational states in text, not color alone");
   assert.ok(explicitStates.every((label) => label.trim().length > 0), "overview state labels must be non-empty");
+
+  const viewModel = await page.evaluate(() => window.PROTOTYPE_OVERVIEW.buildOverviewViewModel(window.PROTOTYPE_DATA));
+  for (const localizedValue of [
+    viewModel.caseStateLabel,
+    viewModel.workItem.reviewStatusLabel,
+    viewModel.contradiction.stateLabel,
+    viewModel.metric.displayName,
+    viewModel.metric.gapLabel,
+    ...viewModel.providers.flatMap((provider) => [provider.displayName, provider.outcomeLabel, provider.detailLabel]),
+  ]) {
+    assert.ok(overviewText.includes(localizedValue), `overview must render localized view-model value: ${localizedValue}`);
+  }
+  for (const internalValue of [
+    "awaiting_validation",
+    "candidate",
+    "quota_failure",
+    "permission_gap",
+    "Market data quota",
+    "Licensed holdings feed",
+    "Data Center revenue",
+    "Daily call limit exceeded; no inferred replacement values",
+    "Current credential lacks historical holdings permission",
+  ]) {
+    assert.ok(!overviewText.includes(internalValue), `overview must not expose internal value: ${internalValue}`);
+  }
+
+  for (const selector of [".case-facts dd", ".decision-source", ".lane-state", ".lane-detail"]) {
+    const sizes = await marker.locator(selector).evaluateAll((elements) => elements.map((element) => parseFloat(getComputedStyle(element).fontSize)));
+    assert.ok(sizes.every((size) => size >= 11), `${selector} operational metadata must be at least 11px`);
+  }
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const narrowLayout = await page.evaluate(() => {
+    const action = document.querySelector("[data-primary-action]").getBoundingClientRect();
+    return {
+      bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      actionLeft: action.left,
+      actionRight: action.right,
+      actionWidth: action.width,
+      viewportWidth: window.innerWidth,
+    };
+  });
+  assert.ok(narrowLayout.bodyOverflow <= 0 && narrowLayout.documentOverflow <= 0, `overview must fit 375px without horizontal overflow: ${JSON.stringify(narrowLayout)}`);
+  assert.ok(narrowLayout.actionLeft >= 0 && narrowLayout.actionRight <= narrowLayout.viewportWidth && narrowLayout.actionWidth > 0, "primary action must remain visible at 375px");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertBrowserContract(routes) {
@@ -669,6 +809,7 @@ async function main() {
   await assertMalformedURLContract();
   await assertServerFilesystemBoundary();
   await assertCaptureDimensionAndOutputContract();
+  await assertAtomicFinalCaptureContract();
   await assertFinalCaptureRegistryContract();
   await assertTeardownContract();
   await assertBrowserContract(routes);

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -58,14 +59,26 @@ export async function captureViewportPng(page) {
   return png;
 }
 
-export function createTransientCaptureDirectory() {
-  return mkdtemp(path.join(os.tmpdir(), "research-prototype-capture-"));
-}
-
 export function captureTargetForScreen(screen) {
   const target = FINAL_CAPTURE_TARGETS[screen];
   if (!target) throw new Error(`Capture renderer not implemented: ${screen}`);
   return target;
+}
+
+export async function writeFinalCaptureAtomically(target, png, {
+  writeTemporary = writeFile,
+  renameFile = rename,
+  removeTemporary = rm,
+  temporaryName = () => `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`,
+} = {}) {
+  assertPngDimensions(png);
+  const temporaryPath = path.join(path.dirname(target), temporaryName());
+  try {
+    await writeTemporary(temporaryPath, png, { flag: "wx" });
+    await renameFile(temporaryPath, target);
+  } finally {
+    await removeTemporary(temporaryPath, { force: true });
+  }
 }
 
 function findPlaywrightNode() {
@@ -251,7 +264,7 @@ async function runCLI() {
       if (selection.mode === "capture") {
         const output = captureTargetForScreen(screen);
         const png = await captureViewportPng(page);
-        await writeFile(output, png);
+        await writeFinalCaptureAtomically(output, png);
         console.log(`${screen} -> ${output}`);
       }
     }
