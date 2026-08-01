@@ -150,7 +150,7 @@ export function assertFixtureContract(data) {
   assert.ok(workbench, "case must expose an explicit workbench dossier");
   assert.equal(
     Object.keys(workbench).sort().join(","),
-    ["factorAnalyses", "formalJudgment", "largestGapFactorId", "mainContradictionFactorId", "nextValidationThesisId", "selectedFactorId", "sourceEvidenceLinkIds"].sort().join(","),
+    ["factorAnalyses", "formalJudgment", "largestGapFactorId", "mainContradictionEvidenceLinkId", "mainContradictionFactorId", "nextValidationThesisId", "selectedFactorId", "sourceEvidenceLinkIds"].sort().join(","),
     "workbench must remain a nested case concern without adding fixture top-level keys",
   );
   assert.equal(workbench.formalJudgment.reviewState, "reviewed", "formal judgment must be human reviewed");
@@ -267,6 +267,8 @@ export function assertFixtureContract(data) {
   for (const evidenceLinkId of workbench.sourceEvidenceLinkIds) {
     assert.ok(indexes.evidenceLinks.has(evidenceLinkId), `workbench references unknown evidence link ${evidenceLinkId}`);
   }
+  assert.ok(indexes.evidenceLinks.has(workbench.mainContradictionEvidenceLinkId), `workbench references unknown contradiction evidence link ${workbench.mainContradictionEvidenceLinkId}`);
+  assert.equal(indexes.evidenceLinks.get(workbench.mainContradictionEvidenceLinkId).role, "contradict", "main contradiction evidence must use the contradict role");
   const factorAnalysisIds = new Set();
   for (const analysis of workbench.factorAnalyses) {
     assert.ok(indexes.factors.has(analysis.factorId), `workbench factor analysis references unknown factor ${analysis.factorId}`);
@@ -294,10 +296,11 @@ export function assertFixtureContract(data) {
 
   const requiredRecordIds = {
     companies: ["CO-NVDA", "CO-TSM"],
+    documents: ["DOC-MSFT-FY25Q3-CALL"],
     funds: ["FUND-ETF-AI-INFRA", "FUND-SEMI-INDEX"],
     reviewQueue: ["RQ-001", "RQ-002"],
-    statements: ["ST-001", "ST-002", "ST-003"],
-    evidenceLinks: ["EL-001", "EL-002", "EL-003"],
+    statements: ["ST-001", "ST-002", "ST-003", "ST-004"],
+    evidenceLinks: ["EL-001", "EL-002", "EL-003", "EL-004"],
   };
   for (const [group, requiredIds] of Object.entries(requiredRecordIds)) {
     for (const id of requiredIds) {
@@ -366,6 +369,9 @@ export function assertFixtureContract(data) {
   const evidenceStates = new Set(data.evidenceLinks.map((link) => link.reviewState));
   assert.ok(evidenceStates.has("reviewed"), "fixture evidence links must include reviewed evidence");
   assert.ok(evidenceStates.has("pending_review"), "fixture evidence links must include pending evidence");
+  const evidenceRoles = new Set(data.evidenceLinks.map((link) => link.role));
+  assert.ok(evidenceRoles.has("support"), "fixture evidence links must include support evidence");
+  assert.ok(evidenceRoles.has("contradict"), "fixture evidence links must include contradictory evidence");
   for (const thesis of data.theses) {
     const links = data.evidenceLinks.filter((link) => link.thesisId === thesis.id);
     const expectedState = links.some((link) => link.reviewState === "pending_review")
@@ -547,6 +553,10 @@ async function assertFixtureDataContract() {
   const unknownWorkbenchEvidence = structuredClone(data);
   unknownWorkbenchEvidence.case.workbench.sourceEvidenceLinkIds = ["EL-MISSING"];
   assert.throws(() => assertFixtureContract(unknownWorkbenchEvidence), /workbench references unknown evidence link EL-MISSING/u);
+
+  const unknownContradictionEvidence = structuredClone(data);
+  unknownContradictionEvidence.case.workbench.mainContradictionEvidenceLinkId = "EL-MISSING";
+  assert.throws(() => assertFixtureContract(unknownContradictionEvidence), /workbench references unknown contradiction evidence link EL-MISSING/u);
 }
 
 async function assertResearchPlanStateContract() {
@@ -1089,42 +1099,46 @@ async function assertResearchPlanProductContract(page, marker) {
   const reuseCount = marker.locator("[data-reuse-count]");
   const candidateCount = marker.locator("[data-candidate-count]");
   assert.equal(await pageStatus.getAttribute("aria-live"), "polite", "asset page changes must be announced");
-  assert.equal(Number(await reuseCount.textContent()), 9);
+  assert.equal(Number(await reuseCount.textContent()), 12);
   assert.equal(Number(await candidateCount.textContent()), 2);
   assert.ok(await previousPage.isDisabled(), "asset previous page must be disabled at the first page");
   assert.ok(!await nextPage.isDisabled(), "asset next page must be enabled before the last page");
-  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 3 页");
+  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 4 页");
   const visitedAssetIds = new Set(await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId)));
 
   await nextPage.press("Enter");
-  assert.equal((await pageStatus.textContent()).trim(), "第 2 / 3 页", "keyboard pagination must reach page 2");
+  assert.equal((await pageStatus.textContent()).trim(), "第 2 / 4 页", "keyboard pagination must reach page 2");
   for (const id of await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId))) visitedAssetIds.add(id);
   const secondPageSelected = marker.locator('[data-asset-id="DOC-MSFT-FY25Q3"] [data-toggle-asset]');
   assert.equal(await secondPageSelected.getAttribute("aria-pressed"), "true", "a non-first-page selected asset must retain fixture selection");
   await secondPageSelected.press("Enter");
   assert.equal(await secondPageSelected.getAttribute("aria-pressed"), "false", "a non-first-page selected asset must be removable");
-  assert.equal(Number(await reuseCount.textContent()), 8, "removing a page-2 asset must update the global selected count");
+  assert.equal(Number(await reuseCount.textContent()), 11, "removing a page-2 asset must update the global selected count");
   assert.equal(Number(await candidateCount.textContent()), 3, "removing a page-2 asset must update the global candidate count");
 
   await nextPage.press("Enter");
-  assert.equal((await pageStatus.textContent()).trim(), "第 3 / 3 页", "keyboard pagination must reach page 3");
+  assert.equal((await pageStatus.textContent()).trim(), "第 3 / 4 页", "keyboard pagination must reach page 3");
   for (const id of await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId))) visitedAssetIds.add(id);
-  assert.ok(await nextPage.isDisabled(), "asset next page must be disabled at the last page");
   const laterCandidate = marker.locator('[data-asset-id="ST-003"] [data-toggle-asset]');
   assert.equal(await laterCandidate.getAttribute("aria-pressed"), "false", "ST-003 must remain an explicit later-page candidate");
   await laterCandidate.press("Enter");
   assert.equal(await laterCandidate.getAttribute("aria-pressed"), "true", "a later-page candidate must be reusable");
-  assert.equal(Number(await reuseCount.textContent()), 9, "reusing a page-3 candidate must update the global selected count");
+  assert.equal(Number(await reuseCount.textContent()), 12, "reusing a page-3 candidate must update the global selected count");
   assert.equal(Number(await candidateCount.textContent()), 2, "reusing a page-3 candidate must update the global candidate count");
-  assert.deepEqual([...visitedAssetIds].sort(), ["DOC-BRCM-FY25Q2", "DOC-MSFT-FY25Q3", "DOC-NVDA-FY26Q1", "DOC-TSMC-2025M05", "EL-001", "EL-002", "M-NVDA-DC-REV", "M-TSMC-M05-YOY", "ST-001", "ST-002", "ST-003"].sort(), "asset pagination must expose exactly all 11 unique assets");
+  await nextPage.press("Enter");
+  assert.equal((await pageStatus.textContent()).trim(), "第 4 / 4 页", "keyboard pagination must reach page 4");
+  for (const id of await assetList.locator("[data-asset-id]").evaluateAll((elements) => elements.map((element) => element.dataset.assetId))) visitedAssetIds.add(id);
+  assert.ok(await nextPage.isDisabled(), "asset next page must be disabled at the last page");
+  assert.deepEqual([...visitedAssetIds].sort(), ["DOC-BRCM-FY25Q2", "DOC-MSFT-FY25Q3", "DOC-NVDA-FY26Q1", "DOC-MSFT-FY25Q3-CALL", "DOC-TSMC-2025M05", "EL-001", "EL-002", "EL-004", "M-NVDA-DC-REV", "M-TSMC-M05-YOY", "ST-001", "ST-002", "ST-003", "ST-004"].sort(), "asset pagination must expose exactly all 14 unique assets");
 
+  await previousPage.press("Enter");
   await previousPage.press("Enter");
   assert.equal(await marker.locator('[data-asset-id="DOC-MSFT-FY25Q3"] [data-toggle-asset]').getAttribute("aria-pressed"), "false", "removed selection must persist when page 2 is revisited");
   await nextPage.press("Enter");
   assert.equal(await marker.locator('[data-asset-id="ST-003"] [data-toggle-asset]').getAttribute("aria-pressed"), "true", "candidate reuse must persist when page 3 is revisited");
   await previousPage.press("Enter");
   await previousPage.press("Enter");
-  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 3 页");
+  assert.equal((await pageStatus.textContent()).trim(), "第 1 / 4 页");
 
   const initialCount = Number(await reuseCount.textContent());
   const candidate = marker.locator('[data-asset-id="DOC-BRCM-FY25Q2"] [data-toggle-asset]');
@@ -1254,6 +1268,24 @@ async function assertCaseWorkbenchProductContract(page, marker) {
   for (const label of ["支持条件", "证据关系", "适用范围", "证伪条件"]) {
     assert.ok((await thesisRegion.innerText()).includes(label), `Thesis evidence must explain ${label}`);
   }
+  const unreviewedTheses = thesisRegion.locator('[data-thesis-review-state="unreviewed"]');
+  assert.equal(await unreviewedTheses.count(), 3, "exploration mode must expose all three explicitly unreviewed Thesis drafts");
+  const pendingRelationshipThesis = thesisRegion.locator('[data-evidence-review-state="pending_relationship_review"]');
+  assert.equal(await pendingRelationshipThesis.count(), 1, "exploration mode must expose the pending relationship Thesis explicitly");
+  const rebuttal = thesisRegion.locator('[data-thesis-rebuttal][data-evidence-role="contradict"]');
+  assert.equal(await rebuttal.count(), 1, "Thesis evidence must expose one explicit contradictory SourceSpan");
+  const rebuttalText = await rebuttal.innerText();
+  for (const copy of [
+    "反驳证据",
+    "Microsoft FY2025 Q3 earnings call transcript",
+    "issuer-call-2025-04-30-v1",
+    "2025-04-30",
+    "prepared remarks, pp. 4-5, capacity constraints and revenue timing",
+    "已人工复核",
+  ]) {
+    assert.ok(rebuttalText.includes(copy), `Thesis rebuttal must visibly include ${copy}`);
+  }
+  assert.match(await rebuttal.getByRole("link", { name: "查看原文定位", exact: true }).getAttribute("href"), /^\?screen=library&document=DOC-MSFT-FY25Q3-CALL&span=/u, "Thesis rebuttal must preserve its document and SourceSpan locator");
 
   const factorRegion = marker.locator("[data-factor-comparison]");
   assert.equal(await factorRegion.locator("table").count(), 1, "factor comparison must use a semantic table");
@@ -1271,7 +1303,12 @@ async function assertCaseWorkbenchProductContract(page, marker) {
   }
 
   const citations = marker.locator("[data-source-citation]");
-  assert.ok(await citations.count() >= 3, "case must expose multiple positive and contradictory source citations");
+  assert.equal(await marker.locator('[data-source-citation][data-evidence-role="support"]').count(), 2, "source list must expose two explicit support relations");
+  assert.equal(await marker.locator('[data-source-citation][data-evidence-role="contradict"]').count(), 1, "source list must expose one explicit contradictory relation");
+  assert.equal(await marker.locator('[data-source-citation][data-evidence-role="gap"]').count(), 1, "source list must preserve the pending gap relation");
+  const contradictoryCitation = marker.locator('[data-source-citation][data-evidence-role="contradict"]');
+  assert.ok((await contradictoryCitation.innerText()).includes("prepared remarks, pp. 4-5, capacity constraints and revenue timing"), "contradictory citation must expose its exact SourceSpan");
+  assert.equal(await contradictoryCitation.getAttribute("data-review-state"), "reviewed", "contradictory citation must be reviewed");
   for (let index = 0; index < await citations.count(); index += 1) {
     const citation = citations.nth(index);
     const text = await citation.innerText();
@@ -1283,19 +1320,37 @@ async function assertCaseWorkbenchProductContract(page, marker) {
     assert.match(await locate.getAttribute("href"), /^\?screen=library&document=[^&]+&span=[^&]+$/u, `source citation ${index + 1} locator must preserve document and span identity`);
   }
 
-  await frozen.click();
+  await frozen.focus();
+  await page.keyboard.press("Space");
   assert.equal(await frozen.getAttribute("aria-pressed"), "true", "frozen switch must be a real control");
   assert.equal(await explore.getAttribute("aria-pressed"), "false");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.caseMode), "frozen", "keyboard switching must retain focus on the frozen-mode control");
   assert.ok((await marker.locator("[data-current-basis]").innerText()).includes("只显示当前快照中的资料、数据和已审核关系"), "frozen view must explain its point-in-time boundary");
   assert.ok(await proposal.isHidden(), "frozen view must exclude the provisional AI proposal");
+  assert.ok(await thesisRegion.isHidden(), "frozen view must exclude unreviewed Thesis drafts rather than leaking their relationship state");
+  assert.ok(await pendingRelationshipThesis.isHidden(), "frozen view must expose no pending_relationship_review Thesis");
+  assert.ok(await compass.locator('[data-decision-kind="contradiction"]').isHidden(), "frozen view must exclude the candidate-factor main contradiction");
+  assert.ok(await compass.locator('[data-decision-kind="gap"]').isHidden(), "frozen view must exclude the candidate-factor largest gap");
+  assert.ok(await compass.locator('[data-decision-kind="next"]').isHidden(), "frozen view must exclude a next event sourced from an unreviewed Thesis");
   assert.ok(await factorRegion.isHidden(), "frozen view must exclude candidate factor comparison");
   assert.ok(await mechanism.isHidden(), "frozen view must exclude the candidate factor detail");
   assert.equal(await citations.filter({ hasText: "待人工审核" }).count(), 1, "exploration view must contain one pending source citation");
   assert.ok(await citations.filter({ hasText: "待人工审核" }).isHidden(), "frozen view must exclude pending source citations");
-  assert.equal(await citations.filter({ hasText: "已人工复核" }).count(), 2, "frozen view must retain both reviewed source citations");
+  assert.equal(await citations.filter({ hasText: "已人工复核" }).count(), 3, "frozen view must retain all reviewed source citations");
   assert.ok(await citations.filter({ hasText: "已人工复核" }).first().isVisible(), "reviewed source citations must remain visible in frozen mode");
-  await explore.click();
+  const visibleExcluded = await marker.locator('[data-frozen-eligibility="excluded"]').evaluateAll((elements) => elements.filter((element) => element.getClientRects().length > 0).length);
+  assert.equal(visibleExcluded, 0, "frozen mode must have no semantically excluded content visible");
+  const visibleCitationStates = await citations.evaluateAll((elements) => elements
+    .filter((element) => element.getClientRects().length > 0)
+    .map((element) => element.dataset.reviewState));
+  assert.deepEqual(visibleCitationStates, ["reviewed", "reviewed", "reviewed"], "frozen source list must contain reviewed relations only");
+  await explore.focus();
+  await page.keyboard.press("Enter");
   assert.ok(await proposal.isVisible(), "exploration view must restore the provisional AI proposal");
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.caseMode), "exploration", "keyboard switching must retain focus on the exploration-mode control");
+  assert.ok(await thesisRegion.isVisible(), "exploration view must restore unreviewed Thesis drafts");
+  assert.ok(await compass.locator('[data-decision-kind="contradiction"]').isVisible(), "exploration view must restore the candidate-factor main contradiction");
+  assert.ok(await compass.locator('[data-decision-kind="gap"]').isVisible(), "exploration view must restore the candidate-factor largest gap");
   assert.ok(await factorRegion.isVisible(), "exploration view must restore candidate factor comparison");
 
   for (const selector of ["[data-case-reading]", "[data-thesis-evidence]", "[data-factor-comparison]", "[data-factor-detail]", "[data-source-list]"]) {

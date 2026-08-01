@@ -1064,25 +1064,25 @@
     return `
       <section class="decision-compass" data-review-compass aria-labelledby="case-dossier">
         <h2 class="sr-only" id="case-dossier">研究档案</h2>
-        <article class="formal-judgment" data-decision-kind="formal" data-review-state="reviewed">
+        <article class="formal-judgment" data-decision-kind="formal" data-review-state="reviewed" data-frozen-eligibility="reviewed">
           <div class="decision-heading"><p>人工审核记录</p><span>已冻结 · ${escapeHTML(view.formalJudgment.snapshotId)}</span></div>
           <h3>当前正式判断</h3>
           <p data-core-text>${escapeHTML(view.formalJudgment.text)}</p>
         </article>
-        <article class="ai-proposal" data-decision-kind="ai" data-review-state="pending_review" data-provisional data-evidence-assessment>
+        <article class="ai-proposal" data-decision-kind="ai" data-review-state="pending_review" data-frozen-eligibility="excluded" data-provisional data-evidence-assessment>
           <div class="decision-heading"><p>AI 提议</p><span>不写入正式版本</span></div>
           <h3>AI 判断草案</h3>
           <strong>AI 草案 · 未经人工复核</strong>
           <p data-core-text>${escapeHTML(view.aiDraft)}</p>
         </article>
         <div class="reviewer-orienting-cues">
-          <article data-decision-kind="contradiction">
+          <article data-decision-kind="contradiction" data-frozen-eligibility="excluded">
             <p>反面线索</p><h3>主要反证</h3><strong data-core-text>${escapeHTML(view.contradiction.label)}</strong>
           </article>
-          <article data-decision-kind="gap">
+          <article data-decision-kind="gap" data-frozen-eligibility="excluded">
             <p>待补证</p><h3>最大缺口</h3><strong data-core-text>${escapeHTML(view.gap.label)}</strong><small data-core-text>${escapeHTML(view.gap.explanation)}</small>
           </article>
-          <article data-decision-kind="next">
+          <article data-decision-kind="next" data-frozen-eligibility="excluded">
             <p>${escapeHTML(view.nextValidation.thesisId)}</p><h3>下一验证事件</h3><strong data-core-text>${escapeHTML(view.nextValidation.event)}</strong>
           </article>
         </div>
@@ -1094,10 +1094,10 @@
     const selected = view.thesisRows.find((thesis) => thesis.selected);
     const register = view.thesisRows.filter((thesis) => !thesis.selected);
     return `
-      <section class="case-section thesis-evidence" data-thesis-evidence aria-labelledby="thesis-evidence-title">
+      <section class="case-section thesis-evidence" data-thesis-evidence data-frozen-eligibility="excluded" aria-labelledby="thesis-evidence-title">
         <header><div><p>命题台账</p><h2 id="thesis-evidence-title">Thesis 与证据</h2></div><span>范围与证伪条件随快照保存</span></header>
         <div class="thesis-focus">
-          <article class="selected-thesis">
+          <article class="selected-thesis" data-thesis-review-state="${escapeHTML(selected.reviewState)}" data-evidence-review-state="${escapeHTML(selected.evidenceReviewState)}" data-frozen-eligibility="${escapeHTML(selected.frozenEligibility)}">
             <div class="thesis-title"><span>${escapeHTML(selected.id)} · 当前验证焦点</span><strong data-core-text>${escapeHTML(selected.title)}</strong></div>
             <dl>
               <div><dt>支持条件</dt><dd data-core-text>${escapeHTML(selected.supportCondition)}</dd></div>
@@ -1108,12 +1108,23 @@
           </article>
           <div class="thesis-register" aria-label="其他命题">
             ${register.map((thesis) => `
-              <article>
+              <article data-thesis-review-state="${escapeHTML(thesis.reviewState)}" data-evidence-review-state="${escapeHTML(thesis.evidenceReviewState)}" data-frozen-eligibility="${escapeHTML(thesis.frozenEligibility)}">
                 <div class="thesis-title"><span>${escapeHTML(thesis.id)}</span><strong data-core-text>${escapeHTML(thesis.title)}</strong></div>
                 <small data-core-text>证据关系：${escapeHTML(thesis.evidenceState)} · 适用范围：${escapeHTML(thesis.scope)}</small>
               </article>
             `).join("")}
           </div>
+          <article class="thesis-rebuttal" data-thesis-rebuttal data-evidence-role="${escapeHTML(view.rebuttal.relation)}" data-review-state="${escapeHTML(view.rebuttal.reviewState)}" data-snapshot-membership="${escapeHTML(view.rebuttal.snapshotMembership)}" data-frozen-eligibility="${escapeHTML(view.rebuttal.frozenEligibility)}">
+            <div class="rebuttal-statement"><span>反驳证据 · ${escapeHTML(view.rebuttal.id)}</span><strong data-core-text>${escapeHTML(view.rebuttal.statement)}</strong></div>
+            <dl>
+              <div><dt>来源文档</dt><dd data-core-text>${escapeHTML(view.rebuttal.documentTitle)}</dd></div>
+              <div><dt>文档版本</dt><dd data-core-text>${escapeHTML(view.rebuttal.sourceVersion)}</dd></div>
+              <div><dt>发布日期</dt><dd data-core-text>${escapeHTML(view.rebuttal.publishedDate)}</dd></div>
+              <div><dt>原文区段</dt><dd data-core-text>${escapeHTML(view.rebuttal.sourceSpan)}</dd></div>
+              <div><dt>复核状态</dt><dd data-core-text>${escapeHTML(view.rebuttal.reviewLabel)}</dd></div>
+            </dl>
+            <a class="source-locator" href="?screen=library&amp;document=${encodeURIComponent(view.rebuttal.documentId)}&amp;span=${encodeURIComponent(view.rebuttal.sourceSpan)}">查看原文定位</a>
+          </article>
         </div>
       </section>
     `;
@@ -1130,13 +1141,13 @@
       ["反例和证伪条件", "falsifier"],
     ];
     return `
-      <section class="case-section factor-comparison" data-factor-comparison data-provisional aria-labelledby="factor-comparison-title">
+      <section class="case-section factor-comparison" data-factor-comparison data-frozen-eligibility="excluded" data-provisional aria-labelledby="factor-comparison-title">
         <header><div><p>竞争性解释</p><h2 id="factor-comparison-title">因素比较</h2></div><span data-provisional>AI 比较草案 · 未经人工复核</span></header>
         <div class="factor-table-wrap">
           <table>
             <thead><tr><th scope="col">审核维度 · 因素角色与状态</th>${view.factorRows.map((factor) => `
               <th scope="col"${factor.factorId === view.selectedFactor.id ? ' class="selected-factor-row"' : ""}>
-                <span>${escapeHTML(factor.groupLabel)}</span><strong>${escapeHTML(factor.label)}</strong><small>${escapeHTML(factor.roleLabel)} · ${escapeHTML(factor.statusLabel)}</small>
+                <span>${escapeHTML(factor.groupLabel)} · ${escapeHTML(factor.roleLabel)} · ${escapeHTML(factor.statusLabel)}</span><strong>${escapeHTML(factor.label)}</strong>
               </th>
             `).join("")}</tr></thead>
             <tbody>
@@ -1162,7 +1173,7 @@
       ["证伪条件", detail.falsifier],
     ];
     return `
-      <section class="case-section factor-detail" data-factor-detail data-provisional aria-labelledby="factor-detail-title">
+      <section class="case-section factor-detail" data-factor-detail data-frozen-eligibility="excluded" data-provisional aria-labelledby="factor-detail-title">
         <header><div><p>${escapeHTML(detail.roleLabel)} · ${escapeHTML(detail.statusLabel)}</p><h2 id="factor-detail-title">所选因素解释</h2></div><strong>${escapeHTML(detail.label)}</strong></header>
         <dl>${fields.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd data-core-text>${escapeHTML(value)}</dd></div>`).join("")}</dl>
       </section>
@@ -1175,7 +1186,7 @@
         <header><div><p>冻结引用清单</p><h2 id="source-citations-title">原文引用</h2></div><span>每条关系回到确切 SourceSpan</span></header>
         <div class="source-list" data-source-list>
           ${view.sources.map((source) => `
-            <article data-source-citation${source.provisional ? " data-provisional" : ""}>
+            <article data-source-citation data-evidence-role="${escapeHTML(source.relation)}" data-review-state="${escapeHTML(source.reviewState)}" data-snapshot-membership="${escapeHTML(source.snapshotMembership)}" data-frozen-eligibility="${escapeHTML(source.frozenEligibility)}"${source.frozenEligibility === "excluded" ? " data-provisional" : ""}>
               <div class="source-statement"><span>${escapeHTML(source.relationLabel)} · ${escapeHTML(source.id)}</span><strong data-core-text>${escapeHTML(source.statement)}</strong></div>
               <dl>
                 <div><dt>文档版本</dt><dd data-core-text>${escapeHTML(source.sourceVersion)}</dd></div>

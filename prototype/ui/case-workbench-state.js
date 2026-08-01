@@ -66,6 +66,28 @@
     const selectedAnalysis = analyses.get(dossier.selectedFactorId);
     const selectedFactor = factors.get(dossier.selectedFactorId);
 
+    const resolveSource = (link) => {
+      const statement = statements.get(link.statementId);
+      const document = documents.get(statement.documentId);
+      return {
+        id: link.id,
+        documentId: document.id,
+        documentTitle: document.title,
+        statement: statement.text,
+        rationale: link.rationale,
+        relation: link.role,
+        relationLabel: EVIDENCE_ROLE_LABELS[link.role] ?? "关系",
+        sourceVersion: link.sourceVersion,
+        publishedDate: link.publishedAt.slice(0, 10),
+        availableDate: link.availableAt.slice(0, 10),
+        sourceSpan: link.sourceSpan,
+        reviewState: link.reviewState,
+        reviewLabel: REVIEW_LABELS[link.reviewState] ?? "状态待确认",
+        snapshotMembership: link.snapshotMembership.join("、"),
+        frozenEligibility: link.reviewState === "reviewed" ? "reviewed" : "excluded",
+      };
+    };
+
     const thesisRows = fixture.theses.map((thesis) => {
       const links = fixture.evidenceLinks.filter((link) => link.thesisId === thesis.id);
       const relationLabels = links.length
@@ -74,9 +96,12 @@
       return {
         id: thesis.id,
         selected: thesis.id === dossier.nextValidationThesisId,
+        reviewState: "unreviewed",
+        frozenEligibility: "excluded",
         title: thesis.title,
         statement: thesis.statement,
         supportCondition: thesis.supportCondition,
+        evidenceReviewState: thesis.evidenceReviewState,
         evidenceState: THESIS_EVIDENCE_LABELS[thesis.evidenceReviewState] ?? "证据关系状态待确认",
         relationLabels,
         scope: `${thesis.observationStart} 至 ${thesis.observationEnd}`,
@@ -95,26 +120,8 @@
       };
     });
 
-    const sources = dossier.sourceEvidenceLinkIds.map((linkId) => {
-      const link = evidenceLinks.get(linkId);
-      const statement = statements.get(link.statementId);
-      const document = documents.get(statement.documentId);
-      return {
-        id: link.id,
-        documentId: document.id,
-        documentTitle: document.title,
-        statement: statement.text,
-        relationLabel: EVIDENCE_ROLE_LABELS[link.role] ?? "关系",
-        sourceVersion: link.sourceVersion,
-        publishedDate: link.publishedAt.slice(0, 10),
-        availableDate: link.availableAt.slice(0, 10),
-        sourceSpan: link.sourceSpan,
-        reviewState: link.reviewState,
-        reviewLabel: REVIEW_LABELS[link.reviewState] ?? "状态待确认",
-        snapshotMembership: link.snapshotMembership.join("、"),
-        provisional: link.reviewState !== "reviewed",
-      };
-    });
+    const sources = dossier.sourceEvidenceLinkIds.map((linkId) => resolveSource(evidenceLinks.get(linkId)));
+    const rebuttal = resolveSource(evidenceLinks.get(dossier.mainContradictionEvidenceLinkId));
 
     return {
       tabs: CASE_TABS,
@@ -142,6 +149,7 @@
         event: nextValidationThesis.nextValidationEvent,
       },
       thesisRows,
+      rebuttal,
       factorRows,
       selectedFactor: {
         id: selectedFactor.id,
@@ -169,7 +177,13 @@
     root.querySelector("[data-current-basis]").textContent = frozen
       ? "已冻结版本 · 只显示当前快照中的资料、数据和已审核关系"
       : "探索模式 · 同时显示新材料与 AI 提议；未经审核内容不会改变正式判断";
-    for (const provisional of root.querySelectorAll("[data-provisional]")) provisional.hidden = frozen;
+    for (const element of root.querySelectorAll("[data-frozen-eligibility]")) {
+      const excluded = frozen && element.dataset.frozenEligibility !== "reviewed";
+      element.hidden = excluded;
+      element.inert = excluded;
+      if (excluded) element.setAttribute("aria-hidden", "true");
+      else element.removeAttribute("aria-hidden");
+    }
   }
 
   function bindCaseWorkbench(root) {
