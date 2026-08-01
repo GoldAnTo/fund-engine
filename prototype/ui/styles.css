@@ -328,6 +328,10 @@
     .asset-header-tools { width: 100%; justify-content: space-between; }
     .provider-plan-row dl div { grid-template-columns: minmax(0, 1fr); gap: 1px; }
     .gap-list article { grid-template-columns: minmax(0, 1fr); }
+    .plan-button,
+    .plan-text-link,
+    .plan-upload span,
+    .asset-pagination button { min-width: 40px; min-height: 40px; }
   }
 }
 

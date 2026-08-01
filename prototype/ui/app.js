@@ -857,11 +857,18 @@
   }
 
   function renderPlanAsset(asset) {
+    const assetLabel = asset.kind === "metric"
+      ? [
+          displayLabel(PRESENTATION.planMetricNames, asset.metricName, "关键业务指标"),
+          displayLabel(PRESENTATION.metricValues, asset.metricValue, asset.metricValue),
+          displayLabel(PRESENTATION.metricPeriods, asset.metricPeriod, asset.metricPeriod),
+        ].join(" · ")
+      : asset.label;
     return `
-      <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}">
-        <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong data-core-text>${escapeHTML(asset.label)}</strong><p data-secondary-text>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
+      <article class="asset-row" data-asset-id="${escapeHTML(asset.id)}" data-asset-label="${escapeHTML(assetLabel)}">
+        <div><span class="type-label">${escapeHTML(displayLabel(PRESENTATION.assetKinds, asset.kind, "冻结资产"))}</span><strong data-core-text>${escapeHTML(assetLabel)}</strong><p data-secondary-text>${escapeHTML(asset.sourceVersion)} · ${escapeHTML(asset.sourceSpan)}</p></div>
         <div class="asset-review"><span data-core-text data-review-status>${escapeHTML(displayLabel(PRESENTATION.reviewStatesExtended, asset.reviewState, "状态待确认"))} · ${asset.reviewCount} 次复核</span><span data-core-text data-reuse-status>${asset.selected ? "已纳入复用" : "未纳入复用"}</span></div>
-        <button type="button" class="plan-button quiet" data-toggle-asset aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
+        <button type="button" class="plan-button quiet" data-toggle-asset aria-label="${asset.selected ? "移除" : "复用"}：${escapeHTML(assetLabel)}" aria-pressed="${asset.selected}">${asset.selected ? "移除" : "复用"}</button>
       </article>
     `;
   }
@@ -872,7 +879,7 @@
     const renderCollectionItems = (items, state, label) => items.map((item) => `
       <li data-collection-state="${escapeHTML(state)}"><span class="plan-state-mark" aria-hidden="true">${escapeHTML(label.slice(0, 1))}</span><div><strong data-core-text>${escapeHTML(label)}</strong><p data-core-text>${escapeHTML(item.label)}</p><small data-secondary-text>截止 ${escapeHTML(item.cutoff)}</small></div></li>
     `).join("");
-    const renderGapItems = (items) => items.map((gap) => `<div class="gap-entry" data-gap-id="${escapeHTML(gap.id)}"><div><strong data-core-text>${escapeHTML(gap.label)}</strong><p data-core-text>${escapeHTML(gap.scope)} · <span data-gap-status>待获取</span></p></div><button type="button" class="plan-button quiet" data-toggle-gap aria-pressed="false">暂时无法获得</button></div>`).join("");
+    const renderGapItems = (items) => items.map((gap) => `<div class="gap-entry" data-gap-id="${escapeHTML(gap.id)}" data-gap-label="${escapeHTML(gap.label)}"><div><strong data-core-text>${escapeHTML(gap.label)}</strong><p data-core-text>${escapeHTML(gap.scope)} · <span data-gap-status>待获取</span></p></div><button type="button" class="plan-button quiet" data-toggle-gap aria-label="暂时无法获得：${escapeHTML(gap.label)}" aria-pressed="false">暂时无法获得</button></div>`).join("");
     return `
       <section class="screen research-plan-screen" data-screen="plan">
         <header class="plan-case-header" data-plan-case-header>
@@ -911,7 +918,7 @@
           </section>
 
           <section class="plan-region" data-plan-region="collection" aria-labelledby="plan-collection-title">
-            <header><div><p class="section-kicker">获取与冻结</p><h2 id="plan-collection-title">正在获取并冻结</h2></div><p>状态不混用</p></header>
+            <header><div><p class="section-kicker">获取与冻结</p><h2 id="plan-collection-title">获取与冻结状态</h2></div><p>状态不混用</p></header>
             <ul class="collection-list">
               ${renderCollectionItems(view.collection.reused, "reused_frozen", "已复用并冻结")}
               ${renderCollectionItems(view.collection.awaitingProbe, "awaiting_capability_probe", "等待能力探测")}
@@ -985,6 +992,7 @@
         assetButton.setAttribute("aria-pressed", String(selected));
         assetButton.textContent = selected ? "移除" : "复用";
         const row = assetButton.closest("[data-asset-id]");
+        assetButton.setAttribute("aria-label", `${selected ? "移除" : "复用"}：${row.dataset.assetLabel}`);
         selectedAssets.set(row.dataset.assetId, selected);
         row.querySelector("[data-reuse-status]").textContent = selected ? "已纳入复用" : "未纳入复用";
         updateAssetCounts();
@@ -1004,6 +1012,7 @@
         gapButton.setAttribute("aria-pressed", String(unavailable));
         gapButton.textContent = unavailable ? "恢复获取" : "暂时无法获得";
         const row = gapButton.closest("[data-gap-id]");
+        gapButton.setAttribute("aria-label", `${unavailable ? "恢复获取" : "暂时无法获得"}：${row.dataset.gapLabel}`);
         row.querySelector("[data-gap-status]").textContent = unavailable ? "暂时无法获得" : "待获取";
         announce(`${row.dataset.gapId}${unavailable ? "已标记暂时无法获得" : "已恢复为待获取"}`);
       }

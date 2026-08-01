@@ -36,6 +36,9 @@
         reviewState: item.reviewState,
         reviewCount: item.reviewState === "reviewed" ? 1 : 0,
         selected: selected.has(item.id),
+        metricName: item.kind === "metric" ? item.name : undefined,
+        metricValue: item.kind === "metric" ? item.value : undefined,
+        metricPeriod: item.kind === "metric" ? item.period : undefined,
       }));
   }
 

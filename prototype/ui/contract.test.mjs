@@ -948,7 +948,7 @@ async function assertFinalCaptureRegistryContract() {
 
 async function assertResearchPlanProductContract(page, marker) {
   assert.equal((await marker.locator("h1").textContent()).trim(), "研究计划与证据获取");
-  for (const region of ["已有资料与数据", "Provider 查询计划", "正在获取并冻结", "待审核结果", "证据缺口", "失败、额度与权限"]) {
+  for (const region of ["已有资料与数据", "Provider 查询计划", "获取与冻结状态", "待审核结果", "证据缺口", "失败、额度与权限"]) {
     assert.equal(await marker.getByRole("heading", { name: region, exact: true }).count(), 1, `plan must expose exactly one ${region} region`);
   }
   for (const action of ["复用", "移除", "重试", "调整范围", "上传材料", "暂时无法获得"]) {
@@ -965,7 +965,18 @@ async function assertResearchPlanProductContract(page, marker) {
     assert.ok(providerText.includes(copy), `provider rows must explain ${copy}`);
   }
   assert.doesNotMatch(providerText, /industry_analysis_view|announcement_filing_fulltext|fund_holding_detail|juyuan|capability_probe|probe_required/u, "plan must not leak raw provider enums");
-  assert.ok(await marker.getByRole("button", { name: "复用" }).first().isVisible(), "explicit candidate reuse must be a real visible action");
+  assert.ok(await marker.getByText("复用", { exact: true }).first().isVisible(), "explicit candidate reuse must be a real visible action");
+  const firstPageAssetButtons = marker.locator("[data-asset-id] [data-toggle-asset]");
+  const assetAccessibleNames = await firstPageAssetButtons.evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+  assert.ok(assetAccessibleNames.every((name) => name && /^(?:复用|移除)：/u.test(name)), `asset actions must have item-specific accessible names: ${JSON.stringify(assetAccessibleNames)}`);
+  assert.equal(new Set(assetAccessibleNames).size, assetAccessibleNames.length, "visible asset action names must be unique");
+  const gapButtons = marker.locator("[data-gap-id] [data-toggle-gap]");
+  const gapAccessibleNames = await gapButtons.evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+  assert.ok(gapAccessibleNames.every((name) => name?.startsWith("暂时无法获得：")), `gap actions must have item-specific accessible names: ${JSON.stringify(gapAccessibleNames)}`);
+  assert.equal(new Set(gapAccessibleNames).size, gapAccessibleNames.length, "gap action names must be unique");
+  const metricAssetText = await marker.locator('[data-asset-id="M-NVDA-DC-REV"]').innerText();
+  for (const copy of ["NVIDIA 数据中心业务收入", "391 亿美元", "2026 财年第一季度"]) assert.ok(metricAssetText.includes(copy), `metric asset must localize ${copy}`);
+  assert.doesNotMatch(metricAssetText, /Data Center revenue|\$39\.1bn|FY2026 Q1/u, "metric asset must not leak raw English values");
 
   for (const selector of [".asset-list", ".provider-plan-list", ".collection-list", ".compact-result-list", ".gap-list", ".failure-list"]) {
     const measurement = await marker.locator(selector).evaluate((element) => ({
@@ -1076,6 +1087,7 @@ async function assertResearchPlanProductContract(page, marker) {
   await candidate.press("Enter");
   assert.equal(Number(await reuseCount.textContent()), initialCount + 1, "keyboard reuse must add an explicit candidate locally");
   assert.equal((await candidate.textContent()).trim(), "移除");
+  assert.ok((await candidate.getAttribute("aria-label")).startsWith("移除："), "asset accessible name must track its current action");
   await candidate.press("Enter");
   assert.equal(Number(await reuseCount.textContent()), initialCount, "candidate reuse must remain reversible without fixture mutation");
   const remove = marker.getByRole("button", { name: "移除" }).first();
@@ -1093,6 +1105,7 @@ async function assertResearchPlanProductContract(page, marker) {
   await gap.press("Enter");
   assert.equal((await gap.textContent()).trim(), "恢复获取");
   assert.equal(await gap.getAttribute("aria-pressed"), "true");
+  assert.ok((await gap.getAttribute("aria-label")).startsWith("恢复获取："), "gap accessible name must track its current action");
 
   const input = marker.locator('input[type="file"]');
   assert.equal(await input.count(), 1, "upload material must use a real file input");
@@ -1115,6 +1128,10 @@ async function assertResearchPlanProductContract(page, marker) {
   }));
   assert.ok(narrow.body <= 0 && narrow.document <= 0, `plan must fit 375px without horizontal overflow: ${JSON.stringify(narrow)}`);
   assert.ok(narrow.height > 812, "plan mobile layout must use normal vertical scrolling");
+  const undersizedMobileTargets = await marker.locator('[data-toggle-asset], [data-toggle-gap], [data-retry-run], [data-asset-page], .plan-text-link, .plan-upload span').evaluateAll((elements) => elements
+    .map((element) => ({ label: element.getAttribute("aria-label") ?? element.textContent.trim(), width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height }))
+    .filter((item) => item.width < 40 || item.height < 40));
+  assert.deepEqual(undersizedMobileTargets, [], `mobile plan controls must expose at least 40px hit targets: ${JSON.stringify(undersizedMobileTargets)}`);
   const mobileRetry = marker.getByRole("button", { name: "重试" }).last();
   await mobileRetry.scrollIntoViewIfNeeded();
   assert.ok(await mobileRetry.isVisible(), "last plan control must remain reachable on mobile");
