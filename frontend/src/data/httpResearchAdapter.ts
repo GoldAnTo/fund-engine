@@ -29,7 +29,10 @@ import type {
   DataMetricSelection,
   DataRevisionComparison,
   DataSeriesPoint,
+  GraphLayer,
+  GraphNodeView,
   LinkReviewPayload,
+  RelationshipGraphView,
   ReviewQueueView,
   ReviewQueueViewItem,
   ThemeIndexView,
@@ -217,6 +220,20 @@ export class HttpResearchAdapter implements ResearchClient {
     }
     const qs = sp.toString();
     return qs ? `?${qs}` : "";
+  }
+
+  /** Prototype routes carry fixture ids (e.g. RC-AIC-2025-01); in live mode
+   * fall back to the first real case unless the id is already a UUID. */
+  private async resolveCaseId(caseId: string): Promise<string> {
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (UUID_RE.test(caseId)) return caseId;
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const first = cases.items[0];
+    if (!first) {
+      throw new PageStateError("parse_failed", "no research case exists yet");
+    }
+    return first.id;
   }
 
   // ── Mappers (honest pass-through; unknown enums throw to surface drift) ─
@@ -760,8 +777,109 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await import("./prototypeFixture")).buildCaseWorkbenchView();
   }
 
-  async getRelationshipGraphView(_caseId: string) {
-    return (await import("./prototypeFixture")).buildRelationshipGraphView();
+  async getRelationshipGraphView(
+    caseId: string,
+  ): Promise<RelationshipGraphView> {
+    const resolvedCaseId = await this.resolveCaseId(caseId);
+    const dto = await this.get<Schemas["GraphResponse"]>(
+      `/research-cases/${resolvedCaseId}/graph${this.buildQuery({
+        research_mode: "true",
+      })}`,
+    );
+    const caseDto = await this.get<Schemas["CaseListResponse"]>(
+      `/research-cases`,
+    );
+    const caseSummary = caseDto.items.find((c) => c.id === resolvedCaseId);
+
+    // review_state arrives on evidence edges (thesis -> statement).
+    const reviewByStatement = new Map<string, string>();
+    for (const edge of dto.edges) {
+      if (edge.semantic_kind === "evidence" && edge.review_state) {
+        reviewByStatement.set(edge.target, edge.review_state);
+      }
+    }
+
+    const KIND_LABEL: Record<string, string> = {
+      case: "研究案例",
+      thesis: "命题",
+      statement: "来源事实",
+      step: "因果步骤",
+      company: "公司",
+      stock: "股票",
+      fund: "基金",
+      valuation: "估值",
+    };
+    const LAYER_OF: Record<string, GraphLayer["key"]> = {
+      statement: "evidence",
+      thesis: "thesis",
+      step: "causal",
+      company: "company",
+      stock: "company",
+      fund: "fund",
+      valuation: "fund",
+    };
+    const LAYER_LABEL: Record<GraphLayer["key"], string> = {
+      evidence: "证据",
+      thesis: "命题",
+      causal: "因果链",
+      company: "公司",
+      fund: "基金",
+    };
+
+    const toNodeView = (node: Schemas["GraphNodeDTO"]): GraphNodeView => {
+      const review = reviewByStatement.get(node.id);
+      return {
+        id: node.id,
+        layer: node.kind,
+        title: node.label,
+        meta: String(node.properties?.statement_kind ?? node.kind),
+        kind: node.kind,
+        kindLabel: KIND_LABEL[node.kind] ?? node.kind,
+        relation: String(node.properties?.reason ?? ""),
+        review: review
+          ? review === "reviewed"
+            ? "已人工复核"
+            : "AI 提议 · 未经人工复核"
+          : "—",
+        sourceName: "—",
+        sourceSpan: "—",
+        sourceHref: "",
+        attachment: "—",
+        publicationDate: "—",
+        asOf: "—",
+        scope: String(node.properties?.code ?? ""),
+        citations: [],
+      };
+    };
+
+    const layerKeys: GraphLayer["key"][] = [
+      "evidence",
+      "thesis",
+      "causal",
+      "company",
+      "fund",
+    ];
+    const nodes = dto.nodes.filter((n) => n.kind !== "case").map(toNodeView);
+    const layers: GraphLayer[] = layerKeys.map((key) => ({
+      key,
+      label: LAYER_LABEL[key],
+      nodes: dto.nodes
+        .filter((n) => LAYER_OF[n.kind] === key)
+        .map(toNodeView),
+    }));
+
+    return {
+      case: {
+        id: resolvedCaseId,
+        title: caseSummary?.title ?? "",
+        question: "",
+        cutoff: dto.basis?.cutoff ?? "",
+        snapshotId: "",
+      },
+      layers,
+      nodes,
+      selectedNodeId: nodes[0]?.id ?? "",
+    };
   }
 
   async getLibraryView() {
