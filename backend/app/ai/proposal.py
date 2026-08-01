@@ -23,6 +23,7 @@ from app.ai.prompts import PROPOSE_PROMPT_VERSION, PROPOSE_SYSTEM
 from app.ai.runs import record_run
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 from app.repositories.research import ResearchRepository
+from app.services.compliance import evaluate_compliance
 from app.services.recall import RecallService
 from app.services.research import ResearchService
 
@@ -97,10 +98,16 @@ class EvidenceProposer:
             )
             created: list[EvidenceLink] = []
             seen_statement_ids: set[str] = set()
+            refused = 0
             for link_data in links_data:
                 stmt_id = link_data.get("source_statement_id", "")
                 statement = stmt_map.get(stmt_id)
                 if statement is None or stmt_id in seen_statement_ids:
+                    continue
+                # Non-investment-advice gate: a link whose rationale crosses
+                # the boundary is skipped, never written to the ledger.
+                if evaluate_compliance(str(link_data.get("reason", ""))).is_hit:
+                    refused += 1
                     continue
                 scope = link_data.get("scope") or derived_scope
                 if not scope:
@@ -115,13 +122,16 @@ class EvidenceProposer:
                 )
                 created.append(link)
 
+            summary = f"proposed {len(created)} evidence links"
+            if refused:
+                summary += f" ({refused} refused by compliance)"
             record_run(
                 session,
                 kind="propose",
                 model_version=self._client.model_version,
                 prompt_version=PROPOSE_PROMPT_VERSION,
                 input_ref=input_ref,
-                output_summary=f"proposed {len(created)} evidence links",
+                output_summary=summary,
                 status="success",
                 started_at=started_at,
             )

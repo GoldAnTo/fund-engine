@@ -37,14 +37,23 @@ class LLMClient:
     def from_env(cls) -> "LLMClient":
         """Build a client from ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``.
 
-        Without ``LLM_API_KEY`` the client runs in mock mode so the engine
-        never fails merely for lack of credentials.
+        Without ``LLM_API_KEY`` the client runs in mock mode for development
+        and tests.  In production (``APP_ENV=production``) a missing key is a
+        hard failure: silently falling back to mock would produce fabricated
+        research output while appearing live (provider discipline borrowed
+        from VCRA's ProviderFactory — real providers fail, never degrade).
         """
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
 
         if not api_key:
+            app_env = os.getenv("APP_ENV", "development").strip().lower()
+            if app_env in {"production", "prod"}:
+                raise RuntimeError(
+                    "LLM_API_KEY is required when APP_ENV=production; "
+                    "mock mode is restricted to development and tests"
+                )
             return cls(model_version=f"mock-{model}", mock=True)
 
         from openai import OpenAI

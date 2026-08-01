@@ -29,6 +29,7 @@ from app.models.ledger import (
 )
 from app.repositories.research import ResearchRepository
 from app.services.assessment import AssessmentService
+from app.services.compliance import assert_compliant
 
 
 class AssessmentGenerator:
@@ -90,6 +91,10 @@ class AssessmentGenerator:
             conclusion = result["conclusion"]
             rationale = result["rationale"]
             gaps = result.get("gaps", [])
+
+            # Non-investment-advice gate: refused text never reaches the
+            # ledger; the failure is recorded on the AIRun below.
+            assert_compliant(rationale, *[str(g) for g in gaps])
 
             assessment = assessment_service.create_ai_assessment(
                 snapshot.id,
