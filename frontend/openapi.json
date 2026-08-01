@@ -145,6 +145,45 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "research-case-commands-v1"
+        ],
+        "summary": "Create Case",
+        "operationId": "create_case_api_v1_research_cases_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateCaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/research-cases/{case_id}/dossier": {
@@ -217,6 +256,178 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DossierResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/gaps": {
+      "get": {
+        "tags": [
+          "research-cases-v1"
+        ],
+        "summary": "Gaps",
+        "description": "证据缺口聚合 (prototype 研究计划): open gaps across latest assessments.",
+        "operationId": "gaps_api_v1_research_cases__case_id__gaps_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseGapsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/compare": {
+      "get": {
+        "tags": [
+          "snapshot-compare-v1"
+        ],
+        "summary": "Compare Case",
+        "operationId": "compare_case_api_v1_research_cases__case_id__compare_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "base",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "基准截止（较早）",
+              "title": "Base"
+            },
+            "description": "基准截止（较早）"
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "对比截止（较晚）",
+              "title": "Compare"
+            },
+            "description": "对比截止（较晚）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseCompareResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/snapshots": {
+      "get": {
+        "tags": [
+          "snapshot-compare-v1"
+        ],
+        "summary": "Case Snapshots",
+        "description": "快照列表 (prototype 版本比较 left rail), newest first.",
+        "operationId": "case_snapshots_api_v1_research_cases__case_id__snapshots_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseSnapshotsResponse"
                 }
               }
             }
@@ -667,6 +878,778 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/fund-exposure": {
+      "get": {
+        "tags": [
+          "penetration-v1"
+        ],
+        "summary": "Case Fund Exposure",
+        "operationId": "case_fund_exposure_api_v1_research_cases__case_id__fund_exposure_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundExposureResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/funds/{fund_id}/composition": {
+      "get": {
+        "tags": [
+          "penetration-v1"
+        ],
+        "summary": "Fund Composition",
+        "operationId": "fund_composition_api_v1_funds__fund_id__composition_get",
+        "parameters": [
+          {
+            "name": "fund_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Fund Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundCompositionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/metrics/catalog": {
+      "get": {
+        "tags": [
+          "metrics-v1"
+        ],
+        "summary": "Metric Catalog",
+        "operationId": "metric_catalog_api_v1_metrics_catalog_get",
+        "parameters": [
+          {
+            "name": "stock_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stock Id"
+            }
+          },
+          {
+            "name": "metric_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Metric Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricCatalogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/metrics/series": {
+      "get": {
+        "tags": [
+          "metrics-v1"
+        ],
+        "summary": "Metric Series",
+        "operationId": "metric_series_api_v1_metrics_series_get",
+        "parameters": [
+          {
+            "name": "stock_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stock Id"
+            }
+          },
+          {
+            "name": "metric_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Metric Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricSeriesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider-runs": {
+      "get": {
+        "tags": [
+          "provider-runs-v1"
+        ],
+        "summary": "List Provider Runs",
+        "operationId": "list_provider_runs_api_v1_provider_runs_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(extract|propose|assess)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge": {
+      "get": {
+        "tags": [
+          "knowledge-v1"
+        ],
+        "summary": "Knowledge Layer",
+        "operationId": "knowledge_layer_api_v1_knowledge_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "review_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(machine_generated|reviewed|rejected)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Review State"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/theses": {
+      "post": {
+        "tags": [
+          "research-case-commands-v1"
+        ],
+        "summary": "Add Thesis",
+        "operationId": "add_thesis_api_v1_research_cases__case_id__theses_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateThesisRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateThesisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/review-queue": {
+      "get": {
+        "tags": [
+          "review-commands-v1"
+        ],
+        "summary": "Review Queue",
+        "operationId": "review_queue_api_v1_review_queue_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evidence-links/{link_id}/reviews": {
+      "post": {
+        "tags": [
+          "review-commands-v1"
+        ],
+        "summary": "Review Link",
+        "operationId": "review_link_api_v1_evidence_links__link_id__reviews_post",
+        "parameters": [
+          {
+            "name": "link_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Link Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkReviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assessments/{assessment_id}/reviews": {
+      "post": {
+        "tags": [
+          "review-commands-v1"
+        ],
+        "summary": "Review Assessment",
+        "operationId": "review_assessment_api_v1_assessments__assessment_id__reviews_post",
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssessmentReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentReviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/rerun": {
+      "post": {
+        "tags": [
+          "engine-commands-v1"
+        ],
+        "summary": "Rerun Assessment",
+        "operationId": "rerun_assessment_api_v1_theses__thesis_id__rerun_post",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/propose": {
+      "post": {
+        "tags": [
+          "engine-commands-v1"
+        ],
+        "summary": "Propose Evidence",
+        "description": "Run the propose step for one thesis.\n\nRecall is cutoff-safe (only statements visible before this run started),\nand every proposed link enters the review queue as machine_generated —\nnothing is auto-confirmed.",
+        "operationId": "propose_evidence_api_v1_theses__thesis_id__propose_post",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/{document_version_id}/extract": {
+      "post": {
+        "tags": [
+          "engine-commands-v1"
+        ],
+        "summary": "Extract Statements",
+        "description": "Run the extract step over one document version.\n\nAppend-only: statements are added, never replaced.  The engine script\nfeeds only pending versions (spans present, no statements yet); calling\nthis on an already-extracted version will append duplicates.",
+        "operationId": "extract_statements_api_v1_documents__document_version_id__extract_post",
+        "parameters": [
+          {
+            "name": "document_version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/ingest": {
+      "post": {
+        "tags": [
+          "ingest-commands-v1"
+        ],
+        "summary": "Ingest Documents",
+        "operationId": "ingest_documents_api_v1_documents_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -692,6 +1675,31 @@
   },
   "components": {
     "schemas": {
+      "AssessFailureDTO": {
+        "properties": {
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "failed_at": {
+            "type": "string",
+            "title": "Failed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "model_version",
+          "error",
+          "failed_at"
+        ],
+        "title": "AssessFailureDTO",
+        "description": "Latest failed assess attempt for the focus thesis.\n\nSurfaced only when the failure is NEWER than the latest successful\nassessment (or no assessment exists) — e.g. a compliance refusal on\nthe last rerun.  The refused text itself never reached the ledger;\nthis is the audit-trail view of it."
+      },
       "AssessmentDTO": {
         "properties": {
           "id": {
@@ -750,6 +1758,208 @@
         ],
         "title": "AssessmentDTO"
       },
+      "AssessmentReviewRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "insufficient_evidence"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer",
+            "default": "reviewer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "reason"
+        ],
+        "title": "AssessmentReviewRequest"
+      },
+      "AssessmentReviewResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "ai_assessment_id": {
+            "type": "string",
+            "title": "Ai Assessment Id"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "ai_assessment_id",
+          "outcome",
+          "conclusion",
+          "reason",
+          "reviewer",
+          "created_at"
+        ],
+        "title": "AssessmentReviewResponse"
+      },
+      "CaseCompareResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "base_cutoff": {
+            "type": "string",
+            "title": "Base Cutoff"
+          },
+          "compare_cutoff": {
+            "type": "string",
+            "title": "Compare Cutoff"
+          },
+          "documents_added": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentVersionAddedDTO"
+            },
+            "type": "array",
+            "title": "Documents Added"
+          },
+          "theses": {
+            "items": {
+              "$ref": "#/components/schemas/ThesisCompareDTO"
+            },
+            "type": "array",
+            "title": "Theses"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "base_cutoff",
+          "compare_cutoff",
+          "documents_added",
+          "theses"
+        ],
+        "title": "CaseCompareResponse",
+        "description": "冻结快照比较: what changed between two point-in-time views."
+      },
+      "CaseGapDTO": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "thesis_statement": {
+            "type": "string",
+            "title": "Thesis Statement"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "gap": {
+            "type": "string",
+            "title": "Gap"
+          },
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "thesis_statement",
+          "conclusion",
+          "gap",
+          "assessment_id"
+        ],
+        "title": "CaseGapDTO",
+        "description": "One open gap from the latest provisional assessment of a thesis."
+      },
+      "CaseGapsResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "title": "Cutoff"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/CaseGapDTO"
+            },
+            "type": "array",
+            "title": "Gaps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "cutoff",
+          "gaps"
+        ],
+        "title": "CaseGapsResponse",
+        "description": "证据缺口聚合: every open gap across the case's latest assessments."
+      },
       "CaseListResponse": {
         "properties": {
           "schema_version": {
@@ -776,6 +1986,68 @@
           "page"
         ],
         "title": "CaseListResponse"
+      },
+      "CaseSnapshotDTO": {
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "thesis_statement": {
+            "type": "string",
+            "title": "Thesis Statement"
+          },
+          "cutoff": {
+            "type": "string",
+            "title": "Cutoff"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "link_count": {
+            "type": "integer",
+            "title": "Link Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "snapshot_id",
+          "thesis_id",
+          "thesis_statement",
+          "cutoff",
+          "created_at",
+          "link_count"
+        ],
+        "title": "CaseSnapshotDTO",
+        "description": "One frozen snapshot row (prototype 版本比较 · 快照列表)."
+      },
+      "CaseSnapshotsResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/CaseSnapshotDTO"
+            },
+            "type": "array",
+            "title": "Snapshots"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "snapshots"
+        ],
+        "title": "CaseSnapshotsResponse"
       },
       "CaseSummaryDTO": {
         "properties": {
@@ -839,6 +2111,392 @@
           "description"
         ],
         "title": "CausalStepDTO"
+      },
+      "CompareLinkDTO": {
+        "properties": {
+          "link_id": {
+            "type": "string",
+            "title": "Link Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "statement_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Text"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_id",
+          "role",
+          "reason",
+          "statement_text",
+          "review_state"
+        ],
+        "title": "CompareLinkDTO"
+      },
+      "CompositionPositionDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "title": "Report Period"
+          },
+          "pe_ttm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pe Ttm"
+          },
+          "pb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pb"
+          },
+          "theme_hits": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeHitDTO"
+            },
+            "type": "array",
+            "title": "Theme Hits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "weight",
+          "report_period",
+          "pe_ttm",
+          "pb",
+          "theme_hits"
+        ],
+        "title": "CompositionPositionDTO"
+      },
+      "CreateCaseRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "industry_topic": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Industry Topic"
+          },
+          "created_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Created By"
+          },
+          "research_object": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Object"
+          },
+          "phenomenon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phenomenon"
+          },
+          "core_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core Question"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "evidence_cutoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Cutoff"
+          },
+          "initial_theses": {
+            "items": {
+              "$ref": "#/components/schemas/ThesisInput"
+            },
+            "type": "array",
+            "title": "Initial Theses"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "industry_topic",
+          "created_by"
+        ],
+        "title": "CreateCaseRequest",
+        "description": "Create a research case with its research question + initial theses."
+      },
+      "CreateCaseResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "theses": {
+            "items": {
+              "$ref": "#/components/schemas/CreatedThesisDTO"
+            },
+            "type": "array",
+            "title": "Theses"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "theses"
+        ],
+        "title": "CreateCaseResponse"
+      },
+      "CreateThesisRequest": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Statement"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "observation_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Start"
+          },
+          "observation_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation End"
+          },
+          "support_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Condition"
+          },
+          "falsification_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Falsification Condition"
+          },
+          "next_verification_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Verification Event"
+          },
+          "creator_type": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Creator Type",
+            "default": "human"
+          },
+          "created_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Created By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "statement",
+          "created_by"
+        ],
+        "title": "CreateThesisRequest",
+        "description": "Add one proposition to an existing case (AI 协助拆分 or human)."
+      },
+      "CreateThesisResponse": {
+        "properties": {
+          "thesis": {
+            "$ref": "#/components/schemas/CreatedThesisDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis"
+        ],
+        "title": "CreateThesisResponse"
+      },
+      "CreatedThesisDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "creator_type": {
+            "type": "string",
+            "title": "Creator Type"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "statement",
+          "title",
+          "creator_type",
+          "review_state"
+        ],
+        "title": "CreatedThesisDTO"
       },
       "CursorPage": {
         "properties": {
@@ -1003,6 +2661,42 @@
         ],
         "title": "DocumentSummaryDTO"
       },
+      "DocumentVersionAddedDTO": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "available_at": {
+            "type": "string",
+            "title": "Available At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "source_url",
+          "published_at",
+          "available_at"
+        ],
+        "title": "DocumentVersionAddedDTO"
+      },
       "DossierResponse": {
         "properties": {
           "schema_version": {
@@ -1032,6 +2726,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AssessmentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assess_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssessFailureDTO"
               },
               {
                 "type": "null"
@@ -1207,6 +2911,299 @@
           "review_state"
         ],
         "title": "EvidenceRecordDTO"
+      },
+      "EvidenceReviewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "evidence_link_id": {
+            "type": "string",
+            "title": "Evidence Link Id"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation"
+          },
+          "factor_role": {
+            "type": "string",
+            "title": "Factor Role"
+          },
+          "scope_boundary": {
+            "type": "string",
+            "title": "Scope Boundary"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_link_id",
+          "outcome",
+          "relation",
+          "factor_role",
+          "scope_boundary",
+          "reason",
+          "reviewer",
+          "created_at"
+        ],
+        "title": "EvidenceReviewDTO"
+      },
+      "ExposurePositionDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "title": "Report Period"
+          },
+          "pe_ttm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pe Ttm"
+          },
+          "pb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pb"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "weight",
+          "report_period",
+          "pe_ttm",
+          "pb"
+        ],
+        "title": "ExposurePositionDTO"
+      },
+      "ExtractResponse": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "statement_count": {
+            "type": "integer",
+            "title": "Statement Count"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractStatementDTO"
+            },
+            "type": "array",
+            "title": "Statements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "mode",
+          "statement_count",
+          "statements"
+        ],
+        "title": "ExtractResponse",
+        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only)."
+      },
+      "ExtractStatementDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "normalized_text": {
+            "type": "string",
+            "title": "Normalized Text"
+          },
+          "observed_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Period"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "normalized_text",
+          "observed_period"
+        ],
+        "title": "ExtractStatementDTO",
+        "description": "One statement produced by the extraction step."
+      },
+      "FundCompositionResponse": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/CompositionPositionDTO"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_id",
+          "fund_code",
+          "fund_name",
+          "as_of",
+          "positions"
+        ],
+        "title": "FundCompositionResponse",
+        "description": "反向穿透: 这只基金「真正装了什么」——持仓 + 命中的主题."
+      },
+      "FundExposureDTO": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "theme_exposure": {
+            "type": "number",
+            "title": "Theme Exposure"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/ExposurePositionDTO"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_id",
+          "fund_code",
+          "fund_name",
+          "theme_exposure",
+          "positions"
+        ],
+        "title": "FundExposureDTO",
+        "description": "One fund's aggregate exposure to the case's theme stocks."
+      },
+      "FundExposureResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "funds": {
+            "items": {
+              "$ref": "#/components/schemas/FundExposureDTO"
+            },
+            "type": "array",
+            "title": "Funds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "as_of",
+          "funds"
+        ],
+        "title": "FundExposureResponse",
+        "description": "正向穿透: 主题/案件 → 命中基金（按主题暴露度排序）."
       },
       "GraphEdgeDTO": {
         "properties": {
@@ -1490,6 +3487,131 @@
         ],
         "title": "HistoricalBasisDTO"
       },
+      "IngestRequest": {
+        "properties": {
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "research_queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Queries"
+          },
+          "announcement_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Announcement Query"
+          },
+          "quote_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Query"
+          },
+          "quote_stock_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Stock Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "IngestRequest",
+        "description": "Trigger a Gildata ingest run.\n\nAll fields optional: omitted queries fall back to the AI-compute\ndefaults.  ``case_id`` tags ingested span locators against a case;\nwhen omitted the first existing case is used (or none)."
+      },
+      "IngestResponse": {
+        "properties": {
+          "research_reports": {
+            "type": "integer",
+            "title": "Research Reports"
+          },
+          "announcements": {
+            "type": "integer",
+            "title": "Announcements"
+          },
+          "spans": {
+            "type": "integer",
+            "title": "Spans"
+          },
+          "valuations_written": {
+            "type": "integer",
+            "title": "Valuations Written"
+          },
+          "valuations_skipped": {
+            "type": "integer",
+            "title": "Valuations Skipped"
+          },
+          "stock_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Id"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "research_reports",
+          "announcements",
+          "spans",
+          "valuations_written",
+          "valuations_skipped",
+          "stock_id",
+          "case_id"
+        ],
+        "title": "IngestResponse",
+        "description": "Summary of one ingest run.\n\nIdempotent: documents dedupe by content hash and valuation snapshots\nby stock + date + metric + source, so re-runs report skips instead of\nduplicating rows."
+      },
       "KeyChangeDTO": {
         "properties": {
           "id": {
@@ -1546,6 +3668,383 @@
           "review_state"
         ],
         "title": "KeyChangeDTO"
+      },
+      "KnowledgeItemDTO": {
+        "properties": {
+          "statement_id": {
+            "type": "string",
+            "title": "Statement Id"
+          },
+          "statement_text": {
+            "type": "string",
+            "title": "Statement Text"
+          },
+          "statement_kind": {
+            "type": "string",
+            "title": "Statement Kind"
+          },
+          "observed_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Period"
+          },
+          "span_id": {
+            "type": "string",
+            "title": "Span Id"
+          },
+          "verbatim_text": {
+            "type": "string",
+            "title": "Verbatim Text"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeLinkDTO"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "statement_id",
+          "statement_text",
+          "statement_kind",
+          "observed_period",
+          "span_id",
+          "verbatim_text",
+          "links"
+        ],
+        "title": "KnowledgeItemDTO",
+        "description": "已复核知识层一行: 规范化陈述 + 它的证据链接与人工审核。"
+      },
+      "KnowledgeLinkDTO": {
+        "properties": {
+          "link_id": {
+            "type": "string",
+            "title": "Link Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Scope"
+          },
+          "creator_type": {
+            "type": "string",
+            "title": "Creator Type"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "latest_review_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Review Outcome"
+          },
+          "latest_reviewer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Reviewer"
+          },
+          "latest_reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_id",
+          "thesis_id",
+          "role",
+          "reason",
+          "scope",
+          "creator_type",
+          "review_state",
+          "latest_review_outcome",
+          "latest_reviewer",
+          "latest_reviewed_at"
+        ],
+        "title": "KnowledgeLinkDTO"
+      },
+      "KnowledgeResponse": {
+        "properties": {
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "items"
+        ],
+        "title": "KnowledgeResponse"
+      },
+      "LinkReviewRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "rejected",
+              "needs_more_evidence"
+            ],
+            "title": "Outcome"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "supports",
+                  "contradicts",
+                  "contextualizes",
+                  "evidence_gap"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation"
+          },
+          "factor_role": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Factor Role"
+          },
+          "scope_boundary": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Scope Boundary"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "factor_role",
+          "scope_boundary",
+          "reason",
+          "reviewer"
+        ],
+        "title": "LinkReviewRequest",
+        "description": "四要素关系级审核: 关系选择/因素角色/适用边界/审核理由 + 动作."
+      },
+      "LinkReviewResponse": {
+        "properties": {
+          "review": {
+            "$ref": "#/components/schemas/EvidenceReviewDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "review"
+        ],
+        "title": "LinkReviewResponse"
+      },
+      "MetricCatalogEntryDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "latest_value": {
+            "type": "number",
+            "title": "Latest Value"
+          },
+          "latest_as_of": {
+            "type": "string",
+            "title": "Latest As Of"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "metric_name",
+          "latest_value",
+          "latest_as_of",
+          "source",
+          "definition"
+        ],
+        "title": "MetricCatalogEntryDTO",
+        "description": "One catalog row: an entity-metric pair with its latest frozen value."
+      },
+      "MetricCatalogResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MetricCatalogEntryDTO"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "MetricCatalogResponse"
+      },
+      "MetricPointDTO": {
+        "properties": {
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "as_of_date": {
+            "type": "string",
+            "title": "As Of Date"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "as_of_date",
+          "source",
+          "definition"
+        ],
+        "title": "MetricPointDTO"
+      },
+      "MetricSeriesResponse": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/MetricPointDTO"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "metric_name",
+          "points"
+        ],
+        "title": "MetricSeriesResponse",
+        "description": "冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断)."
       },
       "OverviewResponse": {
         "properties": {
@@ -1666,6 +4165,238 @@
         ],
         "title": "OverviewTotalsDTO"
       },
+      "ProposeResponse": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "link_count": {
+            "type": "integer",
+            "title": "Link Count"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ProposedLinkDTO"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "mode",
+          "link_count",
+          "links"
+        ],
+        "title": "ProposeResponse",
+        "description": "Result of running evidence proposal for one thesis.\n\nEvery proposed link lands in the review queue as\n``machine_generated``; nothing is auto-confirmed.  ``mode`` is\n``mock`` without an LLM key (non-production only)."
+      },
+      "ProposedLinkDTO": {
+        "properties": {
+          "link_id": {
+            "type": "string",
+            "title": "Link Id"
+          },
+          "source_statement_id": {
+            "type": "string",
+            "title": "Source Statement Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Scope"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_id",
+          "source_statement_id",
+          "role",
+          "reason",
+          "scope"
+        ],
+        "title": "ProposedLinkDTO",
+        "description": "One evidence link proposed by the proposer (pending review)."
+      },
+      "ProviderRunDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "output_summary": {
+            "type": "string",
+            "title": "Output Summary"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "input_ref": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input Ref"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "model_version",
+          "prompt_version",
+          "status",
+          "output_summary",
+          "error",
+          "input_ref",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "ProviderRunDTO",
+        "description": "One AI/provider invocation audit record.\n\n成功 = 保留来源版本；失败 = 本次没有新数据；错误信息原样带出，\n不掩饰、不推测（prototype Provider 运行记录的失败含义约定）。"
+      },
+      "ProviderRunsResponse": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderRunDTO"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "title": "ProviderRunsResponse"
+      },
+      "RerunAssessmentDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "displayed_as_provisional": {
+            "type": "boolean",
+            "title": "Displayed As Provisional"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "snapshot_id",
+          "conclusion",
+          "rationale",
+          "gaps",
+          "displayed_as_provisional",
+          "created_at"
+        ],
+        "title": "RerunAssessmentDTO"
+      },
+      "RerunResponse": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "assessment": {
+            "$ref": "#/components/schemas/RerunAssessmentDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "mode",
+          "assessment"
+        ],
+        "title": "RerunResponse",
+        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
+      },
       "ReviewDecisionDTO": {
         "properties": {
           "outcome": {
@@ -1711,6 +4442,127 @@
           "reviewed_at"
         ],
         "title": "ReviewDecisionDTO"
+      },
+      "ReviewQueueItemDTO": {
+        "properties": {
+          "link_id": {
+            "type": "string",
+            "title": "Link Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "thesis_statement": {
+            "type": "string",
+            "title": "Thesis Statement"
+          },
+          "ai_role": {
+            "type": "string",
+            "title": "Ai Role"
+          },
+          "ai_reason": {
+            "type": "string",
+            "title": "Ai Reason"
+          },
+          "ai_scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Ai Scope"
+          },
+          "statement_id": {
+            "type": "string",
+            "title": "Statement Id"
+          },
+          "statement_text": {
+            "type": "string",
+            "title": "Statement Text"
+          },
+          "statement_kind": {
+            "type": "string",
+            "title": "Statement Kind"
+          },
+          "span_id": {
+            "type": "string",
+            "title": "Span Id"
+          },
+          "verbatim_text": {
+            "type": "string",
+            "title": "Verbatim Text"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "document_source_url": {
+            "type": "string",
+            "title": "Document Source Url"
+          },
+          "document_published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Published At"
+          },
+          "available_at": {
+            "type": "string",
+            "title": "Available At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_id",
+          "thesis_id",
+          "case_id",
+          "thesis_statement",
+          "ai_role",
+          "ai_reason",
+          "ai_scope",
+          "statement_id",
+          "statement_text",
+          "statement_kind",
+          "span_id",
+          "verbatim_text",
+          "locator",
+          "document_version_id",
+          "document_source_url",
+          "document_published_at",
+          "available_at"
+        ],
+        "title": "ReviewQueueItemDTO",
+        "description": "One pending link-level review: frozen source vs AI proposal."
+      },
+      "ReviewQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewQueueItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ReviewQueueResponse"
       },
       "SearchGroupDTO": {
         "properties": {
@@ -1882,6 +4734,222 @@
         ],
         "title": "SourceSpanDTO"
       },
+      "ThemeHitDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "role"
+        ],
+        "title": "ThemeHitDTO"
+      },
+      "ThesisCompareDTO": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "snapshot_before_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Before Id"
+          },
+          "snapshot_after_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot After Id"
+          },
+          "conclusion_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion Before"
+          },
+          "conclusion_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion After"
+          },
+          "conclusion_changed": {
+            "type": "boolean",
+            "title": "Conclusion Changed"
+          },
+          "added_links": {
+            "items": {
+              "$ref": "#/components/schemas/CompareLinkDTO"
+            },
+            "type": "array",
+            "title": "Added Links"
+          },
+          "removed_links": {
+            "items": {
+              "$ref": "#/components/schemas/CompareLinkDTO"
+            },
+            "type": "array",
+            "title": "Removed Links"
+          },
+          "gaps_before": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps Before"
+          },
+          "gaps_after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps After"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "statement",
+          "snapshot_before_id",
+          "snapshot_after_id",
+          "conclusion_before",
+          "conclusion_after",
+          "conclusion_changed",
+          "added_links",
+          "removed_links",
+          "gaps_before",
+          "gaps_after"
+        ],
+        "title": "ThesisCompareDTO"
+      },
+      "ThesisInput": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Statement"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "observation_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Start"
+          },
+          "observation_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation End"
+          },
+          "support_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Condition"
+          },
+          "falsification_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Falsification Condition"
+          },
+          "next_verification_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Verification Event"
+          },
+          "creator_type": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Creator Type",
+            "default": "human"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "title": "ThesisInput",
+        "description": "One initial proposition in the 新建研究 flow (prototype step 2)."
+      },
       "ThesisSummaryDTO": {
         "properties": {
           "id": {
@@ -1899,6 +4967,82 @@
           "created_at": {
             "type": "string",
             "title": "Created At"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "observation_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Start"
+          },
+          "observation_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation End"
+          },
+          "support_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Condition"
+          },
+          "falsification_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Falsification Condition"
+          },
+          "next_verification_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Verification Event"
+          },
+          "creator_type": {
+            "type": "string",
+            "title": "Creator Type",
+            "default": "human"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State",
+            "default": "confirmed"
           }
         },
         "additionalProperties": false,

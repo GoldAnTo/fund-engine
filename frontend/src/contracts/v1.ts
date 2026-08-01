@@ -54,7 +54,8 @@ export interface paths {
         /** List Cases */
         get: operations["list_cases_api_v1_research_cases_get"];
         put?: never;
-        post?: never;
+        /** Create Case */
+        post: operations["create_case_api_v1_research_cases_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -70,6 +71,63 @@ export interface paths {
         };
         /** Dossier */
         get: operations["dossier_api_v1_research_cases__case_id__dossier_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gaps
+         * @description 证据缺口聚合 (prototype 研究计划): open gaps across latest assessments.
+         */
+        get: operations["gaps_api_v1_research_cases__case_id__gaps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare Case */
+        get: operations["compare_case_api_v1_research_cases__case_id__compare_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Case Snapshots
+         * @description 快照列表 (prototype 版本比较 left rail), newest first.
+         */
+        get: operations["case_snapshots_api_v1_research_cases__case_id__snapshots_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -163,6 +221,258 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/fund-exposure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case Fund Exposure */
+        get: operations["case_fund_exposure_api_v1_research_cases__case_id__fund_exposure_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funds/{fund_id}/composition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fund Composition */
+        get: operations["fund_composition_api_v1_funds__fund_id__composition_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metrics/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metric Catalog */
+        get: operations["metric_catalog_api_v1_metrics_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metrics/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metric Series */
+        get: operations["metric_series_api_v1_metrics_series_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Provider Runs */
+        get: operations["list_provider_runs_api_v1_provider_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Knowledge Layer */
+        get: operations["knowledge_layer_api_v1_knowledge_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/theses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Thesis */
+        post: operations["add_thesis_api_v1_research_cases__case_id__theses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review Queue */
+        get: operations["review_queue_api_v1_review_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence-links/{link_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Link */
+        post: operations["review_link_api_v1_evidence_links__link_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assessments/{assessment_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Assessment */
+        post: operations["review_assessment_api_v1_assessments__assessment_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rerun Assessment */
+        post: operations["rerun_assessment_api_v1_theses__thesis_id__rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/propose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Propose Evidence
+         * @description Run the propose step for one thesis.
+         *
+         *     Recall is cutoff-safe (only statements visible before this run started),
+         *     and every proposed link enters the review queue as machine_generated —
+         *     nothing is auto-confirmed.
+         */
+        post: operations["propose_evidence_api_v1_theses__thesis_id__propose_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_version_id}/extract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract Statements
+         * @description Run the extract step over one document version.
+         *
+         *     Append-only: statements are added, never replaced.  The engine script
+         *     feeds only pending versions (spans present, no statements yet); calling
+         *     this on an already-extracted version will append duplicates.
+         */
+        post: operations["extract_statements_api_v1_documents__document_version_id__extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Documents */
+        post: operations["ingest_documents_api_v1_documents_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -184,6 +494,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AssessFailureDTO
+         * @description Latest failed assess attempt for the focus thesis.
+         *
+         *     Surfaced only when the failure is NEWER than the latest successful
+         *     assessment (or no assessment exists) — e.g. a compliance refusal on
+         *     the last rerun.  The refused text itself never reached the ledger;
+         *     this is the audit-trail view of it.
+         */
+        AssessFailureDTO: {
+            /** Model Version */
+            model_version: string;
+            /** Error */
+            error: string;
+            /** Failed At */
+            failed_at: string;
+        };
         /** AssessmentDTO */
         AssessmentDTO: {
             /** Id */
@@ -203,6 +530,84 @@ export interface components {
             provisional: boolean;
             review: components["schemas"]["ReviewDecisionDTO"] | null;
         };
+        /** AssessmentReviewRequest */
+        AssessmentReviewRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Conclusion */
+            conclusion?: ("supported" | "contradicted" | "insufficient_evidence") | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Reviewer
+             * @default reviewer
+             */
+            reviewer: string;
+        };
+        /** AssessmentReviewResponse */
+        AssessmentReviewResponse: {
+            /** Id */
+            id: string;
+            /** Ai Assessment Id */
+            ai_assessment_id: string;
+            /** Outcome */
+            outcome: string;
+            /** Conclusion */
+            conclusion: string | null;
+            /** Reason */
+            reason: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Created At */
+            created_at: string;
+        };
+        /**
+         * CaseCompareResponse
+         * @description 冻结快照比较: what changed between two point-in-time views.
+         */
+        CaseCompareResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Base Cutoff */
+            base_cutoff: string;
+            /** Compare Cutoff */
+            compare_cutoff: string;
+            /** Documents Added */
+            documents_added: components["schemas"]["DocumentVersionAddedDTO"][];
+            /** Theses */
+            theses: components["schemas"]["ThesisCompareDTO"][];
+        };
+        /**
+         * CaseGapDTO
+         * @description One open gap from the latest provisional assessment of a thesis.
+         */
+        CaseGapDTO: {
+            /** Thesis Id */
+            thesis_id: string;
+            /** Thesis Statement */
+            thesis_statement: string;
+            /** Conclusion */
+            conclusion: string;
+            /** Gap */
+            gap: string;
+            /** Assessment Id */
+            assessment_id: string;
+        };
+        /**
+         * CaseGapsResponse
+         * @description 证据缺口聚合: every open gap across the case's latest assessments.
+         */
+        CaseGapsResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Cutoff */
+            cutoff: string;
+            /** Gaps */
+            gaps: components["schemas"]["CaseGapDTO"][];
+        };
         /** CaseListResponse */
         CaseListResponse: {
             /**
@@ -214,6 +619,31 @@ export interface components {
             /** Items */
             items: components["schemas"]["CaseSummaryDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /**
+         * CaseSnapshotDTO
+         * @description One frozen snapshot row (prototype 版本比较 · 快照列表).
+         */
+        CaseSnapshotDTO: {
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Thesis Statement */
+            thesis_statement: string;
+            /** Cutoff */
+            cutoff: string;
+            /** Created At */
+            created_at: string;
+            /** Link Count */
+            link_count: number;
+        };
+        /** CaseSnapshotsResponse */
+        CaseSnapshotsResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Snapshots */
+            snapshots: components["schemas"]["CaseSnapshotDTO"][];
         };
         /** CaseSummaryDTO */
         CaseSummaryDTO: {
@@ -238,6 +668,116 @@ export interface components {
             sequence: number;
             /** Description */
             description: string;
+        };
+        /** CompareLinkDTO */
+        CompareLinkDTO: {
+            /** Link Id */
+            link_id: string;
+            /** Role */
+            role: string;
+            /** Reason */
+            reason: string;
+            /** Statement Text */
+            statement_text: string | null;
+            /** Review State */
+            review_state: string;
+        };
+        /** CompositionPositionDTO */
+        CompositionPositionDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Weight */
+            weight: number;
+            /** Report Period */
+            report_period: string;
+            /** Pe Ttm */
+            pe_ttm: number | null;
+            /** Pb */
+            pb: number | null;
+            /** Theme Hits */
+            theme_hits: components["schemas"]["ThemeHitDTO"][];
+        };
+        /**
+         * CreateCaseRequest
+         * @description Create a research case with its research question + initial theses.
+         */
+        CreateCaseRequest: {
+            /** Title */
+            title: string;
+            /** Industry Topic */
+            industry_topic: string;
+            /** Created By */
+            created_by: string;
+            /** Research Object */
+            research_object?: string | null;
+            /** Phenomenon */
+            phenomenon?: string | null;
+            /** Core Question */
+            core_question?: string | null;
+            /** Period Start */
+            period_start?: string | null;
+            /** Period End */
+            period_end?: string | null;
+            /** Evidence Cutoff */
+            evidence_cutoff?: string | null;
+            /** Initial Theses */
+            initial_theses?: components["schemas"]["ThesisInput"][];
+        };
+        /** CreateCaseResponse */
+        CreateCaseResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Theses */
+            theses: components["schemas"]["CreatedThesisDTO"][];
+        };
+        /**
+         * CreateThesisRequest
+         * @description Add one proposition to an existing case (AI 协助拆分 or human).
+         */
+        CreateThesisRequest: {
+            /** Statement */
+            statement: string;
+            /** Title */
+            title?: string | null;
+            /** Observation Start */
+            observation_start?: string | null;
+            /** Observation End */
+            observation_end?: string | null;
+            /** Support Condition */
+            support_condition?: string | null;
+            /** Falsification Condition */
+            falsification_condition?: string | null;
+            /** Next Verification Event */
+            next_verification_event?: string | null;
+            /**
+             * Creator Type
+             * @default human
+             * @enum {string}
+             */
+            creator_type: "human" | "ai";
+            /** Created By */
+            created_by: string;
+        };
+        /** CreateThesisResponse */
+        CreateThesisResponse: {
+            thesis: components["schemas"]["CreatedThesisDTO"];
+        };
+        /** CreatedThesisDTO */
+        CreatedThesisDTO: {
+            /** Id */
+            id: string;
+            /** Statement */
+            statement: string;
+            /** Title */
+            title: string | null;
+            /** Creator Type */
+            creator_type: string;
+            /** Review State */
+            review_state: string;
         };
         /** CursorPage */
         CursorPage: {
@@ -302,6 +842,17 @@ export interface components {
              */
             parse_state: "parsed" | "unparsed";
         };
+        /** DocumentVersionAddedDTO */
+        DocumentVersionAddedDTO: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Source Url */
+            source_url: string;
+            /** Published At */
+            published_at: string | null;
+            /** Available At */
+            available_at: string;
+        };
         /** DossierResponse */
         DossierResponse: {
             /**
@@ -317,6 +868,7 @@ export interface components {
             /** Focus Thesis Id */
             focus_thesis_id: string;
             assessment: components["schemas"]["AssessmentDTO"] | null;
+            assess_failure?: components["schemas"]["AssessFailureDTO"] | null;
             /** Causal Chain */
             causal_chain: components["schemas"]["CausalStepDTO"][];
             /** Evidence */
@@ -363,6 +915,121 @@ export interface components {
             available_at: string;
             /** Review State */
             review_state: string;
+        };
+        /** EvidenceReviewDTO */
+        EvidenceReviewDTO: {
+            /** Id */
+            id: string;
+            /** Evidence Link Id */
+            evidence_link_id: string;
+            /** Outcome */
+            outcome: string;
+            /** Relation */
+            relation: string | null;
+            /** Factor Role */
+            factor_role: string;
+            /** Scope Boundary */
+            scope_boundary: string;
+            /** Reason */
+            reason: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Created At */
+            created_at: string;
+        };
+        /** ExposurePositionDTO */
+        ExposurePositionDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Weight */
+            weight: number;
+            /** Report Period */
+            report_period: string;
+            /** Pe Ttm */
+            pe_ttm: number | null;
+            /** Pb */
+            pb: number | null;
+        };
+        /**
+         * ExtractResponse
+         * @description Result of running statement extraction over one document version.
+         *
+         *     Append-only: re-running extraction on a version that already has
+         *     statements will append duplicates; the engine script only feeds
+         *     pending versions (spans present, no statements yet).  ``mode`` is
+         *     ``mock`` without an LLM key (non-production only).
+         */
+        ExtractResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Mode */
+            mode: string;
+            /** Statement Count */
+            statement_count: number;
+            /** Statements */
+            statements: components["schemas"]["ExtractStatementDTO"][];
+        };
+        /**
+         * ExtractStatementDTO
+         * @description One statement produced by the extraction step.
+         */
+        ExtractStatementDTO: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Observed Period */
+            observed_period: string | null;
+        };
+        /**
+         * FundCompositionResponse
+         * @description 反向穿透: 这只基金「真正装了什么」——持仓 + 命中的主题.
+         */
+        FundCompositionResponse: {
+            /** Fund Id */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /** As Of */
+            as_of: string;
+            /** Positions */
+            positions: components["schemas"]["CompositionPositionDTO"][];
+        };
+        /**
+         * FundExposureDTO
+         * @description One fund's aggregate exposure to the case's theme stocks.
+         */
+        FundExposureDTO: {
+            /** Fund Id */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /** Theme Exposure */
+            theme_exposure: number;
+            /** Positions */
+            positions: components["schemas"]["ExposurePositionDTO"][];
+        };
+        /**
+         * FundExposureResponse
+         * @description 正向穿透: 主题/案件 → 命中基金（按主题暴露度排序）.
+         */
+        FundExposureResponse: {
+            /** Case Id */
+            case_id: string;
+            /** As Of */
+            as_of: string;
+            /** Funds */
+            funds: components["schemas"]["FundExposureDTO"][];
         };
         /** GraphEdgeDTO */
         GraphEdgeDTO: {
@@ -462,6 +1129,50 @@ export interface components {
             /** Projection Schema Version */
             projection_schema_version?: string | null;
         };
+        /**
+         * IngestRequest
+         * @description Trigger a Gildata ingest run.
+         *
+         *     All fields optional: omitted queries fall back to the AI-compute
+         *     defaults.  ``case_id`` tags ingested span locators against a case;
+         *     when omitted the first existing case is used (or none).
+         */
+        IngestRequest: {
+            /** Case Id */
+            case_id?: string | null;
+            /** Research Queries */
+            research_queries?: string[] | null;
+            /** Announcement Query */
+            announcement_query?: string | null;
+            /** Quote Query */
+            quote_query?: string | null;
+            /** Quote Stock Code */
+            quote_stock_code?: string | null;
+        };
+        /**
+         * IngestResponse
+         * @description Summary of one ingest run.
+         *
+         *     Idempotent: documents dedupe by content hash and valuation snapshots
+         *     by stock + date + metric + source, so re-runs report skips instead of
+         *     duplicating rows.
+         */
+        IngestResponse: {
+            /** Research Reports */
+            research_reports: number;
+            /** Announcements */
+            announcements: number;
+            /** Spans */
+            spans: number;
+            /** Valuations Written */
+            valuations_written: number;
+            /** Valuations Skipped */
+            valuations_skipped: number;
+            /** Stock Id */
+            stock_id: string | null;
+            /** Case Id */
+            case_id: string | null;
+        };
         /** KeyChangeDTO */
         KeyChangeDTO: {
             /** Id */
@@ -479,6 +1190,133 @@ export interface components {
             source_label: string;
             /** Review State */
             review_state: ("machine_generated" | "reviewed" | "rejected") | null;
+        };
+        /**
+         * KnowledgeItemDTO
+         * @description 已复核知识层一行: 规范化陈述 + 它的证据链接与人工审核。
+         */
+        KnowledgeItemDTO: {
+            /** Statement Id */
+            statement_id: string;
+            /** Statement Text */
+            statement_text: string;
+            /** Statement Kind */
+            statement_kind: string;
+            /** Observed Period */
+            observed_period: string | null;
+            /** Span Id */
+            span_id: string;
+            /** Verbatim Text */
+            verbatim_text: string;
+            /** Links */
+            links: components["schemas"]["KnowledgeLinkDTO"][];
+        };
+        /** KnowledgeLinkDTO */
+        KnowledgeLinkDTO: {
+            /** Link Id */
+            link_id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Role */
+            role: string;
+            /** Reason */
+            reason: string;
+            /** Scope */
+            scope: {
+                [key: string]: unknown;
+            };
+            /** Creator Type */
+            creator_type: string;
+            /** Review State */
+            review_state: string;
+            /** Latest Review Outcome */
+            latest_review_outcome: string | null;
+            /** Latest Reviewer */
+            latest_reviewer: string | null;
+            /** Latest Reviewed At */
+            latest_reviewed_at: string | null;
+        };
+        /** KnowledgeResponse */
+        KnowledgeResponse: {
+            /** Case Id */
+            case_id: string | null;
+            /** Items */
+            items: components["schemas"]["KnowledgeItemDTO"][];
+        };
+        /**
+         * LinkReviewRequest
+         * @description 四要素关系级审核: 关系选择/因素角色/适用边界/审核理由 + 动作.
+         */
+        LinkReviewRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "rejected" | "needs_more_evidence";
+            /** Relation */
+            relation?: ("supports" | "contradicts" | "contextualizes" | "evidence_gap") | null;
+            /** Factor Role */
+            factor_role: string;
+            /** Scope Boundary */
+            scope_boundary: string;
+            /** Reason */
+            reason: string;
+            /** Reviewer */
+            reviewer: string;
+        };
+        /** LinkReviewResponse */
+        LinkReviewResponse: {
+            review: components["schemas"]["EvidenceReviewDTO"];
+        };
+        /**
+         * MetricCatalogEntryDTO
+         * @description One catalog row: an entity-metric pair with its latest frozen value.
+         */
+        MetricCatalogEntryDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Latest Value */
+            latest_value: number;
+            /** Latest As Of */
+            latest_as_of: string;
+            /** Source */
+            source: string;
+            /** Definition */
+            definition: string | null;
+        };
+        /** MetricCatalogResponse */
+        MetricCatalogResponse: {
+            /** Entries */
+            entries: components["schemas"]["MetricCatalogEntryDTO"][];
+        };
+        /** MetricPointDTO */
+        MetricPointDTO: {
+            /** Value */
+            value: number;
+            /** As Of Date */
+            as_of_date: string;
+            /** Source */
+            source: string;
+            /** Definition */
+            definition: string | null;
+        };
+        /**
+         * MetricSeriesResponse
+         * @description 冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断).
+         */
+        MetricSeriesResponse: {
+            /** Stock Id */
+            stock_id: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Points */
+            points: components["schemas"]["MetricPointDTO"][];
         };
         /** OverviewResponse */
         OverviewResponse: {
@@ -524,6 +1362,111 @@ export interface components {
             /** Major Gaps */
             major_gaps: number;
         };
+        /**
+         * ProposeResponse
+         * @description Result of running evidence proposal for one thesis.
+         *
+         *     Every proposed link lands in the review queue as
+         *     ``machine_generated``; nothing is auto-confirmed.  ``mode`` is
+         *     ``mock`` without an LLM key (non-production only).
+         */
+        ProposeResponse: {
+            /** Thesis Id */
+            thesis_id: string;
+            /** Mode */
+            mode: string;
+            /** Link Count */
+            link_count: number;
+            /** Links */
+            links: components["schemas"]["ProposedLinkDTO"][];
+        };
+        /**
+         * ProposedLinkDTO
+         * @description One evidence link proposed by the proposer (pending review).
+         */
+        ProposedLinkDTO: {
+            /** Link Id */
+            link_id: string;
+            /** Source Statement Id */
+            source_statement_id: string;
+            /** Role */
+            role: string;
+            /** Reason */
+            reason: string;
+            /** Scope */
+            scope: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * ProviderRunDTO
+         * @description One AI/provider invocation audit record.
+         *
+         *     成功 = 保留来源版本；失败 = 本次没有新数据；错误信息原样带出，
+         *     不掩饰、不推测（prototype Provider 运行记录的失败含义约定）。
+         */
+        ProviderRunDTO: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Model Version */
+            model_version: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Status */
+            status: string;
+            /** Output Summary */
+            output_summary: string;
+            /** Error */
+            error: string | null;
+            /** Input Ref */
+            input_ref: {
+                [key: string]: unknown;
+            };
+            /** Started At */
+            started_at: string;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /** ProviderRunsResponse */
+        ProviderRunsResponse: {
+            /** Runs */
+            runs: components["schemas"]["ProviderRunDTO"][];
+        };
+        /** RerunAssessmentDTO */
+        RerunAssessmentDTO: {
+            /** Id */
+            id: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Conclusion */
+            conclusion: string;
+            /** Rationale */
+            rationale: string;
+            /** Gaps */
+            gaps: string[];
+            /** Displayed As Provisional */
+            displayed_as_provisional: boolean;
+            /** Created At */
+            created_at: string;
+        };
+        /**
+         * RerunResponse
+         * @description Result of re-running the assess step for one thesis.
+         *
+         *     A rerun freezes a NEW snapshot and appends a NEW provisional assessment;
+         *     prior snapshots/assessments are never touched, and the difference shows
+         *     up in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key
+         *     (non-production only — production fails closed per provider discipline).
+         */
+        RerunResponse: {
+            /** Thesis Id */
+            thesis_id: string;
+            /** Mode */
+            mode: string;
+            assessment: components["schemas"]["RerunAssessmentDTO"];
+        };
         /** ReviewDecisionDTO */
         ReviewDecisionDTO: {
             /**
@@ -539,6 +1482,55 @@ export interface components {
             reviewer: string;
             /** Reviewed At */
             reviewed_at: string;
+        };
+        /**
+         * ReviewQueueItemDTO
+         * @description One pending link-level review: frozen source vs AI proposal.
+         */
+        ReviewQueueItemDTO: {
+            /** Link Id */
+            link_id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Thesis Statement */
+            thesis_statement: string;
+            /** Ai Role */
+            ai_role: string;
+            /** Ai Reason */
+            ai_reason: string;
+            /** Ai Scope */
+            ai_scope: {
+                [key: string]: unknown;
+            };
+            /** Statement Id */
+            statement_id: string;
+            /** Statement Text */
+            statement_text: string;
+            /** Statement Kind */
+            statement_kind: string;
+            /** Span Id */
+            span_id: string;
+            /** Verbatim Text */
+            verbatim_text: string;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Document Version Id */
+            document_version_id: string;
+            /** Document Source Url */
+            document_source_url: string;
+            /** Document Published At */
+            document_published_at: string | null;
+            /** Available At */
+            available_at: string;
+        };
+        /** ReviewQueueResponse */
+        ReviewQueueResponse: {
+            /** Items */
+            items: components["schemas"]["ReviewQueueItemDTO"][];
         };
         /** SearchGroupDTO */
         SearchGroupDTO: {
@@ -599,6 +1591,64 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** ThemeHitDTO */
+        ThemeHitDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Role */
+            role: string;
+        };
+        /** ThesisCompareDTO */
+        ThesisCompareDTO: {
+            /** Thesis Id */
+            thesis_id: string;
+            /** Statement */
+            statement: string;
+            /** Snapshot Before Id */
+            snapshot_before_id: string | null;
+            /** Snapshot After Id */
+            snapshot_after_id: string | null;
+            /** Conclusion Before */
+            conclusion_before: string | null;
+            /** Conclusion After */
+            conclusion_after: string | null;
+            /** Conclusion Changed */
+            conclusion_changed: boolean;
+            /** Added Links */
+            added_links: components["schemas"]["CompareLinkDTO"][];
+            /** Removed Links */
+            removed_links: components["schemas"]["CompareLinkDTO"][];
+            /** Gaps Before */
+            gaps_before: string[];
+            /** Gaps After */
+            gaps_after: string[];
+        };
+        /**
+         * ThesisInput
+         * @description One initial proposition in the 新建研究 flow (prototype step 2).
+         */
+        ThesisInput: {
+            /** Statement */
+            statement: string;
+            /** Title */
+            title?: string | null;
+            /** Observation Start */
+            observation_start?: string | null;
+            /** Observation End */
+            observation_end?: string | null;
+            /** Support Condition */
+            support_condition?: string | null;
+            /** Falsification Condition */
+            falsification_condition?: string | null;
+            /** Next Verification Event */
+            next_verification_event?: string | null;
+            /**
+             * Creator Type
+             * @default human
+             * @enum {string}
+             */
+            creator_type: "human" | "ai";
+        };
         /** ThesisSummaryDTO */
         ThesisSummaryDTO: {
             /** Id */
@@ -609,6 +1659,28 @@ export interface components {
             created_by: string;
             /** Created At */
             created_at: string;
+            /** Title */
+            title?: string | null;
+            /** Observation Start */
+            observation_start?: string | null;
+            /** Observation End */
+            observation_end?: string | null;
+            /** Support Condition */
+            support_condition?: string | null;
+            /** Falsification Condition */
+            falsification_condition?: string | null;
+            /** Next Verification Event */
+            next_verification_event?: string | null;
+            /**
+             * Creator Type
+             * @default human
+             */
+            creator_type: string;
+            /**
+             * Review State
+             * @default confirmed
+             */
+            review_state: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -742,6 +1814,39 @@ export interface operations {
             };
         };
     };
+    create_case_api_v1_research_cases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateCaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     dossier_api_v1_research_cases__case_id__dossier_get: {
         parameters: {
             query?: {
@@ -764,6 +1869,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DossierResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gaps_api_v1_research_cases__case_id__gaps_get: {
+        parameters: {
+            query?: {
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseGapsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compare_case_api_v1_research_cases__case_id__compare_get: {
+        parameters: {
+            query: {
+                /** @description 基准截止（较早） */
+                base: string;
+                /** @description 对比截止（较晚） */
+                compare: string;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseCompareResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    case_snapshots_api_v1_research_cases__case_id__snapshots_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseSnapshotsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -936,6 +2141,464 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    case_fund_exposure_api_v1_research_cases__case_id__fund_exposure_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundExposureResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fund_composition_api_v1_funds__fund_id__composition_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+            };
+            header?: never;
+            path: {
+                fund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundCompositionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    metric_catalog_api_v1_metrics_catalog_get: {
+        parameters: {
+            query?: {
+                stock_id?: string | null;
+                metric_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    metric_series_api_v1_metrics_series_get: {
+        parameters: {
+            query: {
+                stock_id: string;
+                metric_name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricSeriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_provider_runs_api_v1_provider_runs_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    knowledge_layer_api_v1_knowledge_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                review_state?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_thesis_api_v1_research_cases__case_id__theses_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateThesisRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateThesisResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_queue_api_v1_review_queue_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_link_api_v1_evidence_links__link_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_assessment_api_v1_assessments__assessment_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssessmentReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssessmentReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_assessment_api_v1_theses__thesis_id__rerun_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    propose_evidence_api_v1_theses__thesis_id__propose_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_statements_api_v1_documents__document_version_id__extract_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_documents_api_v1_documents_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestResponse"];
                 };
             };
             /** @description Validation Error */
