@@ -188,9 +188,9 @@
       },
       metric: {
         id: metric.id,
-        displayName: displayLabel(PRESENTATION.metricNames, metric.name, "关键业务指标"),
-        value: metric.value,
-        period: metric.period,
+        displayName: displayLabel(PRESENTATION.planMetricNames, metric.name, "关键业务指标"),
+        value: displayLabel(PRESENTATION.metricValues, metric.value, metric.value),
+        period: displayLabel(PRESENTATION.metricPeriods, metric.period, metric.period),
         sourceVersion: metric.sourceVersion,
         gapLabel: hasPriorMetricVersion ? "已有跨版本口径" : "缺少前次快照对照",
       },
@@ -1308,7 +1308,7 @@
           <div class="data-heading-actions">
             <div class="data-snapshot"><span>案例截止 ${escapeHTML(view.cutoff)}</span><strong>${escapeHTML(view.snapshotId)}</strong></div>
             <button type="button" class="data-secondary-action" data-data-runs-action>查看 Provider 运行记录</button>
-            <button type="button" class="data-primary-action" data-data-attach>附加冻结数据序列到研究案例</button>
+            <button type="button" class="data-primary-action" data-data-attach>创建新快照并附加</button>
           </div>
         </header>
 
@@ -1399,7 +1399,7 @@
   function bindDataCenter(root) {
     const status = root.querySelector("[data-data-action-status]");
     root.querySelector("[data-data-attach]")?.addEventListener("click", () => {
-      status.textContent = "已在本地选择冻结序列；原型不写入 ResearchCase。";
+      status.textContent = "已在本页创建新快照草稿并选择该序列；当前冻结快照保持不变，原型不写入 ResearchCase。";
     });
     root.querySelector("[data-data-runs-action]")?.addEventListener("click", () => {
       root.querySelector("[data-provider-run-log]")?.classList.add("is-located");
@@ -2206,7 +2206,9 @@
   function renderShell(screen) {
     teardownNewResearchAutosize();
     teardownNewResearchAutosize = () => {};
-    const activeNav = NAV_ITEMS.find((item) => item.screen === screen)?.screen;
+    const activeNav = ["new-research", "plan", "case", "graph"].includes(screen)
+      ? "case"
+      : NAV_ITEMS.find((item) => item.screen === screen)?.screen;
     app.innerHTML = `
       <div class="app-shell">
         <aside class="nav-rail" aria-label="主导航">

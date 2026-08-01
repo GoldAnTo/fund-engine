@@ -1120,12 +1120,15 @@ async function assertDataProductContract(page, marker) {
   assert.ok(await runLog.locator("[data-historical-run]").count() > 0, "provider log must preserve historical runs");
   assert.equal(await runLog.locator("[data-planned-attempt]").count(), 1, "provider log must separate one planned attempt");
 
-  const attach = marker.getByRole("button", { name: "附加冻结数据序列到研究案例" });
+  const attach = marker.getByRole("button", { name: "创建新快照并附加" });
   const runs = marker.getByRole("button", { name: "查看 Provider 运行记录" });
   assert.equal(await attach.count(), 1);
   assert.equal(await runs.count(), 1);
   await attach.click();
-  assert.match(await marker.locator("[data-data-action-status]").innerText(), /原型不写入/u, "attach action must remain local-only");
+  const attachStatus = await marker.locator("[data-data-action-status]").innerText();
+  assert.match(attachStatus, /新快照/u, "post-cutoff data must create a new snapshot context");
+  assert.match(attachStatus, /当前冻结快照保持不变/u, "post-cutoff data must not mutate the current frozen snapshot");
+  assert.match(attachStatus, /原型不写入/u, "attach action must remain local-only");
   await runs.click();
   assert.match(await marker.locator("[data-data-action-status]").innerText(), /已定位/u, "run-log action must provide local navigation feedback");
 
@@ -2432,6 +2435,11 @@ async function assertOverviewProductContract(page, marker) {
   ]) {
     assert.ok(overviewText.includes(localizedValue), `overview must render localized view-model value: ${localizedValue}`);
   }
+  assert.ok(
+    overviewText.includes("NVIDIA 数据中心业务收入 · 391 亿美元"),
+    "overview metric must expose the fully localized metric and value",
+  );
+  assert.ok(overviewText.includes("2026 财年第一季度"), "overview metric period must be localized");
   for (const internalValue of [
     "awaiting_validation",
     "candidate",
@@ -2440,6 +2448,8 @@ async function assertOverviewProductContract(page, marker) {
     "Market data quota",
     "Licensed holdings feed",
     "Data Center revenue",
+    "$39.1bn",
+    "FY2026 Q1",
     "Daily call limit exceeded; no inferred replacement values",
     "Current credential lacks historical holdings permission",
   ]) {
@@ -2472,7 +2482,10 @@ async function assertBrowserContract(routes) {
   const { captureViewportPng, withPrototypeBrowser } = await import("./capture.mjs");
   const directNavLabels = new Map([
     ["overview", "工作台"],
+    ["new-research", "研究案例"],
+    ["plan", "研究案例"],
     ["case", "研究案例"],
+    ["graph", "研究案例"],
     ["library", "资料与知识"],
     ["data", "数据中心"],
     ["review", "审核中心"],
@@ -2490,15 +2503,10 @@ async function assertBrowserContract(routes) {
 
       const currentPageLinks = page.locator('.nav-rail a[aria-current="page"]');
       const expectedNavLabel = directNavLabels.get(screen);
-      assert.equal(
-        await currentPageLinks.count(),
-        expectedNavLabel ? 1 : 0,
-        `${screen} must mark a nav page current only when its route exactly matches a nav destination`,
-      );
-      if (expectedNavLabel) {
-        assert.equal((await currentPageLinks.locator("span:last-child").textContent()).trim(), expectedNavLabel);
-        assert.equal(await currentPageLinks.getAttribute("href"), `?screen=${screen}`);
-      }
+      const expectedNavScreen = ["new-research", "plan", "graph"].includes(screen) ? "case" : screen;
+      assert.equal(await currentPageLinks.count(), 1, `${screen} must mark exactly one product-area navigation context`);
+      assert.equal((await currentPageLinks.locator("span:last-child").textContent()).trim(), expectedNavLabel);
+      assert.equal(await currentPageLinks.getAttribute("href"), `?screen=${expectedNavScreen}`);
 
       const overflow = await page.evaluate(() => ({
         body: document.body.scrollWidth - document.body.clientWidth,
@@ -2575,11 +2583,9 @@ async function assertBrowserContract(routes) {
         assert.ok(await mobileLinks.nth(index).evaluate((element) => element.tabIndex >= 0), `${screen} mobile navigation link ${index + 1} must be keyboard reachable`);
       }
       const mobileCurrentPages = mobileNavigation.locator('a[aria-current="page"]');
-      assert.equal(await mobileCurrentPages.count(), expectedNavLabel ? 1 : 0, `${screen} mobile current-page state must use exact route matching`);
-      if (expectedNavLabel) {
-        assert.equal((await mobileCurrentPages.locator("span:last-child").textContent()).trim(), expectedNavLabel);
-        assert.equal(await mobileCurrentPages.getAttribute("href"), `?screen=${screen}`);
-      }
+      assert.equal(await mobileCurrentPages.count(), 1, `${screen} mobile navigation must mark exactly one product-area context`);
+      assert.equal((await mobileCurrentPages.locator("span:last-child").textContent()).trim(), expectedNavLabel);
+      assert.equal(await mobileCurrentPages.getAttribute("href"), `?screen=${expectedNavScreen}`);
       const openOverflow = await page.evaluate(() => ({
         body: document.body.scrollWidth - document.body.clientWidth,
         document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
