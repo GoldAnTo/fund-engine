@@ -1255,6 +1255,157 @@
     });
   }
 
+  function buildDataCenterViewModel(fixture) {
+    const workspace = fixture.case.dataCenter;
+    const historicalRuns = fixture.providerRuns
+      .filter((run) => ["success", "quota_failure", "permission_gap"].includes(run.outcome))
+      .slice(0, 4)
+      .map((run) => ({
+        ...run,
+        providerLabel: displayLabel(PRESENTATION.providerNames, run.provider, run.provider),
+        outcomeLabel: run.outcome === "success"
+          ? "成功"
+          : displayLabel(PRESENTATION.providerOutcomes, run.outcome, "失败"),
+        detailLabel: displayLabel(PRESENTATION.providerDetails, run.detail, run.detail),
+      }));
+    return { ...workspace, cutoff: fixture.case.cutoff, snapshotId: fixture.case.snapshotId, historicalRuns };
+  }
+
+  function renderDataCenter() {
+    const view = buildDataCenterViewModel(data);
+    const metric = view.selectedMetric;
+    const detailFields = [
+      ["指标名称", metric.name],
+      ["实体", metric.entity],
+      ["数值 / 单位", `${metric.value} ${metric.unit}`],
+      ["报告期 / as-of", `${metric.period} · ${metric.asOf}`],
+      ["published_at", metric.publishedAt],
+      ["available_at", metric.availableAt],
+      ["acquired_at", metric.acquiredAt],
+      ["来源", metric.source],
+      ["方法说明", metric.methodology],
+      ["修订", metric.revision],
+      ["Provider 运行", metric.providerRunId],
+      ["失败含义", metric.failureMeaning],
+    ];
+    const points = view.series.map((item, index) => {
+      const x = 48 + (index * 124);
+      const y = 164 - ((item.numericValue - 250) * .72);
+      return { ...item, x, y };
+    });
+    const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+    const runTone = { success: "success", quota_failure: "quota", permission_gap: "permission" };
+
+    return `
+      <main class="screen data-center-screen" data-screen="data">
+        <header class="data-heading">
+          <div>
+            <p class="eyebrow">Research data · point-in-time</p>
+            <h1>点时数据工作台</h1>
+            <p class="lede">按冻结快照判断当时可用的数据；今天看到的修订不会回写历史研究案例。</p>
+          </div>
+          <div class="data-heading-actions">
+            <div class="data-snapshot"><span>案例截止 ${escapeHTML(view.cutoff)}</span><strong>${escapeHTML(view.snapshotId)}</strong></div>
+            <button type="button" class="data-secondary-action" data-data-runs-action>查看 Provider 运行记录</button>
+            <button type="button" class="data-primary-action" data-data-attach>附加冻结数据序列到研究案例</button>
+          </div>
+        </header>
+
+        <section class="data-workspace" aria-label="指标目录与点时详情">
+          <aside class="metric-catalog" data-metric-catalog>
+            <header><div><p>METRIC CATALOG</p><h2>指标目录</h2></div><span>${view.catalog.length} 项</span></header>
+            <div class="metric-catalog-list">
+              ${view.catalog.map((item) => `
+                <article class="metric-row${item.id === view.selectedMetricId ? " is-selected" : ""}" data-metric-row${item.id === view.selectedMetricId ? ' aria-current="true"' : ""}>
+                  <div><strong>${escapeHTML(item.label)}</strong><span>${escapeHTML(item.id)}</span></div>
+                  <p>${escapeHTML(item.entity)} · ${escapeHTML(item.cadence)}</p>
+                  <small>${escapeHTML(item.state)}</small>
+                </article>
+              `).join("")}
+            </div>
+            <p class="catalog-boundary">目录展示的是研究数据资产，不是交易行情或推荐信号。</p>
+          </aside>
+
+          <article class="metric-detail" data-selected-metric>
+            <header class="metric-detail-heading">
+              <div><p>SELECTED METRIC · ${escapeHTML(view.selectedMetricId)}</p><h2>${escapeHTML(metric.name)}</h2></div>
+              <div class="availability-key"><span class="usable">● 截止日可用</span><span class="later">◇ 案例截止日不可用 · 现在已可用</span></div>
+            </header>
+            <dl class="metric-metadata">
+              ${detailFields.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd></div>`).join("")}
+            </dl>
+
+            <div class="metric-analysis-row">
+              <section class="point-in-time-series" aria-labelledby="series-title">
+                <header><div><p>POINT-IN-TIME SERIES</p><h3 id="series-title">冻结序列 · 亿美元</h3></div><span>可用性按 acquired_at 判断</span></header>
+                <svg viewBox="0 0 590 188" role="img" aria-label="NVIDIA 数据中心业务收入点时序列">
+                  <line x1="40" y1="164" x2="558" y2="164"></line>
+                  <line x1="40" y1="42" x2="40" y2="164"></line>
+                  <path d="${escapeHTML(path)}"></path>
+                  ${points.map((point) => `
+                    <g class="series-point ${point.cutoffUsable ? "usable" : "later"}" data-series-point data-cutoff-usable="${point.cutoffUsable}">
+                      <circle cx="${point.x}" cy="${point.y}" r="6"></circle>
+                      <text class="series-value" x="${point.x}" y="${point.y - 13}" text-anchor="middle">${escapeHTML(point.value)}</text>
+                      <text x="${point.x}" y="182" text-anchor="middle">${escapeHTML(point.period)}</text>
+                    </g>
+                  `).join("")}
+                </svg>
+                <div class="series-availability">
+                  ${view.series.map((item) => `<span class="${item.cutoffUsable ? "usable" : "later"}" data-series-point data-cutoff-usable="${item.cutoffUsable}"><b>${escapeHTML(item.period)}</b><small>采集 ${escapeHTML(item.acquiredAt)}</small>${escapeHTML(item.status)}</span>`).join("")}
+                </div>
+              </section>
+
+              <section class="revision-comparison" data-revision-comparison aria-labelledby="revision-title">
+                <header><p>REVISION AUDIT</p><h3 id="revision-title">修订对照</h3></header>
+                <div class="revision-columns">
+                  <div><span>旧值 · 当时冻结</span><strong>${escapeHTML(view.revisionComparison.oldValue)}</strong><p>${escapeHTML(view.revisionComparison.oldSource)}</p><small>${escapeHTML(view.revisionComparison.oldCutoffMeaning)}</small></div>
+                  <b aria-hidden="true">→</b>
+                  <div><span>新值 · 后续确认</span><strong>${escapeHTML(view.revisionComparison.newValue)}</strong><p>${escapeHTML(view.revisionComparison.newSource)}</p><small>${escapeHTML(view.revisionComparison.newCutoffMeaning)}</small></div>
+                </div>
+                <p class="revision-meaning"><strong>为何重要</strong>${escapeHTML(view.revisionComparison.whyItMatters)}</p>
+              </section>
+            </div>
+          </article>
+        </section>
+
+        <section class="provider-run-log" data-provider-run-log id="provider-run-log" aria-labelledby="provider-run-title">
+          <header>
+            <div><p>PROVIDER RUN LEDGER</p><h2 id="provider-run-title">Provider 运行记录</h2></div>
+            <p class="provider-meaning-key"><span>成功＝保留来源版本</span><span>失败＝本次没有新数据</span><span>权限＝凭证不可读</span><span>配额＝调用额度耗尽</span></p>
+          </header>
+          <div class="provider-run-grid">
+            ${view.historicalRuns.map((run) => `
+              <article class="provider-run ${runTone[run.outcome]}" data-historical-run>
+                <div><span>${escapeHTML(run.id)} · 历史运行</span><strong>${escapeHTML(run.providerLabel)}</strong></div>
+                <b>${escapeHTML(run.outcomeLabel)}</b>
+                <time>${escapeHTML(run.observedAt.replace("T", " "))}</time>
+                <p>${escapeHTML(run.detailLabel)}</p>
+              </article>
+            `).join("")}
+            <article class="provider-run planned" data-planned-attempt>
+              <div><span>${escapeHTML(view.plannedAttempt.id)} · 新尝试</span><strong>${escapeHTML(view.plannedAttempt.label)}</strong></div>
+              <b>${escapeHTML(view.plannedAttempt.state)}</b>
+              <time>未产生运行时间</time>
+              <p>${escapeHTML(view.plannedAttempt.meaning)}</p>
+            </article>
+          </div>
+        </section>
+        <p class="data-action-status" data-data-action-status aria-live="polite">只读原型 · 尚未执行任何操作</p>
+      </main>
+    `;
+  }
+
+  function bindDataCenter(root) {
+    const status = root.querySelector("[data-data-action-status]");
+    root.querySelector("[data-data-attach]")?.addEventListener("click", () => {
+      status.textContent = "已在本地选择冻结序列；原型不写入 ResearchCase。";
+    });
+    root.querySelector("[data-data-runs-action]")?.addEventListener("click", () => {
+      root.querySelector("[data-provider-run-log]")?.classList.add("is-located");
+      status.textContent = "已定位 Provider 运行记录；未发起新请求。";
+    });
+  }
+
   function renderPlaceholder(screen) {
     const [title, description] = PLACEHOLDERS[screen];
     return `
@@ -1931,7 +2082,7 @@
     "graph": renderGraphWorkbench,
     "review": renderReviewWorkbench,
     "library": renderLibraryWorkbench,
-    "data": () => renderPlaceholder("data"),
+    "data": renderDataCenter,
     "versions": () => renderPlaceholder("versions"),
   };
 
@@ -1975,6 +2126,7 @@
     if (screen === "graph") bindGraphWorkbench(app.querySelector("[data-screen=graph]"));
     if (screen === "review") bindReviewWorkbench(app.querySelector("[data-screen=review]"));
     if (screen === "library") bindLibraryWorkbench(app.querySelector("[data-screen=library]"));
+    if (screen === "data") bindDataCenter(app.querySelector("[data-screen=data]"));
   }
 
   renderShell(requestedScreen());
@@ -1986,4 +2138,5 @@
   window.PROTOTYPE_CASE_WORKBENCH = caseState;
   window.PROTOTYPE_GRAPH_WORKBENCH = Object.freeze({ buildGraphViewModel });
   window.PROTOTYPE_LIBRARY_WORKBENCH = Object.freeze({ buildLibraryViewModel });
+  window.PROTOTYPE_DATA_CENTER = Object.freeze({ buildDataCenterViewModel });
 }());

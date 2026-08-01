@@ -1006,13 +1006,64 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型6-资料与知识.png"),
     "library must map exactly to prototype/设计原型6-资料与知识.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review", "library"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("data"),
+    path.resolve(UI_DIR, "../设计原型7-数据中心.png"),
+    "data must map exactly to prototype/设计原型7-数据中心.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review", "library", "data"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertDataProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "点时数据工作台");
+  assert.ok(await marker.locator("[data-metric-catalog] [data-metric-row]").count() >= 3, "data center must expose a metric catalog");
+  assert.equal(await marker.locator("[data-selected-metric]").count(), 1, "data center must expose one selected metric detail");
+
+  const detailText = await marker.locator("[data-selected-metric]").innerText();
+  for (const label of [
+    "指标名称", "实体", "数值 / 单位", "报告期 / as-of", "published_at", "available_at", "acquired_at",
+    "来源", "方法说明", "修订", "Provider 运行", "失败含义",
+  ]) {
+    assert.match(detailText, new RegExp(label, "u"), `selected metric must expose ${label}`);
+  }
+
+  assert.match(await marker.innerText(), /案例截止日不可用/u, "data center must visibly mark cutoff-unavailable observations");
+  assert.match(await marker.innerText(), /现在已可用/u, "data center must visibly mark observations that are available now");
+  assert.ok(await marker.locator('[data-series-point][data-cutoff-usable="true"]').count() > 0, "series must mark observations usable at cutoff");
+  assert.ok(await marker.locator('[data-series-point][data-cutoff-usable="false"]').count() > 0, "series must mark observations unavailable at cutoff");
+
+  const revisionText = await marker.locator("[data-revision-comparison]").innerText();
+  assert.match(revisionText, /旧值/u, "revision comparison must show the old value");
+  assert.match(revisionText, /新值/u, "revision comparison must show the new value");
+  assert.match(revisionText, /不能回写/u, "revision comparison must prohibit hindsight leakage");
+
+  const runLog = marker.locator("[data-provider-run-log]");
+  for (const meaning of ["成功", "失败", "权限", "配额"]) {
+    assert.match(await runLog.innerText(), new RegExp(meaning, "u"), `provider run log must explain ${meaning}`);
+  }
+  assert.ok(await runLog.locator("[data-historical-run]").count() > 0, "provider log must preserve historical runs");
+  assert.equal(await runLog.locator("[data-planned-attempt]").count(), 1, "provider log must separate one planned attempt");
+
+  const attach = marker.getByRole("button", { name: "附加冻结数据序列到研究案例" });
+  const runs = marker.getByRole("button", { name: "查看 Provider 运行记录" });
+  assert.equal(await attach.count(), 1);
+  assert.equal(await runs.count(), 1);
+  await attach.click();
+  assert.match(await marker.locator("[data-data-action-status]").innerText(), /原型不写入/u, "attach action must remain local-only");
+  await runs.click();
+  assert.match(await marker.locator("[data-data-action-status]").innerText(), /已定位/u, "run-log action must provide local navigation feedback");
+
+  const internalScroll = await marker.locator("*").evaluateAll((elements) => elements.filter((element) => {
+    const style = getComputedStyle(element);
+    return ["auto", "scroll"].includes(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+  }).map((element) => element.className || element.tagName));
+  assert.deepEqual(internalScroll, [], `data center must not use internal vertical scrolling: ${internalScroll.join(", ")}`);
 }
 
 async function assertLibraryProductContract(page, marker) {
@@ -2414,6 +2465,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "library") {
         await assertLibraryProductContract(page, marker);
+      }
+      if (screen === "data") {
+        await assertDataProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
