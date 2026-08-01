@@ -1252,7 +1252,23 @@ async function assertReviewProductContract(page, marker) {
 }
 
 async function assertGraphProductContract(page, marker) {
-  assert.equal((await marker.locator("h1").textContent()).trim(), "因素关系路径");
+  assert.equal((await marker.locator("h1").textContent()).trim(), "AI 算力产业链证据图谱");
+  const layerHeadings = await marker.locator("[data-graph-layer-heading]").allTextContents();
+  assert.deepEqual(
+    layerHeadings.map((heading) => heading.trim()),
+    ["证据", "命题", "因果链", "公司", "基金"],
+    "desktop graph must preserve the five original relationship layers in order",
+  );
+  const nodeCountsByLayer = await marker.locator("[data-graph-layer]").evaluateAll((layers) =>
+    Object.fromEntries(layers.map((layer) => [layer.dataset.graphLayer, layer.querySelectorAll("[data-graph-node-id]").length])),
+  );
+  assert.deepEqual(
+    nodeCountsByLayer,
+    { evidence: 4, thesis: 3, causal: 5, company: 3, fund: 3 },
+    "five-layer canvas must retain multiple nodes per lane instead of collapsing to one focused path",
+  );
+  assert.equal(await marker.locator("[data-fixed-inspector]").count(), 1, "graph must expose one fixed evidence inspector");
+  assert.doesNotMatch(await marker.innerText(), /Focused relationship path|主路径/u, "desktop must not replace the five-layer canvas with a single focused path");
   for (const layer of [
     "DocumentVersion",
     "SourceStatement",
@@ -1279,25 +1295,26 @@ async function assertGraphProductContract(page, marker) {
   assert.ok(edgeKinds.has("reviewed"), "graph must label reviewed transmission edges");
   assert.ok(edgeKinds.has("projection"), "graph must label projection edges");
 
-  const pathList = marker.getByRole("list", { name: "结构化关系路径" });
+  const pathList = marker.locator('[aria-label="结构化关系路径"]');
   assert.equal(await pathList.count(), 1, "graph must expose one accessible structured path list");
-  assert.ok(await pathList.getByRole("button").count() >= 9, "structured path must expose every main-path node as a real button");
+  assert.ok(await pathList.locator("button").count() >= 18, "structured path must expose every five-layer node as a real button");
 
   const inspector = marker.locator("[data-graph-inspector]");
-  for (const field of ["原文区段", "关系语义", "审核状态", "适用范围", "as-of", "披露日期"]) {
+  for (const field of ["来源名称", "原文区段", "关系语义", "审核状态", "适用范围", "as-of", "发布日期", "引用与复用记录"]) {
     assert.ok((await inspector.innerText()).includes(field), `graph inspector must show ${field}`);
   }
-  assert.ok(await inspector.getByRole("button", { name: "提交审核", exact: true }).isVisible(), "proposed relation must expose 提交审核");
-  assert.ok(await inspector.getByRole("button", { name: "撤回提议", exact: true }).isVisible(), "proposed relation must expose 撤回提议");
+  assert.ok(await inspector.getByRole("link", { name: "查看冻结原文", exact: true }).isVisible(), "fixed inspector must expose the frozen source link");
+  assert.ok((await inspector.innerText()).includes("附件"), "fixed inspector must expose the frozen attachment/version");
 
   const fundNode = marker.locator('.graph-node[data-graph-node-id="FUND-ETF-AI-INFRA"]');
   const fundText = await fundNode.innerText();
-  for (const copy of ["披露持仓", "as-of 2025-03-31", "不构成投资建议"]) {
+  for (const copy of ["披露持仓", "as-of 2025-03-31"]) {
     assert.ok(fundText.includes(copy), `fund projection must visibly include ${copy}`);
   }
+  assert.doesNotMatch(await marker.innerText(), /置信度|成熟度|推荐/u, "graph must not introduce confidence, maturity, or recommendation language");
 
-  const sourcePathButton = pathList.getByRole("button", { name: /NVIDIA FY2026 Q1 Form 10-Q/u });
-  await sourcePathButton.click();
+  const sourceNode = marker.locator('.graph-node[data-graph-node-id="DOC-NVDA-FY26Q1"]');
+  await sourceNode.click();
   assert.ok((await inspector.innerText()).includes("pp. 22-27, Data Center revenue and supply commitments"), "path selection must update inspector source span");
   assert.equal(await inspector.getByRole("button", { name: "提交审核", exact: true }).count(), 0, "source facts must not expose proposal actions");
 
@@ -1307,18 +1324,28 @@ async function assertGraphProductContract(page, marker) {
 
   const desktop = await marker.evaluate((element) => {
     const graph = element.querySelector("[data-graph-canvas]");
-    const nodeSizes = [...element.querySelectorAll("[data-graph-node-id]")].map((node) => ({
+    const inspectorElement = element.querySelector("[data-fixed-inspector]");
+    const workbench = element.querySelector(".graph-workbench");
+    const nodeSizes = [...element.querySelectorAll(".graph-node[data-graph-node-id]")].map((node) => ({
       fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
       clipped: node.scrollWidth > node.clientWidth || node.scrollHeight > node.clientHeight,
     }));
     return {
       graphVisible: getComputedStyle(graph).display !== "none",
       graphWidth: graph.getBoundingClientRect().width,
+      inspectorShare: inspectorElement.getBoundingClientRect().width / workbench.getBoundingClientRect().width,
+      inspectorClipped: inspectorElement.scrollHeight > inspectorElement.clientHeight,
       nodeSizes,
     };
   });
   assert.ok(desktop.graphVisible && desktop.graphWidth >= 780, `desktop graph must remain the readable primary view: ${JSON.stringify(desktop)}`);
+  assert.ok(desktop.inspectorShare >= .19 && desktop.inspectorShare <= .21, `fixed inspector must occupy about 20% of the desktop workbench: ${JSON.stringify(desktop)}`);
+  assert.equal(desktop.inspectorClipped, false, `fixed inspector must not use internal scrolling: ${JSON.stringify(desktop)}`);
   assert.ok(desktop.nodeSizes.every((node) => node.fontSize >= 13 && !node.clipped), `graph nodes must be readable and unclipped: ${JSON.stringify(desktop.nodeSizes)}`);
+
+  await page.setViewportSize({ width: 1200, height: 1000 });
+  assert.notEqual(await marker.locator("[data-graph-canvas]").evaluate((element) => getComputedStyle(element).display), "none", "desktop widths above 900px must always retain the five-layer canvas");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   await page.setViewportSize({ width: 375, height: 812 });
   const mobile = await marker.evaluate((element) => ({
@@ -2494,7 +2521,7 @@ async function assertBrowserContract(routes) {
     ["new-research", "研究案例"],
     ["plan", "研究案例"],
     ["case", "研究案例"],
-    ["graph", "研究案例"],
+    ["graph", "行业研究"],
     ["library", "资料与知识"],
     ["data", "数据中心"],
     ["review", "审核中心"],

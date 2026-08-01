@@ -232,11 +232,11 @@
     `;
   }
 
-  function renderNavLinks(activeNav) {
+  function renderNavLinks(activeNav, industryResearchActive = false) {
     return NAV_ITEMS.map((item) => `
       <a class="nav-link" href="?screen=${escapeHTML(item.screen)}"${item.screen === activeNav ? ' aria-current="page"' : ""}>
         <span class="nav-icon" aria-hidden="true">${escapeHTML(item.icon)}</span>
-        <span>${escapeHTML(item.label)}</span>
+        <span>${escapeHTML(industryResearchActive && item.screen === "case" ? "行业研究" : item.label)}</span>
       </a>
     `).join("");
   }
@@ -1436,167 +1436,183 @@
   }
 
   function buildGraphViewModel(fixture) {
-    const document = fixture.documents.find((item) => item.id === "DOC-NVDA-FY26Q1");
-    const statement = fixture.statements.find((item) => item.id === "ST-002");
-    const support = fixture.evidenceLinks.find((item) => item.id === "EL-002");
-    const contradiction = fixture.evidenceLinks.find((item) => item.id === "EL-004");
-    const factor = fixture.factors.find((item) => item.id === fixture.case.workbench.selectedFactorId);
-    const company = fixture.companies.find((item) => item.id === "CO-NVDA");
-    const fund = fixture.funds.find((item) => item.id === "FUND-ETF-AI-INFRA");
-    const asOf = fixture.case.cutoff;
+    const documents = indexById(fixture.documents);
+    const statements = indexById(fixture.statements);
+    const evidenceLinks = indexById(fixture.evidenceLinks);
+    const theses = indexById(fixture.theses);
+    const companies = indexById(fixture.companies);
+    const funds = indexById(fixture.funds);
     const publishedDate = (value) => value?.slice(0, 10) ?? "不适用";
+    const sourceHref = (documentId, sourceSpan) => `?screen=library&document=${encodeURIComponent(documentId)}&span=${encodeURIComponent(sourceSpan)}`;
     const node = (definition) => ({
       scope: "AI 算力产业链 · 当前 ResearchCase",
-      asOf,
-      disclosureDate: "不适用",
+      asOf: fixture.case.cutoff,
+      publicationDate: "不适用",
+      sourceName: "冻结研究资料",
+      sourceSpan: "不适用",
+      sourceHref: "?screen=library",
+      attachment: "冻结快照内记录",
+      citations: ["当前 ResearchCase 引用 1 次", "当前快照复用 1 次"],
+      relation: "图谱投影关系",
+      review: "待人工确认",
       actions: false,
       ...definition,
     });
-
-    return {
-      case: fixture.case,
-      nodes: [
-        node({
-          id: document.id,
-          layer: "DocumentVersion",
-          title: document.title,
-          meta: document.sourceVersion,
-          kind: "source-fact",
-          kindLabel: "来源事实",
-          relation: "冻结文档版本，是后续引用的来源边界。",
-          review: "已人工复核",
-          sourceSpan: document.sourceSpan,
-          disclosureDate: publishedDate(document.publishedAt),
-          position: "document",
-        }),
-        node({
-          id: statement.id,
-          layer: "SourceStatement",
-          title: statement.text,
-          meta: `${statement.id} · ${statement.sourceVersion}`,
-          kind: "source-fact",
-          kindLabel: "来源事实",
-          relation: "从冻结版本中抽取的原子陈述。",
-          review: "已人工复核",
-          sourceSpan: statement.sourceSpan,
-          disclosureDate: publishedDate(statement.publishedAt),
-          position: "statement",
-        }),
-        node({
-          id: support.id,
-          layer: "支持证据",
-          title: "交付与分部收入具备同主体披露入口",
-          meta: `${support.id} · 支持`,
-          kind: "reviewed-relation",
-          kindLabel: "已人工复核关系",
-          relation: support.rationale,
-          review: "已人工复核",
-          sourceSpan: support.sourceSpan,
-          disclosureDate: publishedDate(support.publishedAt),
-          position: "support",
-        }),
-        node({
-          id: contradiction.id,
-          layer: "反面证据",
-          title: "需求与投入不等同于当期收入确认",
-          meta: `${contradiction.id} · 反驳即时传导`,
-          kind: "reviewed-relation",
-          kindLabel: "已人工复核关系",
-          relation: contradiction.rationale,
-          review: "已人工复核",
-          sourceSpan: contradiction.sourceSpan,
-          disclosureDate: publishedDate(contradiction.publishedAt),
-          position: "contradiction",
-        }),
-        node({
-          id: factor.id,
-          layer: "ReviewedFactor",
-          title: factor.label,
-          meta: `${factor.id} · 传导因素`,
-          kind: "reviewed-factor",
-          kindLabel: "人工界定因素",
-          relation: "在当前案例中作为订单到交付的传导因素使用。",
-          review: "因素角色已人工界定",
-          sourceSpan: support.sourceSpan,
-          position: "factor",
-        }),
-        node({
-          id: "EL-PROPOSED-CAUSAL",
-          layer: "CausalStep",
-          title: "系统交付兑现后进入分部收入确认",
-          meta: "提议边 · 交付 → 收入",
-          kind: "ai-proposed",
-          kindLabel: "AI 提议关系 · 未经人工复核",
-          relation: "提议语义：实际交付是订单积压进入收入确认的必要中间环节。",
-          review: "未经人工复核",
-          sourceSpan: statement.sourceSpan,
-          scope: "NVIDIA 数据中心业务 · 2026 财年第一季度",
-          disclosureDate: publishedDate(statement.publishedAt),
-          actions: true,
-          position: "causal",
-        }),
-        node({
-          id: company.id,
-          layer: "Company",
-          title: company.name,
-          meta: "算力系统供应商",
-          kind: "projection",
-          kindLabel: "投影节点",
-          relation: "从已披露业务主体投影到公司实体。",
-          review: "来源映射已复核",
-          sourceSpan: company.sourceSpan,
-          disclosureDate: company.disclosureDate,
-          position: "company",
-        }),
-        node({
-          id: "STOCK-NVDA",
-          layer: "Stock",
-          title: "NVDA · NASDAQ",
-          meta: "证券表达层",
-          kind: "projection",
-          kindLabel: "投影节点",
-          relation: "公司实体到上市证券标识的投影，不表示推荐。",
-          review: "投影映射",
-          sourceSpan: company.sourceSpan,
-          disclosureDate: company.disclosureDate,
-          position: "stock",
-        }),
-        node({
-          id: "HOLDING-FUND-NVDA-2025Q1",
-          layer: "HoldingDisclosure",
-          title: `披露持仓 ${fund.disclosedWeight}`,
-          meta: `as-of ${fund.disclosureDate} · ${fund.sourceVersion}`,
-          kind: "projection",
-          kindLabel: "投影节点",
-          relation: "基金定期报告披露的点时持仓，不代表当前敞口。",
-          review: "已人工复核",
-          sourceSpan: fund.sourceSpan,
-          asOf: fund.disclosureDate,
-          disclosureDate: publishedDate(fund.publishedAt),
-          position: "holding",
-        }),
-        node({
-          id: fund.id,
-          layer: "Fund",
-          title: fund.name,
-          meta: `披露持仓 · as-of ${fund.disclosureDate}`,
-          note: "不构成投资建议",
-          kind: "projection",
-          kindLabel: "投影节点",
-          relation: "由已披露持仓连接的基金表达，仅用于点时穿透。",
-          review: "披露记录已复核",
-          sourceSpan: fund.sourceSpan,
-          asOf: fund.disclosureDate,
-          disclosureDate: publishedDate(fund.publishedAt),
-          position: "fund",
-        }),
-      ],
+    const statementNode = (statementId, definition) => {
+      const statement = statements.get(statementId);
+      const document = documents.get(statement.documentId);
+      return node({
+        id: statement.id,
+        sourceName: document.sourceName ?? document.title,
+        sourceSpan: statement.sourceSpan,
+        sourceHref: sourceHref(document.id, statement.sourceSpan),
+        attachment: `${document.title} · ${statement.sourceVersion}`,
+        publicationDate: publishedDate(statement.publishedAt),
+        ...definition,
+      });
     };
+
+    const layers = [
+      {
+        key: "evidence",
+        label: "证据",
+        nodes: [
+          node({
+            id: "DOC-NVDA-FY26Q1",
+            layer: "DocumentVersion",
+            title: "NVIDIA FY2026 Q1 Form 10-Q",
+            meta: "2025-05-28 · 冻结版本",
+            kind: "source-fact",
+            kindLabel: "来源事实",
+            relation: "冻结文档版本界定可引用信息边界。",
+            review: "已人工复核",
+            sourceName: "SEC EDGAR · NVIDIA",
+            sourceSpan: documents.get("DOC-NVDA-FY26Q1").sourceSpan,
+            sourceHref: sourceHref("DOC-NVDA-FY26Q1", documents.get("DOC-NVDA-FY26Q1").sourceSpan),
+            attachment: `NVIDIA 10-Q · ${documents.get("DOC-NVDA-FY26Q1").sourceVersion}`,
+            publicationDate: publishedDate(documents.get("DOC-NVDA-FY26Q1").publishedAt),
+            citations: ["TH-AIC-03 引用", "分部收入关系复用 2 次"],
+          }),
+          statementNode("ST-001", {
+            layer: "SourceStatement",
+            title: "资本开支继续用于云与 AI 基础设施",
+            meta: "支持 · 已人工复核",
+            kind: "source-fact",
+            kindLabel: "来源事实",
+            relation: evidenceLinks.get("EL-001").rationale,
+            review: "已人工复核关系",
+            citations: ["TH-AIC-01 引用", "资本开支命题复用 2 次"],
+          }),
+          statementNode("ST-002", {
+            layer: "支持证据",
+            title: "Blackwell 交付与分部收入同时披露",
+            meta: "支持 · 已人工复核",
+            kind: "reviewed-relation",
+            kindLabel: "已人工复核关系",
+            relation: evidenceLinks.get("EL-002").rationale,
+            review: "已人工复核关系",
+            citations: ["TH-AIC-03 引用", "交付关系复用 3 次"],
+          }),
+          statementNode("ST-004", {
+            layer: "反面证据",
+            title: "需求高于可供容量，收入兑现仍受约束",
+            meta: "反驳即时传导 · 已人工复核",
+            kind: "contradictory",
+            kindLabel: "已人工复核关系",
+            relation: evidenceLinks.get("EL-004").rationale,
+            review: "已人工复核 · 林岚",
+            citations: ["TH-AIC-03 反面引用", "RC-CLOUD-CAPACITY-2025-02 复用"],
+          }),
+        ],
+      },
+      {
+        key: "thesis",
+        label: "命题",
+        nodes: [
+          node({
+            id: "TH-AIC-01",
+            layer: "ReviewedFactor",
+            title: theses.get("TH-AIC-01").title,
+            meta: "已存在人工复核关系",
+            kind: "thesis-node",
+            kindLabel: "已人工复核关系",
+            relation: "由 EL-001 支持，仍保留独立证伪条件。",
+            review: "证据关系已人工复核",
+            sourceName: "Microsoft Form 10-Q",
+            sourceSpan: statements.get("ST-001").sourceSpan,
+            sourceHref: sourceHref("DOC-MSFT-FY25Q3", statements.get("ST-001").sourceSpan),
+            attachment: documents.get("DOC-MSFT-FY25Q3").sourceVersion,
+            publicationDate: publishedDate(documents.get("DOC-MSFT-FY25Q3").publishedAt),
+          }),
+          node({
+            id: "TH-AIC-02",
+            layer: "Thesis",
+            title: theses.get("TH-AIC-02").title,
+            meta: "AI 提议 · 未经人工复核",
+            kind: "ai-proposed",
+            kindLabel: "AI 提议关系 · 未经人工复核",
+            relation: "先进封装与互连可能限制交付斜率，等待直接证据。",
+            review: "未经人工复核",
+            sourceName: "TSMC Investor Relations",
+            sourceSpan: documents.get("DOC-TSMC-2025M05").sourceSpan,
+            sourceHref: sourceHref("DOC-TSMC-2025M05", documents.get("DOC-TSMC-2025M05").sourceSpan),
+            attachment: documents.get("DOC-TSMC-2025M05").sourceVersion,
+            publicationDate: publishedDate(documents.get("DOC-TSMC-2025M05").publishedAt),
+          }),
+          node({
+            id: "TH-AIC-03",
+            layer: "Thesis",
+            title: theses.get("TH-AIC-03").title,
+            meta: "待关系审核 · 含反面证据",
+            kind: "thesis-node",
+            kindLabel: "命题判断",
+            relation: "支持与反面材料并存，不把需求直接等同于收入。",
+            review: "关系待人工审核",
+            sourceName: "NVIDIA Form 10-Q / Microsoft IR",
+            sourceSpan: evidenceLinks.get("EL-004").sourceSpan,
+            sourceHref: sourceHref("DOC-MSFT-FY25Q3-CALL", evidenceLinks.get("EL-004").sourceSpan),
+            attachment: documents.get("DOC-MSFT-FY25Q3-CALL").sourceVersion,
+            publicationDate: publishedDate(documents.get("DOC-MSFT-FY25Q3-CALL").publishedAt),
+          }),
+        ],
+      },
+      {
+        key: "causal",
+        label: "因果链",
+        nodes: [
+          node({ id: "CS-CAPEX", layer: "CausalStep", title: "云厂商资本开支扩张", meta: "01 · 需求入口", kind: "causal-node", kindLabel: "已人工复核关系", relation: "投入方向由正式披露限定。", review: "已人工复核关系", sourceName: "Microsoft Form 10-Q", sourceSpan: statements.get("ST-001").sourceSpan, sourceHref: sourceHref("DOC-MSFT-FY25Q3", statements.get("ST-001").sourceSpan), attachment: documents.get("DOC-MSFT-FY25Q3").sourceVersion, publicationDate: publishedDate(statements.get("ST-001").publishedAt) }),
+          node({ id: "CS-PROCUREMENT", layer: "CausalStep", title: "AI 基础设施采购", meta: "02 · 需求转为订单", kind: "causal-node", kindLabel: "AI 提议 · 未经人工复核", relation: "采购形成系统与芯片订单的提议关系。", review: "未经人工复核", sourceName: "当前 ResearchCase", sourceSpan: "关系提议，无独立 SourceSpan", attachment: fixture.case.snapshotId }),
+          node({ id: "CS-BACKLOG", layer: "CausalStep", title: "订单积压与供给排期", meta: "03 · 供给约束", kind: "causal-node", kindLabel: "AI 提议 · 未经人工复核", relation: "订单仍需经过供给、容量与验收约束。", review: "未经人工复核", sourceName: "NVIDIA Form 10-Q", sourceSpan: documents.get("DOC-NVDA-FY26Q1").sourceSpan, sourceHref: sourceHref("DOC-NVDA-FY26Q1", documents.get("DOC-NVDA-FY26Q1").sourceSpan), attachment: documents.get("DOC-NVDA-FY26Q1").sourceVersion, publicationDate: publishedDate(documents.get("DOC-NVDA-FY26Q1").publishedAt) }),
+          node({ id: "EL-PROPOSED-CAUSAL", layer: "CausalStep", title: "系统交付与容量上线", meta: "04 · 交付 → 收入", kind: "ai-proposed", kindLabel: "AI 提议关系 · 未经人工复核", relation: "实际交付是订单积压进入收入确认的必要中间环节。", review: "未经人工复核", sourceName: "NVIDIA Form 10-Q", sourceSpan: statements.get("ST-002").sourceSpan, sourceHref: sourceHref("DOC-NVDA-FY26Q1", statements.get("ST-002").sourceSpan), attachment: documents.get("DOC-NVDA-FY26Q1").sourceVersion, publicationDate: publishedDate(statements.get("ST-002").publishedAt), scope: "NVIDIA 数据中心业务 · 2026 财年第一季度", actions: true }),
+          node({ id: "CS-REVENUE", layer: "CausalStep", title: "分部收入确认", meta: "05 · 结果口径", kind: "causal-node", kindLabel: "已人工复核关系", relation: "只使用同主体分部收入披露，不用订单推算。", review: "已人工复核关系", sourceName: "NVIDIA Form 10-Q", sourceSpan: "p. 24, segment revenue table", sourceHref: sourceHref("DOC-NVDA-FY26Q1", "p. 24, segment revenue table"), attachment: documents.get("DOC-NVDA-FY26Q1").sourceVersion, publicationDate: publishedDate(documents.get("DOC-NVDA-FY26Q1").publishedAt) }),
+        ],
+      },
+      {
+        key: "company",
+        label: "公司",
+        nodes: [
+          node({ id: "CO-NVDA", layer: "Company", title: "NVIDIA · NVDA", meta: "系统与加速芯片", kind: "company-node projection", kindLabel: "投影节点", relation: "已披露主体映射至上市证券。", review: "公司/证券映射已复核", sourceName: "NVIDIA Form 10-Q", sourceSpan: companies.get("CO-NVDA").sourceSpan, sourceHref: sourceHref("DOC-NVDA-FY26Q1", companies.get("CO-NVDA").sourceSpan), attachment: companies.get("CO-NVDA").sourceVersion, publicationDate: companies.get("CO-NVDA").disclosureDate }),
+          node({ id: "CO-TSM", layer: "Stock", title: "TSMC · TSM", meta: "晶圆与先进封装", kind: "company-node projection", kindLabel: "投影节点", relation: "发行人实体映射至上市证券。", review: "公司/证券映射已复核", sourceName: "TSMC Investor Relations", sourceSpan: companies.get("CO-TSM").sourceSpan, sourceHref: sourceHref("DOC-TSMC-2025M05", companies.get("CO-TSM").sourceSpan), attachment: companies.get("CO-TSM").sourceVersion, publicationDate: companies.get("CO-TSM").disclosureDate }),
+          node({ id: "CO-MSFT", layer: "Company", title: "Microsoft · MSFT", meta: "云与 AI 基础设施", kind: "company-node projection", kindLabel: "投影节点", relation: "披露主体映射至上市证券，仅作研究表达。", review: "公司/证券映射已复核", sourceName: "Microsoft Form 10-Q", sourceSpan: documents.get("DOC-MSFT-FY25Q3").sourceSpan, sourceHref: sourceHref("DOC-MSFT-FY25Q3", documents.get("DOC-MSFT-FY25Q3").sourceSpan), attachment: documents.get("DOC-MSFT-FY25Q3").sourceVersion, publicationDate: publishedDate(documents.get("DOC-MSFT-FY25Q3").publishedAt) }),
+        ],
+      },
+      {
+        key: "fund",
+        label: "基金",
+        nodes: [
+          node({ id: "HOLDING-FUND-NVDA-2025Q1", layer: "HoldingDisclosure", title: "NVDA 披露持仓 8.4%", meta: "as_of_date 2025-03-31", kind: "fund-node projection", kindLabel: "投影节点", relation: "定期报告点时持仓，不代表当前敞口。", review: "披露记录已人工复核", sourceName: "基金 2025 年一季报", sourceSpan: funds.get("FUND-ETF-AI-INFRA").sourceSpan, sourceHref: "?screen=library&document=fund-report-2025q1-v1", attachment: funds.get("FUND-ETF-AI-INFRA").sourceVersion, publicationDate: publishedDate(funds.get("FUND-ETF-AI-INFRA").publishedAt), asOf: funds.get("FUND-ETF-AI-INFRA").disclosureDate }),
+          node({ id: "FUND-ETF-AI-INFRA", layer: "Fund", title: funds.get("FUND-ETF-AI-INFRA").name, meta: "披露持仓 8.4% · as-of 2025-03-31", kind: "fund-node projection", kindLabel: "投影节点", relation: "由已披露持仓连接的基金表达，仅用于点时穿透。", review: "披露记录已人工复核", sourceName: "基金 2025 年一季报", sourceSpan: funds.get("FUND-ETF-AI-INFRA").sourceSpan, sourceHref: "?screen=library&document=fund-report-2025q1-v1", attachment: funds.get("FUND-ETF-AI-INFRA").sourceVersion, publicationDate: publishedDate(funds.get("FUND-ETF-AI-INFRA").publishedAt), asOf: funds.get("FUND-ETF-AI-INFRA").disclosureDate }),
+          node({ id: "FUND-SEMI-INDEX", layer: "Fund", title: funds.get("FUND-SEMI-INDEX").name, meta: "披露持仓 6.1% · as-of 2025-03-31", note: "披露口径待人工审核", kind: "fund-node projection", kindLabel: "投影节点", relation: "由 TSMC 披露持仓连接，份额类别仍待核对。", review: "待人工审核", sourceName: "基金 2025 年一季报", sourceSpan: funds.get("FUND-SEMI-INDEX").sourceSpan, sourceHref: "?screen=library&document=fund-report-2025q1-v2", attachment: funds.get("FUND-SEMI-INDEX").sourceVersion, publicationDate: publishedDate(funds.get("FUND-SEMI-INDEX").publishedAt), asOf: funds.get("FUND-SEMI-INDEX").disclosureDate }),
+        ],
+      },
+    ];
+
+    return { case: fixture.case, layers, nodes: layers.flatMap((layer) => layer.nodes), selectedNodeId: "ST-004" };
   }
 
-  function renderGraphNode(item) {
+  function renderGraphNode(item, selectedNodeId) {
     return `
-      <button type="button" class="graph-node ${escapeHTML(item.kind)} node-${escapeHTML(item.position)}" data-graph-select data-graph-node-id="${escapeHTML(item.id)}" aria-pressed="${item.actions}">
+      <button type="button" class="graph-node ${escapeHTML(item.kind)}" data-graph-select data-graph-node-id="${escapeHTML(item.id)}" aria-pressed="${item.id === selectedNodeId}">
         <span class="graph-node-layer">${escapeHTML(item.layer)}</span>
         <strong>${escapeHTML(item.title)}</strong>
         <small>${escapeHTML(item.meta)}</small>
@@ -1609,86 +1625,119 @@
   function renderGraphInspector(item) {
     return `
       <div class="inspector-heading">
-        <div><p>当前选择</p><h2>${escapeHTML(item.layer)}</h2></div>
+        <div><p>固定证据检查器</p><h2>${escapeHTML(item.layer)}</h2></div>
         <span class="inspector-kind ${escapeHTML(item.kind)}">${escapeHTML(item.kindLabel)}</span>
       </div>
       <strong class="inspector-title">${escapeHTML(item.title)}</strong>
       <dl class="inspector-facts">
-        <div><dt>对象标识</dt><dd>${escapeHTML(item.id)}</dd></div>
-        <div><dt>原文区段</dt><dd>${escapeHTML(item.sourceSpan)}</dd></div>
+        <div><dt>来源名称</dt><dd>${escapeHTML(item.sourceName)}</dd></div>
+        <div><dt>发布日期</dt><dd>${escapeHTML(item.publicationDate)}</dd></div>
+        <div><dt>原文区段 · 精确冻结 SourceSpan</dt><dd>${escapeHTML(item.sourceSpan)}</dd></div>
+        <div class="inspector-source-actions"><dt>来源与附件</dt><dd><a href="${escapeHTML(item.sourceHref)}">查看冻结原文</a><span>附件 · ${escapeHTML(item.attachment)}</span></dd></div>
         <div><dt>关系语义</dt><dd>${escapeHTML(item.relation)}</dd></div>
         <div><dt>审核状态</dt><dd>${escapeHTML(item.review)}</dd></div>
         <div><dt>适用范围</dt><dd>${escapeHTML(item.scope)}</dd></div>
         <div><dt>as-of</dt><dd>${escapeHTML(item.asOf)}</dd></div>
-        <div><dt>披露日期</dt><dd>${escapeHTML(item.disclosureDate)}</dd></div>
       </dl>
+      <section class="inspector-citations" aria-label="引用与复用记录">
+        <h3>引用与复用记录</h3>
+        <ul>${item.citations.map((citation) => `<li>${escapeHTML(citation)}</li>`).join("")}</ul>
+      </section>
       ${item.actions ? `
         <div class="inspector-actions">
           <button type="button" class="graph-action primary" data-graph-action="submit">提交审核</button>
           <button type="button" class="graph-action quiet" data-graph-action="withdraw">撤回提议</button>
         </div>
-        <p class="inspector-action-note" data-graph-action-note aria-live="polite">操作仅更新本页原型状态，不写入冻结快照。</p>
+        <p class="inspector-action-note" data-graph-action-note aria-live="polite">仅更新本页原型状态，不写入冻结快照。</p>
       ` : `<p class="inspector-boundary">该对象不是待审核提议，不显示审核操作。</p>`}
+    `;
+  }
+
+  function renderGraphConnectors() {
+    return `
+      <svg class="graph-connectors" viewBox="0 0 1000 520" preserveAspectRatio="none" aria-label="跨层关系连线">
+        <defs>
+          <marker id="arrow-support" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
+          <marker id="arrow-proposed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
+          <marker id="arrow-contradict" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
+          <marker id="arrow-projection" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>
+        </defs>
+        <g class="edge support" data-edge-kind="source"><path d="M170 118 C190 118 202 112 220 112"></path><text x="184" y="106">冻结引用</text></g>
+        <g class="edge support" data-edge-kind="support"><path d="M170 238 C194 238 200 426 220 426"></path><text x="184" y="330">支持</text></g>
+        <g class="edge support" data-edge-kind="reviewed"><path d="M170 352 C192 352 198 265 220 265"></path><text x="183" y="300">已复核</text></g>
+        <g class="edge contradict" data-edge-kind="contradict"><path d="M170 466 C194 466 198 426 220 426"></path><text x="178" y="449">反驳</text></g>
+        <g class="edge support" data-edge-kind="reviewed"><path d="M378 112 C394 112 404 70 420 70"></path><text x="388" y="82">支持</text></g>
+        <g class="edge proposed" data-edge-kind="projection"><path d="M378 265 C396 265 404 165 420 165"></path><text x="383" y="207">约束</text></g>
+        <g class="edge proposed" data-edge-kind="reviewed"><path d="M378 426 C398 426 402 356 420 356"></path><text x="383" y="386">待审核</text></g>
+        <g class="edge proposed" data-edge-kind="support"><path d="M500 104 L500 126"></path><text x="509" y="120">形成订单</text></g>
+        <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 198 L500 220"></path><text x="509" y="214">进入排期</text></g>
+        <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 292 L500 314"></path><text x="509" y="309">实际交付</text></g>
+        <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 386 L500 408"></path><text x="509" y="404">收入确认</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M580 356 C602 356 606 112 625 112"></path><text x="587" y="176">影响对象</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M580 260 C600 260 606 265 625 265"></path><text x="590" y="252">供给映射</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M580 70 C602 70 606 422 625 422"></path><text x="586" y="350">支出主体</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M783 112 C804 112 808 112 828 112"></path><text x="792" y="102">披露持仓</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M783 265 C804 265 808 424 828 424"></path><text x="792" y="340">披露持仓</text></g>
+      </svg>
     `;
   }
 
   function renderGraphWorkbench() {
     const view = buildGraphViewModel(data);
-    const selected = view.nodes.find((item) => item.actions);
+    const selected = view.nodes.find((item) => item.id === view.selectedNodeId);
     return `
       <main class="screen graph-workbench-screen" data-screen="graph">
-        <header class="graph-header">
-          <div>
-            <p class="eyebrow">Focused relationship path</p>
-            <h1>因素关系路径</h1>
-            <p class="lede">沿一条重要路径核对来源、关系审核与披露持仓；图谱是可重建投影，不替代证据台账。</p>
+        <header class="graph-case-summary">
+          <div class="graph-summary-main">
+            <div class="graph-summary-title"><span>ResearchCase</span><h1>AI 算力产业链证据图谱</h1></div>
+            <p>${escapeHTML(view.case.question)}</p>
           </div>
-          <div class="graph-context" aria-label="图谱上下文">
-            <span>探索视图</span>
-            <strong>当前冻结快照 ${escapeHTML(view.case.snapshotId)}</strong>
-            <small>证据截止 ${escapeHTML(view.case.cutoff)} · 待审核提议可见</small>
-          </div>
+          <dl class="graph-summary-facts">
+            <div><dt>证据截止</dt><dd>${escapeHTML(view.case.cutoff)}</dd></div>
+            <div><dt>冻结快照</dt><dd>${escapeHTML(view.case.snapshotId)}</dd></div>
+            <div><dt>正式判断</dt><dd>证据不足 · 继续验证</dd></div>
+          </dl>
+          <span class="graph-ai-boundary">AI 提议 · 未经人工复核</span>
         </header>
 
         <div class="graph-workbench">
           <section class="graph-primary" aria-labelledby="graph-canvas-title">
             <div class="graph-toolbar">
-              <div><p>主路径</p><h2 id="graph-canvas-title">冻结来源 → 披露持仓</h2></div>
-              <div class="graph-legend" aria-label="关系图例">
-                <span class="legend-source">实线 · 来源</span>
-                <span class="legend-reviewed">实线箭头 · 已复核</span>
-                <span class="legend-proposed">虚线箭头 · 未复核</span>
-              </div>
+              <div><p>Five-layer relationship canvas</p><h2 id="graph-canvas-title">证据 → 命题 → 因果链 → 公司 → 基金</h2></div>
+              <span>图谱为可重建投影 · 证据台账为事实源</span>
             </div>
-            <div class="relationship-canvas" data-graph-canvas aria-label="证据到基金连续关系图">
-              <span class="swimlane-label lane-evidence">01 · 冻结证据</span>
-              <span class="swimlane-label lane-mechanism">02 · 因素与机制</span>
-              <span class="swimlane-label lane-expression">03 · 证券与基金披露</span>
-              ${view.nodes.map(renderGraphNode).join("")}
-              <span class="graph-edge edge-document-statement" data-edge-kind="source"><b>抽取</b></span>
-              <span class="graph-edge edge-statement-support" data-edge-kind="support"><b>支持</b></span>
-              <span class="graph-edge edge-support-factor" data-edge-kind="reviewed"><b>人工确认</b></span>
-              <span class="graph-edge edge-contradiction-horizontal" data-edge-kind="contradict"><b>反驳即时传导</b></span>
-              <span class="graph-edge edge-contradiction-vertical" data-edge-kind="contradict" aria-hidden="true"></span>
-              <span class="graph-edge edge-factor-causal" data-edge-kind="reviewed"><b>形成机制提议</b></span>
-              <span class="graph-edge edge-causal-company" data-edge-kind="projection"><b>影响对象</b></span>
-              <span class="graph-edge edge-company-stock reverse" data-edge-kind="projection"><b>证券映射</b></span>
-              <span class="graph-edge edge-stock-holding reverse" data-edge-kind="projection"><b>披露记录</b></span>
-              <span class="graph-edge edge-holding-fund reverse" data-edge-kind="projection"><b>所属基金</b></span>
+            <div class="relationship-canvas" data-graph-canvas aria-label="证据到基金连续五层关系图">
+              ${renderGraphConnectors()}
+              ${view.layers.map((layer) => `
+                <section class="graph-layer graph-layer-${escapeHTML(layer.key)}" data-graph-layer="${escapeHTML(layer.key)}">
+                  <h3 data-graph-layer-heading>${escapeHTML(layer.label)}</h3>
+                  <div class="graph-layer-nodes">${layer.nodes.map((item) => renderGraphNode(item, view.selectedNodeId)).join("")}</div>
+                </section>
+              `).join("")}
             </div>
 
+            <footer class="graph-canvas-footer">
+              <div class="graph-legend" aria-label="关系图例">
+                <span class="legend-evidence">证据</span>
+                <span class="legend-thesis">命题 / 因果</span>
+                <span class="legend-company">公司 / 股票</span>
+                <span class="legend-fund">基金</span>
+                <span class="legend-contradict">红色虚线箭头 · 反驳</span>
+                <span class="legend-proposed">橙色虚线箭头 · AI 提议</span>
+                <span class="legend-reviewed">实线箭头 · 已人工复核</span>
+              </div>
+              <div class="graph-zoom" aria-label="图谱缩放控件"><button type="button" aria-label="缩小">−</button><span>100%</span><button type="button" aria-label="放大">＋</button><button type="button" aria-label="适合画布">⌗</button></div>
+            </footer>
+
             <div class="structured-path">
-              <div><p>可访问替代</p><h2>结构化路径</h2></div>
+              <div><p>窄屏替代</p><h2>结构化关系列表</h2></div>
               <ol aria-label="结构化关系路径">
-                ${view.nodes.filter((item) => item.position !== "contradiction").map((item, index) => `
-                  <li><button type="button" data-graph-select data-graph-node-id="${escapeHTML(item.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.layer)}</small></button></li>
-                `).join("")}
-                <li class="path-branch"><button type="button" data-graph-select data-graph-node-id="${escapeHTML(view.nodes.find((item) => item.position === "contradiction").id)}"><span>↳</span><strong>反面证据分支</strong><small>反驳即时传导</small></button></li>
+                ${view.nodes.map((item, index) => `<li><button type="button" data-graph-select data-graph-node-id="${escapeHTML(item.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.layer)}</small></button></li>`).join("")}
               </ol>
             </div>
           </section>
 
-          <aside class="graph-inspector" data-graph-inspector aria-label="关系检查器">
+          <aside class="graph-inspector" data-graph-inspector data-fixed-inspector aria-label="固定证据检查器">
             ${renderGraphInspector(selected)}
           </aside>
         </div>
@@ -2230,7 +2279,7 @@
             <div><strong>洞见研究 OS</strong><small>行业研究工作系统</small></div>
           </div>
           <nav class="nav-list">
-            ${renderNavLinks(activeNav)}
+            ${renderNavLinks(activeNav, screen === "graph")}
           </nav>
           <div class="sidebar-context">
             <span>当前研究</span>
@@ -2254,7 +2303,7 @@
         <details class="mobile-nav">
           <summary>导航</summary>
           <nav class="mobile-nav-links" aria-label="移动端主导航">
-            ${renderNavLinks(activeNav)}
+            ${renderNavLinks(activeNav, screen === "graph")}
           </nav>
         </details>
         <div class="work-area insight-workspace">${SCREEN_RENDERERS[screen]()}</div>
