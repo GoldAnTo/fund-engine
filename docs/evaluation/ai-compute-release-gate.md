@@ -1,20 +1,36 @@
 # AI-Compute Release Gate
 
-The release gate (`backend/scripts/verify_ai_compute_slice.py`) runs six
+The release gate (`backend/scripts/verify_ai_compute_slice.py`) runs nine
 explicit checks against the seeded AI-compute evidence ledger to verify that
 the vertical slice is auditable end-to-end before a release is cut.
+
+The gate is part of the evidence pack under `docs/evaluation/`:
+
+- `dataset-manifest.json` – frozen document hashes, theses, cutoffs, dataset
+  index, and stated limitations (fail-closed: the gate refuses to run
+  without it).
+- `datasets/` – frozen offline gold datasets (currently the table-extraction
+  gold set).
+- `reports/` – committed per-run gate summaries (trend over time).
+- `raw/` – gitignored full per-check detail for debugging.
+- `reproduce.sh` – one-command replay of the whole gate.
 
 ## Running
 
 ```bash
+docs/evaluation/reproduce.sh
+# or manually:
 cd backend
 python scripts/verify_ai_compute_slice.py
 ```
 
 The script reads `DATABASE_URL` (default `sqlite:///./evidence_gate.db`),
 recreates the schema, seeds the frozen slice, runs all checks, and writes a
-JSON result to `docs/evaluation/runs/<timestamp>.json` (never overwriting a
-prior result).  Exit code is `0` on pass, `1` on fail.
+summary JSON to `docs/evaluation/reports/<timestamp>.json` plus full detail
+to `docs/evaluation/raw/<timestamp>.json` (never overwriting a prior
+result).  Exit code is `0` on pass, `1` on fail.  If
+`docs/evaluation/dataset-manifest.json` is missing, the script exits `1`
+**before** touching the database (fail-closed).
 
 ## Checks
 
@@ -30,7 +46,22 @@ files failed to parse; the check reports `insufficient_document_versions`.
 
 ---
 
-### 2. `assessment_source_spans_complete`
+### 2. `gold_manifest_matches_ledger` (fail-closed)
+
+**Definition:** The frozen dataset manifest
+(`docs/evaluation/dataset-manifest.json`) exists, lists at least one
+document, and its `content_sha256` set matches the ledger's
+`DocumentVersion` hashes exactly — no missing and no unexpected documents.
+
+**Pass condition:** manifest document hash set == ledger hash set.
+
+**Failure examples:** The manifest file was deleted (check fails with
+`gold manifest missing`); a fixture was edited without re-freezing the
+manifest (`ledger document not in manifest: <hash>…`).
+
+---
+
+### 3. `assessment_source_spans_complete`
 
 **Definition:** Every `AIAssessment` can be traced back through the full chain
 `AIAssessment -> EvidenceSnapshot -> EvidenceLink -> SourceStatement ->
@@ -46,7 +77,7 @@ DBAPI `DELETE` that bypasses the append-only guard).  The check reports
 
 ---
 
-### 3. `holding_disclosures_dated`
+### 4. `holding_disclosures_dated`
 
 **Definition:** Every `HoldingDisclosure` carries both a `report_period` (the
 period the holding report covers) and a `published_at` (when the report was
@@ -63,7 +94,7 @@ inserting via raw DBAPI).  The check reports
 
 ---
 
-### 4. `future_material_excluded`
+### 5. `future_material_excluded`
 
 **Definition:** A historical cutoff excludes disclosures whose `published_at`
 falls after that cutoff from both the `ExposureService` and the
@@ -82,7 +113,7 @@ at cutoff 2026-04-01`.
 
 ---
 
-### 5. `ai_human_boundary_visible`
+### 6. `ai_human_boundary_visible`
 
 **Definition:** Every `AIAssessment` is explicitly marked as provisional
 (`displayed_as_provisional = True`), and human reviews exist as separate
@@ -99,7 +130,38 @@ assessment.  If a `ReviewDecision` exists, the original assessment's
 
 ---
 
-### 6. `projection_rebuilds`
+### 7. `review_outcomes_tracked` (report-only)
+
+**Definition:** Surfaces the `ReviewDecision` outcome distribution
+(confirmed / modified / rejected counts) and `AIRun` audit counts by status
+in every evidence-pack report, so human review adoption of machine output
+is measurable over time.
+
+**Pass condition:** Always passes (`passed = True`, `gated = False` in the
+evidence).  Review adoption is a metric, not a release blocker; the seeded
+slice itself contains no human reviews, so counts may legitimately be zero.
+
+---
+
+### 8. `table_extraction_gold_accuracy` (fail-closed)
+
+**Definition:** The rule-based `FinancialTableExtractor` reproduces the
+frozen table gold set (`docs/evaluation/datasets/table-extraction-gold.json`)
+exactly: for each sample, the extracted fact set
+(`metric_name`, `observed_period`, value-in-statement) equals the annotated
+expected set.
+
+**Pass condition:** Every sample has `recall == 1.0` and `precision == 1.0`.
+The dataset file must exist and contain at least one sample.
+
+**Failure examples:** The gold file was deleted (check fails with
+`table gold dataset missing`); an extractor change drops a fact
+(`sample <id>: missing expected facts [...]`) or starts emitting spurious
+facts (`sample <id>: unexpected extracted facts [...]`).
+
+---
+
+### 9. `projection_rebuilds`
 
 **Definition:** The Neo4j graph projection can be fully rebuilt from the
 ledger alone, and the projected node count matches the ledger row count.
@@ -119,22 +181,20 @@ The check reports
 
 ## Result format
 
+Summary report (`docs/evaluation/reports/<timestamp>.json`, committed):
+
 ```json
 {
   "passed": true,
-  "checks": [
-    {
-      "name": "document_versions_present",
-      "passed": true,
-      "evidence": { "document_version_count": 7, "minimum_required": 6 },
-      "failures": []
-    }
-  ],
   "failures": [],
-  "generated_at": "20260730T095026Z"
+  "generated_at": "20260801T095026Z",
+  "checks": [
+    { "name": "document_versions_present", "passed": true, "skipped": false }
+  ]
 }
 ```
 
+Full detail (`docs/evaluation/raw/<timestamp>.json`, gitignored) additionally
+carries each check's `evidence` payload and human-readable `failures` list.
 `failures` at the top level is a list of check **names** that failed
-(excluding skipped checks).  Each check's own `failures` list contains
-detailed human-readable failure descriptions.
+(excluding skipped checks).

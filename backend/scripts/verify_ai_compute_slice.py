@@ -1,20 +1,28 @@
 """Release-gate verification for the AI-compute evidence slice.
 
-Runs six explicit checks against a seeded ledger to verify that the vertical
+Runs nine explicit checks against a seeded ledger to verify that the vertical
 slice is auditable end-to-end:
 
 1. **document_versions_present** – at least six frozen DocumentVersions exist.
-2. **assessment_source_spans_complete** – every AIAssessment can be traced
+2. **gold_manifest_matches_ledger** – (fail-closed) the frozen dataset
+   manifest exists and its content hashes match the ledger exactly.
+3. **assessment_source_spans_complete** – every AIAssessment can be traced
    back through snapshot → evidence_link → source_statement → source_span
    without a broken link.
-3. **holding_disclosures_dated** – every HoldingDisclosure carries both a
+4. **holding_disclosures_dated** – every HoldingDisclosure carries both a
    ``report_period`` and a ``published_at``.
-4. **future_material_excluded** – a historical cutoff excludes disclosures
+5. **future_material_excluded** – a historical cutoff excludes disclosures
    published after that cutoff from exposure and workbench views.
-5. **ai_human_boundary_visible** – every AIAssessment is marked provisional,
+6. **ai_human_boundary_visible** – every AIAssessment is marked provisional,
    and human reviews exist as separate records (the original AI conclusion
    is never overwritten).
-6. **projection_rebuilds** – (Neo4j only) the graph projection can be rebuilt
+7. **review_outcomes_tracked** – (report-only, never gates) ReviewDecision
+   outcome distribution and AIRun audit counts, so review adoption is
+   visible in every evidence-pack report.
+8. **table_extraction_gold_accuracy** – (fail-closed) the rule-based
+   FinancialTableExtractor reproduces the frozen table gold set exactly
+   (per-sample recall == 1.0 and precision == 1.0).
+9. **projection_rebuilds** – (Neo4j only) the graph projection can be rebuilt
    from the ledger and the node count matches.  Skipped when Neo4j is
    unavailable; a skip never causes the gate to fail.
 
@@ -22,9 +30,13 @@ Usage::
 
     python scripts/verify_ai_compute_slice.py
 
-Reads ``DATABASE_URL`` (default ``sqlite:///./evidence_gate.db``), creates the
-schema, seeds the frozen slice, runs the gate, and writes a JSON result to
-``docs/evaluation/runs/<timestamp>.json``.  Exits 0 on pass, 1 on fail.
+Fail-closed: if the dataset manifest is missing, the script exits non-zero
+*before* touching the database.  Reads ``DATABASE_URL`` (default
+``sqlite:///./evidence_gate.db``), creates the schema, seeds the frozen
+slice, runs the gate, and writes a summary JSON to
+``docs/evaluation/reports/<timestamp>.json`` (committed evidence-pack trend)
+plus full per-check detail to ``docs/evaluation/raw/<timestamp>.json``
+(gitignored).  Exits 0 on pass, 1 on fail.
 """
 from __future__ import annotations
 
@@ -42,6 +54,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import (
     AIAssessment,
+    AIRun,
     DocumentVersion,
     EvidenceLink,
     EvidenceSnapshot,
@@ -62,6 +75,13 @@ from app.services.workbench import WorkbenchService
 # but follows the 2025-07-24 stale disclosure.  Used by the
 # future_material_excluded check.
 HISTORICAL_CUTOFF = date(2026, 4, 1)
+
+# Evidence-pack paths (resolved from this file so they work from any cwd).
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_PATH = PROJECT_ROOT / "docs" / "evaluation" / "dataset-manifest.json"
+TABLE_GOLD_PATH = (
+    PROJECT_ROOT / "docs" / "evaluation" / "datasets" / "table-extraction-gold.json"
+)
 
 
 @dataclass
@@ -96,10 +116,13 @@ class ReleaseGate:
 
         checks = [
             self._check_document_versions_present(),
+            self._check_gold_manifest_matches_ledger(),
             self._check_assessment_source_spans_complete(),
             self._check_holding_disclosures_dated(),
             self._check_future_material_excluded(),
             self._check_ai_human_boundary_visible(),
+            self._check_review_outcomes_tracked(),
+            self._check_table_extraction_gold_accuracy(),
             self._check_projection_rebuilds(),
         ]
         failures = [
@@ -117,6 +140,44 @@ class ReleaseGate:
             "passed": passed,
             "evidence": {"document_version_count": count, "minimum_required": 6},
             "failures": [] if passed else [f"only {count} document versions (need >= 6)"],
+        }
+
+    def _check_gold_manifest_matches_ledger(self) -> dict:
+        """Fail-closed: the frozen dataset manifest must exist, list documents,
+        and match the ledger's DocumentVersion content hashes exactly."""
+        if not MANIFEST_PATH.exists():
+            return {
+                "name": "gold_manifest_matches_ledger",
+                "passed": False,
+                "evidence": {"manifest_path": str(MANIFEST_PATH)},
+                "failures": [f"gold manifest missing: {MANIFEST_PATH}"],
+            }
+
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        expected = {
+            doc["content_sha256"] for doc in manifest.get("documents", [])
+        }
+        actual = set(
+            self._session.scalars(select(DocumentVersion.content_sha256)).all()
+        )
+
+        failures: list[str] = []
+        if not expected:
+            failures.append("gold manifest lists no documents")
+        for digest in sorted(expected - actual):
+            failures.append(f"manifest document not in ledger: {digest[:12]}…")
+        for digest in sorted(actual - expected):
+            failures.append(f"ledger document not in manifest: {digest[:12]}…")
+
+        return {
+            "name": "gold_manifest_matches_ledger",
+            "passed": not failures,
+            "evidence": {
+                "manifest": str(MANIFEST_PATH),
+                "manifest_documents": len(expected),
+                "ledger_documents": len(actual),
+            },
+            "failures": failures,
         }
 
     def _check_assessment_source_spans_complete(self) -> dict:
@@ -311,6 +372,122 @@ class ReleaseGate:
             "failures": failures,
         }
 
+    def _check_review_outcomes_tracked(self) -> dict:
+        """Report-only: surface ReviewDecision outcomes and AIRun audit counts.
+
+        Never gates the release (``passed`` is always True); it exists so every
+        evidence-pack report shows how much machine output humans have
+        confirmed / modified / rejected, making review adoption measurable
+        over time.
+        """
+        reviews = list(self._session.scalars(select(ReviewDecision)).all())
+        outcomes: dict[str, int] = {}
+        for review in reviews:
+            outcomes[review.outcome] = outcomes.get(review.outcome, 0) + 1
+
+        runs = list(self._session.scalars(select(AIRun)).all())
+        runs_by_status: dict[str, int] = {}
+        for run in runs:
+            runs_by_status[run.status] = runs_by_status.get(run.status, 0) + 1
+
+        return {
+            "name": "review_outcomes_tracked",
+            "passed": True,
+            "evidence": {
+                "gated": False,
+                "note": "report-only; review adoption is not a pass condition",
+                "review_decision_count": len(reviews),
+                "outcomes": outcomes,
+                "ai_run_count": len(runs),
+                "ai_runs_by_status": runs_by_status,
+            },
+            "failures": [],
+        }
+
+    def _check_table_extraction_gold_accuracy(self) -> dict:
+        """Fail-closed: the rule-based table extractor must reproduce the
+        frozen gold set exactly (per-sample recall == 1.0, precision == 1.0)."""
+        if not TABLE_GOLD_PATH.exists():
+            return {
+                "name": "table_extraction_gold_accuracy",
+                "passed": False,
+                "evidence": {"gold_path": str(TABLE_GOLD_PATH)},
+                "failures": [f"table gold dataset missing: {TABLE_GOLD_PATH}"],
+            }
+
+        from app.services.table_extraction import FinancialTableExtractor
+
+        gold = json.loads(TABLE_GOLD_PATH.read_text(encoding="utf-8"))
+        samples = gold.get("samples", [])
+        if not samples:
+            return {
+                "name": "table_extraction_gold_accuracy",
+                "passed": False,
+                "evidence": {"gold_path": str(TABLE_GOLD_PATH)},
+                "failures": ["table gold dataset contains no samples"],
+            }
+
+        extractor = FinancialTableExtractor()
+        failures: list[str] = []
+        per_sample: list[dict] = []
+
+        for sample in samples:
+            facts = extractor.extract(sample["text"])
+            expected = {
+                (e["metric_name"], e["observed_period"], e["value"])
+                for e in sample["expected_facts"]
+            }
+            exp_keys = {(m, p) for (m, p, _v) in expected}
+            got_keys = {
+                (f.metric_name, f.observed_period.isoformat()) for f in facts
+            }
+            matched: set[tuple[str, str]] = set()
+            for fact in facts:
+                period = fact.observed_period.isoformat()
+                for metric, exp_period, value in expected:
+                    if (
+                        fact.metric_name == metric
+                        and period == exp_period
+                        and value in fact.statement_text
+                    ):
+                        matched.add((metric, exp_period))
+
+            recall = len(matched) / len(exp_keys) if exp_keys else 1.0
+            precision = len(matched) / len(got_keys) if got_keys else 1.0
+            per_sample.append(
+                {
+                    "id": sample["id"],
+                    "expected": len(exp_keys),
+                    "extracted": len(got_keys),
+                    "recall": round(recall, 4),
+                    "precision": round(precision, 4),
+                }
+            )
+
+            missing = exp_keys - matched
+            extra = got_keys - exp_keys
+            if missing:
+                failures.append(
+                    f"sample {sample['id']}: missing expected facts "
+                    f"{sorted(missing)}"
+                )
+            if extra:
+                failures.append(
+                    f"sample {sample['id']}: unexpected extracted facts "
+                    f"{sorted(extra)}"
+                )
+
+        return {
+            "name": "table_extraction_gold_accuracy",
+            "passed": not failures,
+            "evidence": {
+                "gold_path": str(TABLE_GOLD_PATH),
+                "sample_count": len(samples),
+                "per_sample": per_sample,
+            },
+            "failures": failures,
+        }
+
     def _check_projection_rebuilds(self) -> dict:
         """Verify the graph projection rebuilds from the ledger (Neo4j only)."""
         if self._projector is None:
@@ -354,10 +531,26 @@ class ReleaseGate:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return PROJECT_ROOT
+
+
+def _unique_path(directory: Path, timestamp: str) -> Path:
+    """Pick a non-overwriting ``<timestamp>.json`` path in ``directory``."""
+    path = directory / f"{timestamp}.json"
+    counter = 0
+    while path.exists():
+        counter += 1
+        path = directory / f"{timestamp}-{counter}.json"
+    return path
 
 
 def main() -> None:
+    # Fail-closed: the evidence pack is meaningless without its frozen
+    # manifest, so refuse to touch the database when it is absent.
+    if not MANIFEST_PATH.exists():
+        print(f"FATAL: gold manifest missing: {MANIFEST_PATH}", file=sys.stderr)
+        sys.exit(1)
+
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_gate.db")
     engine = create_engine(url, future=True)
 
@@ -380,29 +573,48 @@ def main() -> None:
         gate = ReleaseGate(session, projector=projector)
         result = gate.run()
 
-    # Write JSON result to docs/evaluation/runs/<timestamp>.json (no overwrite).
-    runs_dir = _project_root() / "docs" / "evaluation" / "runs"
-    runs_dir.mkdir(parents=True, exist_ok=True)
+    # Summary goes to docs/evaluation/reports/<timestamp>.json (committed,
+    # shows the gate trend over time); full per-check detail goes to
+    # docs/evaluation/raw/<timestamp>.json (gitignored, for debugging).
+    reports_dir = _project_root() / "docs" / "evaluation" / "reports"
+    raw_dir = _project_root() / "docs" / "evaluation" / "raw"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    result_path = runs_dir / f"{timestamp}.json"
-    counter = 0
-    while result_path.exists():
-        counter += 1
-        result_path = runs_dir / f"{timestamp}-{counter}.json"
 
-    payload = {
+    summary = {
+        "passed": result.passed,
+        "failures": result.failures,
+        "generated_at": timestamp,
+        "checks": [
+            {
+                "name": c["name"],
+                "passed": c["passed"],
+                "skipped": bool(c.get("skipped")),
+            }
+            for c in result.checks
+        ],
+    }
+    detail = {
         "passed": result.passed,
         "checks": result.checks,
         "failures": result.failures,
         "generated_at": timestamp,
     }
-    result_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+    report_path = _unique_path(reports_dir, timestamp)
+    raw_path = _unique_path(raw_dir, timestamp)
+    report_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str)
+    )
+    raw_path.write_text(
+        json.dumps(detail, indent=2, ensure_ascii=False, default=str)
     )
 
     # Console summary.
     print(f"release gate result: {'PASS' if result.passed else 'FAIL'}")
-    print(f"result written to {result_path}")
+    print(f"summary written to {report_path}")
+    print(f"detail written to {raw_path}")
     for check in result.checks:
         if check.get("skipped"):
             status = "SKIP"

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "ai-compute-evidence-pack-v1",
+  "frozen_at": "2026-08-01",
+  "case": {
+    "title": "AI 算力链",
+    "industry_topic": "ai_compute",
+    "seed_script": "backend/app/scripts/seed_ai_compute_case.py",
+    "replay": "cd backend && .venv/bin/python -m app.scripts.seed_ai_compute_case --reset-test-db"
+  },
+  "snapshot_cutoff": "2026-12-31T23:59:59+00:00",
+  "historical_cutoff": "2026-04-01",
+  "semantic_definitions": {
+    "gold_set": "docs/evaluation/ai-compute-gold-set.md",
+    "failure_cases": "docs/evaluation/ai-compute-failure-cases.md",
+    "release_gate": "docs/evaluation/ai-compute-release-gate.md"
+  },
+  "documents": [
+    {"file": "backend/tests/fixtures/ai_compute/01_cambricon_private_placement_announcement.txt", "type": "公告", "published_at": "2026-03-15", "content_sha256": "090ff982b25f8d229c1ee0f9d1dac4979d44792d8243176e28965376fbfc9085"},
+    {"file": "backend/tests/fixtures/ai_compute/02_fii_annual_report_disclosure.txt", "type": "年报披露", "published_at": "2026-03-28", "content_sha256": "83fb7a2b36dd924ec20260c74d99cab29007d694379bc1e4cdf22ea02f45b3e7"},
+    {"file": "backend/tests/fixtures/ai_compute/03_sk_hynix_quarterly_report.txt", "type": "财报（季报）", "published_at": "2026-04-30", "content_sha256": "05b380015ea9676cd0c98532b46507fc3e6b894bf0a7f1620ab026cb31887db5"},
+    {"file": "backend/tests/fixtures/ai_compute/04_cambricon_annual_report.txt", "type": "财报（年报）", "published_at": "2026-04-25", "content_sha256": "fd3a58ceb4f80758d6cecd1c598cce6a3ac85d87c02e03a2c6d8fe7862df71dd"},
+    {"file": "backend/tests/fixtures/ai_compute/05_citic_research_report.txt", "type": "研报", "published_at": "2026-06-10", "content_sha256": "0d6896517a2992e80245690055f72ab3c744a67811dfe19652d3c6c87c7261fd"},
+    {"file": "backend/tests/fixtures/ai_compute/06_guosen_research_report.txt", "type": "研报", "published_at": "2026-06-18", "content_sha256": "4bf9216183340ea08539da8ef199dab7ea864555a557ef9b19fe391583aff564"},
+    {"file": "backend/tests/fixtures/ai_compute/07_cloud_vendor_capex_note.txt", "type": "公告（云厂商CapEx指引）", "published_at": "2026-05-20", "content_sha256": "d78649bdad8b8d650f3461ca9aa52b36d0d9b406ff1a388c8499bbf0cf218947"}
+  ],
+  "theses": [
+    {"key": "T1", "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张", "assessment": "supported"},
+    {"key": "T2", "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现", "assessment": "insufficient_evidence"},
+    {"key": "T3", "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值", "assessment": "contradicted"}
+  ],
+  "datasets": [
+    {
+      "id": "ai-compute-table-extraction-gold-v1",
+      "file": "docs/evaluation/datasets/table-extraction-gold.json",
+      "samples": 3,
+      "expected_facts": 10,
+      "negative_samples": 1,
+      "type": "offline hand-authored financial-table text with exact-set fact annotations"
+    }
+  ],
+  "limitations": [
+    "源材料为手工准备的纯文本样例（模拟公告/财报/研报），不是真实披露文件，不构成任何投资依据。",
+    "标签先于门禁执行冻结，失败案例（future 泄漏 / 口径误用 / 研报矛盾）保留在 failure-cases 文档中，不被删除。",
+    "ReviewDecision 审核结果当前只做汇报（report-only），不作为门禁通过条件；seed 切片本身不含人工审核记录。"
+  ]
+}

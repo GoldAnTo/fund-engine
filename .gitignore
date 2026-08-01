@@ -61,8 +61,9 @@ logs/
 # Superpowers runtime workspace (keeps docs/superpowers/)
 .superpowers/
 
-# Evaluation run outputs
-docs/evaluation/runs/
+# Evaluation raw run outputs (summary reports under docs/evaluation/reports/
+# are committed; full per-check detail under raw/ stays local)
+docs/evaluation/raw/
 
 # Local reference clones (read-only, not part of the product)
 .reference/

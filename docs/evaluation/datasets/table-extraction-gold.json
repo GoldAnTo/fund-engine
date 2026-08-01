@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "ai-compute-table-extraction-gold-v1",
+  "description": "表格规则抽取（FinancialTableExtractor）的离线金标：手工构造的「表头年份 + 单位行 + 指标行」文本与期望事实的精确集合对照。期望值冻结于 2026-08-01，任何抽取器变更导致集合不一致都会使 release gate 失败（fail-closed）。",
+  "matching": {
+    "rule": "exact-set",
+    "fact_key": ["metric_name", "value", "observed_period"],
+    "value_match": "value 必须作为子串出现在 TableFact.statement_text 中",
+    "pass_condition": "每个 sample 的 recall == 1.0 且 precision == 1.0（抽取集合与期望集合完全一致）"
+  },
+  "samples": [
+    {
+      "id": "annual-report-亿元-table",
+      "note": "标准年报财务表：两年表头 + 单位行 + 四个指标行（含分业务维度与归母净利润优先判定）",
+      "text": "2025年 2024年\n单位：亿元\n营业收入 125.3 98.2\n研发费用 15.6 12.4\n归母净利润 8.9 6.1\n云计算服务收入 45.2 30.1",
+      "expected_facts": [
+        {"metric_name": "revenue", "value": "125.3亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "revenue", "value": "98.2亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "R&D_expenditure", "value": "15.6亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "R&D_expenditure", "value": "12.4亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "net_profit_parent", "value": "8.9亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "net_profit_parent", "value": "6.1亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "revenue_segment:云计算服务", "value": "45.2亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "revenue_segment:云计算服务", "value": "30.1亿元", "observed_period": "2024-12-31"}
+      ]
+    },
+    {
+      "id": "annual-report-万元-comma-table",
+      "note": "万元单位 + 千分位金额：验证单位回退与逗号剥离，且研发投入合计不被章节序号误匹配",
+      "text": "2025年 2024年\n单位：万元\n研发投入合计 15,600 12,400",
+      "expected_facts": [
+        {"metric_name": "R&D_total_spending", "value": "15600万元", "observed_period": "2025-12-31"},
+        {"metric_name": "R&D_total_spending", "value": "12400万元", "observed_period": "2024-12-31"}
+      ]
+    },
+    {
+      "id": "narrative-no-table",
+      "note": "负样本：纯叙述文本（含单年份与订单能见度表述），不得抽出任何表格事实",
+      "text": "公司管理层表示，AI服务器订单能见度已延伸至2026年下半年，市场需求保持旺盛。报告期内公司经营情况符合预期。",
+      "expected_facts": []
+    }
+  ]
+}
