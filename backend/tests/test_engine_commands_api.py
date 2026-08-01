@@ -105,35 +105,31 @@ def test_propose_unknown_thesis_returns_404(cmd_client, cmd_seeded):
     assert resp.status_code == 404
 
 
-def test_rerun_compliance_refusal_returns_422_and_rolls_back(
+def test_rerun_compliance_refusal_returns_422_and_keeps_audit(
     cmd_client, cmd_seeded, monkeypatch
 ):
-    """A compliance refusal must surface as 422 and persist nothing."""
-    from app.ai import assessment_gen
-    from app.models.ledger import AIAssessment, EvidenceSnapshot, Thesis
-    from app.services.compliance import (
-        ComplianceAction,
-        ComplianceDecision,
-        ComplianceRefusedError,
-    )
+    """Refusal surfaces as 422; refused text never lands, but the failed
+    AIRun IS kept as the audit trail (snapshot rolled back in-transaction).
+    """
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIAssessment, AIRun, EvidenceSnapshot, Thesis
 
-    def _refused_generate(self, thesis_id, cutoff, session):
-        decision = ComplianceDecision(
-            is_hit=True,
-            action=ComplianceAction.REFUSE,
-            hits=(),
-            summary_reason="命中投资建议或个性化导向表达",
-        )
-        raise ComplianceRefusedError(decision)
+    def _refused_chat_json(self, messages, schema_hint=""):
+        return {
+            "conclusion": "supported",
+            "rationale": "建议买入该标的",
+            "gaps": [],
+        }
 
-    monkeypatch.setattr(
-        assessment_gen.AssessmentGenerator, "generate", _refused_generate
-    )
+    monkeypatch.setattr(LLMClient, "chat_json", _refused_chat_json)
 
     thesis = cmd_seeded.scalars(select(Thesis)).first()
     snaps_before = cmd_seeded.scalar(select(func.count()).select_from(EvidenceSnapshot))
     assessments_before = cmd_seeded.scalar(
         select(func.count()).select_from(AIAssessment)
+    )
+    failed_runs_before = cmd_seeded.scalar(
+        select(func.count()).select_from(AIRun).where(AIRun.status == "failed")
     )
 
     resp = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
@@ -147,3 +143,55 @@ def test_rerun_compliance_refusal_returns_422_and_rolls_back(
     )
     assert snaps_after == snaps_before
     assert assessments_after == assessments_before
+
+    failed_runs = list(
+        cmd_seeded.scalars(select(AIRun).where(AIRun.status == "failed"))
+    )
+    assert len(failed_runs) == failed_runs_before + 1
+    latest = failed_runs[-1]
+    assert latest.kind == "assess"
+    assert latest.input_ref["thesis_id"] == str(thesis.id)
+    assert "compliance refused" in latest.error
+
+
+def test_dossier_surfaces_fresh_assess_failure_and_hides_stale_one(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    """dossier.assess_failure shows a fresh refusal; a later successful
+    rerun makes the failure stale and the field disappears."""
+    from app.ai.client import LLMClient
+    from app.models.ledger import ResearchCase, Thesis
+
+    thesis = cmd_seeded.scalars(select(Thesis)).first()
+    case = cmd_seeded.scalars(select(ResearchCase)).first()
+    dossier_url = (
+        f"/api/v1/research-cases/{case.id}/dossier?thesis_id={thesis.id}"
+    )
+
+    def _refused_chat_json(self, messages, schema_hint=""):
+        return {
+            "conclusion": "supported",
+            "rationale": "建议买入该标的",
+            "gaps": [],
+        }
+
+    monkeypatch.setattr(LLMClient, "chat_json", _refused_chat_json)
+    refused = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
+    assert refused.status_code == 422
+
+    dossier = cmd_client.get(dossier_url)
+    assert dossier.status_code == 200
+    failure = dossier.json()["assess_failure"]
+    assert failure is not None
+    assert "compliance refused" in failure["error"]
+    assert failure["model_version"].startswith("mock-")
+    assert failure["failed_at"]
+
+    # A later successful rerun makes the refusal stale -> hidden.
+    monkeypatch.undo()
+    ok = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
+    assert ok.status_code == 201
+
+    dossier = cmd_client.get(dossier_url)
+    assert dossier.status_code == 200
+    assert dossier.json()["assess_failure"] is None

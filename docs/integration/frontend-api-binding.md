@@ -133,7 +133,12 @@
 | 接入 | `POST /api/v1/documents/ingest` | 201；body 全可选（case_id/research_queries/announcement_query/quote_query/quote_stock_code，缺省用 AI 算力链默认查询）；幂等（文档按内容哈希去重、估值按股票+日期+指标+源去重）；404 case_id 不存在；503 GILDATA_TOKEN 未配置或上游不可用（`upstream_unavailable`，真实数据源不静默 mock） |
 | 抽取 | `POST /api/v1/documents/{document_version_id}/extract` | 201；append-only，重复调用会重复插 statements；404 版本不存在 |
 | 提案 | `POST /api/v1/theses/{thesis_id}/propose` | 201；产出全部进审核队列（machine_generated），不自动确认；404 thesis 不存在 |
-| 评估 | `POST /api/v1/theses/{thesis_id}/rerun` | 201；冻结新快照 + 追加临时评估 |
+| 评估 | `POST /api/v1/theses/{thesis_id}/rerun` | 201；冻结新快照 + 追加临时评估；**422 `validation_failed` = 合规拒绝**（AI 文本命中投资建议用语，拒绝文本不入账，但失败 AIRun 已留作审计，前端应展示为"被合规拦截"状态而非报错） |
+
+**合规拒绝的透出设计**（2026-08-01）：
+- rerun 被合规门拒绝时：快照不落库（合规先于持久化，账本不可变约束下无法删半成品快照），失败的 AIRun 保留为审计痕迹。
+- dossier 新增 `assess_failure` 字段（`{model_version, error, failed_at}`）：仅当失败比最新成功评估**更新**时透出；后续 rerun 成功后自动隐藏。完整运行历史走 `GET /api/v1/provider-runs?kind=assess&status=`。
+- 引擎脚本按 thesis 容错：单个 thesis 被拒不中断整跑。
 
 引擎脚本 `run_ai_engine` 的抽取过滤已从 parser_version 字面量改为「有 span 且无 statements」的待抽取语义，seed 场景幂等（重复跑不会重复抽取）。
 

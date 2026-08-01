@@ -1,10 +1,13 @@
 """AssessmentGenerator: LLM-driven AIAssessment from a frozen evidence snapshot.
 
-Freezes an EvidenceSnapshot at the given cutoff, gathers the visible
-EvidenceLinks with their statement texts, asks the LLM to produce a
-three-valued conclusion (supported / contradicted / insufficient_evidence),
-and writes the assessment through ``AssessmentService.create_ai_assessment``
-with ``displayed_as_provisional=True``.
+Gathers the visible EvidenceLinks with their statement texts at the given
+cutoff, asks the LLM to produce a three-valued conclusion (supported /
+contradicted / insufficient_evidence), runs the compliance gate, and only
+THEN freezes an EvidenceSnapshot and writes the assessment through
+``AssessmentService.create_ai_assessment`` with
+``displayed_as_provisional=True``.  Compliance-before-persistence: a refusal
+leaves nothing in the ledger except the failed ``AIRun`` (the ledger's
+immutability guard forbids deleting a half-frozen snapshot).
 
 Every assessment operation writes exactly one ``AIRun`` audit record
 (``kind=assess``).
@@ -22,8 +25,6 @@ from app.ai.prompts import ASSESS_PROMPT_VERSION, ASSESS_SYSTEM
 from app.ai.runs import record_run
 from app.models.ledger import (
     AIAssessment,
-    EvidenceLink,
-    EvidenceSnapshot,
     SourceStatement,
     Thesis,
 )
@@ -45,7 +46,8 @@ class AssessmentGenerator:
         session: Session,
     ) -> AIAssessment:
         started_at = datetime.now(timezone.utc)
-        assessment_service = AssessmentService(ResearchRepository(session))
+        repo = ResearchRepository(session)
+        assessment_service = AssessmentService(repo)
 
         thesis = session.get(Thesis, thesis_id)
         if thesis is None:
@@ -57,16 +59,15 @@ class AssessmentGenerator:
         }
 
         try:
-            snapshot = assessment_service.freeze_snapshot(
-                thesis_id, cutoff=cutoff
-            )
-
-            link_ids = snapshot.evidence_link_ids
+            # Compliance BEFORE persistence: gather the visible links and
+            # run the model + non-investment-advice gate first.  Only when
+            # the text passes do we freeze the snapshot and append the
+            # assessment — a refusal therefore leaves nothing behind except
+            # the failed AIRun recorded below (the ledger's immutability
+            # guard forbids deleting a half-frozen snapshot).
+            links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
             links_data: list[dict] = []
-            for link_id_str in link_ids:
-                link = session.get(EvidenceLink, uuid.UUID(link_id_str))
-                if link is None:
-                    continue
+            for link in links:
                 statement = session.get(SourceStatement, link.source_statement_id)
                 links_data.append(
                     {
@@ -96,6 +97,9 @@ class AssessmentGenerator:
             # ledger; the failure is recorded on the AIRun below.
             assert_compliant(rationale, *[str(g) for g in gaps])
 
+            snapshot = assessment_service.freeze_snapshot(
+                thesis_id, cutoff=cutoff
+            )
             assessment = assessment_service.create_ai_assessment(
                 snapshot.id,
                 conclusion=conclusion,
@@ -104,14 +108,14 @@ class AssessmentGenerator:
             )
 
             input_ref["snapshot_id"] = str(snapshot.id)
-            input_ref["link_count"] = len(link_ids)
+            input_ref["link_count"] = len(links)
             record_run(
                 session,
                 kind="assess",
                 model_version=self._client.model_version,
                 prompt_version=ASSESS_PROMPT_VERSION,
                 input_ref=input_ref,
-                output_summary=f"conclusion={conclusion}, links={len(link_ids)}",
+                output_summary=f"conclusion={conclusion}, links={len(links)}",
                 status="success",
                 started_at=started_at,
             )

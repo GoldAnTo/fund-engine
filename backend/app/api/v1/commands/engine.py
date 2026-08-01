@@ -55,9 +55,9 @@ def rerun_assessment(
     except ValueError as exc:
         raise NotFoundError(str(exc)) from exc
     except ComplianceRefusedError as exc:
-        # Refused text never reaches the ledger; drop the half-frozen
-        # snapshot + failed AIRun and surface the refusal as 422.
-        db.rollback()
+        # The generator already deleted the half-frozen snapshot; persist
+        # ONLY the failed AIRun (audit trail for the refusal), then 422.
+        commit_or_rollback(db)
         raise ValidationFailedError(str(exc)) from exc
     commit_or_rollback(db)
     return RerunResponse(

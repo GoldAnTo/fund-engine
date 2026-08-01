@@ -73,6 +73,20 @@ class CausalStepDTO(V1Model):
     description: str
 
 
+class AssessFailureDTO(V1Model):
+    """Latest failed assess attempt for the focus thesis.
+
+    Surfaced only when the failure is NEWER than the latest successful
+    assessment (or no assessment exists) — e.g. a compliance refusal on
+    the last rerun.  The refused text itself never reached the ledger;
+    this is the audit-trail view of it.
+    """
+
+    model_version: str
+    error: str
+    failed_at: str
+
+
 class CaseListResponse(V1Model):
     schema_version: Literal["v1"] = "v1"
     items: list[CaseSummaryDTO]
@@ -86,6 +100,7 @@ class DossierResponse(V1Model):
     theses: list[ThesisSummaryDTO]
     focus_thesis_id: str
     assessment: AssessmentDTO | None
+    assess_failure: AssessFailureDTO | None = None
     causal_chain: list[CausalStepDTO]
     evidence: dict[str, list[EvidenceRecordDTO]]
     competitive_explanations: list[str]

@@ -17,6 +17,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
@@ -24,6 +25,7 @@ from app.models.ledger import ResearchCase
 from app.queries.basis import HistoricalBasis
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.cases import (
+    AssessFailureDTO,
     AssessmentDTO,
     CaseListResponse,
     CaseSummaryDTO,
@@ -141,6 +143,8 @@ class CaseReadQueries:
                 assessment_dto = self._assessment(assessment, thesis.id, basis.cutoff)
                 gaps = list(assessment.gaps)
 
+            assess_failure = self._assess_failure(thesis, assessment)
+
             causal_chain = [
                 CausalStepDTO(
                     id=str(step.id),
@@ -158,6 +162,7 @@ class CaseReadQueries:
             theses=[self._thesis_summary(t) for t in theses],
             focus_thesis_id=focus_thesis_id,
             assessment=assessment_dto,
+            assess_failure=assess_failure,
             causal_chain=causal_chain,
             evidence=evidence,
             competitive_explanations=[],
@@ -165,6 +170,42 @@ class CaseReadQueries:
         )
 
     # ----------------------------------------------------------- mappers
+
+    def _assess_failure(self, thesis, assessment) -> AssessFailureDTO | None:
+        """Latest failed assess run for the thesis, when it is fresh.
+
+        Fresh means: newer than the latest successful assessment (or no
+        assessment at all).  A stale failure (a later rerun succeeded) is
+        hidden — the dossier shows current state, not history; the full
+        run history stays available via /provider-runs.
+        """
+        from app.models.ledger import AIRun
+
+        failed_runs = self._session.scalars(
+            select(AIRun)
+            .where(AIRun.kind == "assess", AIRun.status == "failed")
+            .order_by(AIRun.started_at.desc())
+            .limit(50)
+        )
+        latest_failed = next(
+            (
+                run
+                for run in failed_runs
+                if run.input_ref.get("thesis_id") == str(thesis.id)
+            ),
+            None,
+        )
+        if latest_failed is None:
+            return None
+        if assessment is not None and _to_aware(
+            latest_failed.started_at
+        ) <= _to_aware(assessment.created_at):
+            return None
+        return AssessFailureDTO(
+            model_version=latest_failed.model_version,
+            error=latest_failed.error or "",
+            failed_at=_to_aware(latest_failed.started_at).isoformat(),
+        )
 
     def _case_summary(self, case: ResearchCase) -> CaseSummaryDTO:
         # ResearchCase is append-only and has no updated_at column; the honest

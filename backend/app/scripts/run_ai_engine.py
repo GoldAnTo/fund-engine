@@ -107,7 +107,9 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
         try:
             assessment = generator.generate(thesis.id, cutoff, session)
         except ComplianceRefusedError as exc:
-            session.rollback()
+            # Snapshot already deleted by the generator; keep the failed
+            # AIRun as the audit trail and continue with the next thesis.
+            session.commit()
             print(f"[assess]  {label}… → COMPLIANCE REFUSED ({exc})")
             continue
         session.commit()
