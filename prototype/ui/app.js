@@ -5,6 +5,7 @@
   const researchState = window.NEW_RESEARCH_STATE;
   const planState = window.RESEARCH_PLAN_STATE;
   const caseState = window.CASE_WORKBENCH_STATE;
+  const versionsState = window.VERSIONS_STATE;
   const {
     DRAFT_FIELDS,
     FIELD_LIMITS,
@@ -2074,6 +2075,117 @@
     `;
   }
 
+  function renderVersionItems(items, formatter) {
+    return items.map((item) => `<li data-core-text>${formatter(item)}</li>`).join("");
+  }
+
+  function renderVersionSnapshotColumn(side, snapshot, content) {
+    const isBefore = side === "before";
+    return `
+      <section class="version-snapshot-column ${escapeHTML(side)}" data-snapshot-column="${escapeHTML(side)}" data-comparison-step="${escapeHTML(side)}">
+        <header class="version-column-heading">
+          <span>${isBefore ? "变更前" : "变更后"}</span>
+          <strong>${escapeHTML(snapshot.id)}</strong>
+        </header>
+        <article class="formal-conclusion">
+          <div><span>正式结论</span>${badge(content.formalConclusion.state, isBefore ? "warning" : "reviewed")}</div>
+          <p data-core-text>${escapeHTML(content.formalConclusion.text)}</p>
+        </article>
+        <section class="version-change-group">
+          <h3>DocumentVersion / 数据序列</h3>
+          <ul class="version-record-list inputs">
+            ${renderVersionItems(content.inputs, (item) => `<strong>${escapeHTML(item.id)}</strong><span>${escapeHTML(item.label)}</span><code>${escapeHTML(item.version)}</code>`)}
+          </ul>
+        </section>
+        <section class="version-change-group">
+          <h3>已审核关系 ${isBefore ? "" : '<span class="new-contradiction">新反面证据</span>'}</h3>
+          <ul class="version-record-list compact">
+            ${renderVersionItems(content.relationships, (item) => `<strong>${escapeHTML(item.id)}</strong><span>${escapeHTML(item.label)}</span><em>${escapeHTML(item.role)} · ${escapeHTML(item.reviewState)}</em>`)}
+          </ul>
+        </section>
+        <section class="version-change-group">
+          <h3>因素角色</h3>
+          <ul class="version-record-list compact factor-records">
+            ${renderVersionItems(content.factors, (item) => `<strong>${escapeHTML(item.id)}</strong><span>${escapeHTML(item.label)}</span><em>${escapeHTML(item.role)}</em>`)}
+          </ul>
+        </section>
+        <section class="version-change-group gap-group">
+          <h3>证据缺口</h3>
+          <ul class="version-record-list compact">
+            ${renderVersionItems(content.gaps, (item) => `<strong>${escapeHTML(item.state)}</strong><span>${escapeHTML(item.label)}</span>`)}
+          </ul>
+        </section>
+      </section>
+    `;
+  }
+
+  function renderChangeRail(change) {
+    const changes = [
+      ["输入变化", change.inputSummary],
+      ["关系变化", change.relationshipSummary],
+      ["角色变化", change.factorSummary],
+      ["正式结论变化", change.conclusionSummary],
+      ["缺口状态", change.gapSummary],
+    ];
+    return `
+      <aside class="version-change-rail" data-change-rail data-comparison-step="change">
+        <header><span aria-hidden="true">→</span><strong>为什么改变</strong></header>
+        <ol>
+          ${changes.map(([label, text]) => `<li><span>${escapeHTML(label)}</span><p data-core-text>${escapeHTML(text)}</p></li>`).join("")}
+        </ol>
+        <section class="human-rationale" data-human-rationale>
+          <h3>人工变更理由</h3>
+          <p data-core-text>${escapeHTML(change.rationale)}</p>
+          <small>${escapeHTML(change.reviewedBy)} · ${escapeHTML(change.reviewedAt)}</small>
+        </section>
+      </aside>
+    `;
+  }
+
+  function renderVersionsWorkbench() {
+    const view = versionsState.buildVersionsViewModel(data);
+    return `
+      <main class="screen versions-screen" data-screen="versions">
+        <header class="versions-heading">
+          <div>
+            <p class="eyebrow">ResearchCase · point-in-time</p>
+            <h1>冻结快照比较</h1>
+            <p class="lede"><strong>${escapeHTML(view.case.id)}</strong> · ${escapeHTML(view.case.title)}</p>
+          </div>
+          <div class="versions-actions">
+            <a href="?screen=library&source=version-change">查看变更来源</a>
+            <a href="?screen=review&item=EL-004">查看审核记录</a>
+          </div>
+        </header>
+
+        <section class="snapshot-selection" aria-label="已选择的冻结快照">
+          <button type="button" aria-pressed="true" data-snapshot-selector data-snapshot-id="${escapeHTML(view.beforeSnapshot.id)}">
+            <span>基准快照</span><strong>${escapeHTML(view.beforeSnapshot.id)}</strong>
+            <small>截止 ${escapeHTML(view.beforeSnapshot.cutoff)} · 冻结 ${escapeHTML(view.beforeSnapshot.freezeTime)}</small>
+          </button>
+          <span class="selection-arrow" aria-hidden="true">→</span>
+          <button type="button" aria-pressed="true" data-snapshot-selector data-snapshot-id="${escapeHTML(view.afterSnapshot.id)}">
+            <span>对比快照</span><strong>${escapeHTML(view.afterSnapshot.id)}</strong>
+            <small>截止 ${escapeHTML(view.afterSnapshot.cutoff)} · 冻结 ${escapeHTML(view.afterSnapshot.freezeTime)}</small>
+          </button>
+          <p>同一案例 · 同一研究对象 · 仅比较各自截止时点已可用且已冻结的正式内容</p>
+        </section>
+
+        <section class="versions-comparison" data-formal-snapshot-comparison aria-label="正式冻结快照语义比较">
+          ${renderVersionSnapshotColumn("before", view.beforeSnapshot, view.before)}
+          ${renderChangeRail(view.changeRail)}
+          ${renderVersionSnapshotColumn("after", view.afterSnapshot, view.after)}
+        </section>
+
+        <aside class="ai-version-proposal" data-ai-proposal>
+          <div class="ai-proposal-label"><span>AI rerun</span><strong>${escapeHTML(view.aiProposal.label)}</strong></div>
+          <div><strong>${escapeHTML(view.aiProposal.runId)} · ${escapeHTML(view.aiProposal.observedAt)}</strong><p data-core-text>${escapeHTML(view.aiProposal.text)}</p></div>
+          <p data-core-text>${escapeHTML(view.aiProposal.boundary)}</p>
+        </aside>
+      </main>
+    `;
+  }
+
   const SCREEN_RENDERERS = {
     "overview": renderOverview,
     "new-research": renderNewResearch,
@@ -2083,7 +2195,7 @@
     "review": renderReviewWorkbench,
     "library": renderLibraryWorkbench,
     "data": renderDataCenter,
-    "versions": () => renderPlaceholder("versions"),
+    "versions": renderVersionsWorkbench,
   };
 
   function requestedScreen() {
@@ -2139,4 +2251,5 @@
   window.PROTOTYPE_GRAPH_WORKBENCH = Object.freeze({ buildGraphViewModel });
   window.PROTOTYPE_LIBRARY_WORKBENCH = Object.freeze({ buildLibraryViewModel });
   window.PROTOTYPE_DATA_CENTER = Object.freeze({ buildDataCenterViewModel });
+  window.PROTOTYPE_VERSIONS = versionsState;
 }());

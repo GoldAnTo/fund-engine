@@ -718,7 +718,7 @@ function selectedRoutes(argv) {
 }
 
 async function assertSourceContract() {
-  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "research-plan-state.js", "case-workbench-state.js", "app.js", "capture.mjs"];
+  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "research-plan-state.js", "case-workbench-state.js", "versions-state.js", "app.js", "capture.mjs"];
   for (const filename of requiredFiles) {
     await assert.doesNotReject(
       access(path.join(UI_DIR, filename)),
@@ -726,11 +726,12 @@ async function assertSourceContract() {
     );
   }
 
-  const [html, stateSource, planStateSource, caseStateSource, app, styles, readme] = await Promise.all([
+  const [html, stateSource, planStateSource, caseStateSource, versionsStateSource, app, styles, readme] = await Promise.all([
     readFile(path.join(UI_DIR, "index.html"), "utf8"),
     readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "research-plan-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "case-workbench-state.js"), "utf8"),
+    readFile(path.join(UI_DIR, "versions-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "app.js"), "utf8"),
     readFile(path.join(UI_DIR, "styles.css"), "utf8"),
     readFile(path.join(UI_DIR, "README.md"), "utf8"),
@@ -742,14 +743,18 @@ async function assertSourceContract() {
   assert.match(html, /<script[^>]+src=["']\.\/new-research-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./new-research-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/research-plan-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./research-plan-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/case-workbench-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./case-workbench-state.js");
+  assert.match(html, /<script[^>]+src=["']\.\/versions-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./versions-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/app\.js["'][^>]*><\/script>/u, "index.html must load classic ./app.js");
   assert.ok(html.indexOf("./data.js") < html.indexOf("./new-research-state.js") && html.indexOf("./new-research-state.js") < html.indexOf("./app.js"), "new-research state must load between fixture data and rendering");
   assert.ok(html.indexOf("./new-research-state.js") < html.indexOf("./research-plan-state.js") && html.indexOf("./research-plan-state.js") < html.indexOf("./app.js"), "research-plan state must load after shared state and before rendering");
   assert.ok(html.indexOf("./research-plan-state.js") < html.indexOf("./case-workbench-state.js") && html.indexOf("./case-workbench-state.js") < html.indexOf("./app.js"), "case-workbench state must load after shared state and before rendering");
+  assert.ok(html.indexOf("./case-workbench-state.js") < html.indexOf("./versions-state.js") && html.indexOf("./versions-state.js") < html.indexOf("./app.js"), "versions state must load after case state and before rendering");
   assert.match(planStateSource, /function buildResearchPlanViewModel\(/u, "research-plan state must own its view-model builder");
   assert.doesNotMatch(app, /function buildResearchPlanViewModel\(/u, "app.js must not duplicate the plan view-model builder");
   assert.match(caseStateSource, /function buildCaseWorkbenchViewModel\(/u, "case-workbench state must own its view-model builder");
   assert.doesNotMatch(app, /function buildCaseWorkbenchViewModel\(/u, "app.js must not duplicate the case view-model builder");
+  assert.match(versionsStateSource, /function buildVersionsViewModel\(/u, "versions state must own its view-model builder");
+  assert.doesNotMatch(app, /function buildVersionsViewModel\(/u, "app.js must not duplicate the versions view-model builder");
   for (const stateFunction of ["isStrictISODate", "validateObservationRange", "createConfirmationRecord", "normalizeConfirmationRecord", "readConfirmationRecord"]) {
     assert.match(stateSource, new RegExp(`function ${stateFunction}\\(`, "u"), `state module must own ${stateFunction}`);
     assert.doesNotMatch(app, new RegExp(`function ${stateFunction}\\(`, "u"), `app.js must not duplicate ${stateFunction}`);
@@ -1011,13 +1016,78 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型7-数据中心.png"),
     "data must map exactly to prototype/设计原型7-数据中心.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review", "library", "data"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("versions"),
+    path.resolve(UI_DIR, "../设计原型8-版本比较.png"),
+    "versions must map exactly to prototype/设计原型8-版本比较.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review", "library", "data", "versions"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertVersionsProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "冻结快照比较");
+  const selectors = marker.locator("[data-snapshot-selector][aria-pressed=true]");
+  assert.equal(await selectors.count(), 2, "versions must show two explicitly selected snapshots");
+  assert.deepEqual(
+    await selectors.evaluateAll((elements) => elements.map((element) => element.dataset.snapshotId)),
+    ["RS-2025-03-31-v2", "RS-2025-06-30-v3"],
+    "comparison must preserve the approved before/after snapshot order",
+  );
+  const selectorText = await selectors.allTextContents();
+  assert.ok(selectorText[0].includes("截止 2025-03-31") && selectorText[0].includes("冻结 2025-04-01 09:12"), "before selector must expose cutoff and freeze time");
+  assert.ok(selectorText[1].includes("截止 2025-06-30") && selectorText[1].includes("冻结 2025-06-30 23:59"), "after selector must expose cutoff and freeze time");
+
+  const comparison = marker.locator("[data-formal-snapshot-comparison]");
+  assert.equal(await comparison.locator("[data-snapshot-column=before]").count(), 1, "versions must expose one before column");
+  assert.equal(await comparison.locator("[data-snapshot-column=after]").count(), 1, "versions must expose one after column");
+  assert.equal(await comparison.locator("[data-change-rail]").count(), 1, "versions must expose one central change rail");
+  const formalText = await comparison.innerText();
+  for (const required of [
+    "DocumentVersion / 数据序列", "已审核关系", "因素角色", "正式结论", "新反面证据", "证据缺口", "人工变更理由",
+    "DOC-MSFT-FY25Q2", "DOC-NVDA-FY26Q1", "EL-004", "候选需求因素 → 背景条件", "传导因素", "已解决", "仍未解决",
+  ]) {
+    assert.match(formalText, new RegExp(required, "u"), `versions comparison must expose ${required}`);
+  }
+  assert.doesNotMatch(
+    await comparison.locator("[data-snapshot-column=before]").innerText(),
+    /DOC-NVDA-FY26Q1|EL-004|2025-04-30|2025-05-28|2025-06-10/u,
+    "later evidence and revisions must not appear in the earlier snapshot column",
+  );
+  assert.equal(await marker.locator("[data-ai-proposal]").count(), 1, "AI proposal must be visually separate from formal snapshot comparison");
+  const aiText = await marker.locator("[data-ai-proposal]").innerText();
+  assert.match(aiText, /未经人工复核/u, "AI proposal must carry the explicit unreviewed label");
+  assert.match(aiText, /不属于本次正式快照变更原因/u, "AI proposal must not be presented as the official change reason");
+  assert.doesNotMatch(await marker.locator("[data-human-rationale]").innerText(), /AI|模型|重跑/u, "human rationale must not cite an AI rerun");
+  assert.equal(await marker.getByRole("link", { name: "查看变更来源" }).count(), 1, "versions must expose a provenance action");
+  assert.equal(await marker.getByRole("link", { name: "查看审核记录" }).count(), 1, "versions must expose a review action");
+
+  const desktop = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    height: document.documentElement.scrollHeight,
+    internalScroll: [...document.querySelectorAll('[data-screen="versions"] *')].filter((element) => element.scrollHeight > element.clientHeight + 1 && ["auto", "scroll"].includes(getComputedStyle(element).overflowY)).length,
+  }));
+  assert.ok(desktop.width <= 1600 && desktop.height <= 1000, `versions must fit 1600x1000: ${JSON.stringify(desktop)}`);
+  assert.equal(desktop.internalScroll, 0, "versions desktop must not hide content in internal scroll regions");
+  const coreSizes = await marker.locator("[data-core-text]").evaluateAll((elements) => elements.map((element) => parseFloat(getComputedStyle(element).fontSize)));
+  assert.ok(coreSizes.length > 0 && coreSizes.every((size) => size >= 13), "versions core text must remain at least 13px");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobile = await marker.evaluate((element) => ({
+    body: document.body.scrollWidth - document.body.clientWidth,
+    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    internalScroll: [...element.querySelectorAll("*")].filter((child) => child.scrollHeight > child.clientHeight + 1 && ["auto", "scroll"].includes(getComputedStyle(child).overflowY)).length,
+    order: [...element.querySelectorAll("[data-comparison-step]")].map((child) => child.dataset.comparisonStep),
+  }));
+  assert.ok(mobile.body <= 0 && mobile.document <= 0, `versions must fit 375px without horizontal overflow: ${JSON.stringify(mobile)}`);
+  assert.equal(mobile.internalScroll, 0, "versions mobile must use normal vertical flow without internal scrolling");
+  assert.deepEqual(mobile.order, ["before", "change", "after"], "mobile comparison must stack before then change then after");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertDataProductContract(page, marker) {
@@ -2468,6 +2538,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "data") {
         await assertDataProductContract(page, marker);
+      }
+      if (screen === "versions") {
+        await assertVersionsProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {

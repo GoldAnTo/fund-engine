@@ -207,6 +207,104 @@
           },
         ],
       },
+      versionComparison: {
+        beforeSnapshotId: "RS-2025-03-31-v2",
+        afterSnapshotId: "RS-2025-06-30-v3",
+        before: {
+          formalConclusion: {
+            state: "开放判断",
+            text: "需求扩张已有披露支持，但订单、交付与收入尚未形成经审核的传导关系。",
+          },
+          inputs: [
+            {
+              id: "DOC-MSFT-FY25Q2",
+              kind: "DocumentVersion",
+              label: "Microsoft FY2025 Q2 Form 10-Q",
+              version: "sec-10q-2025-01-29-v1",
+              availableAt: "2025-01-29T20:18:00Z",
+            },
+            {
+              id: "SERIES-NVDA-DC-v2",
+              kind: "数据序列",
+              label: "NVIDIA Data Center revenue · 截至 FY25 Q4",
+              version: "series-nvda-dc-2025-02-26-v2",
+              availableAt: "2025-02-26T21:12:00Z",
+            },
+          ],
+          relationships: [
+            { id: "EL-CAPEX-01", label: "资本开支 → AI 基础设施投入", role: "支持", reviewState: "已审核" },
+            { id: "EL-TRANSMISSION", label: "订单 → 交付 → 分部收入", role: "关系缺失", reviewState: "未形成" },
+          ],
+          factors: [
+            { id: "F-D-01", label: "云厂商资本开支", role: "候选需求因素" },
+            { id: "F-T-01", label: "订单到实际交付", role: "待定义" },
+          ],
+          gaps: [
+            { id: "G-CAPEX-PURPOSE", label: "资本开支是否明确用于 AI 基础设施", state: "未解决" },
+            { id: "G-REVENUE-CHAIN", label: "订单、交付与分部收入能否同主体对齐", state: "未解决" },
+          ],
+        },
+        after: {
+          formalConclusion: {
+            state: "证据不足 · 继续验证",
+            text: "投入扩张与部分系统交付成立，但尚不足以确认需求已完整传导为可持续收入。",
+          },
+          inputs: [
+            {
+              id: "DOC-MSFT-FY25Q3",
+              kind: "DocumentVersion",
+              label: "Microsoft FY2025 Q3 Form 10-Q",
+              version: "sec-10q-2025-04-30-v1",
+              availableAt: "2025-04-30T20:18:00Z",
+            },
+            {
+              id: "DOC-NVDA-FY26Q1",
+              kind: "DocumentVersion",
+              label: "NVIDIA FY2026 Q1 Form 10-Q",
+              version: "sec-10q-2025-05-28-v1",
+              availableAt: "2025-05-28T20:13:00Z",
+            },
+            {
+              id: "SERIES-NVDA-DC-v3",
+              kind: "数据序列",
+              label: "NVIDIA Data Center revenue · 截至 FY26 Q1",
+              version: "series-nvda-dc-2025-05-28-v3",
+              availableAt: "2025-05-28T20:13:00Z",
+            },
+          ],
+          relationships: [
+            { id: "EL-002", label: "系统交付 ↔ 分部收入", role: "支持", reviewState: "已审核" },
+            { id: "EL-004", label: "可用容量不足 → 收入确认滞后", role: "反面证据", reviewState: "已审核" },
+          ],
+          factors: [
+            { id: "F-D-01", label: "云厂商资本开支", role: "背景条件" },
+            { id: "F-T-01", label: "订单到实际交付", role: "传导因素" },
+            { id: "F-C-01", label: "容量与并网周期", role: "限制因素" },
+          ],
+          gaps: [
+            { id: "G-CAPEX-PURPOSE", label: "资本开支用于 AI 基础设施", state: "已解决" },
+            { id: "G-REVENUE-CHAIN", label: "完整收入传导仍缺连续点时证据", state: "仍未解决" },
+            { id: "G-CAPACITY", label: "容量约束影响收入确认的持续期", state: "新增缺口" },
+          ],
+        },
+        changeRail: {
+          inputSummary: "新增 2 个 DocumentVersion · 数据序列 v2 → v3 · 6 项未变输入已折叠",
+          relationshipSummary: "新增 1 条支持关系与 1 条反面关系，均经人工审核",
+          factorSummary: "候选需求因素 → 背景条件；订单交付被定义为传导因素",
+          conclusionSummary: "开放判断 → 证据不足 · 继续验证",
+          gapSummary: "已解决 1 · 新增 1 · 仍未解决 1",
+          rationale: "审核人将需求披露与收入传导拆开判断：新增交付证据只支持局部链条；EL-004 证明可用容量与确认节奏仍会切断即时传导，因此正式结论收敛为“证据不足，继续验证”。",
+          reviewedBy: "林岚 · 行业研究",
+          reviewedAt: "2025-06-30 22:40 CST",
+        },
+        aiProposal: {
+          runId: "AI-RERUN-2025-07-02-01",
+          observedAt: "2025-07-02 08:40 CST",
+          label: "未经人工复核",
+          text: "新采集的 10-Q 来源确认没有改变数值；模型建议复核传导因素措辞。",
+          boundary: "发生在 v3 冻结之后，不属于本次正式快照变更原因；仅可进入下一快照的审核队列。",
+        },
+      },
     },
     theses: [
       {

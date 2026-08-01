@@ -19,6 +19,7 @@ const FINAL_CAPTURE_TARGETS = Object.freeze({
   review: path.resolve(UI_DIR, "../设计原型5-审核工作区.png"),
   library: path.resolve(UI_DIR, "../设计原型6-资料与知识.png"),
   data: path.resolve(UI_DIR, "../设计原型7-数据中心.png"),
+  versions: path.resolve(UI_DIR, "../设计原型8-版本比较.png"),
 });
 const CAPTURE_READY_SCREENS = Object.freeze(Object.keys(FINAL_CAPTURE_TARGETS));
 const MIME_TYPES = {
