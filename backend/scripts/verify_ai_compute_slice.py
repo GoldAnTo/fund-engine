@@ -16,9 +16,9 @@ slice is auditable end-to-end:
 6. **ai_human_boundary_visible** – every AIAssessment is marked provisional,
    and human reviews exist as separate records (the original AI conclusion
    is never overwritten).
-7. **review_outcomes_tracked** – (report-only, never gates) ReviewDecision
-   outcome distribution and AIRun audit counts, so review adoption is
-   visible in every evidence-pack report.
+7. **review_outcomes_tracked** – every AIAssessment carries a human
+   ReviewDecision (review coverage is gated); the outcome distribution and
+   AIRun audit counts are reported as evidence.
 8. **table_extraction_gold_accuracy** – (fail-closed) the rule-based
    FinancialTableExtractor reproduces the frozen table gold set exactly
    (per-sample recall == 1.0 and precision == 1.0).
@@ -373,14 +373,20 @@ class ReleaseGate:
         }
 
     def _check_review_outcomes_tracked(self) -> dict:
-        """Report-only: surface ReviewDecision outcomes and AIRun audit counts.
+        """Every AIAssessment in the frozen slice must carry a human review.
 
-        Never gates the release (``passed`` is always True); it exists so every
-        evidence-pack report shows how much machine output humans have
-        confirmed / modified / rejected, making review adoption measurable
-        over time.
+        The gold set's 人工标签 claim is only real if each AI conclusion has a
+        separate ReviewDecision record, so review coverage is gated here.
+        The outcome distribution (confirmed / modified / rejected) and AIRun
+        audit counts are reported as evidence, making review adoption
+        measurable over time.
         """
+        assessments = list(self._session.scalars(select(AIAssessment)).all())
         reviews = list(self._session.scalars(select(ReviewDecision)).all())
+
+        reviewed_ids = {review.ai_assessment_id for review in reviews}
+        unreviewed = [a for a in assessments if a.id not in reviewed_ids]
+
         outcomes: dict[str, int] = {}
         for review in reviews:
             outcomes[review.outcome] = outcomes.get(review.outcome, 0) + 1
@@ -390,18 +396,32 @@ class ReleaseGate:
         for run in runs:
             runs_by_status[run.status] = runs_by_status.get(run.status, 0) + 1
 
+        failures: list[str] = []
+        if not assessments:
+            failures.append("no AI assessments in the ledger")
+        for assessment in unreviewed:
+            failures.append(
+                f"unreviewed_assessment: assessment {assessment.id} has no "
+                f"ReviewDecision"
+            )
+
+        coverage = (
+            (len(assessments) - len(unreviewed)) / len(assessments)
+            if assessments
+            else 0.0
+        )
         return {
             "name": "review_outcomes_tracked",
-            "passed": True,
+            "passed": not failures,
             "evidence": {
-                "gated": False,
-                "note": "report-only; review adoption is not a pass condition",
+                "assessment_count": len(assessments),
                 "review_decision_count": len(reviews),
+                "review_coverage": round(coverage, 4),
                 "outcomes": outcomes,
                 "ai_run_count": len(runs),
                 "ai_runs_by_status": runs_by_status,
             },
-            "failures": [],
+            "failures": failures,
         }
 
     def _check_table_extraction_gold_accuracy(self) -> dict:

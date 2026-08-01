@@ -130,16 +130,22 @@ assessment.  If a `ReviewDecision` exists, the original assessment's
 
 ---
 
-### 7. `review_outcomes_tracked` (report-only)
+### 7. `review_outcomes_tracked`
 
-**Definition:** Surfaces the `ReviewDecision` outcome distribution
-(confirmed / modified / rejected counts) and `AIRun` audit counts by status
-in every evidence-pack report, so human review adoption of machine output
-is measurable over time.
+**Definition:** Every `AIAssessment` in the frozen slice carries at least one
+human `ReviewDecision` — the gold set's 人工标签 claim is only real if each
+AI conclusion has a separately recorded review.  The outcome distribution
+(confirmed / modified / rejected), review coverage, and `AIRun` audit counts
+by status are reported as evidence so review adoption is measurable over
+time.
 
-**Pass condition:** Always passes (`passed = True`, `gated = False` in the
-evidence).  Review adoption is a metric, not a release blocker; the seeded
-slice itself contains no human reviews, so counts may legitimately be zero.
+**Pass condition:** At least one `AIAssessment` exists and every assessment
+has ≥ 1 `ReviewDecision` (`review_coverage == 1.0`).  The seeded slice
+includes one confirming review per thesis assessment.
+
+**Failure example:** A new thesis assessment was added to the seed without a
+corresponding human review; the check reports
+`unreviewed_assessment: assessment <id> has no ReviewDecision`.
 
 ---
 

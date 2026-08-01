@@ -88,6 +88,10 @@
   且研报观点分歧，需更多分部数据。
 - T3：人工维持 contradicted，国信估值透支观点与兑现假设直接冲突，且公司尚未盈利。
 
+以上三条人工标签以 `ReviewDecision`（outcome=confirmed，reviewer=`seed-human-reviewer`）
+形式随 seed 落库，每条引用对应 AIAssessment 且不覆盖原 AI 结论；门禁检查
+`review_outcomes_tracked` 要求金标切片中每条 AIAssessment 都有人工复核记录。
+
 ## 公司 / 标的 / 基金披露
 
 - Company（3）：寒武纪 688256、工业富联 601138、SK海力士 000660.KS

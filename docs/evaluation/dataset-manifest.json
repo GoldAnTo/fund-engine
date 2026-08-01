@@ -42,6 +42,6 @@
   "limitations": [
     "源材料为手工准备的纯文本样例（模拟公告/财报/研报），不是真实披露文件，不构成任何投资依据。",
     "标签先于门禁执行冻结，失败案例（future 泄漏 / 口径误用 / 研报矛盾）保留在 failure-cases 文档中，不被删除。",
-    "ReviewDecision 审核结果当前只做汇报（report-only），不作为门禁通过条件；seed 切片本身不含人工审核记录。"
+    "人工审核样例（每 Thesis 一条 ReviewDecision，outcome=confirmed）随 seed 落库；门禁要求金标切片中每条 AIAssessment 都有人工复核，但不校验审核结论本身的正确性。"
   ]
 }
