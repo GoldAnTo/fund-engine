@@ -63,3 +63,6 @@ logs/
 
 # Evaluation run outputs
 docs/evaluation/runs/
+
+# Local reference clones (read-only, not part of the product)
+.reference/

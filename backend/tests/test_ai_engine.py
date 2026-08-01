@@ -83,7 +83,20 @@ def test_extraction_records_no_spans(session, document_service):
 # ---------------------------------------------------------------------------
 
 
-def test_proposal_creates_links_and_airun(session, thesis, statement):
+def test_proposal_creates_links_and_airun(
+    session, document_service, research_service, thesis, document
+):
+    # The proposer now recalls only cutoff-visible, thesis-relevant
+    # statements; the generic fixture statement shares no tokens with the
+    # thesis and is correctly filtered out, so seed a relevant one.
+    span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="GPU demand 预计 增长",
+    )
+    research_service.add_statement(
+        span.id, "GPU demand 预计 增长", kind="research_opinion"
+    )
     client = LLMClient(model_version="mock-test", mock=True)
     proposer = EvidenceProposer(client)
 
@@ -168,7 +181,19 @@ def test_ai_run_records_failure_on_extraction_error(session, span):
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
 
 
-def test_ai_run_records_failure_on_proposal_error(session, thesis, statement):
+def test_ai_run_records_failure_on_proposal_error(
+    session, document_service, research_service, thesis, document
+):
+    # A recalled (relevant) statement is required for the proposer to reach
+    # the LLM call at all.
+    span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="GPU demand 预计 增长",
+    )
+    research_service.add_statement(
+        span.id, "GPU demand 预计 增长", kind="research_opinion"
+    )
     client = LLMClient(model_version="mock-test", mock=True)
 
     with patch.object(client, "chat_json", side_effect=RuntimeError("LLM error")):
