@@ -234,3 +234,40 @@ class ProposeResponse(V1Model):
     mode: str
     link_count: int
     links: list[ProposedLinkDTO]
+
+
+# ---------------------------------------------------------------------------
+# 数据接入 (gildata ingest — first step of the engine loop)
+# ---------------------------------------------------------------------------
+
+
+class IngestRequest(V1Model):
+    """Trigger a Gildata ingest run.
+
+    All fields optional: omitted queries fall back to the AI-compute
+    defaults.  ``case_id`` tags ingested span locators against a case;
+    when omitted the first existing case is used (or none).
+    """
+
+    case_id: str | None = None
+    research_queries: list[str] | None = None
+    announcement_query: str | None = None
+    quote_query: str | None = None
+    quote_stock_code: str | None = None
+
+
+class IngestResponse(V1Model):
+    """Summary of one ingest run.
+
+    Idempotent: documents dedupe by content hash and valuation snapshots
+    by stock + date + metric + source, so re-runs report skips instead of
+    duplicating rows.
+    """
+
+    research_reports: int
+    announcements: int
+    spans: int
+    valuations_written: int
+    valuations_skipped: int
+    stock_id: str | None
+    case_id: str | None

@@ -124,13 +124,13 @@
 
 ---
 
-## 命令端点全景（2026-08-01 补齐抽取/提案后）
+## 命令端点全景（2026-08-01 补齐接入/抽取/提案后）
 
 「接入 → 抽取 → 提案 → 评估」四步现全部可界面触发：
 
 | 步骤 | 端点 | 说明 |
 |---|---|---|
-| 接入 | （gildata 接入仍为脚本/服务层，未包 API） | 见缺口说明 |
+| 接入 | `POST /api/v1/documents/ingest` | 201；body 全可选（case_id/research_queries/announcement_query/quote_query/quote_stock_code，缺省用 AI 算力链默认查询）；幂等（文档按内容哈希去重、估值按股票+日期+指标+源去重）；404 case_id 不存在；503 GILDATA_TOKEN 未配置或上游不可用（`upstream_unavailable`，真实数据源不静默 mock） |
 | 抽取 | `POST /api/v1/documents/{document_version_id}/extract` | 201；append-only，重复调用会重复插 statements；404 版本不存在 |
 | 提案 | `POST /api/v1/theses/{thesis_id}/propose` | 201；产出全部进审核队列（machine_generated），不自动确认；404 thesis 不存在 |
 | 评估 | `POST /api/v1/theses/{thesis_id}/rerun` | 201；冻结新快照 + 追加临时评估 |

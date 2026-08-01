@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
-from app.errors import NotFoundError, ValidationFailedError
+from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
 from app.schemas.v1.common import ErrorEnvelope
 
 logger = logging.getLogger("industry_evidence_workspace")
@@ -95,6 +95,19 @@ async def validation_failed_error_handler(request: Request, exc: ValidationFaile
         str(exc) or "validation failed",
         request_id,
         status_code=422,
+    )
+
+
+@app.exception_handler(UpstreamUnavailableError)
+async def upstream_unavailable_error_handler(
+    request: Request, exc: UpstreamUnavailableError
+):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "upstream_unavailable",
+        str(exc) or "upstream datasource unavailable",
+        request_id,
+        status_code=503,
     )
 
 

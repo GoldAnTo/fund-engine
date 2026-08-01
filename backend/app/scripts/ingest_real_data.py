@@ -183,12 +183,23 @@ def ingest(
     client: GildataMCPClient,
     *,
     case_id: uuid.UUID | None = None,
+    research_queries: list[str] | None = None,
+    announcement_query: str | None = None,
+    quote_query: str | None = None,
+    quote_stock_code: str | None = None,
 ) -> dict:
     """Ingest real Gildata data into *session*.
 
     Returns a summary dict with counts of frozen documents, spans, and
-    valuation snapshots written (or skipped as duplicates).
+    valuation snapshots written (or skipped as duplicates).  Query
+    parameters default to the AI-compute constants; the command API passes
+    caller-supplied overrides through here.
     """
+    research_queries = research_queries or RESEARCH_QUERIES
+    announcement_query = announcement_query or ANNOUNCEMENT_QUERY
+    quote_query = quote_query or QUOTE_QUERY
+    quote_stock_code = quote_stock_code or QUOTE_STOCK_CODE
+
     document_service = DocumentService(DocumentRepository(session))
     instruments = InstrumentRepository(session)
     resolved_case_id = _resolve_case_id(session, case_id)
@@ -208,7 +219,7 @@ def ingest(
     )
 
     # 1. Research reports -> DocumentVersion + SourceSpan.
-    for query in RESEARCH_QUERIES:
+    for query in research_queries:
         reports = adapters.fetch_research_report(client, query)
         for report in reports[:3]:
             content = report.get("content", "")
@@ -237,7 +248,7 @@ def ingest(
             summary["spans"] += 1
 
     # 2. Announcements -> DocumentVersion + SourceSpan.
-    announcements = adapters.fetch_announcement(client, ANNOUNCEMENT_QUERY)
+    announcements = adapters.fetch_announcement(client, announcement_query)
     for ann in announcements[:3]:
         content = ann.get("content", "") or ann.get("title", "")
         if not content:
@@ -264,10 +275,10 @@ def ingest(
         summary["spans"] += 1
 
     # 3. Market quote -> ValuationSnapshot rows for the resolved stock.
-    quotes = adapters.fetch_quote(client, QUOTE_QUERY)
+    quotes = adapters.fetch_quote(client, quote_query)
     if quotes:
         quote = quotes[0]
-        resolved_code = quote.get("stock_code", "") or QUOTE_STOCK_CODE
+        resolved_code = quote.get("stock_code", "") or quote_stock_code
         stock = ensure_stock(
             session,
             instruments,
