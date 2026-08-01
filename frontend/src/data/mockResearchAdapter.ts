@@ -29,10 +29,13 @@ import type {
   CaseWorkbenchView,
   DataCenterView,
   LibraryView,
+  LinkReviewPayload,
   NewResearchView,
   RelationshipGraphView,
   ResearchClient,
   ResearchPlanView,
+  ReviewQueueView,
+  ReviewQueueViewItem,
   ThemeIndexView,
   ThemeWorkbenchView,
   VersionsView,
@@ -51,6 +54,9 @@ import {
   buildVersionsView,
   buildWorkspaceOverview,
   buildWorkspaceOverviewScreen,
+  EVIDENCE_LINKS as PROTOTYPE_EVIDENCE_LINKS,
+  REVIEW_QUEUE as PROTOTYPE_REVIEW_QUEUE,
+  STATEMENTS as PROTOTYPE_STATEMENTS,
 } from "./prototypeFixture";
 
 // ── Stable mock data ───────────────────────────────────────────────────────
@@ -1359,6 +1365,57 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView> {
     return simulateLatency(buildThemeWorkbenchView(themeId));
+  }
+
+  // ── Review queue (screen 6) ────────────────────────────────────────────
+  // Built from the same fixture join the screen used to do inline; submitted
+  // link reviews drop the item from the queue like the live backend does.
+
+  private linkReviews: { linkId: string; payload: LinkReviewPayload }[] = [];
+
+  getLinkReviews() {
+    return [...this.linkReviews];
+  }
+
+  async getReviewQueueView(): Promise<ReviewQueueView> {
+    this.throwIfOffline();
+    const reviewed = new Set(this.linkReviews.map((r) => r.linkId));
+    const items: ReviewQueueViewItem[] = PROTOTYPE_REVIEW_QUEUE.filter(
+      (item) => !reviewed.has(item.id),
+    ).map((item) => {
+      const st = PROTOTYPE_STATEMENTS.find((s) => s.id === item.targetId);
+      const link = PROTOTYPE_EVIDENCE_LINKS.find(
+        (l) => l.statementId === item.targetId,
+      );
+      return {
+        linkId: item.id,
+        thesisId: link?.thesisId ?? "",
+        caseId: "RC-AIC-2025-01",
+        thesisStatement: "",
+        aiRole: link?.role ?? "gap",
+        aiReason: link?.rationale ?? item.task,
+        aiScope: {},
+        statementId: st?.id ?? item.targetId,
+        statementText: st?.text ?? item.task,
+        statementKind: "disclosed_fact",
+        verbatimText: link?.sourceSpan ?? item.sourceSpan,
+        documentVersionId: link?.sourceVersion ?? item.sourceVersion,
+        documentSourceUrl: st?.documentId ?? "",
+        documentPublishedAt: st?.publishedAt ?? item.publishedAt,
+        availableAt: item.availableAt,
+      };
+    });
+    return simulateLatency({ items });
+  }
+
+  async submitLinkReview(
+    linkId: string,
+    payload: LinkReviewPayload,
+  ): Promise<void> {
+    this.throwIfOffline();
+    this.throwIfPermissionDenied();
+    this.linkReviews.push({ linkId, payload });
+    return simulateLatency(undefined);
   }
 }
 

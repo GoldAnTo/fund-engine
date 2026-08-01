@@ -777,4 +777,44 @@ export interface PrototypeClient {
   getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
 }
 
-export type ResearchClient = BaseResearchClient & PrototypeClient;
+export type ResearchClient = BaseResearchClient & PrototypeClient & ReviewQueueClient;
+// ── Review queue (screen 6 · live API slice) ─────────────────────────────
+
+/** One pending link-level review, mapped from ReviewQueueItemDTO. */
+export interface ReviewQueueViewItem {
+  linkId: string;
+  thesisId: string;
+  caseId: string;
+  thesisStatement: string;
+  /** AI-proposed relation: supports / contradicts / contextualizes. */
+  aiRole: string;
+  aiReason: string;
+  aiScope: Record<string, unknown>;
+  statementId: string;
+  statementText: string;
+  statementKind: string;
+  verbatimText: string;
+  documentVersionId: string;
+  documentSourceUrl: string;
+  documentPublishedAt: string | null;
+  availableAt: string;
+}
+
+export interface ReviewQueueView {
+  items: ReviewQueueViewItem[];
+}
+
+/** 四要素关系级审核 payload (LinkReviewRequest). */
+export interface LinkReviewPayload {
+  outcome: "confirmed" | "rejected" | "needs_more_evidence";
+  relation: "supports" | "contradicts" | "contextualizes" | "evidence_gap" | null;
+  factor_role: string;
+  scope_boundary: string;
+  reason: string;
+  reviewer: string;
+}
+
+export interface ReviewQueueClient {
+  getReviewQueueView(): Promise<ReviewQueueView>;
+  submitLinkReview(linkId: string, payload: LinkReviewPayload): Promise<void>;
+}

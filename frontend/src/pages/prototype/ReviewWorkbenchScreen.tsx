@@ -1,16 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { researchClient } from "../../data/researchClient";
-import {
-  EVIDENCE_LINKS,
-  REVIEW_QUEUE,
-  STATEMENTS,
-} from "../../data/prototypeFixture";
 import type {
   ReviewOutcome,
 } from "../../domain/types";
 import type {
   CaseWorkbenchRebuttal,
   NewResearchView,
+  ReviewQueueViewItem,
 } from "../../domain/prototypeTypes";
 
 interface PageState {
@@ -36,10 +32,35 @@ interface PendingItem {
   role: PrototypeRole;
 }
 
+function mapQueueItem(item: ReviewQueueViewItem): PendingItem {
+  const role: PrototypeRole =
+    item.aiRole === "supports"
+      ? "support"
+      : item.aiRole === "contradicts"
+        ? "contradict"
+        : "gap";
+  return {
+    id: item.linkId,
+    title: item.statementText,
+    source: item.documentSourceUrl,
+    sourceSpan: item.verbatimText,
+    publishedAt: item.documentPublishedAt ?? "",
+    reviewLabel: "待人工审核",
+    reviewState: "pending_review",
+    snapshotMembership: "",
+    priority: "",
+    rationale: item.aiReason,
+    documentId: item.documentVersionId,
+    statementId: item.statementId,
+    role,
+  };
+}
+
 export function ReviewWorkbenchScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<NewResearchView | null>(null);
-  const [selectedId, setSelectedId] = useState<string>("RQ-001");
+  const [queueItems, setQueueItems] = useState<ReviewQueueViewItem[]>([]);
+  const [selectedId, setSelectedId] = useState<string>("");
   const [decision, setDecision] = useState<ReviewOutcome>("confirmed");
   const [relationChoice, setRelationChoice] = useState<"支持" | "反驳" | "背景" | "证据缺口">(
     "支持",
@@ -50,12 +71,24 @@ export function ReviewWorkbenchScreen() {
   );
   const [reviewNotes, setReviewNotes] = useState("");
   const [reason, setReason] = useState("");
+  const [reviewer, setReviewer] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submittedCount, setSubmittedCount] = useState(0);
+
+  const loadQueue = useCallback(() => {
+    return researchClient.getReviewQueueView().then((q) => {
+      setQueueItems(q.items);
+      setSelectedId((prev) =>
+        q.items.some((i) => i.linkId === prev) ? prev : (q.items[0]?.linkId ?? ""),
+      );
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    researchClient
-      .getNewResearchView()
-      .then((v) => {
+    Promise.all([researchClient.getNewResearchView(), loadQueue()])
+      .then(([v]) => {
         if (!cancelled) {
           setView(v);
           setState({ kind: "ready" });
@@ -67,31 +100,45 @@ export function ReviewWorkbenchScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadQueue]);
+
+  const RELATION_MAP = {
+    支持: "supports",
+    反驳: "contradicts",
+    背景: "contextualizes",
+    证据缺口: "evidence_gap",
+  } as const;
+
+  const submitReview = (outcome: "confirmed" | "rejected" | "needs_more_evidence") => {
+    const current = queueItems.find((i) => i.linkId === selectedId);
+    if (!current || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    researchClient
+      .submitLinkReview(current.linkId, {
+        outcome,
+        relation: RELATION_MAP[relationChoice],
+        factor_role: factor || "未指定因素",
+        scope_boundary: boundary || "未填写边界",
+        reason: reviewNotes || reason || "（无补充理由）",
+        reviewer: reviewer || "审核人",
+      })
+      .then(() => {
+        setSubmittedCount((c) => c + 1);
+        setFactor("");
+        setReviewNotes("");
+        setReason("");
+        return loadQueue();
+      })
+      .catch((err: Error) => {
+        setSubmitError(err.message || "审核写入失败");
+      })
+      .finally(() => setSubmitting(false));
+  };
 
   const pending: PendingItem[] = useMemo(
-    () =>
-      REVIEW_QUEUE.map((item) => {
-        const st = STATEMENTS.find((s) => s.id === item.targetId);
-        const link = EVIDENCE_LINKS.find((l) => l.statementId === item.targetId);
-        return {
-          id: item.id,
-          title: st?.text ?? item.task,
-          source: link?.sourceVersion ?? item.sourceVersion,
-          sourceSpan: link?.sourceSpan ?? item.sourceSpan,
-          publishedAt: st?.publishedAt ?? "",
-          reviewLabel:
-            item.reviewState === "reviewed" ? "已审核" : "待人工审核",
-          reviewState: item.reviewState,
-          snapshotMembership: (link?.snapshotMembership ?? []).join(", "),
-          priority: item.priority,
-          rationale: link?.rationale ?? item.task,
-          documentId: st?.documentId ?? "",
-          statementId: st?.id ?? item.targetId,
-          role: (link?.role ?? "gap") as PrototypeRole,
-        };
-      }),
-    [],
+    () => queueItems.map(mapQueueItem),
+    [queueItems],
   );
 
   const selected = pending.find((p) => p.id === selectedId) ?? pending[0];
@@ -127,6 +174,19 @@ export function ReviewWorkbenchScreen() {
       </div>
     );
   }
+  if (!selected) {
+    return (
+      <div className="prototype-screen" data-testid="review-screen">
+        <header>
+          <div className="eyebrow">审核中心 · Review Workbench</div>
+          <h1>关系审核</h1>
+        </header>
+        <p className="lede" data-testid="review-empty">
+          审核队列已清空{submittedCount > 0 ? `，本次会话已写入 ${submittedCount} 项人工决策` : ""}。
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="prototype-screen" data-testid="review-screen">
@@ -134,8 +194,12 @@ export function ReviewWorkbenchScreen() {
         <div className="eyebrow">审核中心 · Review Workbench</div>
         <h1>关系审核</h1>
         <p className="lede">
-          审核 <code>{pending.length}</code> 项 AI 提议关系 · 冻结快照{" "}
-          <code>RS-2025-06-30-v3</code> · 截止 2025-06-30
+          审核 <code>{pending.length}</code> 项 AI 提议关系
+          {submittedCount > 0 ? (
+            <>
+              {" "}· 本次会话已写入 <code>{submittedCount}</code> 项人工决策
+            </>
+          ) : null}
         </p>
       </header>
 
@@ -159,18 +223,22 @@ export function ReviewWorkbenchScreen() {
                   }}
                 >
                   <div className="review-item-top">
-                    <span>{p.id}</span>
-                    <span
-                      className={`review-priority ${
-                        p.priority === "high"
-                          ? "high"
-                          : p.priority === "medium"
-                            ? "medium"
-                            : "low"
-                      }`}
-                    >
-                      {p.priority}
-                    </span>
+                    <span>{p.id.slice(0, 8)}</span>
+                    {p.priority ? (
+                      <span
+                        className={`review-priority ${
+                          p.priority === "high"
+                            ? "high"
+                            : p.priority === "medium"
+                              ? "medium"
+                              : "low"
+                        }`}
+                      >
+                        {p.priority}
+                      </span>
+                    ) : (
+                      <span className="ai-boundary">AI 提议</span>
+                    )}
                   </div>
                   <strong>{p.title}</strong>
                   <dl>
@@ -219,7 +287,7 @@ export function ReviewWorkbenchScreen() {
               </div>
               <div>
                 <dt>所属快照</dt>
-                <dd>{selected.snapshotMembership}</dd>
+                <dd>{selected.snapshotMembership || "—"}</dd>
               </div>
               <div>
                 <dt>原文 ID</dt>
@@ -253,7 +321,7 @@ export function ReviewWorkbenchScreen() {
           <div className="prototype-immutable-record">
             <strong>当前冻结的不变记录</strong>
             <p style={{ fontSize: 12 }}>
-              上次冻结（{selected.snapshotMembership || "RS-2025-06-30-v3"}）已确认的反面证据：
+              已确认的反面证据（示例数据，待案例工作台接口接入）：
             </p>
             <blockquote>"{rebuttalStub.statement}"</blockquote>
             <dl className="source-metadata">
@@ -291,7 +359,6 @@ export function ReviewWorkbenchScreen() {
               <p className="section-kicker">审核人决策</p>
               <h2>只有人可写入</h2>
             </div>
-            <span className="state-badge ai">当前决策基础 RS-2025-06-30-v3</span>
           </div>
           <p className="muted" style={{ fontSize: 11 }}>
             以下 4 项必须由审核人明确填写，写入系统后不可逆。
@@ -300,11 +367,23 @@ export function ReviewWorkbenchScreen() {
             className="prototype-review-form"
             onSubmit={(e) => {
               e.preventDefault();
-              alert(
-                `[mock] 已记录决策：关系=${relationChoice} · 因素=${factor || "(未选)"} · 边界=${boundary || "(未填)"} · 理由=${reviewNotes || "(未填)"}`,
-              );
+              submitReview("confirmed");
             }}
           >
+            <fieldset>
+              <legend>
+                <span>0. 审核人署名</span>
+                <small>必填</small>
+              </legend>
+              <input
+                type="text"
+                value={reviewer}
+                onChange={(e) => setReviewer(e.target.value)}
+                placeholder="你的名字（写入审计记录）"
+                aria-label="审核人署名"
+              />
+            </fieldset>
+
             <fieldset>
               <legend>
                 <span>1. 关系选择</span>
@@ -381,18 +460,38 @@ export function ReviewWorkbenchScreen() {
             </fieldset>
 
             <div className="prototype-review-actions">
-              <button type="submit" className="prototype-button primary">
-                确认并写入审核记忆
+              <button
+                type="submit"
+                className="prototype-button primary"
+                disabled={submitting}
+              >
+                {submitting ? "写入中…" : "确认并写入审核记忆"}
               </button>
-              <button type="button" className="prototype-button">
+              <button
+                type="button"
+                className="prototype-button"
+                disabled={submitting}
+                onClick={() => submitReview("rejected")}
+              >
                 驳回
               </button>
-              <button type="button" className="prototype-button">
+              <button
+                type="button"
+                className="prototype-button"
+                disabled={submitting}
+                onClick={() => submitReview("needs_more_evidence")}
+              >
                 要求补充证据
               </button>
-              <span className="prototype-page-state">
-                完成该项人工判别后，确认动作才会解锁。
-              </span>
+              {submitError ? (
+                <span className="form-error" role="alert">
+                  {submitError}
+                </span>
+              ) : (
+                <span className="prototype-page-state">
+                  完成该项人工判别后，确认动作才会解锁。
+                </span>
+              )}
             </div>
           </form>
         </aside>

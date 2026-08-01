@@ -47,6 +47,9 @@ export const researchClient: ResearchClient = {
   getThemeIndexView: () => _client.getThemeIndexView(),
   getThemeWorkbenchView: (themeId: string) =>
     _client.getThemeWorkbenchView(themeId),
+  getReviewQueueView: () => _client.getReviewQueueView(),
+  submitLinkReview: (linkId, payload) =>
+    _client.submitLinkReview(linkId, payload),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

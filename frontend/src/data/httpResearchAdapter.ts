@@ -25,6 +25,9 @@ import type {
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
+  LinkReviewPayload,
+  ReviewQueueView,
+  ReviewQueueViewItem,
   ThemeIndexView,
   ThemeWorkbenchView,
   WorkspaceOverviewScreen,
@@ -109,6 +112,33 @@ export class HttpResearchAdapter implements ResearchClient {
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
         headers: { Accept: "application/json" },
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(
+        () => null,
+      )) as ErrorEnvelopeDTO | null;
+      const code = payload?.error?.code;
+      throw new PageStateError(
+        asPageStateErrorKind(code),
+        payload?.error?.message,
+      );
+    }
+    return (await response.json()) as T;
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.options.baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
       });
     } catch {
       throw new PageStateError("backend_unavailable");
@@ -690,5 +720,44 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getVersionsView() {
     return (await import("./prototypeFixture")).buildVersionsView();
+  }
+
+  // ── Review queue (screen 6 · live) ─────────────────────────────────────
+
+  private mapReviewQueueItem(
+    dto: Schemas["ReviewQueueItemDTO"],
+  ): ReviewQueueViewItem {
+    return {
+      linkId: dto.link_id,
+      thesisId: dto.thesis_id,
+      caseId: dto.case_id,
+      thesisStatement: dto.thesis_statement,
+      aiRole: dto.ai_role,
+      aiReason: dto.ai_reason,
+      aiScope: dto.ai_scope,
+      statementId: dto.statement_id,
+      statementText: dto.statement_text,
+      statementKind: dto.statement_kind,
+      verbatimText: dto.verbatim_text,
+      documentVersionId: dto.document_version_id,
+      documentSourceUrl: dto.document_source_url,
+      documentPublishedAt: dto.document_published_at ?? null,
+      availableAt: dto.available_at,
+    };
+  }
+
+  async getReviewQueueView(): Promise<ReviewQueueView> {
+    const dto = await this.get<Schemas["ReviewQueueResponse"]>(`/review-queue`);
+    return { items: dto.items.map((i) => this.mapReviewQueueItem(i)) };
+  }
+
+  async submitLinkReview(
+    linkId: string,
+    payload: LinkReviewPayload,
+  ): Promise<void> {
+    await this.post<Schemas["LinkReviewResponse"]>(
+      `/evidence-links/${linkId}/reviews`,
+      payload,
+    );
   }
 }
