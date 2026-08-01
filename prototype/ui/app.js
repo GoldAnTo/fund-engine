@@ -634,7 +634,7 @@
             <ul>
               <li data-plan-item="reuse"><strong>计划内部复用</strong><span>文档、陈述与已复核关系</span></li>
               <li data-plan-item="providers"><strong>提供方查询</strong><span>${view.plan.providerQueries.map((query) => escapeHTML(query)).join("；")}</span></li>
-              <li data-plan-item="evidence"><strong>正面与反面证据搜索</strong><span>正面：${escapeHTML(view.plan.positiveEvidenceSearches.join("、"))}<br>反面：${escapeHTML(view.plan.negativeEvidenceSearches.join("、"))}</span></li>
+              <li data-plan-item="evidence"><strong>正面与反面证据搜索</strong><span>正面：${escapeHTML(view.plan.positiveEvidenceSearches.map((item) => item.label).join("、"))}<br>反面：${escapeHTML(view.plan.negativeEvidenceSearches.map((item) => item.label).join("、"))}</span></li>
               <li data-plan-item="metrics"><strong>结果数据</strong><span>${view.plan.resultData.map((metric) => escapeHTML(metric)).join("；")}</span></li>
               <li data-plan-item="gaps"><strong>当前缺口</strong><span>${escapeHTML(view.plan.gaps.map((gap) => gap.label).join("、"))}</span></li>
             </ul>

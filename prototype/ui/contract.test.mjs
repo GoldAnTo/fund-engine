@@ -1328,20 +1328,25 @@ async function assertGraphProductContract(page, marker) {
     const workbench = element.querySelector(".graph-workbench");
     const nodeSizes = [...element.querySelectorAll(".graph-node[data-graph-node-id]")].map((node) => ({
       fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      childFontSizes: [...node.querySelectorAll(".graph-node-layer, .graph-node-kind, small, em")].map((child) => Number.parseFloat(getComputedStyle(child).fontSize)),
       clipped: node.scrollWidth > node.clientWidth || node.scrollHeight > node.clientHeight,
     }));
+    const inspectorFontSizes = [...inspectorElement.querySelectorAll(".inspector-heading p, .inspector-kind, .inspector-facts dt, .inspector-facts dd, .inspector-source-actions a, .inspector-source-actions span, .inspector-citations h3, .inspector-citations li, .graph-action, .inspector-boundary")]
+      .map((child) => Number.parseFloat(getComputedStyle(child).fontSize));
     return {
       graphVisible: getComputedStyle(graph).display !== "none",
       graphWidth: graph.getBoundingClientRect().width,
       inspectorShare: inspectorElement.getBoundingClientRect().width / workbench.getBoundingClientRect().width,
       inspectorClipped: inspectorElement.scrollHeight > inspectorElement.clientHeight,
+      inspectorFontSizes,
       nodeSizes,
     };
   });
   assert.ok(desktop.graphVisible && desktop.graphWidth >= 780, `desktop graph must remain the readable primary view: ${JSON.stringify(desktop)}`);
   assert.ok(desktop.inspectorShare >= .19 && desktop.inspectorShare <= .21, `fixed inspector must occupy about 20% of the desktop workbench: ${JSON.stringify(desktop)}`);
   assert.equal(desktop.inspectorClipped, false, `fixed inspector must not use internal scrolling: ${JSON.stringify(desktop)}`);
-  assert.ok(desktop.nodeSizes.every((node) => node.fontSize >= 13 && !node.clipped), `graph nodes must be readable and unclipped: ${JSON.stringify(desktop.nodeSizes)}`);
+  assert.ok(desktop.nodeSizes.every((node) => node.fontSize >= 13 && node.childFontSizes.every((size) => size >= 13) && !node.clipped), `graph nodes must be readable and unclipped: ${JSON.stringify(desktop.nodeSizes)}`);
+  assert.ok(desktop.inspectorFontSizes.length > 0 && desktop.inspectorFontSizes.every((size) => size >= 13), `inspector fields and actions must remain readable: ${JSON.stringify(desktop.inspectorFontSizes)}`);
 
   await page.setViewportSize({ width: 1200, height: 1000 });
   assert.notEqual(await marker.locator("[data-graph-canvas]").evaluate((element) => getComputedStyle(element).display), "none", "desktop widths above 900px must always retain the five-layer canvas");

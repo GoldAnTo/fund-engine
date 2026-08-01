@@ -2537,7 +2537,7 @@ a {
   .graph-node-layer,
   .graph-node-kind,
   .graph-node small,
-  .graph-node em { display: block; min-width: 0; font-size: 11px; line-height: 1.15; }
+  .graph-node em { display: block; min-width: 0; font-size: 13px; line-height: 1.08; }
   .graph-node-layer { color: #738078; font-weight: 720; }
   .graph-node strong { overflow-wrap: anywhere; color: #26312a; font-size: 13px; line-height: 1.22; }
   .graph-node small { color: #69736c; overflow-wrap: anywhere; }
@@ -2619,26 +2619,26 @@ a {
     box-sizing: border-box;
   }
   .inspector-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--graph-line); }
-  .inspector-heading p { margin: 0; color: #747b76; font-size: 10px; font-weight: 760; letter-spacing: .06em; }
+  .inspector-heading p { margin: 0; color: #747b76; font-size: 13px; font-weight: 760; letter-spacing: .04em; }
   .inspector-heading h2 { margin: 2px 0 0; font-size: 15px; }
-  .inspector-kind { max-width: 116px; padding: 3px 5px; border: 1px solid #ddc79e; border-radius: 4px; color: #8d622b; font-size: 10px; font-weight: 720; line-height: 1.2; text-align: right; background: #fff8ed; }
+  .inspector-kind { max-width: 124px; padding: 2px 5px; border: 1px solid #ddc79e; border-radius: 4px; color: #8d622b; font-size: 13px; font-weight: 720; line-height: 1.1; text-align: right; background: #fff8ed; }
   .inspector-kind.contradictory { border-color: #dfaaa6; color: var(--graph-contradict); background: var(--graph-contradict-soft); }
   .inspector-title { display: block; margin-top: 9px; font-size: 14px; line-height: 1.3; }
   .inspector-facts { margin: 7px 0 0; }
-  .inspector-facts div { padding: 5px 0; border-top: 1px solid var(--graph-line); }
-  .inspector-facts dt { color: #727a74; font-size: 10px; font-weight: 720; }
-  .inspector-facts dd { overflow-wrap: anywhere; margin: 2px 0 0; color: #333a35; font-size: 11px; line-height: 1.28; }
+  .inspector-facts div { padding: 3px 0; border-top: 1px solid var(--graph-line); }
+  .inspector-facts dt { color: #727a74; font-size: 13px; font-weight: 720; line-height: 1.08; }
+  .inspector-facts dd { overflow-wrap: anywhere; margin: 1px 0 0; color: #333a35; font-size: 13px; line-height: 1.15; }
   .inspector-source-actions dd { display: grid; gap: 2px; }
-  .inspector-source-actions a { color: #2e6e52; font-size: 11px; font-weight: 720; }
-  .inspector-source-actions span { color: #747b76; font-size: 10px; }
-  .inspector-citations { margin-top: 7px; padding: 7px; border: 1px solid var(--graph-line); border-radius: 5px; background: var(--graph-soft); }
-  .inspector-citations h3 { margin: 0; font-size: 11px; }
-  .inspector-citations ul { display: grid; gap: 2px; margin: 4px 0 0; padding-left: 16px; color: #626b64; font-size: 10px; }
+  .inspector-source-actions a { color: #2e6e52; font-size: 13px; font-weight: 720; }
+  .inspector-source-actions span { color: #747b76; font-size: 13px; line-height: 1.08; }
+  .inspector-citations { margin-top: 5px; padding: 5px; border: 1px solid var(--graph-line); border-radius: 5px; background: var(--graph-soft); }
+  .inspector-citations h3 { margin: 0; font-size: 13px; }
+  .inspector-citations ul { display: grid; gap: 1px; margin: 2px 0 0; padding-left: 16px; color: #626b64; font-size: 13px; line-height: 1.1; }
   .inspector-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 8px; }
-  .graph-action { min-height: 34px; border: 1px solid var(--action-surface); border-radius: 5px; color: #fff; font: inherit; font-size: 11px; font-weight: 740; cursor: pointer; background: var(--action-surface); }
+  .graph-action { min-height: 32px; border: 1px solid var(--action-surface); border-radius: 5px; color: #fff; font: inherit; font-size: 13px; font-weight: 740; cursor: pointer; background: var(--action-surface); }
   .graph-action.quiet { border-color: var(--graph-line); color: var(--ink); background: #fff; }
   .inspector-action-note,
-  .inspector-boundary { margin: 6px 0 0; color: #737b75; font-size: 10px; line-height: 1.3; }
+  .inspector-boundary { margin: 4px 0 0; color: #737b75; font-size: 13px; line-height: 1.12; }
 }
 
 @media (min-width: 901px) {
