@@ -19,15 +19,41 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
-from app.models.ledger import AIRun, DocumentVersion, ResearchCase, Thesis
-from app.models.ledger import Base
+from app.models.ledger import (
+    AIRun,
+    Base,
+    DocumentVersion,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
+
+
+def _pending_versions(session: Session) -> list[DocumentVersion]:
+    """Versions that have source spans but no extracted statements yet.
+
+    Pending, not parser-labelled: ingestion may attach any parser_version,
+    and a seeded version that already carries statements must be skipped so
+    repeated runs stay idempotent.
+    """
+    has_span = exists().where(SourceSpan.document_version_id == DocumentVersion.id)
+    has_statement = (
+        select(SourceStatement.id)
+        .join(SourceSpan, SourceStatement.source_span_id == SourceSpan.id)
+        .where(SourceSpan.document_version_id == DocumentVersion.id)
+        .exists()
+    )
+    return list(
+        session.scalars(select(DocumentVersion).where(has_span, ~has_statement))
+    )
 
 
 def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False) -> None:
@@ -41,21 +67,19 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     print(f"AI research engine - mode: {mode}")
     print(f"Case: {case.title} ({case.id})\n")
 
-    # 1. Extract statements from every document version.
+    # 1. Extract statements from every pending document version (has spans,
+    # no statements yet).
     if not skip_extract:
-        versions = list(
-            session.scalars(
-                select(DocumentVersion).where(
-                    DocumentVersion.parser_version == "gildata-mcp-1"
-                )
-            )
-        )
+        versions = _pending_versions(session)
         total_statements = 0
         for version in versions:
             statements = extractor.extract(version.id, session)
             total_statements += len(statements)
         session.commit()
-        print(f"[extract] {total_statements} statements from {len(versions)} documents")
+        print(
+            f"[extract] {total_statements} statements from "
+            f"{len(versions)} pending documents"
+        )
     else:
         print("[extract] skipped (using existing statements)")
 

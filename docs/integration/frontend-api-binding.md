@@ -122,6 +122,21 @@
 **明确不建**（与文档1「别陷数据迷宫」一致）：任务队列、活动流、图表库。
 前端这些块保持 mock 并标注「非目标范围」即可。
 
+---
+
+## 命令端点全景（2026-08-01 补齐抽取/提案后）
+
+「接入 → 抽取 → 提案 → 评估」四步现全部可界面触发：
+
+| 步骤 | 端点 | 说明 |
+|---|---|---|
+| 接入 | （gildata 接入仍为脚本/服务层，未包 API） | 见缺口说明 |
+| 抽取 | `POST /api/v1/documents/{document_version_id}/extract` | 201；append-only，重复调用会重复插 statements；404 版本不存在 |
+| 提案 | `POST /api/v1/theses/{thesis_id}/propose` | 201；产出全部进审核队列（machine_generated），不自动确认；404 thesis 不存在 |
+| 评估 | `POST /api/v1/theses/{thesis_id}/rerun` | 201；冻结新快照 + 追加临时评估 |
+
+引擎脚本 `run_ai_engine` 的抽取过滤已从 parser_version 字面量改为「有 span 且无 statements」的待抽取语义，seed 场景幂等（重复跑不会重复抽取）。
+
 ## 切换顺序建议
 
 1. 先切 6（审核工作区）——写侧闭环，价值最高，且端到端流程测试已锁定契约

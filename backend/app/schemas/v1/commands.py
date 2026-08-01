@@ -181,3 +181,56 @@ class ReviewQueueItemDTO(V1Model):
 
 class ReviewQueueResponse(V1Model):
     items: list[ReviewQueueItemDTO]
+
+
+# ---------------------------------------------------------------------------
+# 抽取 / 提案 (extract / propose — AI engine steps as commands)
+# ---------------------------------------------------------------------------
+
+
+class ExtractStatementDTO(V1Model):
+    """One statement produced by the extraction step."""
+
+    id: str
+    kind: str
+    normalized_text: str
+    observed_period: str | None
+
+
+class ExtractResponse(V1Model):
+    """Result of running statement extraction over one document version.
+
+    Append-only: re-running extraction on a version that already has
+    statements will append duplicates; the engine script only feeds
+    pending versions (spans present, no statements yet).  ``mode`` is
+    ``mock`` without an LLM key (non-production only).
+    """
+
+    document_version_id: str
+    mode: str
+    statement_count: int
+    statements: list[ExtractStatementDTO]
+
+
+class ProposedLinkDTO(V1Model):
+    """One evidence link proposed by the proposer (pending review)."""
+
+    link_id: str
+    source_statement_id: str
+    role: str
+    reason: str
+    scope: dict[str, Any]
+
+
+class ProposeResponse(V1Model):
+    """Result of running evidence proposal for one thesis.
+
+    Every proposed link lands in the review queue as
+    ``machine_generated``; nothing is auto-confirmed.  ``mode`` is
+    ``mock`` without an LLM key (non-production only).
+    """
+
+    thesis_id: str
+    mode: str
+    link_count: int
+    links: list[ProposedLinkDTO]
