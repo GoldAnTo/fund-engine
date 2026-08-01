@@ -1795,6 +1795,7 @@ export function buildDataCenterView(): DataCenterView {
 export function buildVersionsView(): VersionsView {
   return {
     case: { id: CASE_ID, title: CASE_TITLE },
+    focusThesisId: "TH-AIC-01",
     beforeSnapshot: { id: "RS-2025-03-31-v2", cutoff: "2025-03-31", freezeTime: "2025-04-01 09:12" },
     afterSnapshot: { id: SNAPSHOT_ID, cutoff: CUTOFF, freezeTime: "2025-06-30 23:59" },
     before: {

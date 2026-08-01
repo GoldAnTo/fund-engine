@@ -184,3 +184,14 @@ def test_metric_series_and_404(api_client, seeded_session):
         },
     )
     assert missing.status_code == 404
+
+
+def test_compare_accepts_naive_compare_cutoff(api_client, seeded_session):
+    """Snapshot cutoffs serialize naive; echoing one back must not 500."""
+    case_id = _seeded_case_id(seeded_session)
+    response = api_client.get(
+        f"/api/v1/research-cases/{case_id}/compare",
+        params={"base": "1970-01-01T00:00:00Z", "compare": "2026-12-31T00:00:00"},
+    )
+    assert response.status_code == 200, response.text
+    assert len(response.json()["theses"]) == 3

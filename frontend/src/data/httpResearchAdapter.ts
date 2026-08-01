@@ -30,6 +30,8 @@ import type {
   ReviewQueueViewItem,
   ThemeIndexView,
   ThemeWorkbenchView,
+  ThesisRerunResult,
+  VersionsView,
   WorkspaceOverviewScreen,
 } from "../domain/prototypeTypes";
 
@@ -718,8 +720,142 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await import("./prototypeFixture")).buildDataCenterView();
   }
 
-  async getVersionsView() {
-    return (await import("./prototypeFixture")).buildVersionsView();
+  async getVersionsView(): Promise<VersionsView> {
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const firstCase = cases.items[0];
+    if (!firstCase) {
+      throw new PageStateError("parse_failed", "no research case exists yet");
+    }
+    const snapshotsDto = await this.get<Schemas["CaseSnapshotsResponse"]>(
+      `/research-cases/${firstCase.id}/snapshots`,
+    );
+    // Latest two distinct cutoffs define base/compare; with fewer than two
+    // the compare degenerates to "from the beginning" (epoch -> latest),
+    // showing every visible link as newly added.
+    const cutoffs = [
+      ...new Set(snapshotsDto.snapshots.map((s) => s.cutoff)),
+    ].sort();
+    const compareCutoff = cutoffs[cutoffs.length - 1] ?? new Date().toISOString();
+    const baseCutoff =
+      cutoffs.length > 1
+        ? cutoffs[cutoffs.length - 2]
+        : "1970-01-01T00:00:00Z";
+
+    const compare = await this.get<Schemas["CaseCompareResponse"]>(
+      `/research-cases/${firstCase.id}/compare${this.buildQuery({
+        base: baseCutoff,
+        compare: compareCutoff,
+      })}`,
+    );
+    const runs = await this.get<Schemas["ProviderRunsResponse"]>(
+      `/provider-runs${this.buildQuery({ kind: "assess", limit: "1" })}`,
+    );
+
+    const thesis = compare.theses[0];
+    const lastAssessRun = runs.runs[0];
+    const conclusionLabel = (c: string | null) =>
+      c === "supported"
+        ? "支持（成立）"
+        : c === "contradicted"
+          ? "被反驳"
+          : c === "insufficient_evidence"
+            ? "证据不足 · 继续验证"
+            : "开放判断";
+    const linkRow = (l: Schemas["CompareLinkDTO"], idx: number) => ({
+      id: l.link_id ?? `link-${idx}`,
+      label: l.statement_text ?? l.reason,
+      role: l.role,
+      reviewState: l.review_state,
+    });
+
+    const snapshotMeta = (cutoff: string) => {
+      const s = snapshotsDto.snapshots.find((x) => x.cutoff === cutoff);
+      return {
+        id: s ? s.snapshot_id.slice(0, 8) : cutoff.slice(0, 10),
+        cutoff: cutoff.slice(0, 10),
+        freezeTime: s ? s.created_at : "",
+      };
+    };
+
+    const addedLinks = thesis?.added_links ?? [];
+    const removedLinks = thesis?.removed_links ?? [];
+    return {
+      case: { id: firstCase.id, title: firstCase.title },
+      focusThesisId: thesis?.thesis_id ?? "",
+      beforeSnapshot: snapshotMeta(baseCutoff),
+      afterSnapshot: snapshotMeta(compareCutoff),
+      before: {
+        formalConclusion: {
+          state: conclusionLabel(thesis?.conclusion_before ?? null),
+          text: thesis?.statement ?? "",
+        },
+        inputs: [],
+        relationships: removedLinks.map(linkRow),
+        factors: [],
+        gaps: (thesis?.gaps_before ?? []).map((g, i) => ({
+          id: `gap-b-${i}`,
+          label: g,
+          state: "未解决",
+        })),
+      },
+      after: {
+        formalConclusion: {
+          state: conclusionLabel(thesis?.conclusion_after ?? null),
+          text: thesis?.statement ?? "",
+        },
+        inputs: compare.documents_added.map((d) => ({
+          id: d.document_version_id,
+          kind: "DocumentVersion",
+          label: d.source_url,
+          version: d.published_at ?? "",
+        })),
+        relationships: addedLinks.map(linkRow),
+        factors: [],
+        gaps: (thesis?.gaps_after ?? []).map((g, i) => ({
+          id: `gap-a-${i}`,
+          label: g,
+          state: "未解决",
+        })),
+      },
+      changeRail: {
+        inputSummary: `新增 ${compare.documents_added.length} 个文档版本`,
+        relationshipSummary: `新增 ${addedLinks.length} 条关系 · 移除 ${removedLinks.length} 条`,
+        factorSummary: "因素角色暂无变化记录",
+        conclusionSummary: thesis?.conclusion_changed
+          ? `结论变化：${conclusionLabel(thesis.conclusion_before)} → ${conclusionLabel(thesis.conclusion_after)}`
+          : "结论未变化",
+        gapSummary: `缺口 ${thesis?.gaps_before.length ?? 0} → ${thesis?.gaps_after.length ?? 0}`,
+        rationale: "",
+        reviewedBy: "",
+        reviewedAt: "",
+      },
+      aiProposal: {
+        runId: lastAssessRun ? lastAssessRun.id.slice(0, 8) : "—",
+        observedAt: lastAssessRun?.started_at ?? "",
+        label: "AI RERUN",
+        text: lastAssessRun
+          ? lastAssessRun.output_summary
+          : "（暂无 AI 评估运行记录）",
+        boundary: "AI 生成 · 未经人工复核",
+      },
+    };
+  }
+
+  async rerunThesis(thesisId: string): Promise<ThesisRerunResult> {
+    const dto = await this.post<Schemas["RerunResponse"]>(
+      `/theses/${thesisId}/rerun`,
+      {},
+    );
+    return {
+      thesisId: dto.thesis_id,
+      mode: dto.mode,
+      assessmentId: dto.assessment.id,
+      snapshotId: dto.assessment.snapshot_id,
+      conclusion: dto.assessment.conclusion,
+      rationale: dto.assessment.rationale,
+      gaps: dto.assessment.gaps,
+      createdAt: dto.assessment.created_at,
+    };
   }
 
   // ── Review queue (screen 6 · live) ─────────────────────────────────────

@@ -638,6 +638,7 @@ export interface VersionChangeRail {
 
 export interface VersionsView {
   case: { id: string; title: string };
+  focusThesisId: string;
   beforeSnapshot: { id: string; cutoff: string; freezeTime: string };
   afterSnapshot: { id: string; cutoff: string; freezeTime: string };
   before: VersionColumnContent;
@@ -777,7 +778,10 @@ export interface PrototypeClient {
   getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
 }
 
-export type ResearchClient = BaseResearchClient & PrototypeClient & ReviewQueueClient;
+export type ResearchClient = BaseResearchClient &
+  PrototypeClient &
+  ReviewQueueClient &
+  VersionsClient;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 
 /** One pending link-level review, mapped from ReviewQueueItemDTO. */
@@ -817,4 +821,22 @@ export interface LinkReviewPayload {
 export interface ReviewQueueClient {
   getReviewQueueView(): Promise<ReviewQueueView>;
   submitLinkReview(linkId: string, payload: LinkReviewPayload): Promise<void>;
+}
+
+// ── Versions (screen 9 · live API slice) ─────────────────────────────────
+
+/** Result of POST /theses/{id}/rerun (AI RERUN 监测与更新). */
+export interface ThesisRerunResult {
+  thesisId: string;
+  mode: string;
+  assessmentId: string;
+  snapshotId: string;
+  conclusion: string;
+  rationale: string;
+  gaps: string[];
+  createdAt: string;
+}
+
+export interface VersionsClient {
+  rerunThesis(thesisId: string): Promise<ThesisRerunResult>;
 }

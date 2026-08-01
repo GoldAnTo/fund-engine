@@ -37,6 +37,7 @@ import type {
   ReviewQueueView,
   ReviewQueueViewItem,
   ThemeIndexView,
+  ThesisRerunResult,
   ThemeWorkbenchView,
   VersionsView,
   WorkspaceOverviewScreen,
@@ -1416,6 +1417,20 @@ export class MockResearchAdapter implements ResearchClient {
     this.throwIfPermissionDenied();
     this.linkReviews.push({ linkId, payload });
     return simulateLatency(undefined);
+  }
+
+  async rerunThesis(thesisId: string): Promise<ThesisRerunResult> {
+    this.throwIfOffline();
+    return simulateLatency({
+      thesisId,
+      mode: "mock",
+      assessmentId: "ASSESS-MOCK-RERUN",
+      snapshotId: "RS-MOCK-RERUN",
+      conclusion: "insufficient_evidence",
+      rationale: "mock rerun：结论与证据集合无漂移。",
+      gaps: ["需要补充直接传导证据"],
+      createdAt: new Date().toISOString(),
+    });
   }
 }
 

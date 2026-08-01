@@ -50,6 +50,7 @@ export const researchClient: ResearchClient = {
   getReviewQueueView: () => _client.getReviewQueueView(),
   submitLinkReview: (linkId, payload) =>
     _client.submitLinkReview(linkId, payload),
+  rerunThesis: (thesisId) => _client.rerunThesis(thesisId),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

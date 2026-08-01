@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { researchClient } from "../../data/researchClient";
 import type { VersionColumnContent, VersionsView } from "../../domain/prototypeTypes";
 
@@ -67,16 +67,18 @@ function renderColumn(label: string, content: VersionColumnContent, accent: stri
 export function VersionsScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<VersionsView | null>(null);
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunNotice, setRerunNotice] = useState<string | null>(null);
+
+  const loadView = useCallback(() => {
+    return researchClient.getVersionsView().then((v) => setView(v));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    researchClient
-      .getVersionsView()
-      .then((v) => {
-        if (!cancelled) {
-          setView(v);
-          setState({ kind: "ready" });
-        }
+    loadView()
+      .then(() => {
+        if (!cancelled) setState({ kind: "ready" });
       })
       .catch((err: Error) => {
         if (!cancelled) setState({ kind: "error", message: err.message });
@@ -84,7 +86,26 @@ export function VersionsScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadView]);
+
+  const runRerun = () => {
+    if (!view?.focusThesisId || rerunning) return;
+    setRerunning(true);
+    setRerunNotice(null);
+    researchClient
+      .rerunThesis(view.focusThesisId)
+      .then((result) => {
+        setRerunNotice(
+          `已冻结新快照 ${result.snapshotId.slice(0, 8)}，结论：${result.conclusion}（临时评估，未经人工复核）`,
+        );
+        return loadView();
+      })
+      .catch((err: Error) => {
+        // 422 = 合规拒绝：AI 文本被拦截，这是状态而不是故障。
+        setRerunNotice(`AI RERUN 未完成：${err.message || "未知错误"}`);
+      })
+      .finally(() => setRerunning(false));
+  };
 
   if (state.kind === "loading") {
     return (
@@ -178,6 +199,20 @@ export function VersionsScreen() {
               <p style={{ fontSize: 11, color: "var(--ink-muted)" }}>
                 边界：{view.aiProposal.boundary}
               </p>
+              <button
+                type="button"
+                className="prototype-button primary"
+                disabled={rerunning || !view.focusThesisId}
+                onClick={runRerun}
+                data-testid="ai-rerun-button"
+              >
+                {rerunning ? "RERUN 执行中…" : "AI RERUN（冻结新快照）"}
+              </button>
+              {rerunNotice ? (
+                <p style={{ fontSize: 11, marginTop: 6 }} role="status">
+                  {rerunNotice}
+                </p>
+              ) : null}
             </div>
           </aside>
           {renderColumn(
