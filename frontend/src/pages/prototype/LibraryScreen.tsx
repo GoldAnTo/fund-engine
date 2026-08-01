@@ -116,7 +116,7 @@ export function LibraryScreen() {
             <span className="state-badge reviewed">DocumentVersion · SourceSpan</span>
           </div>
           <div className="prototype-library-source-list">
-            {(["业绩说明会", "监管披露", "月度经营数据"] as const).map((group) => {
+            {[...new Set(view.documents.map((d) => d.documentType))].map((group) => {
               const docs = view.documents.filter((d) => d.documentType === group);
               if (docs.length === 0) return null;
               return (
@@ -184,15 +184,7 @@ export function LibraryScreen() {
               {selected.sourceName} · <code>{selected.sourceVersion}</code>
               （前序版本：<code>{selected.previousVersion}</code>）
             </p>
-            <blockquote
-              style={{
-                fontFamily: "Georgia, 'Songti SC', serif",
-                fontSize: 13,
-                borderLeft: "2px solid var(--reviewed)",
-                padding: "6px 12px",
-                background: "var(--paper-soft)",
-              }}
-            >
+            <blockquote>
               "{selected.sourceExcerpt}"
             </blockquote>
             <p style={{ fontSize: 11, color: "var(--ink-muted)" }}>

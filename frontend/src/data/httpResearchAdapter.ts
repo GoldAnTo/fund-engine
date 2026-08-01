@@ -38,6 +38,7 @@ import type {
   DataSeriesPoint,
   GraphLayer,
   GraphNodeView,
+  LibraryView,
   LinkReviewPayload,
   NewResearchView,
   PlanAsset,
@@ -1586,8 +1587,123 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async getLibraryView() {
-    return (await import("./prototypeFixture")).buildLibraryView();
+  async getLibraryView(): Promise<LibraryView> {
+    const documents = await this.get<Schemas["DocumentListResponse"]>(
+      `/documents`,
+    );
+    if (documents.items.length === 0) {
+      throw new PageStateError("parse_failed", "no documents exist yet");
+    }
+    const [detail, knowledge, queue] = await Promise.all([
+      this.get<Schemas["DocumentDetailResponse"]>(
+        `/documents/${documents.items[0].id}`,
+      ),
+      this.get<Schemas["KnowledgeResponse"]>(
+        `/knowledge${this.buildQuery({ review_state: "reviewed", limit: "1" })}`,
+      ),
+      this.get<Schemas["ReviewQueueResponse"]>(
+        `/review-queue${this.buildQuery({ limit: "1" })}`,
+      ),
+    ]);
+    // Thesis titles are not part of the knowledge payload; resolve them from
+    // the first case's dossier when available (best effort).
+    const thesisTitles = new Map<string, string>();
+    try {
+      const cases = await this.get<Schemas["CaseListResponse"]>(
+        `/research-cases`,
+      );
+      const first = cases.items[0];
+      if (first) {
+        const dossier = await this.get<Schemas["DossierResponse"]>(
+          `/research-cases/${first.id}/dossier`,
+        );
+        for (const t of dossier.theses) {
+          thesisTitles.set(t.id, t.title ?? t.statement);
+        }
+      }
+    } catch {
+      // Title lookup is best-effort; fall back to "—".
+    }
+
+    const dateLabel = (v: string | null) => (v ? v.slice(0, 10) : "—");
+    const toDocument = (
+      d: Schemas["DocumentSummaryDTO"],
+    ): LibraryView["documents"][number] => ({
+      id: d.id,
+      title: d.source_url,
+      sourceName: d.source_url,
+      sourceVersion: d.parser_version,
+      // Documents carry no type/entity metadata in v1; render honestly.
+      documentType: "未分类",
+      entity: "—",
+      reuseCount: d.statement_count,
+      reviewState: d.parse_state === "parsed" ? "reviewed" : "pending_review",
+      publishedLabel: dateLabel(d.published_at),
+      availableLabel: dateLabel(d.available_at),
+      acquiredLabel: dateLabel(d.acquired_at),
+      previousVersion: d.supersedes_id ?? "—",
+      linkedCaseIds: [],
+      reuseHistory: [],
+      sourceExcerpt: "",
+      exactSpan: "",
+    });
+    const docs = documents.items.map(toDocument);
+
+    const firstSpan = detail.spans[0];
+    const selected: LibraryView["selected"] = {
+      ...docs[0],
+      sourceExcerpt: firstSpan?.verbatim_text ?? "（暂无原文区段）",
+      exactSpan: firstSpan ? JSON.stringify(firstSpan.locator) : "—",
+    };
+
+    const ROLE_LABEL: Record<string, string> = {
+      supports: "支持",
+      contradicts: "反驳",
+      contextualizes: "佐证",
+    };
+    const knowledgeItem = knowledge.items[0];
+    const knowledgeLink = knowledgeItem?.links[0];
+    const queueItem = queue.items[0];
+
+    return {
+      cutoff: documents.basis.cutoff,
+      snapshotId: "—",
+      documents: docs,
+      selected,
+      knowledge:
+        knowledgeItem && knowledgeLink
+          ? {
+              statement: {
+                id: knowledgeItem.statement_id,
+                text: knowledgeItem.statement_text,
+              },
+              link: {
+                id: knowledgeLink.link_id,
+                role: knowledgeLink.role,
+                reviewedBy: knowledgeLink.latest_reviewer ?? undefined,
+                reviewedAt: knowledgeLink.latest_reviewed_at ?? undefined,
+              },
+              roleLabel: ROLE_LABEL[knowledgeLink.role] ?? knowledgeLink.role,
+              thesis: {
+                id: knowledgeLink.thesis_id,
+                title: thesisTitles.get(knowledgeLink.thesis_id) ?? "—",
+              },
+              factor: null,
+              reviewedBy: knowledgeLink.latest_reviewer ?? "—",
+              reviewedAt: knowledgeLink.latest_reviewed_at?.slice(0, 10) ?? "—",
+            }
+          : null,
+      proposal: queueItem
+        ? {
+            statement: {
+              id: queueItem.statement_id,
+              text: queueItem.statement_text,
+            },
+            link: { id: queueItem.link_id, role: queueItem.ai_role },
+            roleLabel: `AI 提议 · ${ROLE_LABEL[queueItem.ai_role] ?? queueItem.ai_role}`,
+          }
+        : null,
+    };
   }
 
   async getDataCenterView(): Promise<DataCenterView> {
