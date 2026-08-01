@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
-import type { Conclusion, ResearchClient, ReviewOutcome } from "../domain/types";
+import type { Conclusion, ReviewOutcome } from "../domain/types";
+import type { ResearchClient } from "../domain/prototypeTypes";
 import { MockResearchAdapter } from "./mockResearchAdapter";
 import { HttpResearchAdapter } from "./httpResearchAdapter";
 
@@ -34,6 +35,15 @@ export const researchClient: ResearchClient = {
   getCaseSummaries: () => _client.getCaseSummaries(),
   submitReviewDecision: (itemId, decision) =>
     _client.submitReviewDecision(itemId, decision),
+  getWorkspaceOverviewView: () => _client.getWorkspaceOverviewView(),
+  getWorkspaceOverviewScreen: () => _client.getWorkspaceOverviewScreen(),
+  getNewResearchView: () => _client.getNewResearchView(),
+  getResearchPlanView: () => _client.getResearchPlanView(),
+  getCaseWorkbenchView: (id) => _client.getCaseWorkbenchView(id),
+  getRelationshipGraphView: (id) => _client.getRelationshipGraphView(id),
+  getLibraryView: () => _client.getLibraryView(),
+  getDataCenterView: () => _client.getDataCenterView(),
+  getVersionsView: () => _client.getVersionsView(),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

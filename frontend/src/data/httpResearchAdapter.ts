@@ -14,7 +14,6 @@ import type {
   RelationshipQuery,
   ResearchCaseDossier,
   ResearchCaseSummary,
-  ResearchClient,
   ReviewDecisionView,
   ReviewOutcome,
   SearchHit,
@@ -24,6 +23,8 @@ import type {
   WorkspaceOverview,
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
+import type { ResearchClient } from "../domain/prototypeTypes";
+import type { WorkspaceOverviewScreen } from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
 
@@ -636,5 +637,46 @@ export class HttpResearchAdapter implements ResearchClient {
       "backend_unavailable",
       "review API is not available in live-read delivery",
     );
+  }
+
+  // ── Prototype screens (live backend does not yet expose these endpoints,
+  //    so they fall back to the same frozen fixture as the mock adapter. The
+  //    frontend only depends on the prototype view-model shape; switching
+  //    to a live endpoint is a one-line change once the backend ships it.)
+
+  async getWorkspaceOverviewView() {
+    return (await import("./prototypeFixture")).buildWorkspaceOverview();
+  }
+
+  async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
+    return (await import("./prototypeFixture")).buildWorkspaceOverviewScreen();
+  }
+
+  async getNewResearchView() {
+    return (await import("./prototypeFixture")).buildNewResearchView();
+  }
+
+  async getResearchPlanView() {
+    return (await import("./prototypeFixture")).buildResearchPlanView();
+  }
+
+  async getCaseWorkbenchView(_caseId: string) {
+    return (await import("./prototypeFixture")).buildCaseWorkbenchView();
+  }
+
+  async getRelationshipGraphView(_caseId: string) {
+    return (await import("./prototypeFixture")).buildRelationshipGraphView();
+  }
+
+  async getLibraryView() {
+    return (await import("./prototypeFixture")).buildLibraryView();
+  }
+
+  async getDataCenterView() {
+    return (await import("./prototypeFixture")).buildDataCenterView();
+  }
+
+  async getVersionsView() {
+    return (await import("./prototypeFixture")).buildVersionsView();
   }
 }

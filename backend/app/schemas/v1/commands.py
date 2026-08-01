@@ -124,6 +124,35 @@ class AssessmentReviewResponse(V1Model):
 
 
 # ---------------------------------------------------------------------------
+# 监测与更新 (AI rerun command, prototype 版本比较 · AI RERUN)
+# ---------------------------------------------------------------------------
+
+
+class RerunAssessmentDTO(V1Model):
+    id: str
+    snapshot_id: str
+    conclusion: str
+    rationale: str
+    gaps: list[str]
+    displayed_as_provisional: bool
+    created_at: str
+
+
+class RerunResponse(V1Model):
+    """Result of re-running the assess step for one thesis.
+
+    A rerun freezes a NEW snapshot and appends a NEW provisional assessment;
+    prior snapshots/assessments are never touched, and the difference shows
+    up in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key
+    (non-production only — production fails closed per provider discipline).
+    """
+
+    thesis_id: str
+    mode: str
+    assessment: RerunAssessmentDTO
+
+
+# ---------------------------------------------------------------------------
 # 审核队列 (review queue read model, consumed by the commands router)
 # ---------------------------------------------------------------------------
 

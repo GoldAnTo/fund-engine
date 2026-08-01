@@ -2,35 +2,67 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import {
   BrowserRouter,
-  Navigate,
   Route,
   Routes,
 } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
-import { WorkspaceOverviewPage } from "./pages/WorkspaceOverviewPage";
+import { PrototypeShell } from "./components/PrototypeShell";
 import { ResearchCaseDossierPage } from "./pages/ResearchCaseDossierPage";
 import { RelationshipCanvasPage } from "./pages/RelationshipCanvasPage";
 import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
 import { ReviewWorkbenchPage } from "./pages/ReviewWorkbenchPage";
 import { ResearchWorkbenchPage } from "./pages/ResearchWorkbenchPage";
 import { NotImplementedPage } from "./pages/NotImplementedPage";
+import { OverviewScreen } from "./pages/prototype/OverviewScreen";
+import { NewResearchScreen } from "./pages/prototype/NewResearchScreen";
+import { ResearchPlanScreen } from "./pages/prototype/ResearchPlanScreen";
+import { CaseWorkbenchScreen } from "./pages/prototype/CaseWorkbenchScreen";
+import { RelationshipCanvasScreen } from "./pages/prototype/RelationshipCanvasScreen";
+import { ReviewWorkbenchScreen } from "./pages/prototype/ReviewWorkbenchScreen";
+import { LibraryScreen } from "./pages/prototype/LibraryScreen";
+import { DataCenterScreen } from "./pages/prototype/DataCenterScreen";
+import { VersionsScreen } from "./pages/prototype/VersionsScreen";
 import "./styles.css";
+import "./styles-prototype.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route element={<AppShell />}>
-          <Route index element={<WorkspaceOverviewPage />} />
-          <Route path="cases" element={<ResearchCaseDossierPage />} />
-          <Route path="cases/:caseId" element={<ResearchCaseDossierPage />} />
-          <Route path="relationships" element={<RelationshipCanvasPage />} />
+        {/* Prototype shell is the default: 9 prototype-aligned screens own the canonical URLs. */}
+        <Route element={<PrototypeShell />}>
+          <Route index element={<OverviewScreen />} />
+          <Route path="workspace" element={<OverviewScreen />} />
+          <Route path="new-research" element={<NewResearchScreen />} />
+          <Route path="plan" element={<ResearchPlanScreen />} />
+          <Route path="cases" element={<CaseWorkbenchScreen />} />
+          <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
+          <Route
+            path="relationships"
+            element={<RelationshipCanvasScreen />}
+          />
           <Route
             path="relationships/:caseId"
-            element={<RelationshipCanvasPage />}
+            element={<RelationshipCanvasScreen />}
           />
-          <Route path="documents" element={<DocumentLibraryPage />} />
-          <Route path="review" element={<ReviewWorkbenchPage />} />
+          <Route path="review" element={<ReviewWorkbenchScreen />} />
+          <Route path="library" element={<LibraryScreen />} />
+          <Route path="data" element={<DataCenterScreen />} />
+          <Route path="versions" element={<VersionsScreen />} />
+        </Route>
+
+        {/* Legacy app shell — keeps old entry points working for transitional traffic. */}
+        <Route element={<AppShell />}>
+          <Route
+            path="legacy/dossier/:caseId"
+            element={<LegacyDossierRoute />}
+          />
+          <Route
+            path="legacy/graph/:caseId"
+            element={<LegacyGraphRoute />}
+          />
+          <Route path="legacy/documents" element={<DocumentLibraryPage />} />
+          <Route path="legacy/review" element={<ReviewWorkbenchPage />} />
           <Route
             path="companies"
             element={
@@ -59,15 +91,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             }
           />
           <Route
-            path="data"
-            element={
-              <NotImplementedPage
-                title="数据中心"
-                hint="聚合数据指标库正在搭建。"
-              />
-            }
-          />
-          <Route
             path="monitor"
             element={
               <NotImplementedPage
@@ -80,15 +103,24 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             path="workbench/:caseId"
             element={<LegacyWorkbenchRoute />}
           />
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
-  </React.StrictMode>
+  </React.StrictMode>,
 );
 
 // Legacy workbench keeps working inside the new shell for transitional traffic.
 function LegacyWorkbenchRoute() {
   const params = new URLSearchParams(window.location.search);
   return <ResearchWorkbenchPage caseId={params.get("case") ?? "ai-compute"} />;
+}
+
+// Old research-case dossier lives behind /legacy/dossier/:caseId.
+function LegacyDossierRoute() {
+  return <ResearchCaseDossierPage />;
+}
+
+// Old relationship canvas lives behind /legacy/graph/:caseId.
+function LegacyGraphRoute() {
+  return <RelationshipCanvasPage />;
 }

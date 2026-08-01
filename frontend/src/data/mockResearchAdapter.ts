@@ -10,7 +10,6 @@ import type {
   ResearchCaseDossier,
   ResearchCaseSummary,
   RelationshipGraph,
-  ResearchClient,
   DocumentsQuery,
   DossierQuery,
   OverviewQuery,
@@ -26,6 +25,29 @@ import type {
   WorkspaceOverview,
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
+import type {
+  CaseWorkbenchView,
+  DataCenterView,
+  LibraryView,
+  NewResearchView,
+  RelationshipGraphView,
+  ResearchClient,
+  ResearchPlanView,
+  VersionsView,
+  WorkspaceOverviewScreen,
+  WorkspaceOverviewView,
+} from "../domain/prototypeTypes";
+import {
+  buildCaseWorkbenchView,
+  buildDataCenterView,
+  buildLibraryView,
+  buildNewResearchView,
+  buildRelationshipGraphView,
+  buildResearchPlanView,
+  buildVersionsView,
+  buildWorkspaceOverview,
+  buildWorkspaceOverviewScreen,
+} from "./prototypeFixture";
 
 // ── Stable mock data ───────────────────────────────────────────────────────
 //
@@ -1283,6 +1305,48 @@ export class MockResearchAdapter implements ResearchClient {
     this.decisions.push({ itemId, outcome: decision.outcome, reason: decision.reason });
     this.queue = this.queue.filter((q) => q.id !== itemId);
     return simulateLatency(undefined);
+  }
+
+  // ── Prototype screens ───────────────────────────────────────────────────
+  // Each method returns the deterministic fixture that mirrors the
+  // prototype/ui/data.js fixture. They are read-only and not affected by
+  // scenario mutation; the prototype screens are intentionally always
+  // available because the fixture is frozen at snapshot RS-2025-06-30-v3.
+
+  async getWorkspaceOverviewView(): Promise<WorkspaceOverviewView> {
+    return simulateLatency(buildWorkspaceOverview());
+  }
+
+  async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
+    return simulateLatency(buildWorkspaceOverviewScreen());
+  }
+
+  async getNewResearchView(): Promise<NewResearchView> {
+    return simulateLatency(buildNewResearchView());
+  }
+
+  async getResearchPlanView(): Promise<ResearchPlanView> {
+    return simulateLatency(buildResearchPlanView());
+  }
+
+  async getCaseWorkbenchView(_caseId: string): Promise<CaseWorkbenchView> {
+    return simulateLatency(buildCaseWorkbenchView());
+  }
+
+  async getRelationshipGraphView(_caseId: string): Promise<RelationshipGraphView> {
+    return simulateLatency(buildRelationshipGraphView());
+  }
+
+  async getLibraryView(): Promise<LibraryView> {
+    return simulateLatency(buildLibraryView());
+  }
+
+  async getDataCenterView(): Promise<DataCenterView> {
+    return simulateLatency(buildDataCenterView());
+  }
+
+  async getVersionsView(): Promise<VersionsView> {
+    return simulateLatency(buildVersionsView());
   }
 }
 

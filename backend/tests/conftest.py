@@ -611,3 +611,54 @@ def release_gate(seeded_session):
 def seeded_database(seeded_session):
     """A seeded-session wrapper for destructive data-mutation tests."""
     return _SeededDatabase(seeded_session)
+
+
+# ---------------------------------------------------------------------------
+# Private-engine fixtures for command (write) endpoint tests.  Command
+# endpoints COMMIT, so they must never share the session-scoped engine —
+# committed rows would leak into other tests (e.g. the release gate's
+# manifest-hash check counts seeded DocumentVersions exactly).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cmd_session():
+    from app.models.ledger import Base
+
+    eng = create_engine(
+        "sqlite://",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(eng)
+    db = sessionmaker(bind=eng, future=True)()
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(eng)
+
+
+@pytest.fixture
+def cmd_client(cmd_session):
+    from app.db import get_db
+    from app.main import app
+
+    def _override_get_db():
+        yield cmd_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def cmd_seeded(cmd_session):
+    from app.scripts.seed_ai_compute_case import seed
+
+    seed(cmd_session)
+    cmd_session.commit()
+    return cmd_session

@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.queries.basis import HistoricalBasis
 from app.queries.cases import CaseReadQueries
+from app.queries.gaps import CaseGapQueries
 from app.schemas.v1.cases import CaseListResponse, DossierResponse
+from app.schemas.v1.gaps import CaseGapsResponse
 
 router = APIRouter(prefix="/research-cases", tags=["research-cases-v1"])
 
@@ -39,3 +41,13 @@ def dossier(
         basis=HistoricalBasis.from_cutoff(cutoff),
         research_mode=research_mode,
     )
+
+
+@router.get("/{case_id}/gaps", response_model=CaseGapsResponse)
+def gaps(
+    case_id: uuid.UUID,
+    cutoff: datetime | None = None,
+    db: Session = Depends(get_db),
+):
+    """证据缺口聚合 (prototype 研究计划): open gaps across latest assessments."""
+    return CaseGapQueries(db).list_gaps(case_id=case_id, cutoff=cutoff)

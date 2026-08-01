@@ -1,0 +1,378 @@
+import { useEffect, useState } from "react";
+import { researchClient } from "../../data/researchClient";
+import type { ResearchPlanView } from "../../domain/prototypeTypes";
+
+interface PageState {
+  kind: "loading" | "error" | "ready";
+  message?: string;
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  document: "冻结文档",
+  statement: "来源陈述",
+  metric: "结果数据",
+  evidence_link: "已审核关系",
+};
+
+export function ResearchPlanScreen() {
+  const [state, setState] = useState<PageState>({ kind: "loading" });
+  const [view, setView] = useState<ResearchPlanView | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    researchClient
+      .getResearchPlanView()
+      .then((v) => {
+        if (!cancelled) {
+          setView(v);
+          setState({ kind: "ready" });
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setState({ kind: "error", message: err.message });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (state.kind === "loading") {
+    return (
+      <div className="prototype-screen" data-testid="plan-loading">
+        <p>正在加载研究计划…</p>
+      </div>
+    );
+  }
+  if (state.kind === "error" || !view) {
+    return (
+      <div className="prototype-screen" data-testid="plan-error">
+        <div className="form-error">
+          研究计划加载失败：{state.message ?? "未知错误"}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="prototype-screen" data-testid="plan-screen">
+      <header className="plan-header">
+        <div>
+          <div className="eyebrow">研究计划与证据获取</div>
+          <h1>{view.case.id}</h1>
+          <p className="lede">
+            同一案例内复用、扩展、获取、审核与接口；
+            所有操作仅改变本页类型所反映的状态。
+          </p>
+        </div>
+        <button type="button" className="prototype-button primary">
+          ⌬ 计划草案
+          <small>导入上文</small>
+        </button>
+      </header>
+
+      <section className="plan-meta-grid" aria-label="计划元数据">
+        <MetaCell label="ResearchCase" value={view.case.id} mono />
+        <MetaCell label="研究期间" value={view.case.researchPeriod} />
+        <MetaCell label="证据截止" value={view.case.cutoff} />
+        <MetaCell label="计划修订" value={view.case.revision} mono />
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">现有资料</p>
+            <h2>已纳入 {view.existingAssets.length} 项</h2>
+          </div>
+          <span className="state-badge reviewed">
+            按类型排序 · 每页 {view.assetPageSize}
+          </span>
+        </div>
+        <div className="prototype-plan-asset-list">
+          {view.orderedAssets.map((asset) => (
+            <article
+              key={asset.id}
+              className="prototype-plan-asset"
+              style={{
+                borderColor: asset.selected ? "var(--selected-border)" : undefined,
+                background: asset.selected ? "var(--selected-surface)" : undefined,
+              }}
+            >
+              <div>
+                <strong>{asset.label}</strong>
+                <br />
+                <small>
+                  {asset.sourceVersion} · {asset.sourceSpan}
+                </small>
+                <br />
+                <small>
+                  {asset.kind === "metric"
+                    ? `${asset.metricName ?? ""} · ${asset.metricValue ?? ""} · ${asset.metricPeriod ?? ""}`
+                    : ""}
+                </small>
+              </div>
+              <span
+                className="type-label"
+                style={{
+                  color:
+                    asset.reviewState === "reviewed"
+                      ? "var(--support)"
+                      : "var(--warning)",
+                }}
+              >
+                {TYPE_LABEL[asset.kind]} · {asset.reviewState === "reviewed" ? "已审核" : "待审核"} · ×{asset.reviewCount}
+              </span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">研究能力探测</p>
+            <h2>{view.providerQueries.length} 项待执行查询</h2>
+          </div>
+          <span className="state-badge ai">能力探测阶段</span>
+        </div>
+        <div className="prototype-plan-regions">
+          {view.providerQueries.map((q) => (
+            <article key={q.id} className="prototype-plan-region">
+              <span className="section-kicker">{q.provider}</span>
+              <h3>{q.capability}</h3>
+              <p style={{ fontSize: 12, marginTop: 6 }}>{q.purpose}</p>
+              <dl style={{ display: "grid", gap: 4, margin: 0, fontSize: 11 }}>
+                <div>
+                  <dt style={{ color: "var(--ink-muted)" }}>日期范围</dt>
+                  <dd style={{ margin: 0 }}>
+                    {q.dateScope.start} 至 {q.dateScope.end}
+                  </dd>
+                </div>
+                <div>
+                  <dt style={{ color: "var(--ink-muted)" }}>截止</dt>
+                  <dd style={{ margin: 0 }}>{q.cutoff}</dd>
+                </div>
+                <div>
+                  <dt style={{ color: "var(--ink-muted)" }}>期望产物</dt>
+                  <dd style={{ margin: 0 }}>{q.intendedArtifact}</dd>
+                </div>
+                <div>
+                  <dt style={{ color: "var(--ink-muted)" }}>状态</dt>
+                  <dd style={{ margin: 0 }}>
+                    <span className="state-badge ai">{q.status}</span>{" "}
+                    <small>{q.exposureStatus}</small>
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">采集 / 复用 / 阻塞</p>
+            <h2>资料流向分桶</h2>
+          </div>
+        </div>
+        <div className="prototype-plan-regions">
+          <article className="prototype-plan-region">
+            <span className="section-kicker">已复用并冻结</span>
+            <h3>{view.collection.reused.length} 项</h3>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {view.collection.reused.map((r) => (
+                <li key={r.id} style={{ padding: "4px 0", fontSize: 12 }}>
+                  · {r.label}
+                  <br />
+                  <small>截止 {r.cutoff}</small>
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="prototype-plan-region">
+            <span className="section-kicker">等待能力探测</span>
+            <h3>{view.collection.awaitingProbe.length} 项</h3>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {view.collection.awaitingProbe.map((r) => (
+                <li key={r.id} style={{ padding: "4px 0", fontSize: 12 }}>
+                  · {r.label}
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="prototype-plan-region">
+            <span className="section-kicker">权限阻塞</span>
+            <h3>{view.collection.blocked.length} 项</h3>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {view.collection.blocked.map((r) => (
+                <li key={r.id} style={{ padding: "4px 0", fontSize: 12 }}>
+                  · {r.label}
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="prototype-plan-region">
+            <span className="section-kicker">正在获取</span>
+            <h3>{view.collection.running.length} 项</h3>
+            {view.collection.running.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-muted)" }}>暂无运行中任务。</p>
+            ) : (
+              <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                {view.collection.running.map((r) => (
+                  <li key={r.id} style={{ padding: "4px 0", fontSize: 12 }}>
+                    · {r.label}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">待核实条目</p>
+            <h2>{view.pendingResults.length} 项等待审核</h2>
+          </div>
+          <span className="state-badge warning">需人工</span>
+        </div>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {view.pendingResults.map((p) => (
+            <li
+              key={p.id}
+              className="prototype-plan-failure-row"
+              style={{ borderColor: "var(--warning)" }}
+            >
+              <strong>{p.targetLabel}</strong>
+              <span style={{ float: "right" }} className="state-badge warning">
+                {p.reviewLabel}
+              </span>
+              <small>{p.task}</small>
+              <small>
+                {p.sourceId} · {p.sourceVersion}
+              </small>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">缺口</p>
+            <h2>{view.gaps.length} 项待补</h2>
+          </div>
+        </div>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {view.gaps.map((g) => (
+            <li key={g.id} className="prototype-plan-failure-row">
+              <strong>[{g.type}] {g.label}</strong>
+              <small>{g.scope}</small>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">结果指标</p>
+            <h2>研究计划预定 {view.resultMetrics.length} 项数据采集</h2>
+          </div>
+        </div>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {view.resultMetrics.map((m) => (
+            <li key={m.id} className="prototype-plan-failure-row">
+              <strong>{m.name}</strong>
+              <small>
+                {m.value} · {m.period}
+              </small>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">失败 / 额度与权限 / 上传材料</p>
+            <h2>资料缺口透明化</h2>
+          </div>
+        </div>
+        <div className="prototype-plan-regions plan-failure-triplet">
+          <article className="prototype-plan-region">
+            <span className="section-kicker">失败运行</span>
+            <h3>{view.failures.length} 项</h3>
+            {view.failures.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-muted)" }}>暂无失败运行。</p>
+            ) : (
+              view.failures.map((r) => (
+                <div key={r.id} className="prototype-plan-failure-row" style={{ borderColor: "var(--contradict)" }}>
+                  <strong>{r.provider} · {r.outcome}</strong>
+                  <small>{r.detail}</small>
+                  <small>{r.observedAt}</small>
+                </div>
+              ))
+            )}
+          </article>
+          <article className="prototype-plan-region">
+            <span className="section-kicker">额度与权限</span>
+            <h3>{view.permissionGaps.length} 项</h3>
+            {view.permissionGaps.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-muted)" }}>暂无权限缺口。</p>
+            ) : (
+              view.permissionGaps.map((r) => (
+                <div key={r.id} className="prototype-plan-failure-row" style={{ borderColor: "var(--ai-draft)" }}>
+                  <strong>{r.provider} · {r.outcome}</strong>
+                  <small>{r.detail}</small>
+                  <small>{r.observedAt}</small>
+                </div>
+              ))
+            )}
+            <button type="button" className="prototype-button quiet" style={{ marginTop: 8 }}>
+              上传材料
+            </button>
+          </article>
+          <article className="prototype-plan-region">
+            <span className="section-kicker">人工补录</span>
+            <h3>{view.manualUploads.length} 项</h3>
+            {view.manualUploads.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-muted)" }}>尚无人工补录。</p>
+            ) : (
+              view.manualUploads.map((r) => (
+                <div key={r.id} className="prototype-plan-failure-row" style={{ borderColor: "var(--ai-draft)" }}>
+                  <strong>{r.provider}</strong>
+                  <small>{r.detail}</small>
+                  <small>{r.observedAt} · {r.sourceVersion}</small>
+                </div>
+              ))
+            )}
+            <button type="button" className="prototype-button quiet" style={{ marginTop: 8 }}>
+              重试
+            </button>
+          </article>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MetaCell({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="meta-cell">
+      <span>{label}</span>
+      <strong style={mono ? { fontFamily: "ui-monospace, monospace" } : undefined}>
+        {value}
+      </strong>
+    </div>
+  );
+}

@@ -1,60 +1,11 @@
 """Command-side v1 API tests (prototype 新建研究 / 审核工作区).
 
-The command endpoints COMMIT, so these tests run on a private in-memory
-engine instead of the shared session-scoped one — committed rows must never
-leak into other tests (e.g. the release gate's manifest-hash check counts
-seeded DocumentVersions exactly).
+Uses the private-engine ``cmd_*`` fixtures from conftest: command endpoints
+COMMIT, so they never share the session-scoped engine.
 """
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-
-@pytest.fixture
-def cmd_session():
-    from app.models.ledger import Base
-
-    eng = create_engine(
-        "sqlite://",
-        future=True,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(eng)
-    db = sessionmaker(bind=eng, future=True)()
-    try:
-        yield db
-    finally:
-        db.close()
-        Base.metadata.drop_all(eng)
-
-
-@pytest.fixture
-def cmd_client(cmd_session):
-    from app.db import get_db
-    from app.main import app
-
-    def _override_get_db():
-        yield cmd_session
-
-    app.dependency_overrides[get_db] = _override_get_db
-    try:
-        yield TestClient(app)
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-
-
-@pytest.fixture
-def cmd_seeded(cmd_session):
-    from app.scripts.seed_ai_compute_case import seed
-
-    seed(cmd_session)
-    cmd_session.commit()
-    return cmd_session
+from sqlalchemy import select
 
 
 def _error_code(response) -> str:
