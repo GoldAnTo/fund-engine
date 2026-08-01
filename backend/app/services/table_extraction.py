@@ -26,7 +26,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
+
+from app.domain.metrics import FactValueNormalizer
 
 # ---------------------------------------------------------------------------
 # Patterns
@@ -66,15 +68,6 @@ _MONEY_METRICS = frozenset(
 # 上市公司金额类指标以「元」计通常至少亿级；低于该值多为章节号或比例误匹配。
 _MIN_LISTED_COMPANY_MONEY_YUAN = Decimal("100000000")
 
-_MONEY_FACTORS = {
-    "元": Decimal("1"),
-    "千元": Decimal("1000"),
-    "万元": Decimal("10000"),
-    "亿元": Decimal("100000000"),
-    "亿": Decimal("100000000"),
-    "万": Decimal("10000"),
-}
-
 _SECTION_NUMBER_VALUE_RE = re.compile(
     r"^\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)[、.．]"
 )
@@ -93,19 +86,15 @@ _NOISY_DIMENSION_TOKENS = (
 
 
 def normalize_money_to_yuan(value: str) -> Decimal | None:
-    """Normalize a money string like ``634亿`` / ``50,000万元`` to yuan."""
-    match = re.match(
-        rf"^\s*(?P<number>{NUMBER_PATTERN})\s*(?P<unit>亿元|亿|千元|万元|元|万)\s*$",
-        value,
-    )
-    if match is None:
+    """Normalize a money string like ``634亿`` / ``50,000万元`` to yuan.
+
+    Delegates to the shared ``FactValueNormalizer`` so the plausibility
+    check and the future contradiction detector use one unit table.
+    """
+    normalized = FactValueNormalizer().normalize(value)
+    if normalized is None or normalized.kind != "money":
         return None
-    try:
-        number = Decimal(match.group("number").replace(",", "").replace(" ", ""))
-    except InvalidOperation:
-        return None
-    factor = _MONEY_FACTORS.get(match.group("unit"))
-    return number * factor if factor is not None else None
+    return normalized.value
 
 
 # ---------------------------------------------------------------------------
