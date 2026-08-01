@@ -42,7 +42,7 @@
 | 已有资料与数据（PlanAsset） | `GET /api/v1/documents`（冻结版本列表） | 🔧 |
 | 待审核结果（PlanPendingResult） | `GET /api/v1/review-queue?case_id=` | 🔧 |
 | Provider 查询计划（PlanProviderQuery） | 无后端（需新实体，勿拍脑袋建表） | ❌ mock |
-| Provider 运行记录（PlanProviderRun） | AIRun 无只读端点 | ❌ 缺口 G1 |
+| Provider 运行记录（PlanProviderRun） | `GET /api/v1/provider-runs?kind=&limit=` | ✅ |
 
 ## 4. CaseWorkbenchScreen（行业案例）— `buildCaseWorkbenchView()`
 
@@ -77,7 +77,7 @@
 | 数据块 | 来源 | 状态 |
 |---|---|---|
 | 不可变来源层（DocumentVersion→SourceSpan） | `GET /api/v1/documents` + `GET /api/v1/documents/{id}`（含 citations） | ✅ |
-| 已复核知识层（SourceStatement→EvidenceLink） | 无专门端点 | ❌ 缺口 G3 |
+| 已复核知识层（SourceStatement→EvidenceLink） | `GET /api/v1/knowledge?case_id=&review_state=` | ✅ |
 | AI 待审核提议（隔离区） | `GET /api/v1/review-queue` | 🔧 |
 
 ## 8. DataCenterScreen（数据中心）— `buildDataCenterView()`
@@ -87,14 +87,14 @@
 | 指标目录（DataCatalogItem） | `GET /api/v1/metrics/catalog?stock_id=&metric_name=` | ✅ |
 | 时点序列（DataSeriesPoint） | `GET /api/v1/metrics/series?stock_id=&metric_name=` | ✅ |
 | 修订对照（DataRevisionComparison） | series 多点对比即可（旧值 vs 新值） | 🔧 |
-| Provider 运行记录 | 同 G1 | ❌ 缺口 G1 |
+| Provider 运行记录 | `GET /api/v1/provider-runs?kind=&limit=` | ✅ |
 
 ## 9. VersionsScreen（版本比较）— `buildVersionsView()`
 
 | 数据块 | 来源 | 状态 |
 |---|---|---|
 | 双栏对比（正式结论/文档/已审关系/因素角色/缺口变化） | `GET /api/v1/research-cases/{id}/compare?base=&compare=` | ✅ |
-| 快照列表（VersionRecordRow） | 无专门端点 | ❌ 缺口 G2 |
+| 快照列表（VersionRecordRow） | `GET /api/v1/research-cases/{id}/snapshots` | ✅ |
 | AI RERUN 区 | `POST /api/v1/theses/{id}/rerun` 后重新 compare | ✅ |
 
 ## 10/11. ThemeIndexScreen / ThemeWorkbenchScreen（主题入口/工作台）
@@ -110,14 +110,14 @@
 
 ---
 
-## 缺口清单（后端小补，均为只读、不动写模型）
+## 缺口清单（已全部补齐 ✅，2026-08-01）
 
-| # | 缺口 | 影响的页 | 建议端点 | 工作量 |
-|---|---|---|---|---|
-| G1 | AIRun/Provider 运行记录只读 | 3、8 | `GET /api/v1/provider-runs?kind=&limit=`（直读 AIRun 表） | 小 |
-| G2 | 案件快照列表 | 9 | `GET /api/v1/research-cases/{id}/snapshots`（EvidenceSnapshot 按 thesis 分组） | 小 |
-| G3 | 已复核知识层（statements 按 review 状态） | 7 | `GET /api/v1/knowledge?case_id=&review_state=` | 小 |
-| G4 | dossier 不透出 Thesis 新增强字段 | 10/11 | dossier DTO 补 title/观察期/支持反证条件/验证事件 | 小 |
+| # | 缺口 | 影响的页 | 端点（已上线） |
+|---|---|---|---|
+| G1 | AIRun/Provider 运行记录只读 | 3、8 | `GET /api/v1/provider-runs?kind=&limit=` |
+| G2 | 案件快照列表 | 9 | `GET /api/v1/research-cases/{id}/snapshots` |
+| G3 | 已复核知识层（statements 按 review 状态） | 7 | `GET /api/v1/knowledge?case_id=&review_state=`（含每条 link 的最新人工审核） |
+| G4 | dossier 不透出 Thesis 新增强字段 | 10/11 | dossier `theses[]` 已透出 title/观察期/支持反证条件/验证事件/creator_type/review_state |
 
 **明确不建**（与文档1「别陷数据迷宫」一致）：任务队列、活动流、图表库。
 前端这些块保持 mock 并标注「非目标范围」即可。

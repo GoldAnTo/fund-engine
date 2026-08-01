@@ -184,6 +184,22 @@ class CaseReadQueries:
             statement=thesis.statement,
             created_by=thesis.created_by,
             created_at=_iso(thesis.created_at),
+            title=thesis.title,
+            observation_start=(
+                thesis.observation_start.isoformat()
+                if thesis.observation_start
+                else None
+            ),
+            observation_end=(
+                thesis.observation_end.isoformat()
+                if thesis.observation_end
+                else None
+            ),
+            support_condition=thesis.support_condition,
+            falsification_condition=thesis.falsification_condition,
+            next_verification_event=thesis.next_verification_event,
+            creator_type=thesis.creator_type,
+            review_state=thesis.review_state,
         )
 
     def _evidence_record(self, link, statement=None) -> EvidenceRecordDTO:

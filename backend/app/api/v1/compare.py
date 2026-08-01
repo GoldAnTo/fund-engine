@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.queries.compare import CaseCompareQueries
+from app.queries.knowledge import SnapshotQueries
 from app.schemas.v1.compare import CaseCompareResponse
+from app.schemas.v1.knowledge import CaseSnapshotsResponse
 
 router = APIRouter(prefix="/research-cases", tags=["snapshot-compare-v1"])
 
@@ -23,3 +25,12 @@ def compare_case(
     return CaseCompareQueries(db).compare(
         case_id=case_id, base_cutoff=base, compare_cutoff=compare
     )
+
+
+@router.get("/{case_id}/snapshots", response_model=CaseSnapshotsResponse)
+def case_snapshots(
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    """快照列表 (prototype 版本比较 left rail), newest first."""
+    return SnapshotQueries(db).snapshots_for_case(case_id=case_id)

@@ -30,6 +30,15 @@ class ThesisSummaryDTO(V1Model):
     statement: str
     created_by: str
     created_at: str
+    # Falsifiable-proposition framing (新建研究); null for legacy theses.
+    title: str | None = None
+    observation_start: str | None = None
+    observation_end: str | None = None
+    support_condition: str | None = None
+    falsification_condition: str | None = None
+    next_verification_event: str | None = None
+    creator_type: str = "human"
+    review_state: str = "confirmed"
 
 
 class EvidenceRecordDTO(V1Model):
