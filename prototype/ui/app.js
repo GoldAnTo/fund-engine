@@ -4,6 +4,7 @@
   const data = window.PROTOTYPE_DATA;
   const researchState = window.NEW_RESEARCH_STATE;
   const planState = window.RESEARCH_PLAN_STATE;
+  const caseState = window.CASE_WORKBENCH_STATE;
   const {
     DRAFT_FIELDS,
     FIELD_LIMITS,
@@ -1024,11 +1025,196 @@
     });
   }
 
+  function renderCaseContext(view) {
+    const facts = [
+      ["核心问题", view.case.question, "question"],
+      ["研究对象", view.case.researchObject, "object"],
+      ["时间范围", view.case.researchPeriod, "period"],
+      ["证据截止", view.case.cutoff, "cutoff"],
+      ["当前快照", view.case.snapshotId, "snapshot"],
+      ["AI 草案状态", view.case.aiState, "ai-state"],
+      ["人工复核状态", view.case.humanReviewState, "review-state"],
+    ];
+    return `
+      <header class="case-context" data-case-context>
+        <div class="case-context-title">
+          <div>
+            <p class="case-context-id">${escapeHTML(view.case.id)} · 案例研究工作台</p>
+            <h1>${escapeHTML(view.case.title)}</h1>
+          </div>
+          <div class="case-mode-switch" role="group" aria-label="研究视图">
+            <button type="button" data-case-mode="exploration" aria-pressed="true">探索模式</button>
+            <button type="button" data-case-mode="frozen" aria-pressed="false">已冻结版本</button>
+          </div>
+        </div>
+        <dl class="case-context-facts">
+          ${facts.map(([label, value, kind]) => `<div data-context-kind="${escapeHTML(kind)}"><dt>${escapeHTML(label)}</dt><dd data-core-text>${escapeHTML(value)}</dd></div>`).join("")}
+        </dl>
+        <div class="case-context-navigation">
+          <nav class="case-tabs" role="tablist" aria-label="ResearchCase 内部导航">
+            ${view.tabs.map((tab, index) => `<a role="tab" aria-selected="${index === 0 ? "true" : "false"}" href="#${index === 0 ? "case-dossier" : `case-tab-${index + 1}`}">${escapeHTML(tab)}</a>`).join("")}
+          </nav>
+          <p data-current-basis aria-live="polite"></p>
+        </div>
+      </header>
+    `;
+  }
+
+  function renderDecisionCompass(view) {
+    return `
+      <section class="decision-compass" data-review-compass aria-labelledby="case-dossier">
+        <h2 class="sr-only" id="case-dossier">研究档案</h2>
+        <article class="formal-judgment" data-decision-kind="formal" data-review-state="reviewed">
+          <div class="decision-heading"><p>人工审核记录</p><span>已冻结 · ${escapeHTML(view.formalJudgment.snapshotId)}</span></div>
+          <h3>当前正式判断</h3>
+          <p data-core-text>${escapeHTML(view.formalJudgment.text)}</p>
+        </article>
+        <article class="ai-proposal" data-decision-kind="ai" data-review-state="pending_review" data-provisional data-evidence-assessment>
+          <div class="decision-heading"><p>AI 提议</p><span>不写入正式版本</span></div>
+          <h3>AI 判断草案</h3>
+          <strong>AI 草案 · 未经人工复核</strong>
+          <p data-core-text>${escapeHTML(view.aiDraft)}</p>
+        </article>
+        <div class="reviewer-orienting-cues">
+          <article data-decision-kind="contradiction">
+            <p>反面线索</p><h3>主要反证</h3><strong data-core-text>${escapeHTML(view.contradiction.label)}</strong>
+          </article>
+          <article data-decision-kind="gap">
+            <p>待补证</p><h3>最大缺口</h3><strong data-core-text>${escapeHTML(view.gap.label)}</strong><small data-core-text>${escapeHTML(view.gap.explanation)}</small>
+          </article>
+          <article data-decision-kind="next">
+            <p>${escapeHTML(view.nextValidation.thesisId)}</p><h3>下一验证事件</h3><strong data-core-text>${escapeHTML(view.nextValidation.event)}</strong>
+          </article>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderThesisEvidence(view) {
+    const selected = view.thesisRows.find((thesis) => thesis.selected);
+    const register = view.thesisRows.filter((thesis) => !thesis.selected);
+    return `
+      <section class="case-section thesis-evidence" data-thesis-evidence aria-labelledby="thesis-evidence-title">
+        <header><div><p>命题台账</p><h2 id="thesis-evidence-title">Thesis 与证据</h2></div><span>范围与证伪条件随快照保存</span></header>
+        <div class="thesis-focus">
+          <article class="selected-thesis">
+            <div class="thesis-title"><span>${escapeHTML(selected.id)} · 当前验证焦点</span><strong data-core-text>${escapeHTML(selected.title)}</strong></div>
+            <dl>
+              <div><dt>支持条件</dt><dd data-core-text>${escapeHTML(selected.supportCondition)}</dd></div>
+              <div><dt>证据关系</dt><dd data-core-text>${escapeHTML(selected.evidenceState)}；${escapeHTML(selected.relationLabels)}</dd></div>
+              <div><dt>适用范围</dt><dd data-core-text>${escapeHTML(selected.scope)}</dd></div>
+              <div><dt>证伪条件</dt><dd data-core-text>${escapeHTML(selected.falsifier)}</dd></div>
+            </dl>
+          </article>
+          <div class="thesis-register" aria-label="其他命题">
+            ${register.map((thesis) => `
+              <article>
+                <div class="thesis-title"><span>${escapeHTML(thesis.id)}</span><strong data-core-text>${escapeHTML(thesis.title)}</strong></div>
+                <small data-core-text>证据关系：${escapeHTML(thesis.evidenceState)} · 适用范围：${escapeHTML(thesis.scope)}</small>
+              </article>
+            `).join("")}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderFactorComparison(view) {
+    const dimensions = [
+      ["时间顺序", "timeOrder"],
+      ["传导机制", "mechanism"],
+      ["直接证据", "directEvidence"],
+      ["替代解释", "alternatives"],
+      ["差异解释", "differenceExplanation"],
+      ["适用边界", "scope"],
+      ["反例和证伪条件", "falsifier"],
+    ];
+    return `
+      <section class="case-section factor-comparison" data-factor-comparison data-provisional aria-labelledby="factor-comparison-title">
+        <header><div><p>竞争性解释</p><h2 id="factor-comparison-title">因素比较</h2></div><span data-provisional>AI 比较草案 · 未经人工复核</span></header>
+        <div class="factor-table-wrap">
+          <table>
+            <thead><tr><th scope="col">审核维度 · 因素角色与状态</th>${view.factorRows.map((factor) => `
+              <th scope="col"${factor.factorId === view.selectedFactor.id ? ' class="selected-factor-row"' : ""}>
+                <span>${escapeHTML(factor.groupLabel)}</span><strong>${escapeHTML(factor.label)}</strong><small>${escapeHTML(factor.roleLabel)} · ${escapeHTML(factor.statusLabel)}</small>
+              </th>
+            `).join("")}</tr></thead>
+            <tbody>
+              ${dimensions.map(([label, field]) => `
+                <tr><th scope="row">${escapeHTML(label)}</th>${view.factorRows.map((factor) => `<td data-factor-label="${escapeHTML(factor.label)}" data-core-text>${escapeHTML(factor[field])}</td>`).join("")}</tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderFactorDetail(view) {
+    const detail = view.selectedFactor;
+    const fields = [
+      ["机制", detail.mechanism],
+      ["直接证据", detail.directEvidence],
+      ["反例", detail.counterexample],
+      ["替代解释", detail.alternatives],
+      ["影响对象", detail.impactObject],
+      ["适用范围", detail.scope],
+      ["证伪条件", detail.falsifier],
+    ];
+    return `
+      <section class="case-section factor-detail" data-factor-detail data-provisional aria-labelledby="factor-detail-title">
+        <header><div><p>${escapeHTML(detail.roleLabel)} · ${escapeHTML(detail.statusLabel)}</p><h2 id="factor-detail-title">所选因素解释</h2></div><strong>${escapeHTML(detail.label)}</strong></header>
+        <dl>${fields.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd data-core-text>${escapeHTML(value)}</dd></div>`).join("")}</dl>
+      </section>
+    `;
+  }
+
+  function renderSources(view) {
+    return `
+      <section class="case-section source-citations" aria-labelledby="source-citations-title">
+        <header><div><p>冻结引用清单</p><h2 id="source-citations-title">原文引用</h2></div><span>每条关系回到确切 SourceSpan</span></header>
+        <div class="source-list" data-source-list>
+          ${view.sources.map((source) => `
+            <article data-source-citation${source.provisional ? " data-provisional" : ""}>
+              <div class="source-statement"><span>${escapeHTML(source.relationLabel)} · ${escapeHTML(source.id)}</span><strong data-core-text>${escapeHTML(source.statement)}</strong></div>
+              <dl>
+                <div><dt>文档版本</dt><dd data-core-text>${escapeHTML(source.sourceVersion)}</dd></div>
+                <div><dt>发布日期</dt><dd data-core-text><time datetime="${escapeHTML(source.publishedDate)}">${escapeHTML(source.publishedDate)}</time></dd></div>
+                <div><dt>原文区段</dt><dd data-core-text>${escapeHTML(source.sourceSpan)}</dd></div>
+                <div><dt>复核状态</dt><dd data-core-text>${escapeHTML(source.reviewLabel)}</dd></div>
+                <div><dt>快照归属</dt><dd data-core-text>${escapeHTML(source.snapshotMembership)}</dd></div>
+              </dl>
+              <a class="source-locator" href="?screen=library&amp;document=${encodeURIComponent(source.documentId)}&amp;span=${encodeURIComponent(source.sourceSpan)}">查看原文定位</a>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderCaseWorkbench() {
+    const view = caseState.buildCaseWorkbenchViewModel(data);
+    return `
+      <main class="screen case-workbench-screen" data-screen="case">
+        ${renderCaseContext(view)}
+        <div class="case-reading" data-case-reading>
+          ${renderDecisionCompass(view)}
+          ${renderThesisEvidence(view)}
+          ${renderFactorComparison(view)}
+          <div class="case-bottom-grid">
+            ${renderFactorDetail(view)}
+            ${renderSources(view)}
+          </div>
+        </div>
+      </main>
+    `;
+  }
+
   const SCREEN_RENDERERS = {
     "overview": renderOverview,
     "new-research": renderNewResearch,
     "plan": renderPlan,
-    "case": () => renderPlaceholder("case"),
+    "case": renderCaseWorkbench,
     "graph": () => renderPlaceholder("graph"),
     "review": () => renderPlaceholder("review"),
     "library": () => renderPlaceholder("library"),
@@ -1072,6 +1258,7 @@
     `;
     if (screen === "new-research") bindNewResearchForm(data);
     if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"), planState.buildResearchPlanViewModel(data));
+    if (screen === "case") caseState.bindCaseWorkbench(app.querySelector("[data-screen=case]"));
   }
 
   renderShell(requestedScreen());
@@ -1080,4 +1267,5 @@
   window.PROTOTYPE_OVERVIEW = Object.freeze({ buildOverviewViewModel });
   window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel, confirmationStorageKey });
   window.PROTOTYPE_RESEARCH_PLAN = planState;
+  window.PROTOTYPE_CASE_WORKBENCH = caseState;
 }());

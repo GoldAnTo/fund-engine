@@ -146,6 +146,16 @@ export function assertFixtureContract(data) {
   assert.ok(data.case.researchPeriod.start <= data.case.researchPeriod.end, "research period start must not exceed its end");
   assert.notEqual(data.case.researchPeriod.start, data.snapshots.at(-1).cutoff, "research period start must not be synthesized from a prior snapshot cutoff");
   assert.notEqual(data.case.researchPeriod.end, data.case.cutoff, "research period end must remain independent from the evidence cutoff");
+  const workbench = data.case.workbench;
+  assert.ok(workbench, "case must expose an explicit workbench dossier");
+  assert.equal(
+    Object.keys(workbench).sort().join(","),
+    ["factorAnalyses", "formalJudgment", "largestGapFactorId", "mainContradictionFactorId", "nextValidationThesisId", "selectedFactorId", "sourceEvidenceLinkIds"].sort().join(","),
+    "workbench must remain a nested case concern without adding fixture top-level keys",
+  );
+  assert.equal(workbench.formalJudgment.reviewState, "reviewed", "formal judgment must be human reviewed");
+  assert.equal(workbench.formalJudgment.snapshotId, data.case.snapshotId, "formal judgment must bind to the current immutable snapshot");
+  assert.equal(workbench.factorAnalyses.length, 4, "workbench must compare four competing factors");
   const researchPlan = data.case.researchPlan;
   assert.ok(researchPlan, "case must expose an explicit researchPlan");
   assert.equal(
@@ -249,6 +259,22 @@ export function assertFixtureContract(data) {
   }
   for (const factorId of researchPlan.currentGapFactorIds) {
     assert.ok(indexes.factors.has(factorId), `researchPlan currentGapFactorIds references unknown factor ${factorId}`);
+  }
+  for (const factorId of [workbench.mainContradictionFactorId, workbench.largestGapFactorId, workbench.selectedFactorId]) {
+    assert.ok(indexes.factors.has(factorId), `workbench references unknown factor ${factorId}`);
+  }
+  assert.ok(indexes.theses.has(workbench.nextValidationThesisId), `workbench references unknown Thesis ${workbench.nextValidationThesisId}`);
+  for (const evidenceLinkId of workbench.sourceEvidenceLinkIds) {
+    assert.ok(indexes.evidenceLinks.has(evidenceLinkId), `workbench references unknown evidence link ${evidenceLinkId}`);
+  }
+  const factorAnalysisIds = new Set();
+  for (const analysis of workbench.factorAnalyses) {
+    assert.ok(indexes.factors.has(analysis.factorId), `workbench factor analysis references unknown factor ${analysis.factorId}`);
+    assert.ok(!factorAnalysisIds.has(analysis.factorId), `workbench factor analysis duplicates ${analysis.factorId}`);
+    factorAnalysisIds.add(analysis.factorId);
+    for (const field of ["proposedRole", "timeOrder", "mechanism", "directEvidence", "alternatives", "differenceExplanation", "scope", "falsifier"]) {
+      assert.ok(analysis[field], `workbench factor analysis ${analysis.factorId} must include ${field}`);
+    }
   }
   for (const collectionName of idCollections) {
     for (const record of data[collectionName]) {
@@ -513,6 +539,14 @@ async function assertFixtureDataContract() {
   const candidateAlreadySelected = structuredClone(data);
   candidateAlreadySelected.case.researchPlan.candidateReuseAssetIds = [candidateAlreadySelected.case.researchPlan.reusableAssets.documentIds[0]];
   assert.throws(() => assertFixtureContract(candidateAlreadySelected), /must not already be selected/u);
+
+  const unknownWorkbenchFactor = structuredClone(data);
+  unknownWorkbenchFactor.case.workbench.selectedFactorId = "F-MISSING";
+  assert.throws(() => assertFixtureContract(unknownWorkbenchFactor), /workbench references unknown factor F-MISSING/u);
+
+  const unknownWorkbenchEvidence = structuredClone(data);
+  unknownWorkbenchEvidence.case.workbench.sourceEvidenceLinkIds = ["EL-MISSING"];
+  assert.throws(() => assertFixtureContract(unknownWorkbenchEvidence), /workbench references unknown evidence link EL-MISSING/u);
 }
 
 async function assertResearchPlanStateContract() {
@@ -674,7 +708,7 @@ function selectedRoutes(argv) {
 }
 
 async function assertSourceContract() {
-  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "research-plan-state.js", "app.js", "capture.mjs"];
+  const requiredFiles = ["index.html", "styles.css", "data.js", "new-research-state.js", "research-plan-state.js", "case-workbench-state.js", "app.js", "capture.mjs"];
   for (const filename of requiredFiles) {
     await assert.doesNotReject(
       access(path.join(UI_DIR, filename)),
@@ -682,10 +716,11 @@ async function assertSourceContract() {
     );
   }
 
-  const [html, stateSource, planStateSource, app, styles, readme] = await Promise.all([
+  const [html, stateSource, planStateSource, caseStateSource, app, styles, readme] = await Promise.all([
     readFile(path.join(UI_DIR, "index.html"), "utf8"),
     readFile(path.join(UI_DIR, "new-research-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "research-plan-state.js"), "utf8"),
+    readFile(path.join(UI_DIR, "case-workbench-state.js"), "utf8"),
     readFile(path.join(UI_DIR, "app.js"), "utf8"),
     readFile(path.join(UI_DIR, "styles.css"), "utf8"),
     readFile(path.join(UI_DIR, "README.md"), "utf8"),
@@ -696,11 +731,15 @@ async function assertSourceContract() {
   assert.match(html, /<script[^>]+src=["']\.\/data\.js["'][^>]*><\/script>/u, "index.html must load classic ./data.js");
   assert.match(html, /<script[^>]+src=["']\.\/new-research-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./new-research-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/research-plan-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./research-plan-state.js");
+  assert.match(html, /<script[^>]+src=["']\.\/case-workbench-state\.js["'][^>]*><\/script>/u, "index.html must load classic ./case-workbench-state.js");
   assert.match(html, /<script[^>]+src=["']\.\/app\.js["'][^>]*><\/script>/u, "index.html must load classic ./app.js");
   assert.ok(html.indexOf("./data.js") < html.indexOf("./new-research-state.js") && html.indexOf("./new-research-state.js") < html.indexOf("./app.js"), "new-research state must load between fixture data and rendering");
   assert.ok(html.indexOf("./new-research-state.js") < html.indexOf("./research-plan-state.js") && html.indexOf("./research-plan-state.js") < html.indexOf("./app.js"), "research-plan state must load after shared state and before rendering");
+  assert.ok(html.indexOf("./research-plan-state.js") < html.indexOf("./case-workbench-state.js") && html.indexOf("./case-workbench-state.js") < html.indexOf("./app.js"), "case-workbench state must load after shared state and before rendering");
   assert.match(planStateSource, /function buildResearchPlanViewModel\(/u, "research-plan state must own its view-model builder");
   assert.doesNotMatch(app, /function buildResearchPlanViewModel\(/u, "app.js must not duplicate the plan view-model builder");
+  assert.match(caseStateSource, /function buildCaseWorkbenchViewModel\(/u, "case-workbench state must own its view-model builder");
+  assert.doesNotMatch(app, /function buildCaseWorkbenchViewModel\(/u, "app.js must not duplicate the case view-model builder");
   for (const stateFunction of ["isStrictISODate", "validateObservationRange", "createConfirmationRecord", "normalizeConfirmationRecord", "readConfirmationRecord"]) {
     assert.match(stateSource, new RegExp(`function ${stateFunction}\\(`, "u"), `state module must own ${stateFunction}`);
     assert.doesNotMatch(app, new RegExp(`function ${stateFunction}\\(`, "u"), `app.js must not duplicate ${stateFunction}`);
@@ -937,7 +976,12 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型4-研究计划.png"),
     "plan must map exactly to prototype/设计原型4-研究计划.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("case"),
+    path.resolve(UI_DIR, "../设计原型2.png"),
+    "case must map exactly to prototype/设计原型2.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
@@ -1137,6 +1181,147 @@ async function assertResearchPlanProductContract(page, marker) {
   assert.ok(await mobileRetry.isVisible(), "last plan control must remain reachable on mobile");
   await mobileRetry.press("Enter");
   assert.ok((await mobileRetry.locator("xpath=ancestor::*[@data-provider-run]").innerText()).includes("已加入重试队列（原型）"), "mobile keyboard activation must preserve honest retry behavior");
+  await page.setViewportSize({ width: 1600, height: 1000 });
+}
+
+async function assertCaseWorkbenchProductContract(page, marker) {
+  const context = marker.locator("[data-case-context]");
+  assert.equal(await context.count(), 1, "case must expose one fixed context header");
+  const contextText = await context.innerText();
+  for (const fact of [
+    "核心问题",
+    "截至 2025-06-30，AI 算力资本开支能否通过已披露订单、交付与收入，形成可审计且仍需持续验证的产业链判断？",
+    "研究对象",
+    "从云厂商资本开支，经芯片、互连与系统交付，到分部收入的 AI 算力产业链",
+    "时间范围",
+    "2025-01-01 至 2027-12-31",
+    "证据截止",
+    "2025-06-30",
+    "当前快照",
+    "RS-2025-06-30-v3",
+    "AI 草案 · 未经人工复核",
+    "人工复核 · 正式判断已冻结",
+  ]) {
+    assert.ok(contextText.includes(fact), `fixed case context must visibly include ${fact}`);
+  }
+  assert.equal(await context.evaluate((element) => getComputedStyle(element).position), "sticky", "case context must remain sticky while reading");
+  const clippedContextFacts = await context.locator(".case-context-facts [data-core-text]").evaluateAll((elements) => elements
+    .map((element) => ({ text: element.textContent.trim(), clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))
+    .filter((item) => item.scrollWidth > item.clientWidth));
+  assert.deepEqual(clippedContextFacts, [], `fixed case facts must not be clipped on desktop: ${JSON.stringify(clippedContextFacts)}`);
+
+  const tabs = marker.getByRole("tablist", { name: "ResearchCase 内部导航" }).getByRole("tab");
+  assert.deepEqual(
+    (await tabs.allTextContents()).map((text) => text.trim()),
+    ["研究档案", "命题与证据", "因素分析", "关系路径", "公司与基金", "历史版本"],
+    "case tabs and order are contractual",
+  );
+  assert.equal(await tabs.nth(0).getAttribute("aria-selected"), "true", "研究档案 must be the selected tab");
+
+  const viewSwitch = marker.getByRole("group", { name: "研究视图" });
+  const explore = viewSwitch.getByRole("button", { name: "探索模式", exact: true });
+  const frozen = viewSwitch.getByRole("button", { name: "已冻结版本", exact: true });
+  assert.equal(await explore.getAttribute("aria-pressed"), "true");
+  assert.equal(await frozen.getAttribute("aria-pressed"), "false");
+
+  const compass = marker.locator("[data-review-compass]");
+  for (const [kind, heading] of [
+    ["formal", "当前正式判断"],
+    ["ai", "AI 判断草案"],
+    ["contradiction", "主要反证"],
+    ["gap", "最大缺口"],
+    ["next", "下一验证事件"],
+  ]) {
+    const item = compass.locator(`[data-decision-kind="${kind}"]`);
+    assert.equal(await item.count(), 1, `reviewer compass must expose one ${kind} item`);
+    assert.ok(await item.getByRole("heading", { name: heading, exact: true }).isVisible(), `${heading} must be visible without leaving the page`);
+  }
+  const formal = compass.locator('[data-decision-kind="formal"]');
+  const proposal = compass.locator('[data-decision-kind="ai"]');
+  assert.equal(await formal.getAttribute("data-review-state"), "reviewed", "official judgment must be semantically reviewed");
+  assert.equal(await proposal.getAttribute("data-review-state"), "pending_review", "AI proposal must remain semantically pending review");
+  assert.equal(await proposal.getByText("AI 草案 · 未经人工复核", { exact: true }).count(), 1, "AI proposal must carry the exact provisional label");
+  const decisionStyles = await compass.locator('[data-decision-kind="formal"], [data-decision-kind="ai"]').evaluateAll((elements) => elements.map((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    border: getComputedStyle(element).borderStyle,
+  })));
+  assert.notDeepEqual(decisionStyles[0], decisionStyles[1], "official judgment and AI proposal must be visually distinct");
+
+  for (const heading of ["Thesis 与证据", "因素比较", "所选因素解释", "原文引用"]) {
+    assert.equal(await marker.getByRole("heading", { name: heading, exact: true }).count(), 1, `case must expose one ${heading} section`);
+  }
+  const thesisRegion = marker.locator("[data-thesis-evidence]");
+  for (const label of ["支持条件", "证据关系", "适用范围", "证伪条件"]) {
+    assert.ok((await thesisRegion.innerText()).includes(label), `Thesis evidence must explain ${label}`);
+  }
+
+  const factorRegion = marker.locator("[data-factor-comparison]");
+  assert.equal(await factorRegion.locator("table").count(), 1, "factor comparison must use a semantic table");
+  for (const label of ["因素", "角色", "状态", "时间顺序", "传导机制", "直接证据", "替代解释", "差异解释", "适用边界", "反例和证伪条件"]) {
+    assert.ok((await factorRegion.innerText()).includes(label), `factor comparison must explain ${label}`);
+  }
+  for (const label of ["候选因素", "传导因素", "限制因素", "替代解释", "矛盾观察"]) {
+    assert.ok((await factorRegion.innerText()).includes(label), `factor comparison must use approved factor label ${label}`);
+  }
+  assert.doesNotMatch(await factorRegion.innerText(), /candidate|under_review|key_factor|confidence|置信度|成熟度|评分|得分/iu, "factor comparison must not expose raw enums or synthetic scoring");
+
+  const mechanism = marker.locator("[data-factor-detail]");
+  for (const label of ["机制", "直接证据", "反例", "替代解释", "影响对象", "适用范围", "证伪条件"]) {
+    assert.ok((await mechanism.innerText()).includes(label), `selected factor explanation must include ${label}`);
+  }
+
+  const citations = marker.locator("[data-source-citation]");
+  assert.ok(await citations.count() >= 3, "case must expose multiple positive and contradictory source citations");
+  for (let index = 0; index < await citations.count(); index += 1) {
+    const citation = citations.nth(index);
+    const text = await citation.innerText();
+    for (const label of ["文档版本", "发布日期", "原文区段", "复核状态", "快照归属"]) {
+      assert.ok(text.includes(label), `source citation ${index + 1} must show ${label}`);
+    }
+    const locate = citation.getByRole("link", { name: "查看原文定位", exact: true });
+    assert.equal(await locate.count(), 1, `source citation ${index + 1} must expose one real source locator control`);
+    assert.match(await locate.getAttribute("href"), /^\?screen=library&document=[^&]+&span=[^&]+$/u, `source citation ${index + 1} locator must preserve document and span identity`);
+  }
+
+  await frozen.click();
+  assert.equal(await frozen.getAttribute("aria-pressed"), "true", "frozen switch must be a real control");
+  assert.equal(await explore.getAttribute("aria-pressed"), "false");
+  assert.ok((await marker.locator("[data-current-basis]").innerText()).includes("只显示当前快照中的资料、数据和已审核关系"), "frozen view must explain its point-in-time boundary");
+  assert.ok(await proposal.isHidden(), "frozen view must exclude the provisional AI proposal");
+  assert.ok(await factorRegion.isHidden(), "frozen view must exclude candidate factor comparison");
+  assert.ok(await mechanism.isHidden(), "frozen view must exclude the candidate factor detail");
+  assert.equal(await citations.filter({ hasText: "待人工审核" }).count(), 1, "exploration view must contain one pending source citation");
+  assert.ok(await citations.filter({ hasText: "待人工审核" }).isHidden(), "frozen view must exclude pending source citations");
+  assert.equal(await citations.filter({ hasText: "已人工复核" }).count(), 2, "frozen view must retain both reviewed source citations");
+  assert.ok(await citations.filter({ hasText: "已人工复核" }).first().isVisible(), "reviewed source citations must remain visible in frozen mode");
+  await explore.click();
+  assert.ok(await proposal.isVisible(), "exploration view must restore the provisional AI proposal");
+  assert.ok(await factorRegion.isVisible(), "exploration view must restore candidate factor comparison");
+
+  for (const selector of ["[data-case-reading]", "[data-thesis-evidence]", "[data-factor-comparison]", "[data-factor-detail]", "[data-source-list]"]) {
+    const measurement = await marker.locator(selector).evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overflowY: getComputedStyle(element).overflowY,
+    }));
+    assert.ok(measurement.scrollHeight <= measurement.clientHeight + 1, `${selector} must not internally clip desktop content: ${JSON.stringify(measurement)}`);
+    assert.ok(!["auto", "scroll", "hidden", "clip"].includes(measurement.overflowY), `${selector} must use normal page flow: ${JSON.stringify(measurement)}`);
+  }
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= 1000), "case desktop document must fit the 1000px capture height");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobile = await page.evaluate(() => ({
+    body: document.body.scrollWidth - document.body.clientWidth,
+    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    height: document.documentElement.scrollHeight,
+  }));
+  assert.ok(mobile.body <= 0 && mobile.document <= 0, `case must fit 375px without horizontal overflow: ${JSON.stringify(mobile)}`);
+  assert.ok(mobile.height > 812, "case mobile layout must use normal vertical scrolling");
+  const clippedMobile = await marker.locator("[data-core-text]").evaluateAll((elements) => elements
+    .filter((element) => element.getClientRects().length > 0)
+    .map((element) => ({ text: element.textContent.trim(), size: Number.parseFloat(getComputedStyle(element).fontSize), clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))
+    .filter((item) => item.size < 13 || item.scrollWidth > item.clientWidth + 1));
+  assert.deepEqual(clippedMobile, [], `case mobile core text must remain readable and unclipped: ${JSON.stringify(clippedMobile)}`);
   await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
@@ -1962,6 +2147,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "plan") {
         await assertResearchPlanProductContract(page, marker);
+      }
+      if (screen === "case") {
+        await assertCaseWorkbenchProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {
