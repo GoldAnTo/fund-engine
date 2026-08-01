@@ -45,11 +45,31 @@ class ResearchService:
         title: str,
         industry_topic: str,
         created_by: str,
+        research_object: str | None = None,
+        phenomenon: str | None = None,
+        core_question: str | None = None,
+        period_start: date | None = None,
+        period_end: date | None = None,
+        evidence_cutoff: date | None = None,
     ) -> ResearchCase:
+        if not title.strip():
+            raise ValidationError("case title must not be empty")
+        if (
+            period_start is not None
+            and period_end is not None
+            and period_start > period_end
+        ):
+            raise ValidationError("period_start must not be after period_end")
         return self._repo.add_case(
             title=title,
             industry_topic=industry_topic,
             created_by=created_by,
+            research_object=research_object,
+            phenomenon=phenomenon,
+            core_question=core_question,
+            period_start=period_start,
+            period_end=period_end,
+            evidence_cutoff=evidence_cutoff,
         )
 
     def add_thesis(
@@ -58,11 +78,39 @@ class ResearchService:
         *,
         statement: str,
         created_by: str,
+        title: str | None = None,
+        observation_start: date | None = None,
+        observation_end: date | None = None,
+        support_condition: str | None = None,
+        falsification_condition: str | None = None,
+        next_verification_event: str | None = None,
+        creator_type: str = "human",
+        review_state: str = "confirmed",
     ) -> Thesis:
+        if not statement.strip():
+            raise ValidationError("thesis statement must not be empty")
+        if (
+            observation_start is not None
+            and observation_end is not None
+            and observation_start > observation_end
+        ):
+            raise ValidationError(
+                "observation_start must not be after observation_end"
+            )
+        if self._repo.get_case(research_case_id) is None:
+            raise ValidationError(f"research case {research_case_id} not found")
         return self._repo.add_thesis(
             research_case_id=research_case_id,
             statement=statement,
             created_by=created_by,
+            title=title,
+            observation_start=observation_start,
+            observation_end=observation_end,
+            support_condition=support_condition,
+            falsification_condition=falsification_condition,
+            next_verification_event=next_verification_event,
+            creator_type=creator_type,
+            review_state=review_state,
         )
 
     def add_statement(

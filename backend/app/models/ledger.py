@@ -28,6 +28,13 @@ SourceStatementKind = Literal[
 ]
 ReviewOutcome = Literal["confirmed", "modified", "rejected"]
 ReviewState = Literal["machine_generated", "reviewed", "rejected"]
+# Link-level review (prototype 审核工作区): the human decision on one
+# AI-proposed EvidenceLink.  ``relation`` is the 关系选择 dimension; the
+# action itself is ``outcome``.
+LinkReviewOutcome = Literal["confirmed", "rejected", "needs_more_evidence"]
+LinkReviewRelation = Literal[
+    "supports", "contradicts", "contextualizes", "evidence_gap"
+]
 AIRunKind = Literal["extract", "propose", "assess"]
 AIRunStatus = Literal["success", "failed"]
 
@@ -44,6 +51,7 @@ IMMUTABLE_TABLES = frozenset(
         "evidence_snapshots",
         "ai_assessments",
         "review_decisions",
+        "evidence_reviews",
         "companies",
         "stocks",
         "fund_companies",
@@ -137,6 +145,14 @@ class ResearchCase(Base):
         DateTime(timezone=True), nullable=False
     )
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Research-question framing (prototype 新建研究 step 1).  All optional so
+    # legacy/seeded cases stay valid; a fully framed case carries them.
+    research_object: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phenomenon: Mapped[str | None] = mapped_column(Text, nullable=True)
+    core_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    evidence_cutoff: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class Thesis(Base):
@@ -151,6 +167,24 @@ class Thesis(Base):
         DateTime(timezone=True), nullable=False
     )
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Falsifiable-proposition framing (prototype 新建研究 step 2): a thesis is
+    # verifiable only when its observation window, support/falsification
+    # conditions, and next verification event are written down.  Optional so
+    # legacy/seeded theses stay valid.
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observation_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    observation_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    support_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    falsification_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_verification_event: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AI-drafted theses start as ``draft`` until a human confirms them;
+    # human-authored theses (including the gold seed) are ``confirmed``.
+    creator_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="human"
+    )
+    review_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="confirmed"
+    )
 
 
 class CausalStep(Base):
@@ -271,6 +305,33 @@ class ReviewDecision(Base):
     )
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
     conclusion: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class EvidenceReview(Base):
+    """Link-level human review of one AI-proposed EvidenceLink.
+
+    Prototype 审核工作区: the reviewer must fill four fields — 关系选择
+    (``relation``), 因素角色 (``factor_role``), 适用边界 (``scope_boundary``),
+    审核理由 (``reason``) — and the action (``outcome``) is one of 确认写入 /
+    驳回 / 要求补充证据.  Append-only: the reviewed link is never mutated;
+    readers resolve the latest review per link.
+    """
+
+    __tablename__ = "evidence_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    evidence_link_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("evidence_links.id"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    relation: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    factor_role: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_boundary: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

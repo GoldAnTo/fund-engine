@@ -12,6 +12,7 @@ from app.models.ledger import (
     CausalStep,
     DocumentVersion,
     EvidenceLink,
+    EvidenceReview,
     EvidenceSnapshot,
     ResearchCase,
     ReviewDecision,
@@ -40,12 +41,24 @@ class ResearchRepository:
         title: str,
         industry_topic: str,
         created_by: str,
+        research_object: str | None = None,
+        phenomenon: str | None = None,
+        core_question: str | None = None,
+        period_start: date | None = None,
+        period_end: date | None = None,
+        evidence_cutoff: date | None = None,
     ) -> ResearchCase:
         case = ResearchCase(
             title=title,
             industry_topic=industry_topic,
             created_by=created_by,
             created_at=_utcnow(),
+            research_object=research_object,
+            phenomenon=phenomenon,
+            core_question=core_question,
+            period_start=period_start,
+            period_end=period_end,
+            evidence_cutoff=evidence_cutoff,
         )
         self._session.add(case)
         self._session.flush()
@@ -57,12 +70,28 @@ class ResearchRepository:
         research_case_id: uuid.UUID,
         statement: str,
         created_by: str,
+        title: str | None = None,
+        observation_start: date | None = None,
+        observation_end: date | None = None,
+        support_condition: str | None = None,
+        falsification_condition: str | None = None,
+        next_verification_event: str | None = None,
+        creator_type: str = "human",
+        review_state: str = "confirmed",
     ) -> Thesis:
         thesis = Thesis(
             research_case_id=research_case_id,
             statement=statement,
             created_by=created_by,
             created_at=_utcnow(),
+            title=title,
+            observation_start=observation_start,
+            observation_end=observation_end,
+            support_condition=support_condition,
+            falsification_condition=falsification_condition,
+            next_verification_event=next_verification_event,
+            creator_type=creator_type,
+            review_state=review_state,
         )
         self._session.add(thesis)
         self._session.flush()
@@ -262,6 +291,44 @@ class ResearchRepository:
         self._session.add(review)
         self._session.flush()
         return review
+
+    def insert_evidence_review(
+        self,
+        *,
+        evidence_link_id: uuid.UUID,
+        outcome: str,
+        relation: str | None,
+        factor_role: str,
+        scope_boundary: str,
+        reason: str,
+        reviewer: str,
+    ) -> EvidenceReview:
+        review = EvidenceReview(
+            evidence_link_id=evidence_link_id,
+            outcome=outcome,
+            relation=relation,
+            factor_role=factor_role,
+            scope_boundary=scope_boundary,
+            reason=reason,
+            reviewer=reviewer,
+            created_at=_utcnow(),
+        )
+        self._session.add(review)
+        self._session.flush()
+        return review
+
+    def evidence_reviews_for_links(
+        self, link_ids: list[uuid.UUID]
+    ) -> list[EvidenceReview]:
+        if not link_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(EvidenceReview)
+                .where(EvidenceReview.evidence_link_id.in_(link_ids))
+                .order_by(EvidenceReview.created_at)
+            )
+        )
 
     def get_ai_assessment(self, assessment_id: uuid.UUID) -> AIAssessment | None:
         return self._session.scalar(

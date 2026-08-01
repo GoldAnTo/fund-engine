@@ -1,0 +1,154 @@
+"""Command-side v1 wire DTOs (prototype 新建研究 / 审核工作区).
+
+Request DTOs validate *shape* only (non-empty strings, literal enums);
+business rules (window ordering, outcome/relation consistency) live in the
+services so CLI and tests get the same guarantees.
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Any, Literal
+
+from pydantic import Field
+
+from app.schemas.v1.common import V1Model
+
+# ---------------------------------------------------------------------------
+# 新建研究 (case + thesis commands)
+# ---------------------------------------------------------------------------
+
+
+class ThesisInput(V1Model):
+    """One initial proposition in the 新建研究 flow (prototype step 2)."""
+
+    statement: str = Field(min_length=1)
+    title: str | None = None
+    observation_start: date | None = None
+    observation_end: date | None = None
+    support_condition: str | None = None
+    falsification_condition: str | None = None
+    next_verification_event: str | None = None
+    creator_type: Literal["human", "ai"] = "human"
+
+
+class CreateCaseRequest(V1Model):
+    """Create a research case with its research question + initial theses."""
+
+    title: str = Field(min_length=1)
+    industry_topic: str = Field(min_length=1)
+    created_by: str = Field(min_length=1)
+    research_object: str | None = None
+    phenomenon: str | None = None
+    core_question: str | None = None
+    period_start: date | None = None
+    period_end: date | None = None
+    evidence_cutoff: date | None = None
+    initial_theses: list[ThesisInput] = Field(default_factory=list)
+
+
+class CreatedThesisDTO(V1Model):
+    id: str
+    statement: str
+    title: str | None
+    creator_type: str
+    review_state: str
+
+
+class CreateCaseResponse(V1Model):
+    case_id: str
+    theses: list[CreatedThesisDTO]
+
+
+class CreateThesisRequest(ThesisInput):
+    """Add one proposition to an existing case (AI 协助拆分 or human)."""
+
+    created_by: str = Field(min_length=1)
+
+
+class CreateThesisResponse(V1Model):
+    thesis: CreatedThesisDTO
+
+
+# ---------------------------------------------------------------------------
+# 审核工作区 (review commands)
+# ---------------------------------------------------------------------------
+
+LinkReviewOutcome = Literal["confirmed", "rejected", "needs_more_evidence"]
+LinkReviewRelation = Literal[
+    "supports", "contradicts", "contextualizes", "evidence_gap"
+]
+
+
+class LinkReviewRequest(V1Model):
+    """四要素关系级审核: 关系选择/因素角色/适用边界/审核理由 + 动作."""
+
+    outcome: LinkReviewOutcome
+    relation: LinkReviewRelation | None = None
+    factor_role: str = Field(min_length=1)
+    scope_boundary: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+
+
+class EvidenceReviewDTO(V1Model):
+    id: str
+    evidence_link_id: str
+    outcome: str
+    relation: str | None
+    factor_role: str
+    scope_boundary: str
+    reason: str
+    reviewer: str
+    created_at: str
+
+
+class LinkReviewResponse(V1Model):
+    review: EvidenceReviewDTO
+
+
+class AssessmentReviewRequest(V1Model):
+    outcome: Literal["confirmed", "modified", "rejected"]
+    conclusion: Literal["supported", "contradicted", "insufficient_evidence"] | None = None
+    reason: str = Field(min_length=1)
+    reviewer: str = Field(default="reviewer", min_length=1)
+
+
+class AssessmentReviewResponse(V1Model):
+    id: str
+    ai_assessment_id: str
+    outcome: str
+    conclusion: str | None
+    reason: str
+    reviewer: str
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
+# 审核队列 (review queue read model, consumed by the commands router)
+# ---------------------------------------------------------------------------
+
+
+class ReviewQueueItemDTO(V1Model):
+    """One pending link-level review: frozen source vs AI proposal."""
+
+    link_id: str
+    thesis_id: str
+    case_id: str
+    thesis_statement: str
+    ai_role: str
+    ai_reason: str
+    ai_scope: dict[str, Any]
+    statement_id: str
+    statement_text: str
+    statement_kind: str
+    span_id: str
+    verbatim_text: str
+    locator: dict[str, Any]
+    document_version_id: str
+    document_source_url: str
+    document_published_at: str | None
+    available_at: str
+
+
+class ReviewQueueResponse(V1Model):
+    items: list[ReviewQueueItemDTO]
