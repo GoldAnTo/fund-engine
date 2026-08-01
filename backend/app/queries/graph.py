@@ -17,6 +17,10 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.queries.basis import HistoricalBasis
+from app.queries.effective_state import (
+    effective_review_state,
+    latest_review_outcomes,
+)
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.common import CursorPage
@@ -124,10 +128,19 @@ class RelationshipGraphQueries:
             allowed_states = (
                 _RESEARCH_STATES if research_mode else _REVIEWED_STATES
             )
-            for link in self._research.visible_links(
-                thesis_id=thesis.id, cutoff=basis.cutoff
-            ):
-                if link.review_state not in allowed_states:
+            visible = list(
+                self._research.visible_links(thesis_id=thesis.id, cutoff=basis.cutoff)
+            )
+            # Append-only ledger: human review outcomes live in
+            # evidence_reviews, so visibility/edge state use the effective state.
+            outcomes = latest_review_outcomes(
+                self._session, [link.id for link in visible], cutoff=basis.cutoff
+            )
+            for link in visible:
+                state = effective_review_state(
+                    link.review_state, outcomes.get(link.id)
+                )
+                if state not in allowed_states:
                     continue
                 statement = self._research.get_statement(link.source_statement_id)
                 if statement is None:
@@ -143,7 +156,7 @@ class RelationshipGraphQueries:
                     "evidence",
                     thesis.id,
                     statement.id,
-                    review_state=link.review_state,
+                    review_state=state,
                     available_at=_iso(link.available_at),
                 )
 

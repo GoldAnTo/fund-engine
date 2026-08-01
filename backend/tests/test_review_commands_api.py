@@ -168,6 +168,77 @@ def test_confirmed_link_review_leaves_queue(cmd_client, cmd_seeded):
     assert all(i["link_id"] != link_id for i in remaining)
 
 
+def test_confirmed_link_review_transitions_link_to_reviewed(cmd_client, cmd_seeded):
+    """Confirmed reviews must make the link visible as reviewed knowledge."""
+    link_id = _first_queue_item_id(cmd_client)
+    assert (
+        cmd_client.get("/api/v1/knowledge?review_state=reviewed").json()["items"]
+        == []
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/evidence-links/{link_id}/reviews",
+        json={
+            "outcome": "confirmed",
+            "relation": "contradicts",
+            "factor_role": "x",
+            "scope_boundary": "y",
+            "reason": "z",
+            "reviewer": "reviewer-test",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    items = cmd_client.get("/api/v1/knowledge?review_state=reviewed").json()[
+        "items"
+    ]
+    reviewed_links = [l for i in items for l in i["links"]]
+    assert any(l["link_id"] == link_id for l in reviewed_links)
+    # The derived-state filter must apply before the scan cap (limit=1 used
+    # to hide reviewed links behind newer machine_generated rows).
+    limited = cmd_client.get(
+        "/api/v1/knowledge?review_state=reviewed&limit=1"
+    ).json()["items"]
+    assert any(
+        l["link_id"] == link_id for i in limited for l in i["links"]
+    )
+    # Append-only ledger: role stays the AI proposal; the human decision is
+    # carried by the latest review on the link.
+    hit = next(l for l in reviewed_links if l["link_id"] == link_id)
+    assert hit["review_state"] == "reviewed"
+    assert hit["latest_review_outcome"] == "confirmed"
+    assert hit["latest_reviewer"] == "reviewer-test"
+
+
+def test_rejected_link_review_transitions_link_to_rejected(cmd_client, cmd_seeded):
+    link_id = _first_queue_item_id(cmd_client)
+    response = cmd_client.post(
+        f"/api/v1/evidence-links/{link_id}/reviews",
+        json={
+            "outcome": "rejected",
+            "relation": "evidence_gap",
+            "factor_role": "x",
+            "scope_boundary": "y",
+            "reason": "z",
+            "reviewer": "reviewer-test",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    rejected = cmd_client.get("/api/v1/knowledge?review_state=rejected").json()[
+        "items"
+    ]
+    assert any(
+        l["link_id"] == link_id for i in rejected for l in i["links"]
+    )
+    reviewed = cmd_client.get("/api/v1/knowledge?review_state=reviewed").json()[
+        "items"
+    ]
+    assert all(
+        l["link_id"] != link_id for i in reviewed for l in i["links"]
+    )
+
+
 def test_confirmed_review_requires_relation(cmd_client, cmd_seeded):
     link_id = _first_queue_item_id(cmd_client)
     response = cmd_client.post(

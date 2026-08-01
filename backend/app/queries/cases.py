@@ -23,6 +23,10 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import ResearchCase
 from app.queries.basis import HistoricalBasis
+from app.queries.effective_state import (
+    effective_review_state,
+    latest_review_outcomes,
+)
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.cases import (
     AssessFailureDTO,
@@ -122,10 +126,19 @@ class CaseReadQueries:
 
         if thesis is not None:
             allowed_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
-            for link in self._repo.visible_links(
-                thesis_id=thesis.id, cutoff=basis.cutoff
-            ):
-                if link.review_state not in allowed_states:
+            visible = list(
+                self._repo.visible_links(thesis_id=thesis.id, cutoff=basis.cutoff)
+            )
+            # Ledger rows are append-only: the human review outcome lives in
+            # evidence_reviews, so visibility uses the *effective* state.
+            outcomes = latest_review_outcomes(
+                self._session, [link.id for link in visible], cutoff=basis.cutoff
+            )
+            for link in visible:
+                state = effective_review_state(
+                    link.review_state, outcomes.get(link.id)
+                )
+                if state not in allowed_states:
                     continue
                 statement = self._repo.get_statement(link.source_statement_id)
                 # A link whose statement did not exist at the cutoff would leak
@@ -133,7 +146,7 @@ class CaseReadQueries:
                 if statement is None or _to_aware(statement.created_at) > basis.cutoff:
                     continue
                 evidence.setdefault(link.role, []).append(
-                    self._evidence_record(link, statement)
+                    self._evidence_record(link, statement, review_state=state)
                 )
 
             assessment = self._repo.latest_assessment_for_thesis(
@@ -243,7 +256,9 @@ class CaseReadQueries:
             review_state=thesis.review_state,
         )
 
-    def _evidence_record(self, link, statement=None) -> EvidenceRecordDTO:
+    def _evidence_record(
+        self, link, statement=None, review_state: str | None = None
+    ) -> EvidenceRecordDTO:
         if statement is None:
             statement = self._repo.get_statement(link.source_statement_id)
         span = self._repo.span_for_statement(link.source_statement_id)
@@ -262,7 +277,7 @@ class CaseReadQueries:
             scope=link.scope,
             observed_period=_iso(statement.observed_period) if statement else None,
             available_at=_iso(link.available_at),
-            review_state=link.review_state,
+            review_state=review_state if review_state is not None else link.review_state,
         )
 
     def _assessment(

@@ -1,0 +1,52 @@
+{
+  "passed": true,
+  "failures": [],
+  "generated_at": "20260801T170754Z",
+  "checks": [
+    {
+      "name": "document_versions_present",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "gold_manifest_matches_ledger",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "assessment_source_spans_complete",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "holding_disclosures_dated",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "future_material_excluded",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "ai_human_boundary_visible",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "review_outcomes_tracked",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "table_extraction_gold_accuracy",
+      "passed": true,
+      "skipped": false
+    },
+    {
+      "name": "projection_rebuilds",
+      "passed": true,
+      "skipped": true
+    }
+  ]
+}

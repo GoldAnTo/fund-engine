@@ -22,6 +22,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from app.queries.effective_state import effective_review_state
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.knowledge import (
     CaseSnapshotDTO,
@@ -84,15 +85,25 @@ class KnowledgeQueries:
             .join(SourceSpan, SourceStatement.source_span_id == SourceSpan.id)
             .join(Thesis, EvidenceLink.thesis_id == Thesis.id)
             .order_by(EvidenceLink.created_at.desc())
-            .limit(limit * 4)  # statements collapse multiple links per row
         )
         if case_id is not None:
             query = query.where(Thesis.research_case_id == case_id)
-        if review_state is not None:
-            query = query.where(EvidenceLink.review_state == review_state)
+        # NOTE: no SQL filter on review_state — ledger rows are append-only,
+        # so the effective state is derived from the latest EvidenceReview
+        # below (a confirmed review makes a machine_generated link reviewed).
+        # When no state filter is given we can safely cap the scan; with a
+        # filter the cap must apply *after* derivation, so scan everything.
+        if review_state is None:
+            query = query.limit(limit * 4)  # statements collapse links per row
 
         items: dict[uuid.UUID, KnowledgeItemDTO] = {}
         for link, statement, span, thesis in self._db.execute(query):
+            latest = self._latest_link_review(link.id)
+            state = effective_review_state(
+                link.review_state, latest.outcome if latest else None
+            )
+            if review_state is not None and state != review_state:
+                continue
             item = items.get(statement.id)
             if item is None:
                 if len(items) >= limit:
@@ -111,7 +122,6 @@ class KnowledgeQueries:
                     links=[],
                 )
                 items[statement.id] = item
-            latest = self._latest_link_review(link.id)
             item.links.append(
                 KnowledgeLinkDTO(
                     link_id=str(link.id),
@@ -120,7 +130,7 @@ class KnowledgeQueries:
                     reason=link.reason,
                     scope=link.scope,
                     creator_type=link.creator_type,
-                    review_state=link.review_state,
+                    review_state=state,
                     latest_review_outcome=latest.outcome if latest else None,
                     latest_reviewer=latest.reviewer if latest else None,
                     latest_reviewed_at=(

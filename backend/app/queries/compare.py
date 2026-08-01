@@ -20,6 +20,10 @@ from app.models.ledger import (
     EvidenceLink,
     SourceStatement,
 )
+from app.queries.effective_state import (
+    effective_review_state,
+    latest_review_outcomes,
+)
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.compare import (
     CaseCompareResponse,
@@ -116,6 +120,10 @@ class CaseCompareQueries:
         )
 
     def _link_dtos(self, link_ids: set[str]) -> list[CompareLinkDTO]:
+        uuids = [uuid.UUID(link_id) for link_id in sorted(link_ids)]
+        # Append-only ledger: show the effective state (latest review folded
+        # over the frozen column) so human decisions are visible in compare.
+        outcomes = latest_review_outcomes(self._db, uuids)
         dtos: list[CompareLinkDTO] = []
         for link_id in sorted(link_ids):
             link = self._repo.get_evidence_link(uuid.UUID(link_id))
@@ -134,7 +142,9 @@ class CaseCompareQueries:
                     statement_text=(
                         statement.normalized_text if statement else None
                     ),
-                    review_state=link.review_state,
+                    review_state=effective_review_state(
+                        link.review_state, outcomes.get(link.id)
+                    ),
                 )
             )
         return dtos
