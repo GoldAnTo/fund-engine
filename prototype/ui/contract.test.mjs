@@ -991,13 +991,100 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型2.png"),
     "case must map exactly to prototype/设计原型2.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("graph"),
+    path.resolve(UI_DIR, "../设计原型.png"),
+    "graph must map exactly to prototype/设计原型.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertGraphProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "因素关系路径");
+  for (const layer of [
+    "DocumentVersion",
+    "SourceStatement",
+    "支持证据",
+    "反面证据",
+    "ReviewedFactor",
+    "CausalStep",
+    "Company",
+    "Stock",
+    "HoldingDisclosure",
+    "Fund",
+  ]) {
+    assert.equal(await marker.getByText(layer, { exact: true }).first().count(), 1, `graph must visibly include ${layer}`);
+  }
+
+  for (const semantic of ["来源事实", "AI 提议关系 · 未经人工复核", "已人工复核关系", "投影节点"]) {
+    assert.ok(await marker.getByText(semantic, { exact: true }).first().isVisible(), `graph must distinguish ${semantic}`);
+  }
+
+  const edgeKinds = new Set(await marker.locator("[data-edge-kind]").evaluateAll((edges) => edges.map((edge) => edge.dataset.edgeKind)));
+  assert.ok(edgeKinds.has("source"), "graph must label source extraction edges");
+  assert.ok(edgeKinds.has("support"), "graph must label support edges");
+  assert.ok(edgeKinds.has("contradict"), "graph must label contradiction edges");
+  assert.ok(edgeKinds.has("reviewed"), "graph must label reviewed transmission edges");
+  assert.ok(edgeKinds.has("projection"), "graph must label projection edges");
+
+  const pathList = marker.getByRole("list", { name: "结构化关系路径" });
+  assert.equal(await pathList.count(), 1, "graph must expose one accessible structured path list");
+  assert.ok(await pathList.getByRole("button").count() >= 9, "structured path must expose every main-path node as a real button");
+
+  const inspector = marker.locator("[data-graph-inspector]");
+  for (const field of ["原文区段", "关系语义", "审核状态", "适用范围", "as-of", "披露日期"]) {
+    assert.ok((await inspector.innerText()).includes(field), `graph inspector must show ${field}`);
+  }
+  assert.ok(await inspector.getByRole("button", { name: "提交审核", exact: true }).isVisible(), "proposed relation must expose 提交审核");
+  assert.ok(await inspector.getByRole("button", { name: "撤回提议", exact: true }).isVisible(), "proposed relation must expose 撤回提议");
+
+  const fundNode = marker.locator('.graph-node[data-graph-node-id="FUND-ETF-AI-INFRA"]');
+  const fundText = await fundNode.innerText();
+  for (const copy of ["披露持仓", "as-of 2025-03-31", "不构成投资建议"]) {
+    assert.ok(fundText.includes(copy), `fund projection must visibly include ${copy}`);
+  }
+
+  const sourcePathButton = pathList.getByRole("button", { name: /NVIDIA FY2026 Q1 Form 10-Q/u });
+  await sourcePathButton.click();
+  assert.ok((await inspector.innerText()).includes("pp. 22-27, Data Center revenue and supply commitments"), "path selection must update inspector source span");
+  assert.equal(await inspector.getByRole("button", { name: "提交审核", exact: true }).count(), 0, "source facts must not expose proposal actions");
+
+  await marker.locator('.graph-node[data-graph-node-id="EL-PROPOSED-CAUSAL"]').click();
+  assert.ok((await inspector.innerText()).includes("未经人工复核"), "canvas selection must update inspector review state");
+  assert.ok(await inspector.getByRole("button", { name: "提交审核", exact: true }).isVisible(), "canvas-selected proposal must restore review action");
+
+  const desktop = await marker.evaluate((element) => {
+    const graph = element.querySelector("[data-graph-canvas]");
+    const nodeSizes = [...element.querySelectorAll("[data-graph-node-id]")].map((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      clipped: node.scrollWidth > node.clientWidth || node.scrollHeight > node.clientHeight,
+    }));
+    return {
+      graphVisible: getComputedStyle(graph).display !== "none",
+      graphWidth: graph.getBoundingClientRect().width,
+      nodeSizes,
+    };
+  });
+  assert.ok(desktop.graphVisible && desktop.graphWidth >= 780, `desktop graph must remain the readable primary view: ${JSON.stringify(desktop)}`);
+  assert.ok(desktop.nodeSizes.every((node) => node.fontSize >= 13 && !node.clipped), `graph nodes must be readable and unclipped: ${JSON.stringify(desktop.nodeSizes)}`);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobile = await marker.evaluate((element) => ({
+    graphDisplay: getComputedStyle(element.querySelector("[data-graph-canvas]")).display,
+    listVisible: getComputedStyle(element.querySelector('[aria-label="结构化关系路径"]')).display !== "none",
+    bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+    documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  }));
+  assert.equal(mobile.graphDisplay, "none", "mobile must replace the positioned graph with normal-flow path content");
+  assert.ok(mobile.listVisible, "mobile structured path must remain visible");
+  assert.ok(mobile.bodyOverflow <= 0 && mobile.documentOverflow <= 0, `graph must fit 375px without horizontal overflow: ${JSON.stringify(mobile)}`);
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertResearchPlanProductContract(page, marker) {
@@ -2205,6 +2292,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "case") {
         await assertCaseWorkbenchProductContract(page, marker);
+      }
+      if (screen === "graph") {
+        await assertGraphProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {

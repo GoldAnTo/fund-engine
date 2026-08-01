@@ -857,6 +857,294 @@
     `;
   }
 
+  function buildGraphViewModel(fixture) {
+    const document = fixture.documents.find((item) => item.id === "DOC-NVDA-FY26Q1");
+    const statement = fixture.statements.find((item) => item.id === "ST-002");
+    const support = fixture.evidenceLinks.find((item) => item.id === "EL-002");
+    const contradiction = fixture.evidenceLinks.find((item) => item.id === "EL-004");
+    const factor = fixture.factors.find((item) => item.id === fixture.case.workbench.selectedFactorId);
+    const company = fixture.companies.find((item) => item.id === "CO-NVDA");
+    const fund = fixture.funds.find((item) => item.id === "FUND-ETF-AI-INFRA");
+    const asOf = fixture.case.cutoff;
+    const publishedDate = (value) => value?.slice(0, 10) ?? "不适用";
+    const node = (definition) => ({
+      scope: "AI 算力产业链 · 当前 ResearchCase",
+      asOf,
+      disclosureDate: "不适用",
+      actions: false,
+      ...definition,
+    });
+
+    return {
+      case: fixture.case,
+      nodes: [
+        node({
+          id: document.id,
+          layer: "DocumentVersion",
+          title: document.title,
+          meta: document.sourceVersion,
+          kind: "source-fact",
+          kindLabel: "来源事实",
+          relation: "冻结文档版本，是后续引用的来源边界。",
+          review: "已人工复核",
+          sourceSpan: document.sourceSpan,
+          disclosureDate: publishedDate(document.publishedAt),
+          position: "document",
+        }),
+        node({
+          id: statement.id,
+          layer: "SourceStatement",
+          title: statement.text,
+          meta: `${statement.id} · ${statement.sourceVersion}`,
+          kind: "source-fact",
+          kindLabel: "来源事实",
+          relation: "从冻结版本中抽取的原子陈述。",
+          review: "已人工复核",
+          sourceSpan: statement.sourceSpan,
+          disclosureDate: publishedDate(statement.publishedAt),
+          position: "statement",
+        }),
+        node({
+          id: support.id,
+          layer: "支持证据",
+          title: "交付与分部收入具备同主体披露入口",
+          meta: `${support.id} · 支持`,
+          kind: "reviewed-relation",
+          kindLabel: "已人工复核关系",
+          relation: support.rationale,
+          review: "已人工复核",
+          sourceSpan: support.sourceSpan,
+          disclosureDate: publishedDate(support.publishedAt),
+          position: "support",
+        }),
+        node({
+          id: contradiction.id,
+          layer: "反面证据",
+          title: "需求与投入不等同于当期收入确认",
+          meta: `${contradiction.id} · 反驳即时传导`,
+          kind: "reviewed-relation",
+          kindLabel: "已人工复核关系",
+          relation: contradiction.rationale,
+          review: "已人工复核",
+          sourceSpan: contradiction.sourceSpan,
+          disclosureDate: publishedDate(contradiction.publishedAt),
+          position: "contradiction",
+        }),
+        node({
+          id: factor.id,
+          layer: "ReviewedFactor",
+          title: factor.label,
+          meta: `${factor.id} · 传导因素`,
+          kind: "reviewed-factor",
+          kindLabel: "人工界定因素",
+          relation: "在当前案例中作为订单到交付的传导因素使用。",
+          review: "因素角色已人工界定",
+          sourceSpan: support.sourceSpan,
+          position: "factor",
+        }),
+        node({
+          id: "EL-PROPOSED-CAUSAL",
+          layer: "CausalStep",
+          title: "系统交付兑现后进入分部收入确认",
+          meta: "提议边 · 交付 → 收入",
+          kind: "ai-proposed",
+          kindLabel: "AI 提议关系 · 未经人工复核",
+          relation: "提议语义：实际交付是订单积压进入收入确认的必要中间环节。",
+          review: "未经人工复核",
+          sourceSpan: statement.sourceSpan,
+          scope: "NVIDIA 数据中心业务 · 2026 财年第一季度",
+          disclosureDate: publishedDate(statement.publishedAt),
+          actions: true,
+          position: "causal",
+        }),
+        node({
+          id: company.id,
+          layer: "Company",
+          title: company.name,
+          meta: "算力系统供应商",
+          kind: "projection",
+          kindLabel: "投影节点",
+          relation: "从已披露业务主体投影到公司实体。",
+          review: "来源映射已复核",
+          sourceSpan: company.sourceSpan,
+          disclosureDate: company.disclosureDate,
+          position: "company",
+        }),
+        node({
+          id: "STOCK-NVDA",
+          layer: "Stock",
+          title: "NVDA · NASDAQ",
+          meta: "证券表达层",
+          kind: "projection",
+          kindLabel: "投影节点",
+          relation: "公司实体到上市证券标识的投影，不表示推荐。",
+          review: "投影映射",
+          sourceSpan: company.sourceSpan,
+          disclosureDate: company.disclosureDate,
+          position: "stock",
+        }),
+        node({
+          id: "HOLDING-FUND-NVDA-2025Q1",
+          layer: "HoldingDisclosure",
+          title: `披露持仓 ${fund.disclosedWeight}`,
+          meta: `as-of ${fund.disclosureDate} · ${fund.sourceVersion}`,
+          kind: "projection",
+          kindLabel: "投影节点",
+          relation: "基金定期报告披露的点时持仓，不代表当前敞口。",
+          review: "已人工复核",
+          sourceSpan: fund.sourceSpan,
+          asOf: fund.disclosureDate,
+          disclosureDate: publishedDate(fund.publishedAt),
+          position: "holding",
+        }),
+        node({
+          id: fund.id,
+          layer: "Fund",
+          title: fund.name,
+          meta: `披露持仓 · as-of ${fund.disclosureDate}`,
+          note: "不构成投资建议",
+          kind: "projection",
+          kindLabel: "投影节点",
+          relation: "由已披露持仓连接的基金表达，仅用于点时穿透。",
+          review: "披露记录已复核",
+          sourceSpan: fund.sourceSpan,
+          asOf: fund.disclosureDate,
+          disclosureDate: publishedDate(fund.publishedAt),
+          position: "fund",
+        }),
+      ],
+    };
+  }
+
+  function renderGraphNode(item) {
+    return `
+      <button type="button" class="graph-node ${escapeHTML(item.kind)} node-${escapeHTML(item.position)}" data-graph-select data-graph-node-id="${escapeHTML(item.id)}" aria-pressed="${item.actions}">
+        <span class="graph-node-layer">${escapeHTML(item.layer)}</span>
+        <strong>${escapeHTML(item.title)}</strong>
+        <small>${escapeHTML(item.meta)}</small>
+        <span class="graph-node-kind">${escapeHTML(item.kindLabel)}</span>
+        ${item.note ? `<em>${escapeHTML(item.note)}</em>` : ""}
+      </button>
+    `;
+  }
+
+  function renderGraphInspector(item) {
+    return `
+      <div class="inspector-heading">
+        <div><p>当前选择</p><h2>${escapeHTML(item.layer)}</h2></div>
+        <span class="inspector-kind ${escapeHTML(item.kind)}">${escapeHTML(item.kindLabel)}</span>
+      </div>
+      <strong class="inspector-title">${escapeHTML(item.title)}</strong>
+      <dl class="inspector-facts">
+        <div><dt>对象标识</dt><dd>${escapeHTML(item.id)}</dd></div>
+        <div><dt>原文区段</dt><dd>${escapeHTML(item.sourceSpan)}</dd></div>
+        <div><dt>关系语义</dt><dd>${escapeHTML(item.relation)}</dd></div>
+        <div><dt>审核状态</dt><dd>${escapeHTML(item.review)}</dd></div>
+        <div><dt>适用范围</dt><dd>${escapeHTML(item.scope)}</dd></div>
+        <div><dt>as-of</dt><dd>${escapeHTML(item.asOf)}</dd></div>
+        <div><dt>披露日期</dt><dd>${escapeHTML(item.disclosureDate)}</dd></div>
+      </dl>
+      ${item.actions ? `
+        <div class="inspector-actions">
+          <button type="button" class="graph-action primary" data-graph-action="submit">提交审核</button>
+          <button type="button" class="graph-action quiet" data-graph-action="withdraw">撤回提议</button>
+        </div>
+        <p class="inspector-action-note" data-graph-action-note aria-live="polite">操作仅更新本页原型状态，不写入冻结快照。</p>
+      ` : `<p class="inspector-boundary">该对象不是待审核提议，不显示审核操作。</p>`}
+    `;
+  }
+
+  function renderGraphWorkbench() {
+    const view = buildGraphViewModel(data);
+    const selected = view.nodes.find((item) => item.actions);
+    return `
+      <main class="screen graph-workbench-screen" data-screen="graph">
+        <header class="graph-header">
+          <div>
+            <p class="eyebrow">Focused relationship path</p>
+            <h1>因素关系路径</h1>
+            <p class="lede">沿一条重要路径核对来源、关系审核与披露持仓；图谱是可重建投影，不替代证据台账。</p>
+          </div>
+          <div class="graph-context" aria-label="图谱上下文">
+            <span>探索视图</span>
+            <strong>当前冻结快照 ${escapeHTML(view.case.snapshotId)}</strong>
+            <small>证据截止 ${escapeHTML(view.case.cutoff)} · 待审核提议可见</small>
+          </div>
+        </header>
+
+        <div class="graph-workbench">
+          <section class="graph-primary" aria-labelledby="graph-canvas-title">
+            <div class="graph-toolbar">
+              <div><p>主路径</p><h2 id="graph-canvas-title">冻结来源 → 披露持仓</h2></div>
+              <div class="graph-legend" aria-label="关系图例">
+                <span class="legend-source">实线 · 来源</span>
+                <span class="legend-reviewed">实线箭头 · 已复核</span>
+                <span class="legend-proposed">虚线箭头 · 未复核</span>
+              </div>
+            </div>
+            <div class="relationship-canvas" data-graph-canvas aria-label="证据到基金连续关系图">
+              <span class="swimlane-label lane-evidence">01 · 冻结证据</span>
+              <span class="swimlane-label lane-mechanism">02 · 因素与机制</span>
+              <span class="swimlane-label lane-expression">03 · 证券与基金披露</span>
+              ${view.nodes.map(renderGraphNode).join("")}
+              <span class="graph-edge edge-document-statement" data-edge-kind="source"><b>抽取</b></span>
+              <span class="graph-edge edge-statement-support" data-edge-kind="support"><b>支持</b></span>
+              <span class="graph-edge edge-support-factor" data-edge-kind="reviewed"><b>人工确认</b></span>
+              <span class="graph-edge edge-contradiction-horizontal" data-edge-kind="contradict"><b>反驳即时传导</b></span>
+              <span class="graph-edge edge-contradiction-vertical" data-edge-kind="contradict" aria-hidden="true"></span>
+              <span class="graph-edge edge-factor-causal" data-edge-kind="reviewed"><b>形成机制提议</b></span>
+              <span class="graph-edge edge-causal-company" data-edge-kind="projection"><b>影响对象</b></span>
+              <span class="graph-edge edge-company-stock reverse" data-edge-kind="projection"><b>证券映射</b></span>
+              <span class="graph-edge edge-stock-holding reverse" data-edge-kind="projection"><b>披露记录</b></span>
+              <span class="graph-edge edge-holding-fund reverse" data-edge-kind="projection"><b>所属基金</b></span>
+            </div>
+
+            <div class="structured-path">
+              <div><p>可访问替代</p><h2>结构化路径</h2></div>
+              <ol aria-label="结构化关系路径">
+                ${view.nodes.filter((item) => item.position !== "contradiction").map((item, index) => `
+                  <li><button type="button" data-graph-select data-graph-node-id="${escapeHTML(item.id)}"><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.layer)}</small></button></li>
+                `).join("")}
+                <li class="path-branch"><button type="button" data-graph-select data-graph-node-id="${escapeHTML(view.nodes.find((item) => item.position === "contradiction").id)}"><span>↳</span><strong>反面证据分支</strong><small>反驳即时传导</small></button></li>
+              </ol>
+            </div>
+          </section>
+
+          <aside class="graph-inspector" data-graph-inspector aria-label="关系检查器">
+            ${renderGraphInspector(selected)}
+          </aside>
+        </div>
+      </main>
+    `;
+  }
+
+  function bindGraphWorkbench(root) {
+    const view = buildGraphViewModel(data);
+    const nodeIndex = new Map(view.nodes.map((item) => [item.id, item]));
+    const inspector = root.querySelector("[data-graph-inspector]");
+    const selectNode = (id) => {
+      const selected = nodeIndex.get(id);
+      if (!selected) return;
+      root.querySelectorAll("[data-graph-select]").forEach((control) => {
+        control.setAttribute("aria-pressed", String(control.dataset.graphNodeId === id));
+      });
+      inspector.innerHTML = renderGraphInspector(selected);
+    };
+    root.addEventListener("click", (event) => {
+      const selector = event.target.closest("[data-graph-select]");
+      if (selector) {
+        selectNode(selector.dataset.graphNodeId);
+        return;
+      }
+      const action = event.target.closest("[data-graph-action]");
+      if (!action) return;
+      const note = inspector.querySelector("[data-graph-action-note]");
+      note.textContent = action.dataset.graphAction === "submit"
+        ? "已在本页标记为待提交审核，冻结快照保持不变。"
+        : "已在本页标记为撤回，冻结快照保持不变。";
+    });
+  }
+
   function renderPlanAsset(asset) {
     const assetLabel = asset.kind === "metric"
       ? [
@@ -1226,7 +1514,7 @@
     "new-research": renderNewResearch,
     "plan": renderPlan,
     "case": renderCaseWorkbench,
-    "graph": () => renderPlaceholder("graph"),
+    "graph": renderGraphWorkbench,
     "review": () => renderPlaceholder("review"),
     "library": () => renderPlaceholder("library"),
     "data": () => renderPlaceholder("data"),
@@ -1270,6 +1558,7 @@
     if (screen === "new-research") bindNewResearchForm(data);
     if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"), planState.buildResearchPlanViewModel(data));
     if (screen === "case") caseState.bindCaseWorkbench(app.querySelector("[data-screen=case]"));
+    if (screen === "graph") bindGraphWorkbench(app.querySelector("[data-screen=graph]"));
   }
 
   renderShell(requestedScreen());
@@ -1279,4 +1568,5 @@
   window.PROTOTYPE_NEW_RESEARCH = Object.freeze({ buildNewResearchViewModel, confirmationStorageKey });
   window.PROTOTYPE_RESEARCH_PLAN = planState;
   window.PROTOTYPE_CASE_WORKBENCH = caseState;
+  window.PROTOTYPE_GRAPH_WORKBENCH = Object.freeze({ buildGraphViewModel });
 }());
