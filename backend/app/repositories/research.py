@@ -440,6 +440,21 @@ class ResearchRepository:
             .limit(1)
         )
 
+    def latest_snapshot_for_thesis(
+        self,
+        thesis_id: uuid.UUID,
+        *,
+        cutoff: datetime,
+    ) -> EvidenceSnapshot | None:
+        """Latest frozen snapshot for a thesis written on or before *cutoff*."""
+        return self._session.scalar(
+            select(EvidenceSnapshot)
+            .where(EvidenceSnapshot.thesis_id == thesis_id)
+            .where(EvidenceSnapshot.created_at <= cutoff)
+            .order_by(EvidenceSnapshot.created_at.desc())
+            .limit(1)
+        )
+
     def assessments_for_thesis(
         self,
         thesis_id: uuid.UUID,
