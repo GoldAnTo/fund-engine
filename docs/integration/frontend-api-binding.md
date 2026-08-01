@@ -3,6 +3,11 @@
 > 目的：前端从 `prototypeFixture` mock 切到真实 v1 API 的逐页映射。
 > 状态分三档：✅ 已就绪（端点存在，直接绑）/ 🔧 需适配（端点存在但字段要转换）/ ❌ 无后端（保持 mock 或补端点，见文末缺口清单）。
 >
+> **切换进度（2026-08-02 全部完成）**：屏 1/2/3/4/5/6/8/9/10/11 已切真实 API 并逐屏真实联调通过
+> （临时 SQLite 种子库 + uvicorn 直连，含屏2 createCase 写路径 round-trip）。
+> 屏 7 资料库仍为 fixture（端点已就绪，见 §7）。
+> 「任务队列 / 活动流 / Provider 查询计划」按缺口清单明确不建，页面已标注「示例 · 非目标范围」。
+>
 > 后端契约统一约定：
 > - 所有 id 为 UUID 字符串；日期 `YYYY-MM-DD`，日期时间 ISO 8601 带时区
 > - 错误统一走 `{schema_version:"v1", error:{code,message,request_id}}` envelope
