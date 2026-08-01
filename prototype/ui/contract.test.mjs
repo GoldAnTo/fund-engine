@@ -996,13 +996,61 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型.png"),
     "graph must map exactly to prototype/设计原型.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("review"),
+    path.resolve(UI_DIR, "../设计原型5-审核工作区.png"),
+    "review must map exactly to prototype/设计原型5-审核工作区.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertReviewProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "证据审核工作区");
+  assert.equal(await marker.locator('[data-review-queue-item]').count(), 2, "review queue must expose the two honest fixture items");
+  const selected = marker.locator('[data-review-queue-item][data-selected="true"]');
+  assert.equal(await selected.count(), 1, "review queue must expose one unmistakable selected row");
+  for (const label of ["类型", "目标", "来源", "优先级", "审核状态", "剩余进度"]) {
+    assert.ok((await selected.innerText()).includes(label), `selected review item must expose ${label}`);
+  }
+
+  const comparison = marker.locator('[data-review-comparison]');
+  for (const label of ["冻结 SourceSpan", "DocumentVersion", "发布日期", "精确位置", "证据截止", "冻结快照", "AI 规范化陈述", "未经人工复核", "目标 Thesis", "目标因素", "拟建关系"]) {
+    assert.ok((await comparison.innerText()).includes(label), `review comparison must expose ${label}`);
+  }
+  assert.ok((await comparison.locator("blockquote").textContent()).trim().length > 20, "review comparison must show a non-vacuous frozen source excerpt");
+
+  const decision = marker.locator('[data-human-decision]');
+  assert.equal(await decision.locator('input[name="relation"]').count(), 4, "human decision must require an explicit relation selection");
+  assert.equal(await decision.getByLabel("因素角色").count(), 1, "human decision must expose factor-role selection");
+  assert.equal(await decision.getByLabel("适用边界").count(), 1, "human decision must require an applicability boundary");
+  assert.equal(await decision.getByLabel("审核理由").count(), 1, "human decision must require review rationale");
+  for (const action of ["确认并写入审核知识", "驳回", "要求补充证据"]) {
+    assert.ok(await decision.getByRole("button", { name: action, exact: true }).isVisible(), `review must expose exact action ${action}`);
+  }
+  const accept = decision.getByRole("button", { name: "确认并写入审核知识", exact: true });
+  assert.ok(await accept.isDisabled(), "acceptance must be gated until all human fields are explicit");
+  await decision.locator('input[name="relation"][value="gap"]').check();
+  await decision.getByLabel("因素角色").selectOption("transmission");
+  await decision.getByLabel("适用边界").fill("仅适用于 2025-06-30 截止的当前冻结快照。");
+  await decision.getByLabel("审核理由").fill("展望不能代替实际交付与分部收入确认。");
+  assert.ok(await accept.isEnabled(), "acceptance must unlock only after all four human decisions are explicit");
+  const immutable = decision.locator('[data-immutable-record]');
+  assert.ok((await immutable.innerText()).includes("追加新记录"), "decision must preview the immutable write");
+  assert.ok((await immutable.innerText()).includes("更正不覆盖"), "decision must state append-only correction semantics");
+  assert.doesNotMatch(await marker.innerText(), /置信度|成熟度|confidence|maturity/iu, "review must not expose confidence or maturity scores");
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= 1000), "review desktop document must fit the 1000px capture height");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobileActions = marker.locator('[data-review-actions]');
+  await mobileActions.scrollIntoViewIfNeeded();
+  assert.ok(await accept.isVisible(), "review decisions must remain reachable in normal mobile flow");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertGraphProductContract(page, marker) {
@@ -2295,6 +2343,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "graph") {
         await assertGraphProductContract(page, marker);
+      }
+      if (screen === "review") {
+        await assertReviewProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {

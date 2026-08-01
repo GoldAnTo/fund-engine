@@ -841,6 +841,198 @@
     });
   }
 
+  function buildReviewViewModel(fixture) {
+    const statements = indexById(fixture.statements);
+    const documents = indexById(fixture.documents);
+    const theses = indexById(fixture.theses);
+    const funds = indexById(fixture.funds);
+    const requestedItem = new URLSearchParams(window.location.search).get("item");
+    const selectedId = fixture.reviewQueue.some((item) => item.id === requestedItem)
+      ? requestedItem
+      : fixture.reviewQueue[0]?.id;
+    const selectedQueueItem = fixture.reviewQueue.find((item) => item.id === selectedId);
+    const priorityLabels = { high: "高", medium: "中", low: "低" };
+    const reviewLabels = { pending_review: "待人工审核", reviewed: "已人工复核" };
+
+    const queue = fixture.reviewQueue.map((item, index) => {
+      const statement = statements.get(item.targetId);
+      const fund = funds.get(item.targetId);
+      const evidence = statement
+        ? fixture.evidenceLinks.find((link) => link.statementId === statement.id)
+        : undefined;
+      const thesis = evidence ? theses.get(evidence.thesisId) : undefined;
+      const document = statement ? documents.get(statement.documentId) : undefined;
+      return {
+        ...item,
+        typeLabel: statement ? "来源陈述 · 关系" : "持仓披露映射",
+        targetLabel: thesis ? `${thesis.id} · ${thesis.title}` : `${fund.id} · ${fund.name}`,
+        sourceLabel: document?.title ?? `${fund.name} 2025 年一季报`,
+        priorityLabel: priorityLabels[item.priority] ?? "待判定",
+        reviewLabel: reviewLabels[item.reviewState] ?? "状态待确认",
+        remainingLabel: `${fixture.reviewQueue.length - index} / ${fixture.reviewQueue.length}`,
+        statement,
+        document,
+        evidence,
+        thesis,
+        fund,
+      };
+    });
+    const selected = queue.find((item) => item.id === selectedId);
+    const isStatementReview = Boolean(selected?.statement);
+    const factor = fixture.factors.find((item) => item.id === "F-T-01");
+    return {
+      case: fixture.case,
+      queue,
+      selected: {
+        ...selected,
+        sourceExcerpt: selected?.statement?.sourceExcerpt
+          ?? "Top ten holdings | TSMC | 6.1% | report date 2025-03-31",
+        normalizedStatement: selected?.statement?.text
+          ?? `该基金于 ${selected?.fund?.disclosureDate} 披露 ${selected?.fund?.name} 对台积电的持仓权重为 ${selected?.fund?.disclosedWeight}。`,
+        targetThesis: selected?.thesis ? `${selected.thesis.id} · ${selected.thesis.title}` : "不适用 · 本项为披露映射",
+        targetFactor: isStatementReview ? `${factor.id} · ${factor.label}` : "不适用 · 仅核对披露口径",
+        proposedRelation: isStatementReview
+          ? `${selected.statement.id} —[证据缺口]→ ${selected.thesis.id}`
+          : `${selected.fund.id} —[披露映射]→ CO-TSM`,
+      },
+    };
+  }
+
+  function renderReviewQueueItem(item, selectedId) {
+    const selected = item.id === selectedId;
+    return `
+      <li>
+        <a class="review-queue-item${selected ? " is-selected" : ""}" data-review-queue-item data-selected="${selected}" href="?screen=review&amp;item=${escapeHTML(item.id)}" ${selected ? 'aria-current="true"' : ""}>
+          <span class="review-item-top"><strong>${escapeHTML(item.id)}</strong><span class="review-priority ${escapeHTML(item.priority)}">优先级 · ${escapeHTML(item.priorityLabel)}</span></span>
+          <span class="review-item-task">${escapeHTML(item.task)}</span>
+          <dl>
+            <div><dt>类型</dt><dd>${escapeHTML(item.typeLabel)}</dd></div>
+            <div><dt>目标</dt><dd>${escapeHTML(item.targetLabel)}</dd></div>
+            <div><dt>来源</dt><dd>${escapeHTML(item.sourceLabel)}</dd></div>
+            <div><dt>审核状态</dt><dd>${escapeHTML(item.reviewLabel)}</dd></div>
+          </dl>
+          <span class="review-item-progress"><span>剩余进度</span><strong>${escapeHTML(item.remainingLabel)}</strong></span>
+        </a>
+      </li>
+    `;
+  }
+
+  function renderReviewWorkbench() {
+    const view = buildReviewViewModel(data);
+    const item = view.selected;
+    return `
+      <main class="screen review-workbench-screen" data-screen="review">
+        <header class="review-header">
+          <div>
+            <p class="eyebrow">Single-decision review</p>
+            <h1>证据审核工作区</h1>
+            <p class="lede">一次只审一个关系：对照冻结原文与 AI 提议，再由人明确选择关系、角色、边界和理由。</p>
+          </div>
+          <div class="review-snapshot"><span>当前审核基础</span><strong>${escapeHTML(view.case.snapshotId)}</strong><small>证据截止 ${escapeHTML(view.case.cutoff)} · 写入须人工确认</small></div>
+        </header>
+
+        <div class="review-workbench">
+          <aside class="review-queue-panel" aria-labelledby="review-queue-title">
+            <header><p>01 · 待办</p><h2 id="review-queue-title">审核队列</h2><span>${view.queue.length} 项待审</span></header>
+            <ol>${view.queue.map((queueItem) => renderReviewQueueItem(queueItem, item.id)).join("")}</ol>
+            <p class="review-queue-note">选中项已固定右侧写入目标；切换待办不会保留未提交的表单。</p>
+          </aside>
+
+          <section class="review-comparison" data-review-comparison aria-labelledby="review-comparison-title">
+            <header><div><p>02 · 证据对照</p><h2 id="review-comparison-title">原文与规范化提议</h2></div><span class="source-lock">◇ 冻结来源版本</span></header>
+            <article class="frozen-source" data-source-layer="frozen">
+              <div class="layer-heading"><span class="layer-index">A</span><div><p>事实层 · 不可在本页改写</p><h3>冻结 SourceSpan</h3></div></div>
+              <blockquote lang="en">${escapeHTML(item.sourceExcerpt)}</blockquote>
+              <dl class="source-metadata">
+                <div><dt>DocumentVersion</dt><dd>${escapeHTML(item.sourceVersion)}</dd></div>
+                <div><dt>发布日期</dt><dd>${escapeHTML(item.publishedAt.slice(0, 10))}</dd></div>
+                <div><dt>精确位置</dt><dd>${escapeHTML(item.sourceSpan)}</dd></div>
+                <div><dt>可用时间</dt><dd>${escapeHTML(item.availableAt.replace("T", " "))}</dd></div>
+                <div><dt>证据截止</dt><dd>${escapeHTML(view.case.cutoff)}</dd></div>
+                <div><dt>冻结快照</dt><dd>${escapeHTML(view.case.snapshotId)}</dd></div>
+              </dl>
+            </article>
+
+            <div class="normalization-step" aria-label="AI 规范化转换"><span>↓</span><strong>AI 抽取与规范化</strong><small>只生成候选陈述，不生成审核结论</small></div>
+
+            <article class="ai-proposal" data-evidence-assessment data-source-layer="ai">
+              <div class="layer-heading"><span class="layer-index">AI</span><div><p>提议层 · 不进入正式知识</p><h3>AI 规范化陈述</h3></div><strong class="ai-boundary">未经人工复核</strong></div>
+              <p class="normalized-statement">${escapeHTML(item.normalizedStatement)}</p>
+              <dl class="proposal-targets">
+                <div><dt>目标 Thesis</dt><dd>${escapeHTML(item.targetThesis)}</dd></div>
+                <div><dt>目标因素</dt><dd>${escapeHTML(item.targetFactor)}</dd></div>
+                <div class="proposed-relation"><dt>拟建关系</dt><dd>${escapeHTML(item.proposedRelation)}</dd></div>
+              </dl>
+            </article>
+          </section>
+
+          <section class="human-decision" data-human-decision aria-labelledby="human-decision-title">
+            <header><div><p>03 · 人工关口</p><h2 id="human-decision-title">审核人决定</h2></div><span class="human-only">只有人可写入</span></header>
+            <p class="decision-boundary"><strong>AI 提议到此为止。</strong>以下四项必须由审核人明确填写，系统不预选。</p>
+            <form data-review-form>
+              <fieldset class="relation-field"><legend>1 · 关系选择 <span>必选</span></legend><div>
+                <label><input type="radio" name="relation" value="support"><span>支持</span></label>
+                <label><input type="radio" name="relation" value="contradict"><span>反驳</span></label>
+                <label><input type="radio" name="relation" value="context"><span>背景</span></label>
+                <label><input type="radio" name="relation" value="gap"><span>证据缺口</span></label>
+              </div></fieldset>
+              <label class="decision-field"><span>2 · 因素角色 <b>必选</b></span><select aria-label="因素角色" name="factor-role"><option value="">请人工选择</option><option value="demand">需求拉动</option><option value="supply">供给约束</option><option value="transmission">传导验证</option><option value="alternative">替代解释</option></select></label>
+              <label class="decision-field"><span>3 · 适用边界 <b>必填</b></span><textarea aria-label="适用边界" name="boundary" rows="2" placeholder="例：仅适用于当前截止日与该分部口径"></textarea></label>
+              <label class="decision-field"><span>4 · 审核理由 <b>必填</b></span><textarea aria-label="审核理由" name="rationale" rows="2" placeholder="写明为何接受、驳回或要求补证"></textarea></label>
+
+              <section class="immutable-record" data-immutable-record aria-label="将写入的不可变记录">
+                <header><div><p>写入预览</p><h3>追加新记录</h3></div><span data-review-gate>0 / 4 已完成</span></header>
+                <dl><div><dt>对象</dt><dd>${escapeHTML(item.id)} · ${escapeHTML(item.targetId)}</dd></div><div><dt>绑定</dt><dd>${escapeHTML(item.sourceVersion)} · ${escapeHTML(view.case.snapshotId)}</dd></div><div><dt>将记录</dt><dd data-record-summary>关系、角色、边界、理由与审核时间</dd></div></dl>
+                <p><strong>更正不覆盖：</strong>后续修正会追加新版本，原审核记录保留。</p>
+              </section>
+
+              <div class="review-actions" data-review-actions>
+                <button type="submit" class="review-accept" disabled>确认并写入审核知识</button>
+                <div><button type="button" class="review-reject" data-review-action="reject">驳回</button><button type="button" class="review-supplement" data-review-action="supplement">要求补充证据</button></div>
+              </div>
+              <p class="review-action-status" data-review-action-status aria-live="polite">完成四项人工判断后，确认动作才会解锁。</p>
+            </form>
+          </section>
+        </div>
+      </main>
+    `;
+  }
+
+  function bindReviewWorkbench(root) {
+    const form = root.querySelector("[data-review-form]");
+    const accept = form.querySelector(".review-accept");
+    const gate = form.querySelector("[data-review-gate]");
+    const status = form.querySelector("[data-review-action-status]");
+    const updateGate = () => {
+      const values = [
+        Boolean(form.querySelector('input[name="relation"]:checked')),
+        Boolean(form.elements["factor-role"].value),
+        Boolean(form.elements.boundary.value.trim()),
+        Boolean(form.elements.rationale.value.trim()),
+      ];
+      const complete = values.filter(Boolean).length;
+      gate.textContent = `${complete} / 4 已完成`;
+      accept.disabled = complete !== 4;
+      status.textContent = complete === 4
+        ? "四项人工判断已齐备；请再次核对写入预览。"
+        : "完成四项人工判断后，确认动作才会解锁。";
+    };
+    form.addEventListener("input", updateGate);
+    form.addEventListener("change", updateGate);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (accept.disabled) return;
+      status.textContent = "原型演示：将追加一条不可变审核记录；本页不连接真实写入。";
+    });
+    form.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-review-action]");
+      if (!action) return;
+      status.textContent = action.dataset.reviewAction === "reject"
+        ? "原型演示：驳回会追加否决记录，不删除 AI 原提议。"
+        : "原型演示：该项会留在队列中，并追加补证要求。";
+    });
+  }
+
   function renderPlaceholder(screen) {
     const [title, description] = PLACEHOLDERS[screen];
     return `
@@ -1515,7 +1707,7 @@
     "plan": renderPlan,
     "case": renderCaseWorkbench,
     "graph": renderGraphWorkbench,
-    "review": () => renderPlaceholder("review"),
+    "review": renderReviewWorkbench,
     "library": () => renderPlaceholder("library"),
     "data": () => renderPlaceholder("data"),
     "versions": () => renderPlaceholder("versions"),
@@ -1559,6 +1751,7 @@
     if (screen === "plan") bindResearchPlan(app.querySelector("[data-screen=plan]"), planState.buildResearchPlanViewModel(data));
     if (screen === "case") caseState.bindCaseWorkbench(app.querySelector("[data-screen=case]"));
     if (screen === "graph") bindGraphWorkbench(app.querySelector("[data-screen=graph]"));
+    if (screen === "review") bindReviewWorkbench(app.querySelector("[data-screen=review]"));
   }
 
   renderShell(requestedScreen());
