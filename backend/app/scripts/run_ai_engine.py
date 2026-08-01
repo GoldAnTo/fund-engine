@@ -36,6 +36,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from app.services.compliance import ComplianceRefusedError
 
 
 def _pending_versions(session: Session) -> list[DocumentVersion]:
@@ -94,13 +95,22 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     for thesis in theses:
         links = proposer.propose(thesis.id, session)
         total_links += len(links)
+    session.commit()  # persist proposals before the assess loop
     print(f"[propose] {total_links} evidence links for {len(theses)} theses")
 
-    # 3. Generate an AI assessment for every thesis.
+    # 3. Generate an AI assessment for every thesis.  A compliance refusal
+    # on one thesis must not kill the run: roll back that thesis's
+    # half-frozen snapshot + failed AIRun, report it, and continue.
     cutoff = datetime.now(timezone.utc)
     for thesis in theses:
-        assessment = generator.generate(thesis.id, cutoff, session)
         label = thesis.statement[:50]
+        try:
+            assessment = generator.generate(thesis.id, cutoff, session)
+        except ComplianceRefusedError as exc:
+            session.rollback()
+            print(f"[assess]  {label}… → COMPLIANCE REFUSED ({exc})")
+            continue
+        session.commit()
         print(
             f"[assess]  {label}… → {assessment.conclusion} "
             f"(gaps: {len(assessment.gaps)})"

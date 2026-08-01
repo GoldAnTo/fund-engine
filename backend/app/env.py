@@ -7,6 +7,7 @@ entry points (FastAPI app, CLI scripts) so real credentials like
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,5 +16,12 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 def load_local_env() -> None:
-    """Load ``backend/.env`` if it exists; existing env vars win."""
+    """Load ``backend/.env`` if it exists; existing env vars win.
+
+    Skipped under ``APP_ENV=test`` so the test suite always runs against
+    mock/fake providers even when a developer's local ``.env`` holds real
+    credentials.
+    """
+    if os.getenv("APP_ENV", "").strip().lower() == "test":
+        return
     load_dotenv(ENV_PATH, override=False)

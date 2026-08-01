@@ -22,8 +22,9 @@ from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
-from app.errors import NotFoundError
+from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import DocumentVersion
+from app.services.compliance import ComplianceRefusedError
 from app.schemas.v1.commands import (
     ExtractResponse,
     ExtractStatementDTO,
@@ -53,6 +54,11 @@ def rerun_assessment(
         )
     except ValueError as exc:
         raise NotFoundError(str(exc)) from exc
+    except ComplianceRefusedError as exc:
+        # Refused text never reaches the ledger; drop the half-frozen
+        # snapshot + failed AIRun and surface the refusal as 422.
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
     commit_or_rollback(db)
     return RerunResponse(
         thesis_id=str(thesis_id),

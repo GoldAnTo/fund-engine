@@ -2,6 +2,10 @@ import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+# Tests must never see a developer's local .env credentials: APP_ENV=test
+# makes app.env.load_local_env() a no-op, so providers stay mock/fake.
+os.environ.setdefault("APP_ENV", "test")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

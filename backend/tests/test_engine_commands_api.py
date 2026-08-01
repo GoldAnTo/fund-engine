@@ -103,3 +103,47 @@ def test_propose_creates_links_landing_in_review_queue(cmd_client, cmd_seeded):
 def test_propose_unknown_thesis_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/theses/{ZERO_UUID}/propose")
     assert resp.status_code == 404
+
+
+def test_rerun_compliance_refusal_returns_422_and_rolls_back(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    """A compliance refusal must surface as 422 and persist nothing."""
+    from app.ai import assessment_gen
+    from app.models.ledger import AIAssessment, EvidenceSnapshot, Thesis
+    from app.services.compliance import (
+        ComplianceAction,
+        ComplianceDecision,
+        ComplianceRefusedError,
+    )
+
+    def _refused_generate(self, thesis_id, cutoff, session):
+        decision = ComplianceDecision(
+            is_hit=True,
+            action=ComplianceAction.REFUSE,
+            hits=(),
+            summary_reason="命中投资建议或个性化导向表达",
+        )
+        raise ComplianceRefusedError(decision)
+
+    monkeypatch.setattr(
+        assessment_gen.AssessmentGenerator, "generate", _refused_generate
+    )
+
+    thesis = cmd_seeded.scalars(select(Thesis)).first()
+    snaps_before = cmd_seeded.scalar(select(func.count()).select_from(EvidenceSnapshot))
+    assessments_before = cmd_seeded.scalar(
+        select(func.count()).select_from(AIAssessment)
+    )
+
+    resp = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "validation_failed"
+    assert "compliance refused" in resp.json()["error"]["message"]
+
+    snaps_after = cmd_seeded.scalar(select(func.count()).select_from(EvidenceSnapshot))
+    assessments_after = cmd_seeded.scalar(
+        select(func.count()).select_from(AIAssessment)
+    )
+    assert snaps_after == snaps_before
+    assert assessments_after == assessments_before
