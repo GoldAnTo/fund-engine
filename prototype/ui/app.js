@@ -18,13 +18,25 @@
   let teardownNewResearchAutosize = () => {};
 
   const NAV_ITEMS = [
-    { label: "工作台", screen: "overview", icon: "台" },
-    { label: "研究案例", screen: "case", icon: "研" },
-    { label: "资料与知识", screen: "library", icon: "知" },
-    { label: "数据中心", screen: "data", icon: "数" },
-    { label: "审核中心", screen: "review", icon: "审" },
-    { label: "监测与更新", screen: "versions", icon: "更" },
+    { label: "工作台", screen: "overview", icon: "▦" },
+    { label: "研究案例", screen: "case", icon: "◫" },
+    { label: "资料与知识", screen: "library", icon: "▤" },
+    { label: "数据中心", screen: "data", icon: "⌁" },
+    { label: "审核中心", screen: "review", icon: "✓" },
+    { label: "监测与更新", screen: "versions", icon: "↻" },
   ];
+
+  const SHELL_CONTEXT = Object.freeze({
+    overview: ["研究工作台", "研究总览"],
+    "new-research": ["行业研究", "新建研究"],
+    plan: ["行业研究", "研究计划"],
+    case: ["行业研究", "研究案例"],
+    graph: ["行业研究", "证据图谱"],
+    review: ["审核中心", "关系审核"],
+    library: ["资料与知识", "来源资料"],
+    data: ["数据中心", "时点数据"],
+    versions: ["监测与更新", "版本比较"],
+  });
 
   const PLACEHOLDERS = {
     "new-research": ["创建研究", "定义一个可证伪问题，并明确截止日与首次冻结边界。"],
@@ -2209,21 +2221,35 @@
     const activeNav = ["new-research", "plan", "case", "graph"].includes(screen)
       ? "case"
       : NAV_ITEMS.find((item) => item.screen === screen)?.screen;
+    const [moduleName, pageName] = SHELL_CONTEXT[screen];
     app.innerHTML = `
-      <div class="app-shell">
-        <aside class="nav-rail" aria-label="主导航">
+      <div class="app-shell insight-os-shell">
+        <aside class="nav-rail insight-sidebar" aria-label="主导航">
           <div class="brand">
-            <span class="brand-mark" aria-hidden="true">R</span>
-            <div><strong>研究台账</strong><small>EVIDENCE LEDGER</small></div>
+            <span class="brand-mark" aria-hidden="true">◇</span>
+            <div><strong>洞见研究 OS</strong><small>行业研究工作系统</small></div>
           </div>
           <nav class="nav-list">
             ${renderNavLinks(activeNav)}
           </nav>
-          <p class="nav-note">证据台账为事实源<br>图谱与搜索均为可重建投影</p>
+          <div class="sidebar-context">
+            <span>当前研究</span>
+            <strong>AI 算力产业链</strong>
+            <small>冻结快照 ${escapeHTML(data.case.snapshotId)}</small>
+          </div>
         </aside>
-        <header class="utility-header">
-          <div class="breadcrumbs"><span>AI 算力产业链</span><span aria-hidden="true">/</span><strong>${escapeHTML(data.case.snapshotId)}</strong></div>
-          <div class="utility-actions"><span class="utility-pill">截止 ${escapeHTML(data.case.cutoff)}</span><span class="utility-pill">只读原型</span></div>
+        <header class="utility-header insight-topbar">
+          <div class="breadcrumbs" aria-label="当前位置">
+            <span>${escapeHTML(moduleName)}</span><span aria-hidden="true">/</span><strong>${escapeHTML(pageName)}</strong>
+          </div>
+          <div class="insight-search" role="search">
+            <span aria-hidden="true">⌕</span>
+            <input type="search" aria-label="搜索研究、命题和证据" placeholder="搜索研究、命题、证据…">
+          </div>
+          <div class="utility-actions">
+            <span class="utility-pill insight-history-cutoff"><span aria-hidden="true">◷</span> 历史截点 ${escapeHTML(data.case.cutoff)}</span>
+            <button class="insight-user-entry" type="button" aria-label="研究员账户"><span aria-hidden="true">研</span><span>研究员</span></button>
+          </div>
         </header>
         <details class="mobile-nav">
           <summary>导航</summary>
@@ -2231,7 +2257,7 @@
             ${renderNavLinks(activeNav)}
           </nav>
         </details>
-        <div class="work-area">${SCREEN_RENDERERS[screen]()}</div>
+        <div class="work-area insight-workspace">${SCREEN_RENDERERS[screen]()}</div>
       </div>
     `;
     if (screen === "new-research") bindNewResearchForm(data);

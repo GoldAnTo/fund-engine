@@ -552,12 +552,30 @@ a {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
-  grid-template-rows: 56px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: 61px minmax(0, 1fr);
   width: min(1600px, 100vw);
   min-height: 100vh;
   margin: 0 auto;
   background: var(--canvas-warm);
+}
+
+.insight-os-shell {
+  --insight-canvas: #f6f6f2;
+  --insight-panel: #fff;
+  --insight-divider: #e2e3df;
+  --insight-text: #242824;
+  --insight-muted: #6d746f;
+  --insight-green: #35745b;
+  --insight-green-soft: #eaf3ee;
+  --insight-orange: #c87828;
+  --insight-blue: #3977aa;
+  --insight-purple: #76598d;
+  --insight-red: #b14f48;
+  --insight-focus: #3977aa;
+  color: var(--insight-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: var(--insight-canvas);
 }
 
 .nav-rail {
@@ -565,28 +583,30 @@ a {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: var(--space-5) var(--space-3);
-  color: var(--nav-ink);
-  background: var(--nav-surface);
+  padding: 16px 12px;
+  border-right: 1px solid var(--insight-divider);
+  color: var(--insight-text);
+  background: var(--insight-panel);
 }
 
 .brand {
   display: flex;
   gap: var(--space-3);
   align-items: center;
-  padding: 0 var(--space-2) var(--space-5);
-  border-bottom: 1px solid rgb(255 255 255 / 12%);
+  padding: 0 6px 16px;
+  border-bottom: 1px solid var(--insight-divider);
 }
 
 .brand-mark {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 34%);
-  border-radius: 50% 50% 8px 50%;
-  color: var(--nav-surface);
-  background: var(--brand-accent);
+  border: 1px solid var(--insight-green);
+  border-radius: 5px;
+  color: #fff;
+  font-size: 15px;
+  background: var(--insight-green);
 }
 
 .brand strong,
@@ -596,55 +616,69 @@ a {
 
 .brand small {
   margin-top: 2px;
-  color: var(--nav-muted);
+  color: var(--insight-muted);
   font-size: 11px;
-  letter-spacing: .06em;
+  letter-spacing: .03em;
 }
+
+.brand strong { color: var(--insight-text); font-size: 15px; font-weight: 750; }
 
 .nav-list {
   display: grid;
-  gap: var(--space-1);
-  margin-top: var(--space-5);
+  gap: 3px;
+  margin-top: 14px;
 }
 
 .nav-link {
   display: flex;
-  gap: var(--space-3);
+  gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 11px 12px;
+  min-height: 38px;
+  padding: 7px 9px;
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: var(--nav-link);
+  border-radius: 5px;
+  color: #505853;
+  font-size: 13px;
+  font-weight: 600;
   text-decoration: none;
 }
 
-.nav-link:hover,
-.nav-link[aria-current="page"] {
-  border-color: rgb(255 255 255 / 10%);
-  color: var(--paper);
-  background: rgb(255 255 255 / 8%);
-}
+.nav-link:hover { border-color: var(--insight-divider); color: var(--insight-text); background: #f7f8f5; }
+.nav-link[aria-current="page"] { border-color: #d8e6de; color: #245a44; background: var(--insight-green-soft); }
+.nav-link:focus-visible { outline: 2px solid var(--insight-focus); outline-offset: 1px; }
 
 .nav-icon {
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid currentcolor;
-  border-radius: 7px;
+  border-radius: 4px;
+  color: var(--insight-muted);
+  font-size: 15px;
+}
+
+.nav-link[aria-current="page"] .nav-icon { color: var(--insight-green); background: rgb(53 116 91 / 8%); }
+
+.sidebar-context {
+  display: grid;
+  gap: 4px;
+  margin-top: auto;
+  padding: 12px 8px 2px;
+  border-top: 1px solid var(--insight-divider);
+}
+
+.sidebar-context span,
+.sidebar-context small {
+  color: var(--insight-muted);
   font-size: 11px;
 }
 
-.nav-note {
-  margin-top: auto;
-  padding: var(--space-3);
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: var(--radius-md);
-  color: var(--nav-note);
-  font-size: 12px;
-  line-height: 1.55;
+.sidebar-context strong {
+  overflow-wrap: anywhere;
+  color: var(--insight-text);
+  font-size: 13px;
 }
 
 .utility-header {
@@ -653,11 +687,11 @@ a {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-5);
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  background: rgb(255 253 248 / 72%);
-  backdrop-filter: blur(10px);
+  gap: 18px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--insight-divider);
+  color: var(--insight-muted);
+  background: var(--insight-panel);
 }
 
 .mobile-nav {
@@ -674,17 +708,87 @@ a {
   align-items: center;
 }
 
+.breadcrumbs {
+  flex: 0 1 auto;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.breadcrumbs strong { color: var(--insight-text); font-weight: 700; }
+
+.insight-search {
+  display: flex;
+  width: clamp(230px, 28vw, 420px);
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--insight-divider);
+  border-radius: 5px;
+  color: var(--insight-muted);
+  background: #fafbf9;
+}
+
+.insight-search:focus-within { border-color: var(--insight-focus); box-shadow: 0 0 0 2px rgb(57 119 170 / 12%); }
+
+.insight-search input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--insight-text);
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+}
+
+.insight-search input::placeholder { color: #929893; }
+
 .utility-actions {
-  font-size: 12px;
+  flex: 0 0 auto;
+  gap: 8px;
+  font-size: 13px;
 }
 
 .utility-pill {
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  padding: 7px 9px;
+  border: 1px solid var(--insight-divider);
+  border-radius: 5px;
   white-space: nowrap;
-  background: var(--paper);
+  background: var(--insight-panel);
 }
+
+.insight-history-cutoff { color: #58605b; }
+
+.insight-user-entry {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--insight-text);
+  background: transparent;
+  cursor: pointer;
+}
+
+.insight-user-entry > span:first-child {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  background: var(--insight-green);
+}
+
+.insight-user-entry:hover { border-color: var(--insight-divider); background: #f7f8f5; }
+.insight-user-entry:focus-visible { outline: 2px solid var(--insight-focus); outline-offset: 1px; }
 
 .work-area {
   grid-column: 2;

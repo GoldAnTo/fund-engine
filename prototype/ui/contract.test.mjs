@@ -764,6 +764,15 @@ async function assertSourceContract() {
     assert.match(app, new RegExp(`["']${screen}["']\\s*:`, "u"), `SCREEN_RENDERERS must expose ${screen}`);
   }
 
+  for (const shellClass of ["insight-os-shell", "insight-sidebar", "insight-topbar", "insight-workspace"]) {
+    assert.match(app, new RegExp(`class=["'][^"']*${shellClass}`, "u"), `app shell must expose .${shellClass}`);
+  }
+  assert.match(app, />洞见研究 OS</u, "app shell must use the approved 洞见研究 OS brand");
+  assert.doesNotMatch(app, /研究台账|EVIDENCE LEDGER/u, "app shell must not retain the dark evidence-ledger brand");
+  for (const utility of ["insight-search", "insight-history-cutoff", "insight-user-entry"]) {
+    assert.match(app, new RegExp(`class=["'][^"']*${utility}`, "u"), `topbar must expose .${utility}`);
+  }
+
   assert.equal((styles.match(/\.case-question\s*\{/gu) ?? []).length, 1, "overview must define .case-question only once");
   assert.doesNotMatch(styles, /border-left:\s*4px/u, "selected ResearchCase must not use a generic colored side stripe");
   assert.doesNotMatch(styles, /\.assessment\s*\{[^}]*border-left:/su, "AI assessment must not use a colored side stripe");
@@ -2507,6 +2516,31 @@ async function assertBrowserContract(routes) {
       assert.equal(await currentPageLinks.count(), 1, `${screen} must mark exactly one product-area navigation context`);
       assert.equal((await currentPageLinks.locator("span:last-child").textContent()).trim(), expectedNavLabel);
       assert.equal(await currentPageLinks.getAttribute("href"), `?screen=${expectedNavScreen}`);
+
+      const shellLayout = await page.evaluate(() => {
+        const shell = document.querySelector(".insight-os-shell");
+        const sidebar = document.querySelector(".insight-sidebar");
+        const topbar = document.querySelector(".insight-topbar");
+        const workspace = document.querySelector(".insight-workspace");
+        return {
+          shell: Boolean(shell),
+          sidebarWidth: sidebar?.getBoundingClientRect().width,
+          sidebarBackground: sidebar ? getComputedStyle(sidebar).backgroundColor : null,
+          topbarHeight: topbar?.getBoundingClientRect().height,
+          workspace: Boolean(workspace),
+          brand: document.querySelector(".brand strong")?.textContent?.trim(),
+          search: Boolean(document.querySelector(".insight-search")),
+          cutoff: document.querySelector(".insight-history-cutoff")?.textContent?.trim(),
+          user: Boolean(document.querySelector(".insight-user-entry")),
+        };
+      });
+      assert.ok(shellLayout.shell && shellLayout.workspace, `${screen} must render the insight OS shell regions`);
+      assert.ok(shellLayout.sidebarWidth >= 190 && shellLayout.sidebarWidth <= 210, `${screen} desktop sidebar must be about 200px: ${JSON.stringify(shellLayout)}`);
+      assert.ok(shellLayout.topbarHeight >= 60 && shellLayout.topbarHeight <= 64, `${screen} desktop topbar must be 60-64px: ${JSON.stringify(shellLayout)}`);
+      assert.match(shellLayout.sidebarBackground, /^rgb\((?:24[5-9]|25[0-5]),/u, `${screen} sidebar must remain light: ${JSON.stringify(shellLayout)}`);
+      assert.equal(shellLayout.brand, "洞见研究 OS");
+      assert.ok(shellLayout.search && shellLayout.user, `${screen} topbar must expose search and user entry`);
+      assert.match(shellLayout.cutoff, /2025-06-30/u, `${screen} topbar must expose the truthful historical cutoff`);
 
       const overflow = await page.evaluate(() => ({
         body: document.body.scrollWidth - document.body.clientWidth,
