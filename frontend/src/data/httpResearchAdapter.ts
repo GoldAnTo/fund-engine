@@ -25,6 +25,11 @@ import type {
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
+  CaseWorkbenchFactorRow,
+  CaseWorkbenchFormalJudgment,
+  CaseWorkbenchSourceRow,
+  CaseWorkbenchThesisRow,
+  CaseWorkbenchView,
   DataCenterView,
   DataMetricSelection,
   DataRevisionComparison,
@@ -773,8 +778,243 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await import("./prototypeFixture")).buildResearchPlanView();
   }
 
-  async getCaseWorkbenchView(_caseId: string) {
-    return (await import("./prototypeFixture")).buildCaseWorkbenchView();
+  async getCaseWorkbenchView(
+    caseId: string,
+  ): Promise<CaseWorkbenchView> {
+    const resolvedCaseId = await this.resolveCaseId(caseId);
+    // research_mode reveals AI-proposed links; the view labels each record's
+    // review state so unreviewed evidence is never presented as confirmed.
+    const dto = await this.get<Schemas["DossierResponse"]>(
+      `/research-cases/${resolvedCaseId}/dossier${this.buildQuery({
+        research_mode: "true",
+      })}`,
+    );
+    const focus =
+      dto.theses.find((t) => t.id === dto.focus_thesis_id) ?? dto.theses[0];
+    // The dossier evidence map is grouped by role and only covers the focus
+    // thesis; per-thesis rows below fetch their own dossier for counts.
+    const focusEvidence = Object.values(dto.evidence).flat();
+    const perThesisEvidence = new Map<string, Schemas["EvidenceRecordDTO"][]>();
+    if (focus) perThesisEvidence.set(focus.id, focusEvidence);
+    await Promise.all(
+      dto.theses
+        .filter((t) => !perThesisEvidence.has(t.id))
+        .map(async (t) => {
+          const sub = await this.get<Schemas["DossierResponse"]>(
+            `/research-cases/${resolvedCaseId}/dossier${this.buildQuery({
+              thesis_id: t.id,
+              research_mode: "true",
+            })}`,
+          );
+          perThesisEvidence.set(t.id, Object.values(sub.evidence).flat());
+        }),
+    );
+
+    const ROLE_NORMALIZE: Record<string, string> = {
+      supports: "support",
+      contradicts: "contradict",
+      contextualizes: "context",
+    };
+    const REVIEW_LABEL = (state: string) =>
+      state === "reviewed" || state === "confirmed"
+        ? "已人工复核"
+        : "AI 提议 · 未经人工复核";
+    const CONCLUSION_LABEL: Record<string, string> = {
+      supported: "支持（成立）",
+      contradicted: "反驳（不成立）",
+      insufficient_evidence: "证据不足",
+    };
+
+    const allRecords = Object.values(dto.evidence).flat();
+    const firstContradict = allRecords.find((r) => r.role === "contradicts");
+
+    const sources: CaseWorkbenchSourceRow[] = focusEvidence.map((r) => ({
+      id: r.link_id,
+      relation: ROLE_NORMALIZE[r.role] ?? r.role,
+      relationLabel:
+        r.role === "supports" ? "支持" : r.role === "contradicts" ? "反驳" : "佐证",
+      statement: r.statement_text ?? "（陈述内容缺失）",
+      documentId: r.span_id ?? "—",
+      sourceVersion: "—",
+      publishedDate: r.available_at.slice(0, 10),
+      sourceSpan: r.verbatim_text ?? "—",
+      reviewState: r.review_state,
+      reviewLabel: REVIEW_LABEL(r.review_state),
+      snapshotMembership: "—",
+      frozenEligibility:
+        r.review_state === "reviewed" || r.review_state === "confirmed"
+          ? "reviewed"
+          : "excluded",
+    }));
+
+    const thesisRows: CaseWorkbenchThesisRow[] = dto.theses.map((t) => {
+      const records = perThesisEvidence.get(t.id) ?? [];
+      const reviewedCount = records.filter(
+        (r) => r.review_state === "reviewed" || r.review_state === "confirmed",
+      ).length;
+      return {
+        id: t.id,
+        title: t.title ?? t.statement,
+        supportCondition: t.support_condition ?? "—",
+        evidenceState:
+          records.length === 0
+            ? "尚无证据关系"
+            : reviewedCount === records.length
+              ? "已有已审核关系"
+              : "已有已审核关系 · 另有待审核关系",
+        relationLabels: records
+          .map((r) =>
+            r.role === "supports" ? "支持" : r.role === "contradicts" ? "反驳" : "佐证",
+          )
+          .join(" · "),
+        scope:
+          t.observation_start && t.observation_end
+            ? `${t.observation_start} — ${t.observation_end}`
+            : "—",
+        falsifier: t.falsification_condition ?? "—",
+        reviewState: t.review_state,
+        evidenceReviewState:
+          records.length === 0
+            ? "no_links"
+            : reviewedCount < records.length
+              ? "pending_relationship_review"
+              : "reviewed_links_present",
+        frozenEligibility:
+          records.length > 0 && reviewedCount === records.length
+            ? "reviewed"
+            : "excluded",
+        selected: t.id === (focus?.id ?? ""),
+      };
+    });
+
+    const factorRows: CaseWorkbenchFactorRow[] = dto.causal_chain.map((step) => ({
+      factorId: step.id,
+      groupLabel: "因果链",
+      roleLabel: `步骤 ${step.sequence}`,
+      statusLabel: "—",
+      label: step.description,
+      timeOrder: String(step.sequence),
+      mechanism: step.description,
+      directEvidence: "—",
+      alternatives: dto.competitive_explanations.join("；") || "—",
+      differenceExplanation: "—",
+      scope: "—",
+      falsifier: "—",
+      counterexample: "—",
+      impactObject: "—",
+    }));
+    const EMPTY_FACTOR: CaseWorkbenchFactorRow = {
+      factorId: "—",
+      groupLabel: "—",
+      roleLabel: "—",
+      statusLabel: "—",
+      label: "（暂无因果链步骤）",
+      timeOrder: "—",
+      mechanism: "—",
+      directEvidence: "—",
+      alternatives: "—",
+      differenceExplanation: "—",
+      scope: "—",
+      falsifier: "—",
+      counterexample: "—",
+      impactObject: "—",
+    };
+
+    const assessment = dto.assessment;
+    const formalJudgment: CaseWorkbenchFormalJudgment = assessment
+      ? {
+          text: `${CONCLUSION_LABEL[assessment.conclusion] ?? assessment.conclusion}：${assessment.rationale}`,
+          rationale: assessment.gaps.length
+            ? `待补缺口：${assessment.gaps.join("；")}`
+            : "当前评估未标注额外缺口。",
+          reviewState: assessment.review ? "reviewed" : "pending",
+          snapshotId: "—",
+          reviewedAt: assessment.review?.reviewed_at ?? "",
+        }
+      : dto.assess_failure
+        ? {
+            text: `AI 评估未完成：${dto.assess_failure.error}`,
+            rationale: `模型 ${dto.assess_failure.model_version} 于 ${dto.assess_failure.failed_at} 评估失败；失败不撤销已有冻结证据。`,
+            reviewState: "failed",
+            snapshotId: "—",
+            reviewedAt: "",
+          }
+        : {
+            text: "尚无 AI 评估结果。",
+            rationale: "该案例尚未运行评估，或评估不在当前证据截止日可见范围内。",
+            reviewState: "pending",
+            snapshotId: "—",
+            reviewedAt: "",
+          };
+
+    return {
+      case: {
+        id: dto.case.id,
+        title: dto.case.title,
+        question: "",
+        researchObject: dto.case.topic,
+        researchPeriod:
+          focus?.observation_start && focus?.observation_end
+            ? `${focus.observation_start} — ${focus.observation_end}`
+            : "—",
+        cutoff: dto.basis.cutoff,
+        snapshotId: "—",
+        aiState: assessment ? "AI 已评估" : dto.assess_failure ? "评估失败" : "未评估",
+        humanReviewState: assessment?.review
+          ? `已人工复核 · ${assessment.review.reviewer}`
+          : "未人工复核",
+      },
+      tabs: ["研究摘要", "关键图表", "核心观点", "风险与假设", "相关公司", "研究日志"],
+      formalJudgment,
+      aiDraft: assessment?.rationale ?? "",
+      contradiction: firstContradict
+        ? {
+            id: firstContradict.link_id,
+            label: firstContradict.statement_text ?? "（反驳陈述缺失）",
+          }
+        : { id: "—", label: "（暂无反驳证据）" },
+      gap: dto.gaps.length
+        ? { id: "gap-0", label: dto.gaps[0], explanation: dto.gaps.join("；") }
+        : { id: "—", label: "（暂无已识别缺口）", explanation: "" },
+      nextValidation: {
+        thesisId: focus?.id ?? "—",
+        event: focus?.next_verification_event ?? "—",
+      },
+      thesisRows,
+      rebuttal: firstContradict
+        ? {
+            id: firstContradict.link_id,
+            statement: firstContradict.statement_text ?? "（反驳陈述缺失）",
+            documentId: firstContradict.span_id ?? "—",
+            documentTitle: "—",
+            sourceVersion: "—",
+            publishedDate: firstContradict.available_at.slice(0, 10),
+            sourceSpan: firstContradict.verbatim_text ?? "—",
+            reviewLabel: REVIEW_LABEL(firstContradict.review_state),
+            reviewState: firstContradict.review_state,
+            relation: "contradict",
+            snapshotMembership: "—",
+            frozenEligibility:
+              firstContradict.review_state === "reviewed" ? "已冻结可用" : "未复核 · 不入快照",
+          }
+        : {
+            id: "—",
+            statement: "（暂无反驳证据）",
+            documentId: "—",
+            documentTitle: "—",
+            sourceVersion: "—",
+            publishedDate: "—",
+            sourceSpan: "—",
+            reviewLabel: "—",
+            reviewState: "—",
+            relation: "contradict",
+            snapshotMembership: "—",
+            frozenEligibility: "—",
+          },
+      factorRows,
+      selectedFactor: factorRows[0] ?? EMPTY_FACTOR,
+      sources,
+    };
   }
 
   async getRelationshipGraphView(
