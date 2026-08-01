@@ -9,10 +9,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/cases", label: "行业研究", icon: "⏚", group: "primary" },
+  { to: "/themes", label: "主题", icon: "⏚", group: "primary" },
   { to: "/workspace", label: "工作台", icon: "⌂", group: "primary" },
   { to: "/new-research", label: "新建研究", icon: "⌬", group: "primary" },
-  { to: "/relationships", label: "研究案例", icon: "⧉", group: "primary" },
+  { to: "/relationships", label: "证据图谱", icon: "⧉", group: "primary" },
   { to: "/plan", label: "研究计划", icon: "▤", group: "industry" },
   { to: "/library", label: "资料与知识", icon: "▦", group: "industry" },
   { to: "/data", label: "数据中心", icon: "⌖", group: "knowledge" },
@@ -21,11 +21,11 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const SHELL_CONTEXT: Record<string, [string, string]> = {
-  cases: ["行业研究", "研究案例"],
+  themes: ["主题驱动", "主题列表"],
   workspace: ["研究工作台", "研究总览"],
-  "new-research": ["行业研究", "新建研究"],
-  relationships: ["行业研究", "证据图谱"],
-  plan: ["行业研究", "研究计划"],
+  "new-research": ["主题驱动", "新建主题"],
+  relationships: ["主题驱动", "证据图谱"],
+  plan: ["主题驱动", "研究计划"],
   library: ["资料与知识", "来源资料"],
   data: ["数据中心", "时点数据"],
   review: ["审核中心", "关系审核"],
@@ -40,16 +40,16 @@ interface ActivePath {
 }
 
 function resolveActive(pathname: string): ActivePath {
+  if (pathname.startsWith("/themes")) return { primary: "/themes", label: "主题", module: "主题驱动", page: "主题列表" };
   if (pathname.startsWith("/workspace")) return { primary: "/workspace", label: "工作台", module: "研究工作台", page: "研究总览" };
-  if (pathname.startsWith("/new-research")) return { primary: "/new-research", label: "新建研究", module: "行业研究", page: "新建研究" };
-  if (pathname.startsWith("/plan")) return { primary: "/plan", label: "研究计划", module: "行业研究", page: "研究计划" };
-  if (pathname.startsWith("/cases")) return { primary: "/cases", label: "研究案例", module: "行业研究", page: "研究案例" };
-  if (pathname.startsWith("/relationships")) return { primary: "/relationships", label: "证据图谱", module: "行业研究", page: "证据图谱" };
+  if (pathname.startsWith("/new-research")) return { primary: "/new-research", label: "新建研究", module: "主题驱动", page: "新建主题" };
+  if (pathname.startsWith("/plan")) return { primary: "/plan", label: "研究计划", module: "主题驱动", page: "研究计划" };
+  if (pathname.startsWith("/relationships")) return { primary: "/relationships", label: "证据图谱", module: "主题驱动", page: "证据图谱" };
   if (pathname.startsWith("/library")) return { primary: "/library", label: "资料与知识", module: "资料与知识", page: "来源资料" };
   if (pathname.startsWith("/data")) return { primary: "/data", label: "数据中心", module: "数据中心", page: "时点数据" };
   if (pathname.startsWith("/review")) return { primary: "/review", label: "审核中心", module: "审核中心", page: "关系审核" };
   if (pathname.startsWith("/versions")) return { primary: "/versions", label: "监测与更新", module: "监测与更新", page: "版本比较" };
-  return { primary: "/workspace", label: "工作台", module: "研究工作台", page: "研究总览" };
+  return { primary: "/themes", label: "主题", module: "主题驱动", page: "主题列表" };
 }
 
 export interface PrototypeShellProps {
@@ -211,6 +211,30 @@ export function PrototypeShell({ defaultCutoff = "2025-06-30" }: PrototypeShellP
         <Link to="/data" className="prototype-bottom-nav__tile">
           <strong>数据中心</strong>
           <small>32 个指标</small>
+        </Link>
+      </nav>
+
+      <nav className="prototype-personal-area" aria-label="我的工作区">
+        <span className="prototype-personal-area__head">我的工作区</span>
+        <Link to="/themes?owner=me" className="prototype-personal-area__item">
+          <span>我的项目</span>
+          <small>8</small>
+        </Link>
+        <Link to="/themes?owner=me&status=validating" className="prototype-personal-area__item">
+          <span>我的观点</span>
+          <small>5</small>
+        </Link>
+        <Link to="/themes?owner=me&view=charts" className="prototype-personal-area__item">
+          <span>我的图表</span>
+          <small>12</small>
+        </Link>
+        <Link to="/themes?owner=me&view=data" className="prototype-personal-area__item">
+          <span>我的数据</span>
+          <small>9</small>
+        </Link>
+        <Link to="/themes?status=draft" className="prototype-personal-area__item">
+          <span>回收站</span>
+          <small>3</small>
         </Link>
       </nav>
     </div>

@@ -33,6 +33,8 @@ import type {
   RelationshipGraphView,
   ResearchClient,
   ResearchPlanView,
+  ThemeIndexView,
+  ThemeWorkbenchView,
   VersionsView,
   WorkspaceOverviewScreen,
   WorkspaceOverviewView,
@@ -44,6 +46,8 @@ import {
   buildNewResearchView,
   buildRelationshipGraphView,
   buildResearchPlanView,
+  buildThemeIndexView,
+  buildThemeWorkbenchView,
   buildVersionsView,
   buildWorkspaceOverview,
   buildWorkspaceOverviewScreen,
@@ -1347,6 +1351,14 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getVersionsView(): Promise<VersionsView> {
     return simulateLatency(buildVersionsView());
+  }
+
+  async getThemeIndexView(): Promise<ThemeIndexView> {
+    return simulateLatency(buildThemeIndexView());
+  }
+
+  async getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView> {
+    return simulateLatency(buildThemeWorkbenchView(themeId));
   }
 }
 

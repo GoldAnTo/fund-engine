@@ -24,7 +24,11 @@ import type {
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
-import type { WorkspaceOverviewScreen } from "../domain/prototypeTypes";
+import type {
+  ThemeIndexView,
+  ThemeWorkbenchView,
+  WorkspaceOverviewScreen,
+} from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
 
@@ -650,6 +654,14 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
     return (await import("./prototypeFixture")).buildWorkspaceOverviewScreen();
+  }
+
+  async getThemeIndexView(): Promise<ThemeIndexView> {
+    return (await import("./prototypeFixture")).buildThemeIndexView();
+  }
+
+  async getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView> {
+    return (await import("./prototypeFixture")).buildThemeWorkbenchView(themeId);
   }
 
   async getNewResearchView() {

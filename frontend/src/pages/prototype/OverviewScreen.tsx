@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { researchClient } from "../../data/researchClient";
+import { PageHeader } from "../../components/prototype/PageHeader";
 import type {
   OverviewEvidenceChange,
   OverviewFrameworkNode,
@@ -115,32 +116,25 @@ export function OverviewScreen() {
 
   return (
     <div className="prototype-screen workspace-overview" data-testid="overview-screen">
-      <header className="workspace-overview__header">
-        <div className="workspace-overview__title">
-          <div className="eyebrow">研究总览</div>
-          <h1>
-            <span>{view.caseTitle}</span>
-            <span className="topic-tag">深度研究</span>
-          </h1>
-          <p className="lede">
+      <PageHeader
+        title={view.caseTitle}
+        eyebrow="研究总览 · Workspace Overview"
+        lede={
+          <>
             全局视角地理解研究进展与关键变化。
             <span className="updated-at">
               最后更新 {formatDate(view.lastUpdatedAt)}
             </span>
-          </p>
-        </div>
-        <div className="workspace-overview__actions">
-          <button type="button" className="prototype-button">
-            ↗ 分享
-          </button>
-          <button type="button" className="prototype-button quiet">
-            ···
-          </button>
-          <button type="button" className="prototype-button quiet">
-            ☆
-          </button>
-        </div>
-      </header>
+          </>
+        }
+        actions={
+          <>
+            <button type="button" className="prototype-button">↗ 分享</button>
+            <button type="button" className="prototype-button quiet">···</button>
+            <button type="button" className="prototype-button quiet">☆</button>
+          </>
+        }
+      />
 
       <nav className="workspace-overview__tabs" aria-label="研究总览分类">
         {tabs.map((tab) => (

@@ -652,6 +652,113 @@ export interface VersionsView {
   };
 }
 
+// ── Theme (主题) ─ 一等公民 ───────────────────────────────────────────
+//
+// 设计文档 §3 数据模型：Theme 是用户「我相信的这件事」的锚点，所有证据
+// （Claim）/ 穿透（Stock / Fund）都挂在主题下。本节视图模型用于驱动
+// 主题列表 / 主题详情 / 主题工作台，与旧的 ResearchCaseDossierPage 解耦。
+
+export type ThemeStatus = "monitoring" | "validating" | "frozen" | "draft";
+
+export interface ThemeHypothesis {
+  id: string;
+  label: string;
+  supportCount: number;
+  contradictCount: number;
+  status: "validated" | "contested" | "unverified";
+}
+
+export interface ThemeClaim {
+  id: string;
+  content: string;
+  sentiment: "positive" | "negative" | "neutral";
+  confidence: number;
+  sourceLabel: string;
+  documentTitle: string;
+  documentType: "公告" | "研报" | "财报" | "政策" | "新闻";
+  publishedAt: string;
+  snippet: string;
+  span: string;
+  conflictsWith?: string[];
+  hypothesisIds: string[];
+  isAiProposed: boolean;
+}
+
+export interface ThemeStock {
+  code: string;
+  name: string;
+  industry: string;
+  pe: number;
+  pb: number;
+  roe: number;
+  marketCap: string;
+  valuationUpdatedAt: string;
+  exposure: number;
+}
+
+export interface ThemeFund {
+  code: string;
+  name: string;
+  scale: string;
+  themeExposure: number;
+  topHoldings: { code: string; name: string; weight: number }[];
+}
+
+export interface ThemeChainLink {
+  code: string;
+  name: string;
+  relation: "supplies" | "competes" | "customer";
+  side: "upstream" | "downstream" | "competitor";
+}
+
+export interface ThemeHypothesisLink {
+  hypothesis: ThemeHypothesis;
+  claims: ThemeClaim[];
+}
+
+export interface ThemeIndexEntry {
+  id: string;
+  name: string;
+  industry: string;
+  hypothesis: string;
+  status: ThemeStatus;
+  statusLabel: string;
+  claimCount: number;
+  conflictCount: number;
+  lastUpdatedAt: string;
+}
+
+export interface ThemeIndexView {
+  themes: ThemeIndexEntry[];
+  totals: {
+    themes: number;
+    validating: number;
+    frozen: number;
+    conflictPairs: number;
+  };
+  filters: {
+    industries: string[];
+    statuses: ThemeStatus[];
+  };
+}
+
+export interface ThemeWorkbenchView {
+  id: string;
+  name: string;
+  industry: string;
+  hypothesis: string;
+  cutoff: string;
+  snapshotId: string;
+  status: ThemeStatus;
+  statusLabel: string;
+  hypothesisLinks: ThemeHypothesisLink[];
+  claims: ThemeClaim[];
+  stocks: ThemeStock[];
+  funds: ThemeFund[];
+  chain: ThemeChainLink[];
+  conflictCount: number;
+}
+
 // ── Adapter extensions ───────────────────────────────────────────────────
 
 import type { ResearchClient as BaseResearchClient } from "./types";
@@ -666,6 +773,8 @@ export interface PrototypeClient {
   getLibraryView(): Promise<LibraryView>;
   getDataCenterView(): Promise<DataCenterView>;
   getVersionsView(): Promise<VersionsView>;
+  getThemeIndexView(): Promise<ThemeIndexView>;
+  getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
 }
 
 export type ResearchClient = BaseResearchClient & PrototypeClient;

@@ -22,6 +22,8 @@ import { ReviewWorkbenchScreen } from "./pages/prototype/ReviewWorkbenchScreen";
 import { LibraryScreen } from "./pages/prototype/LibraryScreen";
 import { DataCenterScreen } from "./pages/prototype/DataCenterScreen";
 import { VersionsScreen } from "./pages/prototype/VersionsScreen";
+import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
+import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -29,14 +31,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* Prototype shell is the default: 9 prototype-aligned screens own the canonical URLs. */}
+        {/* Prototype shell — Theme 一等公民下的工作流：
+            主题列表 → 主题详情（认知假设 + 证据 + 穿透） → 子流程。 */}
         <Route element={<PrototypeShell />}>
-          <Route index element={<OverviewScreen />} />
+          <Route index element={<ThemeIndexScreen />} />
+          <Route path="themes" element={<ThemeIndexScreen />} />
+          <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
           <Route path="workspace" element={<OverviewScreen />} />
           <Route path="new-research" element={<NewResearchScreen />} />
           <Route path="plan" element={<ResearchPlanScreen />} />
-          <Route path="cases" element={<CaseWorkbenchScreen />} />
-          <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
           <Route
             path="relationships"
             element={<RelationshipCanvasScreen />}
@@ -49,6 +52,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="library" element={<LibraryScreen />} />
           <Route path="data" element={<DataCenterScreen />} />
           <Route path="versions" element={<VersionsScreen />} />
+          {/* 兼容旧版研究案例工作台 */}
+          <Route path="cases" element={<CaseWorkbenchScreen />} />
+          <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
         </Route>
 
         {/* Legacy app shell — keeps old entry points working for transitional traffic. */}
