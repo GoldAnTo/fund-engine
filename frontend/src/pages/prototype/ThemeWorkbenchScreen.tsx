@@ -341,7 +341,7 @@ function ClaimRow({
                   : "var(--contradict)",
             }}
           >
-            {claim.confidence.toFixed(2)}
+            {claim.confidence > 0 ? claim.confidence.toFixed(2) : "—"}
           </strong>
         </span>
       </div>
@@ -404,11 +404,11 @@ function StockRow({ stock }: { stock: ThemeStock }) {
         </div>
         <div>
           <dt>PB</dt>
-          <dd>{stock.pb.toFixed(1)}</dd>
+          <dd>{stock.pb > 0 ? stock.pb.toFixed(1) : "—"}</dd>
         </div>
         <div>
           <dt>ROE</dt>
-          <dd>{stock.roe.toFixed(1)}%</dd>
+          <dd>{stock.roe !== 0 ? `${stock.roe.toFixed(1)}%` : "—"}</dd>
         </div>
         <div>
           <dt>暴露度</dt>

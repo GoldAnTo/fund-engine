@@ -40,7 +40,13 @@ import type {
   RelationshipGraphView,
   ReviewQueueView,
   ReviewQueueViewItem,
+  ThemeClaim,
+  ThemeFund,
+  ThemeHypothesisLink,
+  ThemeIndexEntry,
   ThemeIndexView,
+  ThemeStatus,
+  ThemeStock,
   ThemeWorkbenchView,
   ThesisRerunResult,
   VersionsView,
@@ -763,11 +769,223 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async getThemeIndexView(): Promise<ThemeIndexView> {
-    return (await import("./prototypeFixture")).buildThemeIndexView();
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const entries = await Promise.all(
+      cases.items.map(async (c) => {
+        const dossier = await this.get<Schemas["DossierResponse"]>(
+          `/research-cases/${c.id}/dossier${this.buildQuery({
+            research_mode: "true",
+          })}`,
+        );
+        const records = Object.values(dossier.evidence).flat();
+        const contradicts = records.filter(
+          (r) => r.role === "contradicts",
+        ).length;
+        const focus = dossier.theses.find(
+          (t) => t.id === dossier.focus_thesis_id,
+        );
+        const status: ThemeIndexEntry["status"] = dossier.assessment?.review
+          ? "frozen"
+          : dossier.assessment
+            ? "validating"
+            : dossier.theses.length > 0
+              ? "monitoring"
+              : "draft";
+        const STATUS_LABEL: Record<ThemeIndexEntry["status"], string> = {
+          monitoring: "监测中",
+          validating: "持续验证",
+          frozen: "已冻结",
+          draft: "草稿",
+        };
+        return {
+          id: c.id,
+          name: c.title,
+          industry: c.topic,
+          hypothesis: focus?.title ?? focus?.statement ?? "",
+          status,
+          statusLabel: STATUS_LABEL[status],
+          claimCount: records.length,
+          conflictCount: contradicts,
+          lastUpdatedAt: c.updated_at.slice(0, 10),
+        } satisfies ThemeIndexEntry;
+      }),
+    );
+    return {
+      themes: entries,
+      totals: {
+        themes: entries.length,
+        validating: entries.filter((e) => e.status === "validating").length,
+        frozen: entries.filter((e) => e.status === "frozen").length,
+        conflictPairs: entries.reduce((sum, e) => sum + e.conflictCount, 0),
+      },
+      filters: {
+        industries: [...new Set(entries.map((e) => e.industry))],
+        statuses: ["monitoring", "validating", "frozen", "draft"],
+      },
+    };
   }
 
   async getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView> {
-    return (await import("./prototypeFixture")).buildThemeWorkbenchView(themeId);
+    const resolvedCaseId = await this.resolveCaseId(themeId);
+    const dossier = await this.get<Schemas["DossierResponse"]>(
+      `/research-cases/${resolvedCaseId}/dossier${this.buildQuery({
+        research_mode: "true",
+      })}`,
+    );
+    // Per-thesis evidence: the dossier only expands the focus thesis, so the
+    // remaining theses are fetched in parallel (same pattern as screen 4).
+    const perThesisRecords = new Map<string, Schemas["EvidenceRecordDTO"][]>();
+    perThesisRecords.set(
+      dossier.focus_thesis_id,
+      Object.values(dossier.evidence).flat(),
+    );
+    await Promise.all(
+      dossier.theses
+        .filter((t) => !perThesisRecords.has(t.id))
+        .map(async (t) => {
+          const sub = await this.get<Schemas["DossierResponse"]>(
+            `/research-cases/${resolvedCaseId}/dossier${this.buildQuery({
+              thesis_id: t.id,
+              research_mode: "true",
+            })}`,
+          );
+          perThesisRecords.set(t.id, Object.values(sub.evidence).flat());
+        }),
+    );
+
+    const SENTIMENT_OF: Record<string, ThemeClaim["sentiment"]> = {
+      supports: "positive",
+      contradicts: "negative",
+      contextualizes: "neutral",
+    };
+    const DOC_TYPE_OF: Record<string, ThemeClaim["documentType"]> = {
+      disclosed_fact: "公告",
+      management_attribution: "财报",
+      forecast: "研报",
+      research_opinion: "研报",
+    };
+    const toClaim = (
+      r: Schemas["EvidenceRecordDTO"],
+      thesisId: string,
+    ): ThemeClaim => ({
+      id: r.link_id,
+      content: r.statement_text ?? "（陈述内容缺失）",
+      sentiment: SENTIMENT_OF[r.role] ?? "neutral",
+      // Backend keeps no confidence score; 0 renders as "—" in the UI.
+      confidence: 0,
+      sourceLabel: r.statement_kind ?? "—",
+      documentTitle: "—",
+      documentType: DOC_TYPE_OF[r.statement_kind ?? ""] ?? "新闻",
+      publishedAt: r.available_at.slice(0, 10),
+      snippet: r.verbatim_text ?? r.statement_text ?? "—",
+      span: r.span_id ?? "—",
+      hypothesisIds: [thesisId],
+      isAiProposed: r.review_state !== "reviewed" && r.review_state !== "confirmed",
+    });
+
+    const claims: ThemeClaim[] = [];
+    const hypothesisLinks: ThemeHypothesisLink[] = dossier.theses.map((t) => {
+      const records = perThesisRecords.get(t.id) ?? [];
+      const thesisClaims = records.map((r) => toClaim(r, t.id));
+      // Cross-link support/contradict claims of the same thesis as conflicts.
+      const supports = thesisClaims.filter((c) => c.sentiment === "positive");
+      const contradicts = thesisClaims.filter((c) => c.sentiment === "negative");
+      for (const s of supports) {
+        s.conflictsWith = contradicts.map((c) => c.id);
+      }
+      for (const c of contradicts) {
+        c.conflictsWith = supports.map((s) => s.id);
+      }
+      claims.push(...thesisClaims);
+      const isFocusAssessed =
+        t.id === dossier.focus_thesis_id && dossier.assessment;
+      return {
+        hypothesis: {
+          id: t.id,
+          label: t.title ?? t.statement,
+          supportCount: supports.length,
+          contradictCount: contradicts.length,
+          status:
+            contradicts.length > 0
+              ? "contested"
+              : isFocusAssessed && dossier.assessment?.review
+                ? "validated"
+                : supports.length > 0
+                  ? "validated"
+                  : "unverified",
+        },
+        claims: thesisClaims,
+      } satisfies ThemeHypothesisLink;
+    });
+
+    const exposure = await this.get<Schemas["FundExposureResponse"]>(
+      `/research-cases/${resolvedCaseId}/fund-exposure`,
+    );
+    const stockMap = new Map<string, ThemeStock>();
+    const funds: ThemeFund[] = exposure.funds.map((f) => {
+      const topHoldings = f.positions
+        .slice()
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 5)
+        .map((p) => ({ code: p.stock_code, name: p.stock_name, weight: p.weight }));
+      for (const p of f.positions) {
+        const existing = stockMap.get(p.stock_id);
+        if (existing) {
+          existing.exposure += p.weight;
+        } else {
+          stockMap.set(p.stock_id, {
+            code: p.stock_code,
+            name: p.stock_name,
+            industry: "—",
+            pe: p.pe_ttm ?? 0,
+            pb: p.pb ?? 0,
+            roe: 0,
+            marketCap: "—",
+            valuationUpdatedAt: p.report_period,
+            exposure: p.weight,
+          });
+        }
+      }
+      return {
+        code: f.fund_code,
+        name: f.fund_name,
+        scale: "—",
+        themeExposure: f.theme_exposure,
+        topHoldings,
+      } satisfies ThemeFund;
+    });
+
+    const assessment = dossier.assessment;
+    const status: ThemeStatus = assessment?.review
+      ? "frozen"
+      : assessment
+        ? "validating"
+        : dossier.theses.length > 0
+          ? "monitoring"
+          : "draft";
+    const STATUS_LABEL: Record<ThemeStatus, string> = {
+      monitoring: "监测中",
+      validating: "持续验证",
+      frozen: "已冻结",
+      draft: "草稿",
+    };
+    const focus = dossier.theses.find((t) => t.id === dossier.focus_thesis_id);
+    return {
+      id: dossier.case.id,
+      name: dossier.case.title,
+      industry: dossier.case.topic,
+      hypothesis: focus?.title ?? focus?.statement ?? "",
+      cutoff: dossier.basis.cutoff,
+      snapshotId: "—",
+      status,
+      statusLabel: STATUS_LABEL[status],
+      hypothesisLinks,
+      claims,
+      stocks: [...stockMap.values()],
+      funds,
+      chain: [],
+      conflictCount: claims.filter((c) => c.sentiment === "negative").length,
+    };
   }
 
   async getNewResearchView() {
