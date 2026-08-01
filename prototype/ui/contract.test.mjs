@@ -1001,13 +1001,78 @@ async function assertFinalCaptureRegistryContract() {
     path.resolve(UI_DIR, "../设计原型5-审核工作区.png"),
     "review must map exactly to prototype/设计原型5-审核工作区.png",
   );
-  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review"].includes(screen))) {
+  assert.equal(
+    captureTargetForScreen("library"),
+    path.resolve(UI_DIR, "../设计原型6-资料与知识.png"),
+    "library must map exactly to prototype/设计原型6-资料与知识.png",
+  );
+  for (const placeholder of REQUIRED_SCREENS.filter((screen) => !["overview", "new-research", "plan", "case", "graph", "review", "library"].includes(screen))) {
     assert.throws(
       () => captureTargetForScreen(placeholder),
       /Capture renderer not implemented/u,
       `${placeholder} placeholder must not map to a final PNG`,
     );
   }
+}
+
+async function assertLibraryProductContract(page, marker) {
+  assert.equal((await marker.locator("h1").textContent()).trim(), "资料与知识工作台");
+
+  const filters = marker.locator("[data-library-filters]");
+  for (const label of ["文档类型", "来源", "发布日期", "版本", "审核状态", "关联案例", "实体"]) {
+    assert.equal(await filters.getByLabel(label, { exact: true }).count(), 1, `library must expose the ${label} filter`);
+  }
+
+  const sourceLayer = marker.locator("[data-source-layer]");
+  const knowledgeLayer = marker.locator("[data-knowledge-layer]");
+  for (const label of ["不可变来源层", "DocumentVersion", "SourceSpan", "复用 2 次"]) {
+    assert.ok((await sourceLayer.innerText()).includes(label), `source layer must expose ${label}`);
+  }
+  for (const label of ["已复核知识层", "SourceStatement", "EvidenceLink", "反驳", "目标 Thesis", "目标因素", "复核人", "复核时间"]) {
+    assert.ok((await knowledgeLayer.innerText()).includes(label), `knowledge layer must expose ${label}`);
+  }
+
+  const selected = marker.locator("[data-selected-source]");
+  for (const label of ["Microsoft FY2025 Q3 earnings call transcript", "issuer-call-2025-04-30-v1", "版本沿革", "发布时间", "首次可用", "采集时间", "截止日可用", "精确原文区段", "关联 ResearchCase", "复用记录"]) {
+    assert.ok((await selected.innerText()).includes(label), `selected source inspector must expose ${label}`);
+  }
+  assert.ok((await selected.locator("blockquote").textContent()).trim().length > 30, "selected source must expose a non-vacuous exact excerpt");
+
+  const proposal = marker.locator("[data-ai-proposal]");
+  assert.ok((await proposal.innerText()).includes("未经人工复核"), "pending AI proposal must remain visibly isolated and unreviewed");
+  assert.ok((await proposal.innerText()).includes("不会进入已复核知识"), "pending AI proposal must not imply reviewed status");
+
+  const reuse = marker.getByRole("button", { name: "引用到研究案例", exact: true });
+  assert.ok(await reuse.isVisible(), "library must expose a real visible reuse action");
+  assert.ok((await marker.locator("[data-reuse-note]").innerText()).includes("复用现有冻结来源与已复核知识，不复制来源文档"), "reuse wording must forbid source duplication");
+  await reuse.click();
+  assert.ok((await marker.locator("[data-library-status]").innerText()).includes("已选择复用"), "reuse action must provide visible interaction feedback");
+
+  const desktop = await page.evaluate(() => ({
+    scrollWidth: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
+    scrollHeight: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+    coreSizes: [...document.querySelectorAll("[data-library-core]")].map((element) => parseFloat(getComputedStyle(element).fontSize)),
+    internalScroll: [...document.querySelectorAll('[data-screen="library"] *')].filter((element) => {
+      const style = getComputedStyle(element);
+      return ["auto", "scroll"].includes(style.overflowY) && element.scrollHeight > element.clientHeight;
+    }).length,
+  }));
+  assert.ok(desktop.scrollWidth <= 1600 && desktop.scrollHeight <= 1000, `library must fit the 1600x1000 capture: ${JSON.stringify(desktop)}`);
+  assert.ok(desktop.coreSizes.length > 0 && desktop.coreSizes.every((size) => size >= 13), "library core text must remain at least 13px");
+  assert.equal(desktop.internalScroll, 0, "library must not hide content in internal scrolling regions");
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobile = await page.evaluate(() => ({
+    body: document.body.scrollWidth - document.body.clientWidth,
+    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    internalScroll: [...document.querySelectorAll('[data-screen="library"] *')].filter((element) => {
+      const style = getComputedStyle(element);
+      return ["auto", "scroll"].includes(style.overflowY) && element.scrollHeight > element.clientHeight;
+    }).length,
+  }));
+  assert.ok(mobile.body <= 0 && mobile.document <= 0, `library must fit 375px without horizontal overflow: ${JSON.stringify(mobile)}`);
+  assert.equal(mobile.internalScroll, 0, "library mobile layout must use normal vertical flow without internal scrolling");
+  await page.setViewportSize({ width: 1600, height: 1000 });
 }
 
 async function assertReviewProductContract(page, marker) {
@@ -2346,6 +2411,9 @@ async function assertBrowserContract(routes) {
       }
       if (screen === "review") {
         await assertReviewProductContract(page, marker);
+      }
+      if (screen === "library") {
+        await assertLibraryProductContract(page, marker);
       }
       for (const assessment of assessments) {
         for (const forbidden of assessmentScoringViolations(assessment)) {

@@ -1033,6 +1033,228 @@
     });
   }
 
+  function buildLibraryViewModel(fixture) {
+    const documentPresentation = {
+      "DOC-MSFT-FY25Q3": { documentType: "监管披露", sourceName: "SEC EDGAR", entity: "Microsoft", reuseCount: 3 },
+      "DOC-NVDA-FY26Q1": { documentType: "监管披露", sourceName: "SEC EDGAR", entity: "NVIDIA", reuseCount: 2 },
+      "DOC-MSFT-FY25Q3-CALL": { documentType: "业绩说明会", sourceName: "Microsoft IR", entity: "Microsoft", reuseCount: 2 },
+      "DOC-TSMC-2025M05": { documentType: "月度经营数据", sourceName: "TSMC IR", entity: "TSMC", reuseCount: 1 },
+      "DOC-BRCM-FY25Q2": { documentType: "业绩公告", sourceName: "Broadcom IR", entity: "Broadcom", reuseCount: 0 },
+    };
+    const params = new URLSearchParams(window.location.search);
+    const requestedDocument = params.get("document");
+    const selectedDocument = fixture.documents.find((item) => item.id === requestedDocument)
+      ?? fixture.documents.find((item) => item.id === "DOC-MSFT-FY25Q3-CALL")
+      ?? fixture.documents[0];
+    const selectedStatement = fixture.statements.find((item) => item.documentId === selectedDocument.id);
+    const selectedLink = fixture.evidenceLinks.find((item) => item.statementId === selectedStatement?.id);
+    const selectedThesis = fixture.theses.find((item) => item.id === selectedLink?.thesisId);
+    const selectedFactorId = selectedLink?.factorId
+      ?? (selectedLink?.id === fixture.case.workbench.mainContradictionEvidenceLinkId ? fixture.case.workbench.mainContradictionFactorId : undefined);
+    const selectedFactor = fixture.factors.find((item) => item.id === selectedFactorId)
+      ?? fixture.factors.find((item) => item.id === fixture.case.workbench.selectedFactorId);
+    const pendingStatement = fixture.statements.find((item) => item.reviewState === "pending_review");
+    const pendingLink = fixture.evidenceLinks.find((item) => item.statementId === pendingStatement?.id);
+    const selectedPresentation = documentPresentation[selectedDocument.id] ?? {};
+    const dateTime = (value) => value ? value.replace("T", " ").replace(/Z$/u, " UTC") : "未记录";
+    const reviewRole = {
+      support: "支持 · support",
+      contradict: "反驳 · contradict",
+      background: "背景 · background",
+      contextualize: "背景 · background",
+      contextualizes: "背景 · background",
+      gap: "缺口 · gap",
+    };
+    const linkedCaseIds = selectedDocument.linkedCaseIds ?? [fixture.case.id];
+    const reuseHistory = selectedDocument.reuseHistory ?? linkedCaseIds.map((caseId, index) => ({
+      caseId,
+      label: caseId === fixture.case.id ? fixture.case.title : "关联研究案例",
+      reusedAt: index === 0 ? "2025-06-30 22:40" : "历史快照",
+    }));
+
+    return {
+      cutoff: fixture.case.cutoff,
+      snapshotId: fixture.case.snapshotId,
+      documents: fixture.documents
+        .map((document) => ({ ...document, ...documentPresentation[document.id] }))
+        .sort((left, right) => Number(right.id === selectedDocument.id) - Number(left.id === selectedDocument.id)),
+      selected: {
+        ...selectedDocument,
+        ...selectedPresentation,
+        publishedLabel: dateTime(selectedDocument.publishedAt),
+        availableLabel: dateTime(selectedDocument.availableAt),
+        acquiredLabel: dateTime(selectedDocument.acquiredAt ?? selectedDocument.availableAt),
+        previousVersion: selectedDocument.previousVersion ?? "首个归档版本 · 无前序版本",
+        linkedCaseIds,
+        reuseHistory,
+        sourceExcerpt: selectedStatement?.sourceExcerpt ?? selectedStatement?.text ?? "该版本尚无可展示的已定位原文。",
+        exactSpan: params.get("span") ?? selectedStatement?.sourceSpan ?? selectedDocument.sourceSpan,
+      },
+      knowledge: selectedStatement && selectedLink ? {
+        statement: selectedStatement,
+        link: selectedLink,
+        roleLabel: reviewRole[selectedLink.role] ?? selectedLink.role,
+        thesis: selectedThesis,
+        factor: selectedFactor,
+        reviewedBy: selectedLink.reviewedBy ?? "研究审核组",
+        reviewedAt: dateTime(selectedLink.reviewedAt ?? "2025-06-30T22:40:00+08:00"),
+      } : undefined,
+      proposal: pendingStatement ? {
+        statement: pendingStatement,
+        link: pendingLink,
+        roleLabel: reviewRole[pendingLink?.role] ?? "关系待判断",
+      } : undefined,
+    };
+  }
+
+  function renderLibraryFilters() {
+    const field = (label, options) => `
+      <label class="library-filter">
+        <span>${escapeHTML(label)}</span>
+        <select aria-label="${escapeHTML(label)}">
+          ${options.map((option) => `<option>${escapeHTML(option)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+    return `
+      <form class="library-filters" data-library-filters aria-label="资料与知识筛选">
+        ${field("文档类型", ["全部类型", "监管披露", "业绩说明会"])}
+        ${field("来源", ["全部来源", "发行人 IR", "SEC EDGAR"])}
+        ${field("发布日期", ["截至 2025-06-30", "2025 年第二季度"])}
+        ${field("版本", ["当前冻结版本", "含历史版本"])}
+        ${field("审核状态", ["全部状态", "已人工复核", "待人工审核"])}
+        ${field("关联案例", ["AI 算力产业链", "全部案例"])}
+        ${field("实体", ["全部实体", "Microsoft", "NVIDIA"])}
+      </form>
+    `;
+  }
+
+  function renderLibrarySourceRow(document, selectedId) {
+    const isSelected = document.id === selectedId;
+    const stateLabel = document.reviewState === "reviewed" ? "已人工复核" : "待人工审核";
+    return `
+      <a class="library-source-row${isSelected ? " is-selected" : ""}" data-library-source href="?screen=library&amp;document=${encodeURIComponent(document.id)}" ${isSelected ? 'aria-current="true"' : ""}>
+        <div class="library-row-top">
+          <span class="library-kind">${escapeHTML(document.documentType ?? "来源文档")}</span>
+          <span class="library-review-state ${document.reviewState === "reviewed" ? "reviewed" : "pending"}">${escapeHTML(stateLabel)}</span>
+        </div>
+        <strong data-library-core>${escapeHTML(document.title)}</strong>
+        <p data-library-core>${escapeHTML(document.sourceName ?? "已归档来源")} · ${escapeHTML(document.sourceVersion)}</p>
+        <div class="library-row-meta"><span>${escapeHTML(document.entity ?? "多实体")}</span><span>复用 ${escapeHTML(document.reuseCount ?? 0)} 次</span></div>
+      </a>
+    `;
+  }
+
+  function renderLibraryWorkbench() {
+    const view = buildLibraryViewModel(data);
+    const selected = view.selected;
+    const knowledge = view.knowledge;
+    return `
+      <main class="screen library-workbench-screen" data-screen="library">
+        <header class="library-heading">
+          <div>
+            <p class="eyebrow">Research library · point-in-time</p>
+            <h1>资料与知识工作台</h1>
+            <p class="lede">从不可变来源定位到人工复核知识；待审核 AI 提议始终隔离。</p>
+          </div>
+          <div class="library-heading-meta">
+            <span>证据截止 ${escapeHTML(view.cutoff)}</span>
+            <strong>${escapeHTML(view.snapshotId)}</strong>
+          </div>
+        </header>
+
+        ${renderLibraryFilters()}
+
+        <section class="library-workspace" aria-label="来源与知识工作区">
+          <aside class="library-source-layer" data-source-layer aria-labelledby="source-layer-title">
+            <header class="library-layer-heading">
+              <div><p>IMMUTABLE SOURCE</p><h2 id="source-layer-title">不可变来源层</h2></div>
+              <span>DocumentVersion → SourceSpan</span>
+            </header>
+            <div class="library-source-list">
+              ${view.documents.slice(0, 4).map((document) => renderLibrarySourceRow(document, selected.id)).join("")}
+            </div>
+            <p class="library-ledger-note" data-library-core>原文只新增版本，不覆盖；知识关系引用精确 SourceSpan。</p>
+          </aside>
+
+          <div class="library-reading-pane">
+            <article class="library-source-inspector" data-selected-source>
+              <header class="library-inspector-heading">
+                <div>
+                  <p class="library-overline">SELECTED DOCUMENTVERSION</p>
+                  <h2 data-library-core>${escapeHTML(selected.title)}</h2>
+                  <p class="library-version" data-library-core>${escapeHTML(selected.sourceVersion)}</p>
+                </div>
+                <div class="library-lineage"><span>版本沿革</span><strong>${escapeHTML(selected.previousVersion)}</strong><b aria-hidden="true">→</b><em>当前冻结</em></div>
+              </header>
+              <dl class="library-time-grid" data-library-core>
+                <div><dt>发布时间</dt><dd>${escapeHTML(selected.publishedLabel)}</dd></div>
+                <div><dt>首次可用</dt><dd>${escapeHTML(selected.availableLabel)}</dd></div>
+                <div><dt>采集时间</dt><dd>${escapeHTML(selected.acquiredLabel)}</dd></div>
+                <div><dt>截止日可用</dt><dd>是 · ${escapeHTML(view.cutoff)} 前已可用</dd></div>
+              </dl>
+              <div class="library-source-detail">
+                <div class="library-excerpt">
+                  <p class="library-detail-label">精确原文区段 · SourceSpan</p>
+                  <code>${escapeHTML(selected.exactSpan)}</code>
+                  <blockquote data-library-core>“${escapeHTML(selected.sourceExcerpt)}”</blockquote>
+                </div>
+                <div class="library-reuse-history">
+                  <p class="library-detail-label">关联 ResearchCase · 复用记录</p>
+                  <ol>${selected.reuseHistory.map((entry) => `<li><strong data-library-core>${escapeHTML(entry.caseId)}</strong><span data-library-core>${escapeHTML(entry.label)} · ${escapeHTML(entry.reusedAt)}</span></li>`).join("")}</ol>
+                </div>
+              </div>
+            </article>
+
+            <section class="library-knowledge-layer" data-knowledge-layer aria-labelledby="knowledge-layer-title">
+              <header class="library-layer-heading">
+                <div><p>HUMAN-REVIEWED KNOWLEDGE</p><h2 id="knowledge-layer-title">已复核知识层</h2></div>
+                <span>SourceStatement → EvidenceLink</span>
+              </header>
+              ${knowledge ? `
+                <div class="library-knowledge-body">
+                  <article class="reviewed-statement">
+                    <div class="knowledge-state"><span>已人工复核</span><strong>${escapeHTML(knowledge.roleLabel)}</strong></div>
+                    <p class="library-detail-label">规范化 SourceStatement</p>
+                    <blockquote data-library-core>${escapeHTML(knowledge.statement.text)}</blockquote>
+                    <dl data-library-core>
+                      <div><dt>目标 Thesis</dt><dd>${escapeHTML(knowledge.thesis?.title ?? "未关联")}</dd></div>
+                      <div><dt>目标因素</dt><dd>${escapeHTML(knowledge.factor?.label ?? "未关联")}</dd></div>
+                      <div><dt>复核人</dt><dd>${escapeHTML(knowledge.reviewedBy)}</dd></div>
+                      <div><dt>复核时间</dt><dd>${escapeHTML(knowledge.reviewedAt)}</dd></div>
+                    </dl>
+                  </article>
+                  <div class="library-reuse-action">
+                    <button type="button" data-library-reuse>引用到研究案例</button>
+                    <p data-reuse-note data-library-core>复用现有冻结来源与已复核知识，不复制来源文档。</p>
+                    <p class="library-action-status" data-library-status aria-live="polite">尚未选择目标案例</p>
+                  </div>
+                </div>
+              ` : '<p class="library-empty">该来源尚无已复核知识关系。</p>'}
+            </section>
+
+            ${view.proposal ? `
+              <aside class="library-ai-proposal" data-ai-proposal>
+                <div><span>AI 待审核提议</span><strong>未经人工复核</strong></div>
+                <p data-library-core>${escapeHTML(view.proposal.statement.text)}</p>
+                <small data-library-core>${escapeHTML(view.proposal.roleLabel)} · 隔离队列中，不会进入已复核知识</small>
+              </aside>
+            ` : ""}
+          </div>
+        </section>
+      </main>
+    `;
+  }
+
+  function bindLibraryWorkbench(root) {
+    const action = root.querySelector("[data-library-reuse]");
+    const status = root.querySelector("[data-library-status]");
+    if (!action || !status) return;
+    action.addEventListener("click", () => {
+      status.textContent = "已选择复用 · 下一步选择目标 ResearchCase（原型不写入）";
+    });
+  }
+
   function renderPlaceholder(screen) {
     const [title, description] = PLACEHOLDERS[screen];
     return `
@@ -1708,7 +1930,7 @@
     "case": renderCaseWorkbench,
     "graph": renderGraphWorkbench,
     "review": renderReviewWorkbench,
-    "library": () => renderPlaceholder("library"),
+    "library": renderLibraryWorkbench,
     "data": () => renderPlaceholder("data"),
     "versions": () => renderPlaceholder("versions"),
   };
@@ -1752,6 +1974,7 @@
     if (screen === "case") caseState.bindCaseWorkbench(app.querySelector("[data-screen=case]"));
     if (screen === "graph") bindGraphWorkbench(app.querySelector("[data-screen=graph]"));
     if (screen === "review") bindReviewWorkbench(app.querySelector("[data-screen=review]"));
+    if (screen === "library") bindLibraryWorkbench(app.querySelector("[data-screen=library]"));
   }
 
   renderShell(requestedScreen());
@@ -1762,4 +1985,5 @@
   window.PROTOTYPE_RESEARCH_PLAN = planState;
   window.PROTOTYPE_CASE_WORKBENCH = caseState;
   window.PROTOTYPE_GRAPH_WORKBENCH = Object.freeze({ buildGraphViewModel });
+  window.PROTOTYPE_LIBRARY_WORKBENCH = Object.freeze({ buildLibraryViewModel });
 }());
