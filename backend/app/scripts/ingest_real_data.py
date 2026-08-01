@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.datasources.gildata import adapters
 from app.datasources.gildata.client import GildataMCPClient
+from app.env import load_local_env
 from app.models.ledger import Base, ResearchCase, Stock, ValuationSnapshot
 from app.repositories.documents import DocumentRepository
 from app.repositories.instruments import InstrumentRepository
@@ -319,6 +320,8 @@ def main() -> None:
         "(defaults to the first existing case)",
     )
     args = parser.parse_args()
+
+    load_local_env()  # backend/.env (gitignored); shell env still wins
 
     case_id: uuid.UUID | None = None
     if args.case_id:

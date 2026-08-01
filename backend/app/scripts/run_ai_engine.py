@@ -26,6 +26,7 @@ from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
+from app.env import load_local_env
 from app.models.ledger import (
     AIRun,
     Base,
@@ -138,6 +139,8 @@ def main() -> None:
         help="Skip extraction (use existing statements in the ledger).",
     )
     args = parser.parse_args()
+
+    load_local_env()  # backend/.env (gitignored); shell env still wins
 
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_ai.db")
     engine = create_engine(url, future=True)

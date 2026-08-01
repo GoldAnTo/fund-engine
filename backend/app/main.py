@@ -11,8 +11,11 @@ from fastapi.responses import JSONResponse
 
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
+from app.env import load_local_env
 from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
 from app.schemas.v1.common import ErrorEnvelope
+
+load_local_env()  # backend/.env (gitignored) -> os.environ, env vars win
 
 logger = logging.getLogger("industry_evidence_workspace")
 
