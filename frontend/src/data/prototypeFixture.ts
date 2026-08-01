@@ -1720,6 +1720,8 @@ export function buildDataCenterView(): DataCenterView {
         entity: "NVIDIA",
         cadence: "季度",
         state: "部分观测可用于截止日",
+        stockId: "CO-NVDA",
+        metricName: "Data Center revenue",
       },
       {
         id: "M-TSMC-M05-YOY",
@@ -1727,6 +1729,8 @@ export function buildDataCenterView(): DataCenterView {
         entity: "TSMC",
         cadence: "月度",
         state: "截止日可用",
+        stockId: "CO-TSM",
+        metricName: "May monthly revenue year-on-year change",
       },
       {
         id: "M-FUND-HOLDING-HIST",
@@ -1734,6 +1738,8 @@ export function buildDataCenterView(): DataCenterView {
         entity: "示例基金范围",
         cadence: "报告期",
         state: "权限缺口 · 暂无冻结值",
+        stockId: "FUND-SEMI-INDEX",
+        metricName: "基金历史持仓权重",
       },
     ],
     selectedMetricId: "M-NVDA-DC-REV",

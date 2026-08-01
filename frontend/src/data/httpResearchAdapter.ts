@@ -25,6 +25,10 @@ import type {
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
+  DataCenterView,
+  DataMetricSelection,
+  DataRevisionComparison,
+  DataSeriesPoint,
   LinkReviewPayload,
   ReviewQueueView,
   ReviewQueueViewItem,
@@ -104,6 +108,54 @@ function asPageStateErrorKind(
   if (code === "parse_failed") return "parse_failed";
   if (code === "stale") return "stale";
   return "backend_unavailable";
+}
+
+const EMPTY_METRIC_DETAIL: DataCenterView["selectedMetric"] = {
+  id: "",
+  name: "（暂无指标）",
+  entity: "",
+  value: "—",
+  unit: "",
+  period: "—",
+  asOf: "—",
+  publishedAt: "—",
+  availableAt: "—",
+  acquiredAt: "—",
+  source: "—",
+  methodology: "—",
+  revision: "—",
+  providerRunId: "—",
+  failureMeaning:
+    "刷新失败只表示本次未取得新版本，不撤销或推测替换已冻结观测。",
+};
+
+function buildRevisionComparison(
+  series: DataSeriesPoint[],
+): DataRevisionComparison {
+  const latest = series[series.length - 1];
+  const previous = series[series.length - 2];
+  if (!latest || !previous) {
+    return {
+      oldValue: "—",
+      oldSource: "—",
+      oldCutoffMeaning: "观测点不足两个，暂无修订对照",
+      newValue: latest?.value ?? "—",
+      newSource: latest?.status ?? "—",
+      newCutoffMeaning: "—",
+      whyItMatters:
+        "修订对照需要同一指标的至少两个冻结观测；新来源只能进入后续快照，不能回写历史截止日。",
+    };
+  }
+  return {
+    oldValue: previous.value,
+    oldSource: previous.status,
+    oldCutoffMeaning: `冻结于 ${previous.period}`,
+    newValue: latest.value,
+    newSource: latest.status,
+    newCutoffMeaning: `冻结于 ${latest.period}`,
+    whyItMatters:
+      "新观测只能进入后续快照，不能回写历史截止日当时可知的信息。",
+  };
 }
 
 export class HttpResearchAdapter implements ResearchClient {
@@ -716,8 +768,97 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await import("./prototypeFixture")).buildLibraryView();
   }
 
-  async getDataCenterView() {
-    return (await import("./prototypeFixture")).buildDataCenterView();
+  async getDataCenterView(): Promise<DataCenterView> {
+    const catalog = await this.get<Schemas["MetricCatalogResponse"]>(
+      `/metrics/catalog`,
+    );
+    const entries = catalog.entries;
+    const first = entries[0];
+    const selection = first
+      ? await this.getDataCenterMetric(first.stock_id, first.metric_name)
+      : { selectedMetric: EMPTY_METRIC_DETAIL, series: [] };
+
+    const runs = await this.get<Schemas["ProviderRunsResponse"]>(
+      `/provider-runs${this.buildQuery({ limit: "8" })}`,
+    );
+
+    return {
+      cutoff: first?.latest_as_of ?? "",
+      snapshotId: "",
+      catalog: entries.map((e) => ({
+        id: `${e.stock_id}::${e.metric_name}`,
+        label: e.metric_name,
+        entity: `${e.stock_name} (${e.stock_code})`,
+        cadence: "—",
+        state: "截止日可用",
+        stockId: e.stock_id,
+        metricName: e.metric_name,
+      })),
+      selectedMetricId: first ? `${first.stock_id}::${first.metric_name}` : "",
+      selectedMetric: selection.selectedMetric,
+      series: selection.series,
+      revisionComparison: buildRevisionComparison(selection.series),
+      plannedAttempt: {
+        id: "PQ-MOCK",
+        label: "计划中能力探测（示例，非目标范围）",
+        state: "计划中 · 尚未执行",
+        meaning: "任务队列不属于当前目标范围，此块为占位展示。",
+      },
+      historicalRuns: runs.runs.map((r) => ({
+        id: r.id.slice(0, 8),
+        providerLabel: r.model_version,
+        outcome: r.status === "success" ? "success" : "quota_failure",
+        outcomeLabel: r.status === "success" ? "成功" : "失败",
+        detailLabel:
+          r.status === "success"
+            ? r.output_summary
+            : (r.error ?? "（无错误详情）"),
+        observedAt: r.started_at,
+      })),
+    };
+  }
+
+  async getDataCenterMetric(
+    stockId: string,
+    metricName: string,
+  ): Promise<DataMetricSelection> {
+    const dto = await this.get<Schemas["MetricSeriesResponse"]>(
+      `/metrics/series${this.buildQuery({
+        stock_id: stockId,
+        metric_name: metricName,
+      })}`,
+    );
+    const points = dto.points;
+    const latest = points[points.length - 1];
+    const series: DataSeriesPoint[] = points.map((p) => ({
+      period: p.as_of_date,
+      value: String(p.value),
+      numericValue: p.value,
+      acquiredAt: p.as_of_date,
+      cutoffUsable: true,
+      status: `冻结观测 · ${p.source}`,
+    }));
+    return {
+      selectedMetric: {
+        id: `${dto.stock_id}::${dto.metric_name}`,
+        name: dto.metric_name,
+        entity: dto.stock_id,
+        value: latest ? String(latest.value) : "—",
+        unit: "",
+        period: latest?.as_of_date ?? "—",
+        asOf: latest?.as_of_date ?? "—",
+        publishedAt: "—",
+        availableAt: "—",
+        acquiredAt: "—",
+        source: latest?.source ?? "—",
+        methodology: latest?.definition ?? "—",
+        revision: "—",
+        providerRunId: "—",
+        failureMeaning:
+          "刷新失败只表示本次未取得新版本，不撤销或推测替换已冻结观测。",
+      },
+      series,
+    };
   }
 
   async getVersionsView(): Promise<VersionsView> {

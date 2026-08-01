@@ -51,6 +51,8 @@ export const researchClient: ResearchClient = {
   submitLinkReview: (linkId, payload) =>
     _client.submitLinkReview(linkId, payload),
   rerunThesis: (thesisId) => _client.rerunThesis(thesisId),
+  getDataCenterMetric: (stockId, metricName) =>
+    _client.getDataCenterMetric(stockId, metricName),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

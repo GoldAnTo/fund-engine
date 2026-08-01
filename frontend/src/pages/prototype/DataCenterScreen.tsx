@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { researchClient } from "../../data/researchClient";
-import type { DataCenterView } from "../../domain/prototypeTypes";
+import type {
+  DataCenterView,
+  DataMetricSelection,
+} from "../../domain/prototypeTypes";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -16,6 +19,8 @@ export function DataCenterScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<DataCenterView | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
+  const [selection, setSelection] = useState<DataMetricSelection | null>(null);
+  const [selectionLoading, setSelectionLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,6 +30,10 @@ export function DataCenterScreen() {
         if (!cancelled) {
           setView(v);
           setSelectedId(v.selectedMetricId);
+          setSelection({
+            selectedMetric: v.selectedMetric,
+            series: v.series,
+          });
           setState({ kind: "ready" });
         }
       })
@@ -35,6 +44,21 @@ export function DataCenterScreen() {
       cancelled = true;
     };
   }, []);
+
+  const selectMetric = (catalogId: string) => {
+    setSelectedId(catalogId);
+    if (!view) return;
+    const entry = view.catalog.find((c) => c.id === catalogId);
+    if (!entry) return;
+    setSelectionLoading(true);
+    researchClient
+      .getDataCenterMetric(entry.stockId, entry.metricName)
+      .then((sel) => setSelection(sel))
+      .catch(() => {
+        // Selection stays on the last successfully loaded metric.
+      })
+      .finally(() => setSelectionLoading(false));
+  };
 
   if (state.kind === "loading") {
     return (
@@ -53,10 +77,8 @@ export function DataCenterScreen() {
     );
   }
 
-  const selectedMetric =
-    selectedId === view.selectedMetric.id
-      ? view.selectedMetric
-      : { ...view.selectedMetric, id: selectedId, name: view.catalog.find((c) => c.id === selectedId)?.label ?? view.selectedMetric.name };
+  const selectedMetric = selection?.selectedMetric ?? view.selectedMetric;
+  const series = selection?.series ?? view.series;
 
   return (
     <div className="prototype-screen" data-testid="data-center-screen">
@@ -64,7 +86,8 @@ export function DataCenterScreen() {
         <div className="eyebrow">数据中心 · Data Center</div>
         <h1>指标库 · 时点数据 · 来源确认</h1>
         <p className="lede">
-          证据截止 {view.cutoff} · 快照 <code>{view.snapshotId}</code>
+          最新冻结观测 {view.cutoff || "—"}
+          {selectionLoading ? " · 加载选中指标…" : ""}
         </p>
       </header>
 
@@ -83,7 +106,7 @@ export function DataCenterScreen() {
               className={`prototype-metric-row ${
                 c.id === selectedId ? "is-selected" : ""
               }`}
-              onClick={() => setSelectedId(c.id)}
+              onClick={() => selectMetric(c.id)}
             >
               <strong>{c.label}</strong>
               <div style={{ fontSize: 11, color: "var(--ink-muted)" }}>
@@ -182,7 +205,13 @@ export function DataCenterScreen() {
             aria-label="数据时序"
           >
             {(() => {
-              const series = view.series;
+              if (series.length === 0) {
+                return (
+                  <text x={300} y={110} textAnchor="middle" fontSize={12}>
+                    该指标暂无冻结观测
+                  </text>
+                );
+              }
               const maxValue = Math.max(...series.map((s) => s.numericValue));
               const minValue = Math.min(...series.map((s) => s.numericValue));
               const range = Math.max(1, maxValue - minValue);
@@ -232,7 +261,7 @@ export function DataCenterScreen() {
             })()}
           </svg>
           <ul style={{ listStyle: "none", padding: 0, fontSize: 11 }}>
-            {view.series.map((p) => (
+            {series.map((p) => (
               <li
                 key={p.period}
                 style={{

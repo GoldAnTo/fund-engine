@@ -28,6 +28,7 @@ import { PageStateError } from "../domain/types";
 import type {
   CaseWorkbenchView,
   DataCenterView,
+  DataMetricSelection,
   LibraryView,
   LinkReviewPayload,
   NewResearchView,
@@ -1354,6 +1355,18 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getDataCenterView(): Promise<DataCenterView> {
     return simulateLatency(buildDataCenterView());
+  }
+
+  async getDataCenterMetric(
+    _stockId: string,
+    _metricName: string,
+  ): Promise<DataMetricSelection> {
+    this.throwIfOffline();
+    const view = buildDataCenterView();
+    return simulateLatency({
+      selectedMetric: view.selectedMetric,
+      series: view.series,
+    });
   }
 
   async getVersionsView(): Promise<VersionsView> {

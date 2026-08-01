@@ -540,6 +540,9 @@ export interface DataCatalogItem {
   entity: string;
   cadence: string;
   state: string;
+  /** Live-selection keys for /metrics/series. */
+  stockId: string;
+  metricName: string;
 }
 
 export interface DataSeriesPoint {
@@ -781,7 +784,8 @@ export interface PrototypeClient {
 export type ResearchClient = BaseResearchClient &
   PrototypeClient &
   ReviewQueueClient &
-  VersionsClient;
+  VersionsClient &
+  DataCenterClient;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 
 /** One pending link-level review, mapped from ReviewQueueItemDTO. */
@@ -839,4 +843,19 @@ export interface ThesisRerunResult {
 
 export interface VersionsClient {
   rerunThesis(thesisId: string): Promise<ThesisRerunResult>;
+}
+
+// ── Data center (screen 8 · live API slice) ──────────────────────────────
+
+/** Detail + series for one catalog metric, loaded on selection change. */
+export interface DataMetricSelection {
+  selectedMetric: DataCenterView["selectedMetric"];
+  series: DataSeriesPoint[];
+}
+
+export interface DataCenterClient {
+  getDataCenterMetric(
+    stockId: string,
+    metricName: string,
+  ): Promise<DataMetricSelection>;
 }
