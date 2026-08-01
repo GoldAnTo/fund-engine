@@ -27,6 +27,8 @@ import type {
 import { PageStateError } from "../domain/types";
 import type {
   CaseWorkbenchView,
+  CreateCaseInput,
+  CreateCaseResult,
   DataCenterView,
   DataMetricSelection,
   LibraryView,
@@ -1335,6 +1337,14 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getNewResearchView(): Promise<NewResearchView> {
     return simulateLatency(buildNewResearchView());
+  }
+
+  async createCase(input: CreateCaseInput): Promise<CreateCaseResult> {
+    // Mock: simulate case creation without touching the fixture store.
+    return simulateLatency({
+      caseId: `RC-MOCK-${Date.now()}`,
+      thesisIds: input.theses.map((_, i) => `TH-MOCK-${i + 1}`),
+    });
   }
 
   async getResearchPlanView(): Promise<ResearchPlanView> {

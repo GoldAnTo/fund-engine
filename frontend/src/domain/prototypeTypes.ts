@@ -767,10 +767,38 @@ export interface ThemeWorkbenchView {
 
 import type { ResearchClient as BaseResearchClient } from "./types";
 
+/** Payload for POST /research-cases (screen 2 · 新建研究 submit). */
+export interface CreateCaseInput {
+  title: string;
+  industryTopic: string;
+  createdBy: string;
+  researchObject?: string;
+  phenomenon?: string;
+  coreQuestion?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  theses: {
+    statement: string;
+    title?: string;
+    observationStart?: string;
+    observationEnd?: string;
+    supportCondition?: string;
+    falsificationCondition?: string;
+    nextVerificationEvent?: string;
+    creatorType: "human" | "ai";
+  }[];
+}
+
+export interface CreateCaseResult {
+  caseId: string;
+  thesisIds: string[];
+}
+
 export interface PrototypeClient {
   getWorkspaceOverviewView(): Promise<WorkspaceOverviewView>;
   getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen>;
   getNewResearchView(): Promise<NewResearchView>;
+  createCase(input: CreateCaseInput): Promise<CreateCaseResult>;
   getResearchPlanView(): Promise<ResearchPlanView>;
   getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView>;
   getRelationshipGraphView(caseId: string): Promise<RelationshipGraphView>;

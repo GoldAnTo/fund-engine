@@ -222,7 +222,7 @@ export function OverviewScreen() {
           <article className="prototype-paper workspace-block workspace-block--queue">
             <div className="prototype-section-header">
               <div>
-                <p className="section-kicker">任务队列</p>
+                <p className="section-kicker">任务队列（示例 · 非目标范围）</p>
                 <h2>边研究 · 边处理</h2>
               </div>
               <button type="button" className="link-button">＋ 新建任务</button>
@@ -264,7 +264,7 @@ export function OverviewScreen() {
           <article className="prototype-paper workspace-block">
             <div className="prototype-section-header">
               <div>
-                <p className="section-kicker">证据变化</p>
+                <p className="section-kicker">证据变化（示例 · 非目标范围）</p>
                 <h2>{view.evidenceChanges.length} 条</h2>
               </div>
               <button type="button" className="link-button">全部 ▾</button>
@@ -300,7 +300,7 @@ export function OverviewScreen() {
           <article className="prototype-paper workspace-block">
             <div className="prototype-section-header">
               <div>
-                <p className="section-kicker">活动</p>
+                <p className="section-kicker">活动（示例 · 非目标范围）</p>
                 <h2>研究日志</h2>
               </div>
               <button type="button" className="link-button">全部 ▾</button>

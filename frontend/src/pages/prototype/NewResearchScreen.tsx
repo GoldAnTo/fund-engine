@@ -46,6 +46,16 @@ export function NewResearchScreen() {
   const [view, setView] = useState<NewResearchView | null>(null);
   const [drafts, setDrafts] = useState<Record<string, ThesisDraftState>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [createdCaseId, setCreatedCaseId] = useState<string | null>(null);
+  const [caseForm, setCaseForm] = useState({
+    title: "",
+    industryTopic: "",
+    researchObject: "",
+    phenomenon: "",
+    periodStart: "",
+    periodEnd: "",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -125,10 +135,13 @@ export function NewResearchScreen() {
   function validateAndConfirm(): boolean {
     setSubmitError(null);
     const issues: string[] = [];
+    if (!caseForm.title.trim()) issues.push("案例标题不能为空");
+    if (!caseForm.industryTopic.trim()) issues.push("行业主题不能为空");
     for (const draft of Object.values(drafts)) {
       const { thesis, touched } = draft;
       if (!touched) continue;
       if (!thesis.title.trim()) issues.push(`${thesis.id}：标题不能为空`);
+      if (!thesis.statement.trim()) issues.push(`${thesis.id}：命题表达不能为空`);
       for (const field of DRAFT_FIELDS) {
         const value = thesis[field];
         if (typeof value === "string") {
@@ -143,6 +156,41 @@ export function NewResearchScreen() {
       return false;
     }
     return true;
+  }
+
+  async function confirmAndCreate() {
+    if (!validateAndConfirm()) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const theses = Object.values(drafts)
+        .filter((d) => d.touched && d.thesis.statement.trim())
+        .map((d) => ({
+          statement: d.thesis.statement,
+          title: d.thesis.title || undefined,
+          observationStart: d.thesis.observationStart || undefined,
+          observationEnd: d.thesis.observationEnd || undefined,
+          supportCondition: d.thesis.supportCondition || undefined,
+          falsificationCondition: d.thesis.falsifier || undefined,
+          nextVerificationEvent: d.thesis.nextValidationEvent || undefined,
+          creatorType: "human" as const,
+        }));
+      const result = await researchClient.createCase({
+        title: caseForm.title,
+        industryTopic: caseForm.industryTopic,
+        createdBy: "prototype-user",
+        researchObject: caseForm.researchObject || undefined,
+        phenomenon: caseForm.phenomenon || undefined,
+        periodStart: caseForm.periodStart || undefined,
+        periodEnd: caseForm.periodEnd || undefined,
+        theses,
+      });
+      setCreatedCaseId(result.caseId);
+    } catch (err) {
+      setSubmitError(`创建失败：${(err as Error).message}`);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const thesisEntries = Object.values(drafts);
@@ -170,30 +218,76 @@ export function NewResearchScreen() {
             <p className="section-kicker">研究对象</p>
             <h2>研究范围与现象</h2>
           </div>
-          <span className="state-badge reviewed">已确认</span>
+          <span className="state-badge ai">草稿</span>
         </div>
-        <dl style={{ display: "grid", gap: 6, margin: 0 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr" }}>
-            <dt style={{ color: "var(--ink-muted)", fontSize: 12 }}>研究对象</dt>
-            <dd style={{ margin: 0 }}>{view.researchObject}</dd>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr" }}>
-            <dt style={{ color: "var(--ink-muted)", fontSize: 12 }}>观察现象</dt>
-            <dd style={{ margin: 0 }}>{view.phenomenon}</dd>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr" }}>
-            <dt style={{ color: "var(--ink-muted)", fontSize: 12 }}>研究期间</dt>
-            <dd style={{ margin: 0 }}>
-              {view.researchPeriod.start} 至 {view.researchPeriod.end}
-            </dd>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr" }}>
-            <dt style={{ color: "var(--ink-muted)", fontSize: 12 }}>证据截止</dt>
-            <dd style={{ margin: 0 }}>
-              {view.cutoff} · 快照 <code>{view.snapshotId}</code>
-            </dd>
-          </div>
-        </dl>
+        <div className="thesis-fields">
+          <label className="title-field">
+            案例标题
+            <input
+              type="text"
+              value={caseForm.title}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, title: e.target.value }))
+              }
+              aria-label="案例标题"
+              placeholder="例如：AI 算力链"
+            />
+          </label>
+          <label>
+            行业主题
+            <input
+              type="text"
+              value={caseForm.industryTopic}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, industryTopic: e.target.value }))
+              }
+              aria-label="行业主题"
+              placeholder="例如：ai_compute"
+            />
+          </label>
+          <label className="statement-field">
+            研究对象
+            <textarea
+              rows={2}
+              value={caseForm.researchObject}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, researchObject: e.target.value }))
+              }
+              aria-label="研究对象"
+            />
+          </label>
+          <label className="statement-field">
+            观察现象
+            <textarea
+              rows={2}
+              value={caseForm.phenomenon}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, phenomenon: e.target.value }))
+              }
+              aria-label="观察现象"
+            />
+          </label>
+          <label>
+            研究期间开始
+            <input
+              type="date"
+              value={caseForm.periodStart}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, periodStart: e.target.value }))
+              }
+            />
+          </label>
+          <label>
+            研究期间结束
+            <input
+              type="date"
+              value={caseForm.periodEnd}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, periodEnd: e.target.value }))
+              }
+            />
+          </label>
+        </div>
       </section>
 
       <section>
@@ -325,22 +419,40 @@ export function NewResearchScreen() {
           <button
             type="button"
             className="prototype-button primary"
-            onClick={() => {
-              if (validateAndConfirm()) {
-                setSubmitError(`已暂存 ${confirmedCount} 条命题。下一步将进入研究计划。`);
-              }
-            }}
+            disabled={submitting}
+            onClick={confirmAndCreate}
           >
-            确认命题 · 进入研究计划
+            {submitting ? "正在创建…" : "确认命题 · 创建研究案例"}
           </button>
         </div>
+        {createdCaseId && (
+          <p style={{ marginTop: 12 }}>
+            ✅ 案例已创建：
+            <Link to={`/cases/${createdCaseId}`}>进入案例工作台 →</Link>
+          </p>
+        )}
+      </section>
+
+      <section>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">已有资产</p>
+            <h2>可复用的冻结资料</h2>
+          </div>
+        </div>
+        <ul className="case-bullets">
+          <li>文档 {view.assets.documentCount} 份（不可变来源层）</li>
+          <li>已抽取陈述 {view.assets.statementCount} 条</li>
+          <li>指标目录 {view.assets.metricCount} 项</li>
+          <li>已复核知识 {view.assets.reviewedLinkCount} 条</li>
+        </ul>
       </section>
 
       <section>
         <div className="prototype-section-header">
           <div>
             <p className="section-kicker">研究计划预览</p>
-            <h2>能力探测 · 证据检索 · 结果指标</h2>
+            <h2>能力探测 · 证据检索 · 结果指标（示例 · 非目标范围）</h2>
           </div>
           <Link to="/plan" className="prototype-next-action">
             查看完整计划 →

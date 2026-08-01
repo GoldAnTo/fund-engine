@@ -30,6 +30,8 @@ import type {
   CaseWorkbenchSourceRow,
   CaseWorkbenchThesisRow,
   CaseWorkbenchView,
+  CreateCaseInput,
+  CreateCaseResult,
   DataCenterView,
   DataMetricSelection,
   DataRevisionComparison,
@@ -37,7 +39,10 @@ import type {
   GraphLayer,
   GraphNodeView,
   LinkReviewPayload,
+  NewResearchView,
+  PlanAsset,
   RelationshipGraphView,
+  ResearchPlanView,
   ReviewQueueView,
   ReviewQueueViewItem,
   ThemeClaim,
@@ -765,7 +770,93 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
-    return (await import("./prototypeFixture")).buildWorkspaceOverviewScreen();
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const first = cases.items[0];
+    if (!first) {
+      throw new PageStateError("parse_failed", "no research case exists yet");
+    }
+    const overview = await this.get<Schemas["OverviewResponse"]>(
+      `/overview${this.buildQuery({ case_id: first.id })}`,
+    );
+    // 任务队列 / 证据变化 / 活动流: explicitly out of target scope (binding
+    // doc 缺口清单 "明确不建"); the screen labels these blocks as 示例.
+    const fixture = await (
+      await import("./prototypeFixture")
+    ).buildWorkspaceOverviewScreen();
+
+    const assessment = overview.assessment;
+    const CONCLUSION_LABEL: Record<string, string> = {
+      supported: "支持（成立）",
+      contradicted: "反驳（不成立）",
+      insufficient_evidence: "证据不足",
+    };
+    const thesisStatement =
+      typeof overview.thesis?.statement === "string"
+        ? overview.thesis.statement
+        : "";
+    const bullets: string[] = [];
+    if (thesisStatement) bullets.push(`焦点命题：${thesisStatement}`);
+    if (assessment) {
+      bullets.push(
+        `${CONCLUSION_LABEL[assessment.conclusion] ?? assessment.conclusion}：${assessment.rationale}`,
+      );
+      for (const gap of assessment.gaps) bullets.push(`缺口：${gap}`);
+    }
+    if (bullets.length === 0) bullets.push("（暂无评估结论）");
+
+    return {
+      caseId: first.id,
+      caseTitle: first.title,
+      caseTopic: first.topic,
+      caseTopicTags: [first.topic],
+      lastUpdatedAt: first.updated_at.slice(0, 10),
+      caseCountLabel: `${cases.items.length} 个研究案例`,
+      tabs: [
+        { id: "summary", label: "结论", count: bullets.length },
+        { id: "evidence", label: "证据", count: overview.totals.evidence_total },
+        { id: "pending", label: "待审核", count: overview.totals.pending_review },
+        { id: "gaps", label: "缺口", count: overview.totals.major_gaps },
+      ],
+      bullets,
+      keyChanges: overview.key_changes.map((kc) => ({
+        id: kc.id,
+        // View union has no 缺口 variant; fold it into 风险.
+        tag: kc.tag === "缺口" ? "风险" : kc.tag,
+        text: kc.text,
+        detail:
+          kc.review_state === "reviewed"
+            ? "已人工复核"
+            : kc.review_state === "rejected"
+              ? "已驳回"
+              : "AI 提议 · 未经人工复核",
+        occurredAt: kc.occurred_at.slice(0, 10),
+        sourceLabel: kc.source_label || "—",
+      })),
+      framework: overview.framework.map((node, i) => {
+        const description =
+          typeof node.description === "string" ? node.description : "";
+        return {
+          id: String(node.id ?? `step-${i}`),
+          sequence: String(node.sequence ?? i + 1),
+          title:
+            description.length > 40
+              ? `${description.slice(0, 40)}…`
+              : description,
+          description,
+          expanded: false,
+          children: [],
+        };
+      }),
+      totals: {
+        evidenceTotal: overview.totals.evidence_total,
+        reliablePct: null,
+        pendingReview: overview.totals.pending_review,
+        majorBlockers: overview.totals.major_gaps,
+      },
+      taskQueue: fixture.taskQueue,
+      evidenceChanges: fixture.evidenceChanges,
+      activity: fixture.activity,
+    };
   }
 
   async getThemeIndexView(): Promise<ThemeIndexView> {
@@ -988,12 +1079,167 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async getNewResearchView() {
-    return (await import("./prototypeFixture")).buildNewResearchView();
+  async getNewResearchView(): Promise<NewResearchView> {
+    // A new case does not exist yet; only the asset summary and the (out of
+    // scope) plan preview are data-driven. The thesis list starts blank.
+    const [documents, catalog, reviewed, cases] = await Promise.all([
+      this.get<Schemas["DocumentListResponse"]>(`/documents`),
+      this.get<Schemas["MetricCatalogResponse"]>(`/metrics/catalog`),
+      this.get<Schemas["KnowledgeResponse"]>(
+        `/knowledge${this.buildQuery({ review_state: "reviewed", limit: "500" })}`,
+      ),
+      this.get<Schemas["CaseListResponse"]>(`/research-cases`),
+    ]);
+    // Provider 查询计划 / 证据检索计划: no backend entity (binding doc 缺口
+    // 清单 "明确不建"); keep the fixture plan block labeled 非目标范围.
+    const fixture = await (
+      await import("./prototypeFixture")
+    ).buildNewResearchView();
+    return {
+      caseId: "",
+      caseTitle: "新建研究",
+      caseQuestion: "",
+      researchObject: "",
+      phenomenon: "",
+      researchPeriod: { start: "", end: "" },
+      studyRange: "",
+      cutoff: "",
+      snapshotId: "",
+      theses: [
+        {
+          id: "TH-DRAFT-1",
+          origin: "human",
+          lastEditedBy: "human",
+          title: "",
+          statement: "",
+          observationStart: "",
+          observationEnd: "",
+          supportCondition: "",
+          falsifier: "",
+          nextValidationEvent: "",
+        },
+      ],
+      confirmedTheses: [],
+      activeStep: 2,
+      stageStatus: "草稿",
+      assets: {
+        documentCount: documents.items.length,
+        statementCount: documents.items.reduce(
+          (sum, d) => sum + d.statement_count,
+          0,
+        ),
+        metricCount: catalog.entries.length,
+        reviewedLinkCount: reviewed.items.length,
+        relatedCaseIds: cases.items.map((c) => c.id),
+      },
+      plan: fixture.plan,
+    };
   }
 
-  async getResearchPlanView() {
-    return (await import("./prototypeFixture")).buildResearchPlanView();
+  async createCase(input: CreateCaseInput): Promise<CreateCaseResult> {
+    const dto = await this.post<Schemas["CreateCaseResponse"]>(
+      `/research-cases`,
+      {
+        title: input.title,
+        industry_topic: input.industryTopic,
+        created_by: input.createdBy,
+        research_object: input.researchObject || null,
+        phenomenon: input.phenomenon || null,
+        core_question: input.coreQuestion || null,
+        period_start: input.periodStart || null,
+        period_end: input.periodEnd || null,
+        initial_theses: input.theses.map((t) => ({
+          statement: t.statement,
+          title: t.title || null,
+          observation_start: t.observationStart || null,
+          observation_end: t.observationEnd || null,
+          support_condition: t.supportCondition || null,
+          falsification_condition: t.falsificationCondition || null,
+          next_verification_event: t.nextVerificationEvent || null,
+          creator_type: t.creatorType,
+        })),
+      },
+    );
+    return {
+      caseId: dto.case_id,
+      thesisIds: dto.theses.map((t) => t.id),
+    };
+  }
+
+  async getResearchPlanView(): Promise<ResearchPlanView> {
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    const first = cases.items[0];
+    if (!first) {
+      throw new PageStateError("parse_failed", "no research case exists yet");
+    }
+    const [gapsDto, documents, queue, runs] = await Promise.all([
+      this.get<Schemas["CaseGapsResponse"]>(
+        `/research-cases/${first.id}/gaps`,
+      ),
+      this.get<Schemas["DocumentListResponse"]>(`/documents`),
+      this.get<Schemas["ReviewQueueResponse"]>(
+        `/review-queue${this.buildQuery({ case_id: first.id, limit: "50" })}`,
+      ),
+      this.get<Schemas["ProviderRunsResponse"]>(
+        `/provider-runs${this.buildQuery({ limit: "20" })}`,
+      ),
+    ]);
+    // Provider 查询计划 / 采集编排 / 计划指标: no backend entity (binding
+    // doc "明确不建"); keep the fixture blocks labeled 非目标范围.
+    const fixture = await (
+      await import("./prototypeFixture")
+    ).buildResearchPlanView();
+
+    const assets: PlanAsset[] = documents.items.map((d) => ({
+      id: d.id,
+      kind: "document",
+      label: d.source_url,
+      sourceVersion: d.parser_version,
+      sourceSpan: `${d.span_count} spans`,
+      reviewState: "reviewed",
+      reviewCount: d.statement_count,
+      selected: false,
+    }));
+
+    return {
+      case: {
+        id: first.id,
+        researchPeriod: "—",
+        cutoff: gapsDto.cutoff,
+        revision: "—",
+      },
+      existingAssets: assets,
+      orderedAssets: assets,
+      assetPageSize: assets.length || 1,
+      providerQueries: fixture.providerQueries,
+      collection: fixture.collection,
+      pendingResults: queue.items.map((item) => ({
+        id: item.link_id,
+        targetLabel: item.thesis_statement,
+        task: `确认关系 ${item.ai_role}：${item.ai_reason}`,
+        sourceId: item.statement_id,
+        sourceVersion: item.document_version_id,
+        reviewLabel: "待人工复核",
+      })),
+      gaps: gapsDto.gaps.map((g) => ({
+        id: g.assessment_id,
+        label: g.gap,
+        scope: g.thesis_statement,
+        type: "factor",
+      })),
+      resultMetrics: fixture.resultMetrics,
+      failures: runs.runs
+        .filter((r) => r.status !== "success")
+        .map((r) => ({
+          id: r.id.slice(0, 8),
+          provider: r.model_version,
+          outcome: r.status,
+          observedAt: r.started_at,
+          detail: r.error ?? "（无错误详情）",
+        })),
+      permissionGaps: [],
+      manualUploads: [],
+    };
   }
 
   async getCaseWorkbenchView(

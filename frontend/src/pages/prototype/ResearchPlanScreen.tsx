@@ -129,7 +129,7 @@ export function ResearchPlanScreen() {
       <section>
         <div className="prototype-section-header">
           <div>
-            <p className="section-kicker">研究能力探测</p>
+            <p className="section-kicker">研究能力探测（示例 · 非目标范围）</p>
             <h2>{view.providerQueries.length} 项待执行查询</h2>
           </div>
           <span className="state-badge ai">能力探测阶段</span>
@@ -171,7 +171,7 @@ export function ResearchPlanScreen() {
       <section>
         <div className="prototype-section-header">
           <div>
-            <p className="section-kicker">采集 / 复用 / 阻塞</p>
+            <p className="section-kicker">采集 / 复用 / 阻塞（示例 · 非目标范围）</p>
             <h2>资料流向分桶</h2>
           </div>
         </div>
@@ -277,7 +277,7 @@ export function ResearchPlanScreen() {
       <section>
         <div className="prototype-section-header">
           <div>
-            <p className="section-kicker">结果指标</p>
+            <p className="section-kicker">结果指标（示例 · 非目标范围）</p>
             <h2>研究计划预定 {view.resultMetrics.length} 项数据采集</h2>
           </div>
         </div>

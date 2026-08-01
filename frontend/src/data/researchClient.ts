@@ -38,6 +38,7 @@ export const researchClient: ResearchClient = {
   getWorkspaceOverviewView: () => _client.getWorkspaceOverviewView(),
   getWorkspaceOverviewScreen: () => _client.getWorkspaceOverviewScreen(),
   getNewResearchView: () => _client.getNewResearchView(),
+  createCase: (input) => _client.createCase(input),
   getResearchPlanView: () => _client.getResearchPlanView(),
   getCaseWorkbenchView: (id) => _client.getCaseWorkbenchView(id),
   getRelationshipGraphView: (id) => _client.getRelationshipGraphView(id),
