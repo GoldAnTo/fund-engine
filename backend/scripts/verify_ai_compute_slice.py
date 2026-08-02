@@ -1,11 +1,13 @@
-"""Release-gate verification for the AI-compute evidence slice.
+"""Release-gate verification for the frozen evidence slices (two cases).
 
-Runs nine explicit checks against a seeded ledger to verify that the vertical
-slice is auditable end-to-end:
+Runs ten explicit checks against a seeded ledger (AI-compute + storage-chain
+cases) to verify that the vertical slices are auditable end-to-end:
 
 1. **document_versions_present** – at least six frozen DocumentVersions exist.
-2. **gold_manifest_matches_ledger** – (fail-closed) the frozen dataset
-   manifest exists and its content hashes match the ledger exactly.
+2. **gold_manifest_matches_ledger** – (fail-closed) the v2 manifest's per-case
+   document hashes match the ledger exactly; ledger documents are attributed
+   to cases by source_url prefix, unseeded cases are reported as skipped, and
+   documents claimed by no case fail the check.
 3. **assessment_source_spans_complete** – every AIAssessment can be traced
    back through snapshot → evidence_link → source_statement → source_span
    without a broken link.
@@ -22,9 +24,12 @@ slice is auditable end-to-end:
 8. **table_extraction_gold_accuracy** – (fail-closed) the rule-based
    FinancialTableExtractor reproduces the frozen table gold set exactly
    (per-sample recall == 1.0 and precision == 1.0).
-9. **projection_rebuilds** – (Neo4j only) the graph projection can be rebuilt
-   from the ledger and the node count matches.  Skipped when Neo4j is
-   unavailable; a skip never causes the gate to fail.
+9. **pdf_fixture_parse_gold** – (fail-closed) committed binary PDF fixtures
+   parse through pypdf and their extracted table regions reproduce the gold
+   facts end-to-end; hash drift of a PDF fixture fails the check.
+10. **projection_rebuilds** – (Neo4j only) the graph projection can be rebuilt
+    from the ledger and the node count matches.  Skipped when Neo4j is
+    unavailable; a skip never causes the gate to fail.
 
 Usage::
 
@@ -40,6 +45,7 @@ plus full per-check detail to ``docs/evaluation/raw/<timestamp>.json``
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -67,7 +73,8 @@ from app.models.ledger import (
 )
 from app.models.ledger import Base
 from app.repositories.instruments import InstrumentRepository
-from app.scripts.seed_ai_compute_case import seed
+from app.scripts.seed_ai_compute_case import seed as seed_ai_compute
+from app.scripts.seed_storage_chain_case import seed as seed_storage_chain
 from app.services.exposure import ExposureService
 from app.services.workbench import WorkbenchService
 
@@ -123,6 +130,7 @@ class ReleaseGate:
             self._check_ai_human_boundary_visible(),
             self._check_review_outcomes_tracked(),
             self._check_table_extraction_gold_accuracy(),
+            self._check_pdf_fixture_parse_gold(),
             self._check_projection_rebuilds(),
         ]
         failures = [
@@ -143,8 +151,13 @@ class ReleaseGate:
         }
 
     def _check_gold_manifest_matches_ledger(self) -> dict:
-        """Fail-closed: the frozen dataset manifest must exist, list documents,
-        and match the ledger's DocumentVersion content hashes exactly."""
+        """Fail-closed: the v2 manifest lists per-case document hashes; ledger
+        documents are attributed to cases by ``source_url`` prefix, and every
+        *seeded* case's hash set must match exactly.  A case with no ledger
+        documents is reported as ``not_seeded`` (skipped) so the test
+        environment — which seeds only the AI-compute slice — still passes,
+        while the verify script seeds every case and enforces all of them.
+        Ledger documents claimed by no case prefix always fail the check."""
         if not MANIFEST_PATH.exists():
             return {
                 "name": "gold_manifest_matches_ledger",
@@ -154,28 +167,86 @@ class ReleaseGate:
             }
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        expected = {
-            doc["content_sha256"] for doc in manifest.get("documents", [])
-        }
-        actual = set(
-            self._session.scalars(select(DocumentVersion.content_sha256)).all()
+        cases = manifest.get("cases", [])
+        if not cases:
+            return {
+                "name": "gold_manifest_matches_ledger",
+                "passed": False,
+                "evidence": {"manifest": str(MANIFEST_PATH)},
+                "failures": [
+                    "gold manifest has no per-case document lists "
+                    "(schema_version 2 required)"
+                ],
+            }
+
+        ledger_rows = list(
+            self._session.execute(
+                select(DocumentVersion.content_sha256, DocumentVersion.source_url)
+            ).all()
         )
 
         failures: list[str] = []
-        if not expected:
-            failures.append("gold manifest lists no documents")
-        for digest in sorted(expected - actual):
-            failures.append(f"manifest document not in ledger: {digest[:12]}…")
-        for digest in sorted(actual - expected):
-            failures.append(f"ledger document not in manifest: {digest[:12]}…")
+        per_case: list[dict] = []
+        enforced = 0
+        for case in cases:
+            prefix = case["source_url_prefix"]
+            expected = {d["content_sha256"] for d in case.get("documents", [])}
+            actual = {
+                digest
+                for digest, url in ledger_rows
+                if url and url.startswith(prefix)
+            }
+            if not expected:
+                failures.append(f"case {case['id']}: manifest lists no documents")
+                continue
+            if not actual:
+                per_case.append(
+                    {"case": case["id"], "status": "not_seeded",
+                     "expected": len(expected)}
+                )
+                continue
+            enforced += 1
+            case_failures = []
+            for digest in sorted(expected - actual):
+                case_failures.append(
+                    f"case {case['id']}: manifest document not in ledger: "
+                    f"{digest[:12]}…"
+                )
+            for digest in sorted(actual - expected):
+                case_failures.append(
+                    f"case {case['id']}: ledger document not in manifest: "
+                    f"{digest[:12]}…"
+                )
+            failures.extend(case_failures)
+            per_case.append(
+                {
+                    "case": case["id"],
+                    "status": "enforced",
+                    "expected": len(expected),
+                    "actual": len(actual),
+                    "passed": not case_failures,
+                }
+            )
+
+        prefixes = [c["source_url_prefix"] for c in cases]
+        unclaimed = sorted(
+            digest
+            for digest, url in ledger_rows
+            if not (url and any(url.startswith(p) for p in prefixes))
+        )
+        for digest in unclaimed:
+            failures.append(f"ledger document claimed by no case: {digest[:12]}…")
+
+        if enforced == 0:
+            failures.append("no manifest case is seeded in this ledger")
 
         return {
             "name": "gold_manifest_matches_ledger",
             "passed": not failures,
             "evidence": {
                 "manifest": str(MANIFEST_PATH),
-                "manifest_documents": len(expected),
-                "ledger_documents": len(actual),
+                "per_case": per_case,
+                "unclaimed_ledger_documents": len(unclaimed),
             },
             "failures": failures,
         }
@@ -453,39 +524,29 @@ class ReleaseGate:
 
         for sample in samples:
             facts = extractor.extract(sample["text"])
-            expected = {
-                (e["metric_name"], e["observed_period"], e["value"])
-                for e in sample["expected_facts"]
-            }
-            exp_keys = {(m, p) for (m, p, _v) in expected}
-            got_keys = {
-                (f.metric_name, f.observed_period.isoformat()) for f in facts
-            }
-            matched: set[tuple[str, str]] = set()
-            for fact in facts:
-                period = fact.observed_period.isoformat()
-                for metric, exp_period, value in expected:
-                    if (
-                        fact.metric_name == metric
-                        and period == exp_period
-                        and value in fact.statement_text
-                    ):
-                        matched.add((metric, exp_period))
-
-            recall = len(matched) / len(exp_keys) if exp_keys else 1.0
-            precision = len(matched) / len(got_keys) if got_keys else 1.0
+            missing, extra, expected_count, extracted_count = _table_fact_diff(
+                facts, sample["expected_facts"]
+            )
+            recall = (
+                (expected_count - len(missing)) / expected_count
+                if expected_count
+                else 1.0
+            )
+            precision = (
+                (extracted_count - len(extra)) / extracted_count
+                if extracted_count
+                else 1.0
+            )
             per_sample.append(
                 {
                     "id": sample["id"],
-                    "expected": len(exp_keys),
-                    "extracted": len(got_keys),
+                    "expected": expected_count,
+                    "extracted": extracted_count,
                     "recall": round(recall, 4),
                     "precision": round(precision, 4),
                 }
             )
 
-            missing = exp_keys - matched
-            extra = got_keys - exp_keys
             if missing:
                 failures.append(
                     f"sample {sample['id']}: missing expected facts "
@@ -505,6 +566,102 @@ class ReleaseGate:
                 "sample_count": len(samples),
                 "per_sample": per_sample,
             },
+            "failures": failures,
+        }
+
+    def _check_pdf_fixture_parse_gold(self) -> dict:
+        """Fail-closed: committed PDF fixtures must parse through pypdf, and
+        their extracted table regions must reproduce the gold facts.
+
+        This is the end-to-end guard for the real-binary parse path:
+        ``pdf_text`` regressions change the extracted spans (parse fails or
+        facts go missing); extractor regressions are caught here and by
+        ``table_extraction_gold_accuracy`` on the inline copy of the same
+        table.  Gold samples opt in via a ``pdf_file`` field pointing at the
+        repo-relative fixture path.
+        """
+        if not MANIFEST_PATH.exists() or not TABLE_GOLD_PATH.exists():
+            return {
+                "name": "pdf_fixture_parse_gold",
+                "passed": False,
+                "evidence": {},
+                "failures": ["manifest or table gold dataset missing"],
+            }
+
+        from app.services.pdf_text import PdfParseError, extract_spans
+        from app.services.table_extraction import FinancialTableExtractor
+
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        pdf_hashes = {
+            doc["file"]: doc["content_sha256"]
+            for case in manifest.get("cases", [])
+            for doc in case.get("documents", [])
+            if doc["file"].endswith(".pdf")
+        }
+        gold = json.loads(TABLE_GOLD_PATH.read_text(encoding="utf-8"))
+        pdf_samples = [s for s in gold.get("samples", []) if s.get("pdf_file")]
+
+        failures: list[str] = []
+        per_doc: list[dict] = []
+        extractor = FinancialTableExtractor()
+
+        for sample in pdf_samples:
+            rel = sample["pdf_file"]
+            path = PROJECT_ROOT / rel
+            if rel not in pdf_hashes:
+                failures.append(f"PDF gold sample {sample['id']}: {rel} not in manifest")
+                continue
+            if not path.exists():
+                failures.append(f"PDF fixture missing: {rel}")
+                continue
+            raw = path.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest != pdf_hashes[rel]:
+                failures.append(
+                    f"PDF fixture hash drifted: {rel} "
+                    f"(regenerating requires re-freezing the manifest)"
+                )
+                continue
+            try:
+                spans = extract_spans(raw)
+            except PdfParseError as exc:
+                failures.append(f"PDF parse failed: {rel}: {exc}")
+                continue
+
+            facts = []
+            for _locator, text in spans:
+                facts.extend(extractor.extract(text))
+            missing, extra, expected_count, extracted_count = _table_fact_diff(
+                facts, sample["expected_facts"]
+            )
+            per_doc.append(
+                {
+                    "sample": sample["id"],
+                    "file": rel,
+                    "spans": len(spans),
+                    "expected": expected_count,
+                    "extracted": extracted_count,
+                    "passed": not missing and not extra,
+                }
+            )
+            if missing:
+                failures.append(
+                    f"PDF sample {sample['id']}: missing expected facts "
+                    f"{sorted(missing)}"
+                )
+            if extra:
+                failures.append(
+                    f"PDF sample {sample['id']}: unexpected extracted facts "
+                    f"{sorted(extra)}"
+                )
+
+        if not pdf_samples:
+            failures.append("table gold dataset contains no pdf_file samples")
+
+        return {
+            "name": "pdf_fixture_parse_gold",
+            "passed": not failures,
+            "evidence": {"per_doc": per_doc},
             "failures": failures,
         }
 
@@ -550,6 +707,36 @@ class ReleaseGate:
 # ---------------------------------------------------------------------------
 
 
+def _table_fact_diff(
+    facts: list, expected_facts: list[dict]
+) -> tuple[set, set, int, int]:
+    """Diff extracted TableFacts against a gold sample's expected facts.
+
+    Matching rule (see table-extraction-gold.json): a fact matches when
+    metric_name and observed_period are equal and the expected ``value``
+    appears as a substring of ``fact.statement_text``.  Returns
+    ``(missing, extra, expected_count, extracted_count)`` where ``missing``
+    and ``extra`` are ``(metric_name, observed_period)`` key sets.
+    """
+    expected = {
+        (e["metric_name"], e["observed_period"], e["value"])
+        for e in expected_facts
+    }
+    exp_keys = {(m, p) for (m, p, _v) in expected}
+    got_keys = {(f.metric_name, f.observed_period.isoformat()) for f in facts}
+    matched: set[tuple[str, str]] = set()
+    for fact in facts:
+        period = fact.observed_period.isoformat()
+        for metric, exp_period, value in expected:
+            if (
+                fact.metric_name == metric
+                and period == exp_period
+                and value in fact.statement_text
+            ):
+                matched.add((metric, exp_period))
+    return exp_keys - matched, got_keys - exp_keys, len(exp_keys), len(got_keys)
+
+
 def _project_root() -> Path:
     return PROJECT_ROOT
 
@@ -580,7 +767,8 @@ def main() -> None:
 
     session_local = sessionmaker(bind=engine, future=True)
     with session_local() as session:
-        seed(session)
+        seed_ai_compute(session)
+        seed_storage_chain(session)
         session.commit()
         projector = None
         if os.getenv("NEO4J_URL"):

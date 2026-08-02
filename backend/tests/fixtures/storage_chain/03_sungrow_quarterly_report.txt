@@ -1,0 +1,13 @@
+# FILE: sungrow_quarterly_report
+# SOURCE_URL: https://example.test/storage-chain/sungrow-2026-q1-report
+# PUBLISHED_AT: 2026-04-28
+# TITLE: 阳光电源2026年第一季度报告（节选）
+
+[PAGE 3][PARA 1]
+2026年第一季度公司实现营业收入198亿元，同比增长41%；归母净利润32亿元，同比增长55%。储能系统发货量同比增长75%，海外收入占比超过60%。
+
+[PAGE 4][PARA 1]
+公司表示，全球大型储能市场需求持续旺盛，美国、欧洲及中东市场订单增长显著，储能系统在手订单规模创历史新高。
+
+[PAGE 5][PARA 2]
+风险提示：海外贸易政策变化、汇率波动及行业竞争加剧可能对公司业绩产生影响。

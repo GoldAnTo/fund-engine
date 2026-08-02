@@ -1,16 +1,18 @@
-# AI-Compute Release Gate
+# Evidence-Pack Release Gate
 
-The release gate (`backend/scripts/verify_ai_compute_slice.py`) runs nine
-explicit checks against the seeded AI-compute evidence ledger to verify that
-the vertical slice is auditable end-to-end before a release is cut.
+The release gate (`backend/scripts/verify_ai_compute_slice.py`) runs ten
+explicit checks against the seeded evidence ledger — **two frozen cases**
+(AI 算力链 + 锂电储能链) — to verify that the vertical slices are auditable
+end-to-end before a release is cut.
 
 The gate is part of the evidence pack under `docs/evaluation/`:
 
-- `dataset-manifest.json` – frozen document hashes, theses, cutoffs, dataset
-  index, and stated limitations (fail-closed: the gate refuses to run
-  without it).
+- `dataset-manifest.json` – v2 per-case manifest: frozen document hashes
+  grouped by case (attributed in the ledger by `source_url` prefix), theses,
+  cutoffs, dataset index, and stated limitations (fail-closed: the gate
+  refuses to run without it).
 - `datasets/` – frozen offline gold datasets (currently the table-extraction
-  gold set).
+  gold set, including a sample sourced from a real binary PDF).
 - `reports/` – committed per-run gate summaries (trend over time).
 - `raw/` – gitignored full per-check detail for debugging.
 - `reproduce.sh` – one-command replay of the whole gate.
@@ -25,10 +27,10 @@ python scripts/verify_ai_compute_slice.py
 ```
 
 The script reads `DATABASE_URL` (default `sqlite:///./evidence_gate.db`),
-recreates the schema, seeds the frozen slice, runs all checks, and writes a
-summary JSON to `docs/evaluation/reports/<timestamp>.json` plus full detail
-to `docs/evaluation/raw/<timestamp>.json` (never overwriting a prior
-result).  Exit code is `0` on pass, `1` on fail.  If
+recreates the schema, seeds **both** frozen cases, runs all checks, and
+writes a summary JSON to `docs/evaluation/reports/<timestamp>.json` plus
+full detail to `docs/evaluation/raw/<timestamp>.json` (never overwriting a
+prior result).  Exit code is `0` on pass, `1` on fail.  If
 `docs/evaluation/dataset-manifest.json` is missing, the script exits `1`
 **before** touching the database (fail-closed).
 
@@ -48,16 +50,24 @@ files failed to parse; the check reports `insufficient_document_versions`.
 
 ### 2. `gold_manifest_matches_ledger` (fail-closed)
 
-**Definition:** The frozen dataset manifest
-(`docs/evaluation/dataset-manifest.json`) exists, lists at least one
-document, and its `content_sha256` set matches the ledger's
-`DocumentVersion` hashes exactly — no missing and no unexpected documents.
+**Definition:** The v2 dataset manifest
+(`docs/evaluation/dataset-manifest.json`) lists per-case document hash sets.
+Ledger `DocumentVersion` rows are attributed to cases by `source_url`
+prefix; every **seeded** case's hash set must match the manifest exactly —
+no missing and no unexpected documents — and every ledger document must be
+claimed by exactly one case.  A manifest case with no ledger documents is
+reported as `not_seeded` (the unit-test environment seeds only the
+AI-compute slice); the verify script seeds all cases, so all are enforced
+on the real gate path.
 
-**Pass condition:** manifest document hash set == ledger hash set.
+**Pass condition:** for every seeded case, manifest hash set == attributed
+ledger hash set; zero unclaimed ledger documents.
 
 **Failure examples:** The manifest file was deleted (check fails with
 `gold manifest missing`); a fixture was edited without re-freezing the
-manifest (`ledger document not in manifest: <hash>…`).
+manifest (`ledger document not in manifest: <hash>…`); a document was
+ingested from a source outside any case prefix
+(`ledger document claimed by no case`).
 
 ---
 
@@ -167,7 +177,29 @@ facts (`sample <id>: unexpected extracted facts [...]`).
 
 ---
 
-### 9. `projection_rebuilds`
+### 9. `pdf_fixture_parse_gold` (fail-closed)
+
+**Definition:** Committed binary PDF fixtures (currently
+`backend/tests/fixtures/storage_chain/06_sungrow_annual_summary.pdf`) must
+parse through `app/services/pdf_text` (pypdf), and the extracted table
+regions must reproduce the gold facts declared by the gold sample's
+`pdf_file` entry.  This is the end-to-end guard for the real-binary parse
+path: parser regressions surface here, extractor regressions surface here
+and in check 8 (which holds an inline copy of the same table text).
+
+**Pass condition:** The PDF file exists, its sha256 matches the manifest
+(a regenerated fixture fails as `hash drifted`), `extract_spans` succeeds,
+and the facts extracted from all spans exactly match the sample's
+`expected_facts`.
+
+**Failure examples:** The fixture was regenerated without re-freezing the
+manifest (`PDF fixture hash drifted`); a pypdf upgrade changes text
+extraction (`PDF sample <id>: missing expected facts [...]`); the fixture
+was deleted (`PDF fixture missing`).
+
+---
+
+### 10. `projection_rebuilds`
 
 **Definition:** The Neo4j graph projection can be fully rebuilt from the
 ledger alone, and the projected node count matches the ledger row count.

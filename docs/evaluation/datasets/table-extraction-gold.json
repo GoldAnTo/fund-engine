@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "id": "ai-compute-table-extraction-gold-v1",
-  "description": "表格规则抽取（FinancialTableExtractor）的离线金标：手工构造的「表头年份 + 单位行 + 指标行」文本与期望事实的精确集合对照。期望值冻结于 2026-08-01，任何抽取器变更导致集合不一致都会使 release gate 失败（fail-closed）。",
+  "id": "table-extraction-gold-v2",
+  "description": "表格规则抽取（FinancialTableExtractor）的离线金标：手工构造的「表头年份 + 单位行 + 指标行」文本与期望事实的精确集合对照。v2 起新增 pdf_file 样本：期望事实同时用于对冻结 PDF 原件重解析的端到端比对。期望值冻结于 2026-08-02，任何抽取器或 PDF 解析变更导致集合不一致都会使 release gate 失败（fail-closed）。",
   "matching": {
     "rule": "exact-set",
     "fact_key": ["metric_name", "value", "observed_period"],
@@ -38,6 +38,22 @@
       "note": "负样本：纯叙述文本（含单年份与订单能见度表述），不得抽出任何表格事实",
       "text": "公司管理层表示，AI服务器订单能见度已延伸至2026年下半年，市场需求保持旺盛。报告期内公司经营情况符合预期。",
       "expected_facts": []
+    },
+    {
+      "id": "pdf-sungrow-annual-table",
+      "pdf_file": "backend/tests/fixtures/storage_chain/06_sungrow_annual_summary.pdf",
+      "note": "真实 PDF 抽取样本（锂电储能链案例）：text 为 pypdf 从冻结 PDF 第 2 页抽取的表格文本的拷贝；pdf_fixture_parse_gold 检查会对 PDF 原件重新解析并比对同一组期望事实，text 拷贝同时供 table_extraction_gold_accuracy 离线校验",
+      "text": "主要财务数据（合并口径）\n2025年 2024年\n单位：亿元\n营业收入 778.6 542.3\n研发费用 32.5 27.8\n归母净利润 110.4 82.6\n储能系统收入 298.5 178.2",
+      "expected_facts": [
+        {"metric_name": "revenue", "value": "778.6亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "revenue", "value": "542.3亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "R&D_expenditure", "value": "32.5亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "R&D_expenditure", "value": "27.8亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "net_profit_parent", "value": "110.4亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "net_profit_parent", "value": "82.6亿元", "observed_period": "2024-12-31"},
+        {"metric_name": "revenue_segment:储能系统", "value": "298.5亿元", "observed_period": "2025-12-31"},
+        {"metric_name": "revenue_segment:储能系统", "value": "178.2亿元", "observed_period": "2024-12-31"}
+      ]
     }
   ]
 }
