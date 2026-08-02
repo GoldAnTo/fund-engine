@@ -44,6 +44,41 @@ class InstrumentService:
         self._session = session
         self._instruments = InstrumentRepository(session)
 
+    def create_company(self, *, code: str, name: str, type: str) -> Company:
+        code = _require_non_empty(code, "code", 64)
+        name = _require_non_empty(name, "name", 255)
+        type = _require_non_empty(type, "type", 64)
+
+        existing = self._session.scalar(
+            select(func.count()).select_from(Company).where(Company.code == code)
+        )
+        if existing:
+            raise ValidationError(f"公司代码 {code} 已存在")
+
+        return self._instruments.add_company(code=code, name=name, type=type)
+
+    def add_stock(
+        self,
+        *,
+        company: Company,
+        code: str,
+        name: str,
+        market: str,
+    ) -> Stock:
+        code = _require_non_empty(code, "code", 64)
+        name = _require_non_empty(name, "name", 255)
+        market = _require_non_empty(market, "market", 64)
+
+        existing = self._session.scalar(
+            select(func.count()).select_from(Stock).where(Stock.code == code)
+        )
+        if existing:
+            raise ValidationError(f"股票代码 {code} 已存在")
+
+        return self._instruments.add_stock(
+            company_id=company.id, code=code, name=name, market=market
+        )
+
     def create_fund(
         self,
         *,

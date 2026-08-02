@@ -4,6 +4,8 @@ import uuid
 from datetime import date, datetime, timezone
 
 from app.models.ledger import (
+    CausalEdge,
+    CausalStep,
     EvidenceLink,
     ResearchCase,
     SourceStatement,
@@ -16,6 +18,7 @@ _SOURCE_STATEMENT_KINDS = frozenset(
     {"disclosed_fact", "management_attribution", "forecast", "research_opinion"}
 )
 _EVIDENCE_ROLES = frozenset({"supports", "contradicts", "contextualizes"})
+_CREATOR_TYPES = frozenset({"human", "ai"})
 
 
 def _utcnow() -> datetime:
@@ -109,6 +112,63 @@ class ResearchService:
             support_condition=support_condition,
             falsification_condition=falsification_condition,
             next_verification_event=next_verification_event,
+            creator_type=creator_type,
+            review_state=review_state,
+        )
+
+    def add_causal_step(
+        self,
+        thesis: Thesis,
+        *,
+        description: str,
+        sequence: int,
+    ) -> CausalStep:
+        if not description.strip():
+            raise ValidationError("causal step description must not be empty")
+        if sequence < 1:
+            raise ValidationError("causal step sequence must be >= 1")
+        for existing in self._repo.causal_steps_for_thesis(thesis.id):
+            if existing.sequence == sequence:
+                raise ValidationError(
+                    f"causal step sequence {sequence} already exists for this thesis"
+                )
+        return self._repo.add_causal_step(
+            thesis_id=thesis.id,
+            description=description.strip(),
+            sequence=sequence,
+        )
+
+    def add_causal_edge(
+        self,
+        thesis: Thesis,
+        *,
+        source_step: CausalStep,
+        target_step: CausalStep,
+        rationale: str,
+        creator_type: str = "human",
+    ) -> CausalEdge:
+        if not rationale.strip():
+            raise ValidationError("causal edge rationale must not be empty")
+        if creator_type not in _CREATOR_TYPES:
+            raise ValidationError(f"invalid creator_type: {creator_type}")
+        if source_step.id == target_step.id:
+            raise ValidationError("causal edge must not be a self-loop")
+        if source_step.thesis_id != thesis.id or target_step.thesis_id != thesis.id:
+            raise ValidationError("causal edge steps must belong to the thesis")
+        step_ids = [s.id for s in self._repo.causal_steps_for_thesis(thesis.id)]
+        for edge in self._repo.causal_edges_for_steps(step_ids):
+            if (
+                edge.source_step_id == source_step.id
+                and edge.target_step_id == target_step.id
+            ):
+                raise ValidationError("causal edge already exists for this step pair")
+        # AI-drafted edges start as unconfirmed drafts; human-authored ones are
+        # confirmed on entry (same boundary convention as theses).
+        review_state = "confirmed" if creator_type == "human" else "draft"
+        return self._repo.add_causal_edge(
+            source_step_id=source_step.id,
+            target_step_id=target_step.id,
+            rationale=rationale.strip(),
             creator_type=creator_type,
             review_state=review_state,
         )

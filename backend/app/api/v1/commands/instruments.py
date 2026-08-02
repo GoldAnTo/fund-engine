@@ -1,4 +1,5 @@
-"""v1 instrument command endpoints (funds, holding disclosures, theme roles)."""
+"""v1 instrument command endpoints (companies, stocks, funds, holding
+disclosures, theme roles)."""
 
 from __future__ import annotations
 
@@ -20,16 +21,59 @@ from app.models.ledger import (
     ThemeRole,
 )
 from app.schemas.v1.instrument_commands import (
+    CompanyDTO,
+    CreateCompanyRequest,
     CreateFundRequest,
     CreateHoldingDisclosureRequest,
+    CreateStockRequest,
     CreateThemeRoleRequest,
     FundDTO,
     HoldingDisclosureDTO,
+    StockDTO,
     ThemeRoleDTO,
 )
 from app.services.instruments import InstrumentService
 
 router = APIRouter(tags=["instrument-commands-v1"])
+
+
+@router.post("/companies", response_model=CompanyDTO, status_code=201)
+def create_company(
+    payload: CreateCompanyRequest, db: Session = Depends(get_db)
+) -> Company:
+    company = translate_validation(
+        InstrumentService(db).create_company,
+        code=payload.code,
+        name=payload.name,
+        type=payload.type,
+    )
+    commit_or_rollback(db)
+    return company
+
+
+@router.post(
+    "/companies/{company_id}/stocks",
+    response_model=StockDTO,
+    status_code=201,
+)
+def create_stock(
+    company_id: uuid.UUID,
+    payload: CreateStockRequest,
+    db: Session = Depends(get_db),
+) -> Stock:
+    company = db.get(Company, company_id)
+    if company is None:
+        raise NotFoundError("Company", str(company_id))
+
+    stock = translate_validation(
+        InstrumentService(db).add_stock,
+        company=company,
+        code=payload.code,
+        name=payload.name,
+        market=payload.market,
+    )
+    commit_or_rollback(db)
+    return stock
 
 
 @router.post("/funds", response_model=FundDTO, status_code=201)

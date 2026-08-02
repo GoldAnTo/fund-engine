@@ -52,6 +52,92 @@ def _create_fund(cmd_client, code: str = "005827") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/companies & /api/v1/companies/{company_id}/stocks
+# ---------------------------------------------------------------------------
+
+
+def test_create_company_persists_ledger_row(cmd_client, cmd_session):
+    from app.models.ledger import Company
+
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "寒武纪", "type": "listed"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["code"] == "688256.SH"
+
+    row = cmd_session.scalar(select(Company).where(Company.code == "688256.SH"))
+    assert row is not None
+    assert str(row.id) == body["id"]
+
+
+def test_create_company_duplicate_code_is_422(cmd_client, cmd_session):
+    from app.models.ledger import Company
+
+    _seed_company(cmd_session, code="688256.SH")
+
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "另一家", "type": "listed"},
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+    count = cmd_session.scalar(
+        select(func.count()).select_from(Company).where(Company.code == "688256.SH")
+    )
+    assert count == 1
+
+
+def test_create_company_blank_type_is_422(cmd_client):
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "寒武纪", "type": " "},
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
+def test_create_stock_persists_ledger_row(cmd_client, cmd_session):
+    from app.models.ledger import Stock
+
+    company = _seed_company(cmd_session)
+    response = cmd_client.post(
+        f"/api/v1/companies/{company.id}/stocks",
+        json={"code": "688256.SH", "name": "寒武纪-U", "market": "SSE"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["company_id"] == str(company.id)
+
+    row = cmd_session.scalar(select(Stock))
+    assert row is not None
+    assert row.market == "SSE"
+
+
+def test_create_stock_missing_company_is_404(cmd_client):
+    response = cmd_client.post(
+        "/api/v1/companies/00000000-0000-0000-0000-000000000000/stocks",
+        json={"code": "688256.SH", "name": "寒武纪-U", "market": "SSE"},
+    )
+    assert response.status_code == 404
+    assert _error_code(response) == "not_found"
+
+
+def test_create_stock_duplicate_code_is_422(cmd_client, cmd_session):
+    company = _seed_company(cmd_session)
+    _seed_stock(cmd_session, company)
+
+    response = cmd_client.post(
+        f"/api/v1/companies/{company.id}/stocks",
+        json={"code": "688256.SH", "name": "重复", "market": "SSE"},
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/funds
 # ---------------------------------------------------------------------------
 

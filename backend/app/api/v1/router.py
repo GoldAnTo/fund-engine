@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.cases import router as cases_router
 from app.api.v1.commands.cases import router as case_commands_router
+from app.api.v1.commands.causal import router as causal_commands_router
 from app.api.v1.commands.engine import documents_router as engine_doc_commands_router
 from app.api.v1.commands.engine import router as engine_commands_router
 from app.api.v1.commands.ingest import router as ingest_commands_router
@@ -50,3 +51,4 @@ router.include_router(engine_commands_router)
 router.include_router(engine_doc_commands_router)
 router.include_router(ingest_commands_router)
 router.include_router(instrument_commands_router)
+router.include_router(causal_commands_router)

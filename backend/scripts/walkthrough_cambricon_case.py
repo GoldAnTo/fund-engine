@@ -506,10 +506,11 @@ def phase8_assessment_reviews(assessments: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
-    """Write ThemeRole / Fund / HoldingDisclosure through the v1 instrument
-    command API (added 2026-08-02); CausalStep/CausalEdge still have no API
-    and remain repository writes.  Fund holding data is only written when the
-    P0 probe returned an explicit weight; no weights are fabricated.
+    """Write ThemeRole / Fund / HoldingDisclosure / CausalStep / CausalEdge
+    through the v1 command APIs (instrument + causal, added 2026-08-02); the
+    session below is only used for existence lookups and the idempotency
+    guard.  Fund holding data is only written when the P0 probe returned an
+    explicit weight; no weights are fabricated.
     """
     from decimal import Decimal
 
@@ -517,12 +518,10 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
 
     from app.db import SessionLocal
     from app.models.ledger import Company, Fund, Stock
-    from app.repositories.research import ResearchRepository
 
     out: dict = {"theme_roles": 0, "causal_steps": 0, "causal_edges": 0,
                  "funds": 0, "holding_disclosures": 0, "notes": []}
     with SessionLocal() as session:
-        research = ResearchRepository(session)
 
         # Idempotency guard: enrichment writes have no dedupe key, so a
         # re-run of this stage must skip rather than duplicate rows.
@@ -581,7 +580,8 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
             else:
                 issue("theme_role_api_failed", f"工业富联 theme-role HTTP {status}")
 
-        # Human-authored causal chain for T2 (mirrors the storage-chain seed).
+        # Human-authored causal chain for T2 via the v1 causal command API
+        # (added 2026-08-02; mirrors the storage-chain seed).
         chain = [
             "国产大模型训练/推理需求爆发，云端AI芯片采购放量",
             "寒武纪云端产品线收入高增长（2024年云端收入同比+1187.78%）",
@@ -591,20 +591,32 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
         ]
         steps = {}
         for seq, desc in enumerate(chain, 1):
-            step = research.add_causal_step(
-                thesis_id=uuid.UUID(theses["T2"]["id"]),
-                description=desc, sequence=seq,
+            status, body = api(
+                "POST", f"/api/v1/theses/{theses['T2']['id']}/causal-steps",
+                "P9", f"causal_step_{seq}",
+                json={"description": desc, "sequence": seq},
             )
-            steps[seq] = step
+            if status != 201:
+                issue("causal_api_failed", f"因果步骤 {seq} HTTP {status}")
+                continue
+            steps[seq] = body["id"]
             out["causal_steps"] += 1
         for seq in range(1, len(chain)):
-            research.add_causal_edge(
-                source_step_id=steps[seq].id,
-                target_step_id=steps[seq + 1].id,
-                rationale="人工编写并复核的传导关系（走查模拟）",
-                creator_type="human",
-                review_state="confirmed",
+            if seq not in steps or seq + 1 not in steps:
+                continue
+            status, _ = api(
+                "POST", f"/api/v1/theses/{theses['T2']['id']}/causal-edges",
+                "P9", f"causal_edge_{seq}",
+                json={
+                    "source_step_id": steps[seq],
+                    "target_step_id": steps[seq + 1],
+                    "rationale": "人工编写并复核的传导关系（走查模拟）",
+                    "creator_type": "human",
+                },
             )
+            if status != 201:
+                issue("causal_api_failed", f"因果边 {seq}->{seq+1} HTTP {status}")
+                continue
             out["causal_edges"] += 1
 
         # Funds + holding disclosures — only from probe data with real weights.

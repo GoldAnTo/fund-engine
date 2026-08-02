@@ -1,4 +1,5 @@
-"""Schemas for instrument command endpoints (funds, holding disclosures, theme roles)."""
+"""Schemas for instrument command endpoints (companies, stocks, funds, holding
+disclosures, theme roles)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,35 @@ from decimal import Decimal
 from typing import Any
 
 from app.schemas.v1.common import V1Model
+
+
+class CreateCompanyRequest(V1Model):
+    code: str
+    name: str
+    type: str
+
+
+class CompanyDTO(V1Model):
+    id: uuid.UUID
+    code: str
+    name: str
+    type: str
+    created_at: datetime
+
+
+class CreateStockRequest(V1Model):
+    code: str
+    name: str
+    market: str
+
+
+class StockDTO(V1Model):
+    id: uuid.UUID
+    company_id: uuid.UUID
+    code: str
+    name: str
+    market: str
+    created_at: datetime
 
 
 class CreateFundRequest(V1Model):
