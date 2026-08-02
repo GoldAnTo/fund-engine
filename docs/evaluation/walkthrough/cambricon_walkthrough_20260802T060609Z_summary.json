@@ -1,0 +1,778 @@
+{
+  "run_id": "20260802T060609Z",
+  "phases": {
+    "P0_preflight": {
+      "tools": [
+        "SmartStockSelection",
+        "SmartFundSelection",
+        "SmartFundManagerSelection",
+        "IcEnterpriseDataQuery",
+        "FinQuery",
+        "MacroIndustryData",
+        "FinancialResearchReport",
+        "AnnouncementData",
+        "NewsDataQuery"
+      ],
+      "quote": {
+        "stock_name": "寒武纪",
+        "stock_code": "688256",
+        "交易时间": "2026-07-31 15:00",
+        "交易状态": "交易结束",
+        "latest_price": "1106.0",
+        "开盘价(元)": "1139.5",
+        "涨跌(元)": "63.57",
+        "涨跌幅(%)": "6.1",
+        "振幅(%)": "7.47",
+        "最高价(元)": "1179.5",
+        "最低价(元)": "1101.58",
+        "均价(元)": "1140.454",
+        "昨收(元)": "1042.43",
+        "总成交量(万手)": "16.27",
+        "现手(手)": "1372.05",
+        "成交额": "185.52亿元",
+        "换手率(%)": "2.59",
+        "量比": "1.26",
+        "外盘(万手)": "8.43",
+        "内盘(万手)": "7.84",
+        "委比(%)": "-66.86",
+        "委差(手)": "-127",
+        "委买档位": "买一价:1105.99CNY,买一挂单量:4手;买二价:1105.98CNY,买二挂单量:2手;买三价:1105.9CNY,买三挂单量:15.79手;买四价:1105.82CNY,买四挂单量:2手;买五价:1105.34CNY,买五挂单量:7.60手",
+        "委卖档位": "卖一价:1106.0CNY,卖一挂单量:27.92手;卖二价:1106.79CNY,卖二挂单量:2.20手;卖三价:1106.8CNY,卖三挂单量:104手;卖四价:1106.81CNY,卖四挂单量:5手;卖五价:1106.82CNY,卖五挂单量:18.92手",
+        "涨停价(元)": "1250.92",
+        "跌停价(元)": "833.94",
+        "总股本(亿股)": "6.28",
+        "流通股(亿股)": "6.28",
+        "total_mv": "6948.92",
+        "negotiable_mv": "6948.92",
+        "pb": "53.99",
+        "pe_lyr": "337.453",
+        "pe_ttm": "255.759",
+        "滚动股息率": "0.14"
+      },
+      "annual_2025_rows": 5,
+      "fund_holders_rows": 500
+    },
+    "P1_create_case": {
+      "case_id": "8a45bee1-a38d-4c97-b565-dcbb4c05daf8",
+      "theses": {
+        "T1": {
+          "id": "bfd7c2c5-c14e-4c0a-8f5c-bf34ce5ec394",
+          "statement": "2024-2025年国产AI算力芯片需求爆发将驱动寒武纪云端芯片收入持续高增长",
+          "title": "国产算力需求驱动收入高增长",
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        "T2": {
+          "id": "b91a3a76-f745-4127-9fc9-332eb5e76065",
+          "statement": "寒武纪将在2024Q4-2025年实现连续季度盈利并走向年度扭亏为盈",
+          "title": "盈利拐点兑现",
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        "T3": {
+          "id": "df73af08-ae26-47ed-b90c-bffdf20b824d",
+          "statement": "寒武纪当前估值水平已显著透支基本面兑现节奏，估值溢价难以仅由收入高增长维持",
+          "title": "估值溢价透支风险",
+          "creator_type": "human",
+          "review_state": "confirmed"
+        }
+      }
+    },
+    "P2_ingest": [
+      {
+        "research_reports": 9,
+        "announcements": 3,
+        "news": 3,
+        "spans": 15,
+        "valuations_written": 3,
+        "valuations_skipped": 0,
+        "stock_id": "db8e18dd-2e26-426f-8742-74c299dc1fb9",
+        "case_id": "8a45bee1-a38d-4c97-b565-dcbb4c05daf8"
+      },
+      {
+        "research_reports": 9,
+        "announcements": 3,
+        "news": 3,
+        "spans": 15,
+        "valuations_written": 3,
+        "valuations_skipped": 0,
+        "stock_id": "603e523d-24a0-4c59-8062-22a20ca7d486",
+        "case_id": "8a45bee1-a38d-4c97-b565-dcbb4c05daf8"
+      }
+    ],
+    "P3_extract": {
+      "documents_total": 26,
+      "pending_before": 5,
+      "extracted_this_run": 5,
+      "statements": 0,
+      "per_document": [
+        {
+          "version_id": "a9a5121e-3e9c-4d6e-9a18-0bbc22334043",
+          "mode": "MiniMax-M3",
+          "title": "半导体行业超级周期系列-国产算力“三支箭”：芯片、FAB、超节点",
+          "doc_kind": "research_report",
+          "statement_count": 0,
+          "kinds": {}
+        },
+        {
+          "version_id": "110d8cde-9198-4a8b-bbe9-a747222d158b",
+          "mode": "MiniMax-M3",
+          "title": "半导体行业超级周期系列-国产算力“三支箭”：芯片、FAB、超节点",
+          "doc_kind": "research_report",
+          "statement_count": 0,
+          "kinds": {}
+        },
+        {
+          "version_id": "0f156622-4793-4809-8f8e-9ba360af82bf",
+          "mode": "MiniMax-M3",
+          "title": "工业富联(601138)点评报告：AI算力基建核心供应商 高速交换机业务大幅增长",
+          "doc_kind": "research_report",
+          "statement_count": 0,
+          "kinds": {}
+        },
+        {
+          "version_id": "7295ba93-3d74-4d6e-87c9-28ad2ca0a967",
+          "mode": "MiniMax-M3",
+          "title": "工业富联(601138)：业绩预告高增长 AI算力龙头无疑",
+          "doc_kind": "research_report",
+          "statement_count": 0,
+          "kinds": {}
+        },
+        {
+          "version_id": "1b116666-8331-4e99-b602-29acec693633",
+          "mode": "MiniMax-M3",
+          "title": "寒武纪(688256)：产品持续落地 业绩进入兑现期",
+          "doc_kind": "research_report",
+          "statement_count": 0,
+          "kinds": {}
+        }
+      ],
+      "pending_after": 0
+    },
+    "P4_propose": {
+      "T1": {
+        "mode": "MiniMax-M3",
+        "link_count": 20,
+        "roles": {
+          "supports": 13,
+          "contextualizes": 7
+        }
+      },
+      "T2": {
+        "mode": "MiniMax-M3",
+        "link_count": 20,
+        "roles": {
+          "supports": 7,
+          "contextualizes": 13
+        }
+      },
+      "T3": {
+        "mode": "MiniMax-M3",
+        "link_count": 19,
+        "roles": {
+          "contradicts": 4,
+          "contextualizes": 15
+        }
+      }
+    },
+    "P5_pre_review_assessment_T1": {
+      "conclusion": "supported",
+      "rationale": "命题包含三个核心要素：(1)2024-2025年国产AI算力芯片需求爆发；(2)寒武纪作为头部供应商受益；(3)其云端芯片收入持续高增长。证据快照在三个层面均提供了较强的支持，且未发现实质性反驳证据。\n\n【需求爆发维度（强支持）】：①2024年中国AI算力市场规模约190亿美元的量化数据支撑行业总量；②美加大出口管制直接驱动国内自主可控需求强烈，属政策层面确证事实；③阿里云2025年采购5-6万张寒武纪思元芯片为下游大客户实际订单层面的硬证据，需求转化可见。\n\n【公司受益维度（强支持）】：①2025年寒武纪AI加速卡出货约11.6万张，位居国产第三，提供出货量级量化证据；②寒武纪为国内领先AI芯片供应商（contextualizes），具备承接需求的地位基础。\n\n【收入高增长维度（中等支持）】：①公司2024年Q4及2025年Q1实现盈利，2024年及2025年一季度业绩显著改善，从利润端间接印证收入端增长；②多家研报基于生成式AI商业化加速及算力投入趋势作出预测（分析师观点，权重较低）。\n\n【反驳证据】：未发现实质性反驳证据。唯一需注意的局限是思元690于2026年初量产，对2024-2025收入窗口无直接贡献，意味着2024-2025收入主要由思元590及之前产品承接，但这是产品节奏问题而非反驳需求/收入增长本身。华为以约81.2万张领先说明竞争激烈，但寒武纪仍位列前三，并未削弱其受益逻辑。\n\n【证据强度综合】：含法定/可披露事实级别的需求数据（阿里采购量、市占率出货数据、市场规模、出口管制政策、公司盈利）和分析师观点（受益判断、趋势预测）混合，前者来源等级高且与命题各要素直接对应，后者提供方向一致性背书。整体证据一致支持命题。",
+      "gaps": [
+        "缺少寒武纪2024年和2025年云端芯片（思元系列）收入的具体金额及同比增速数据，目前仅有整体业绩改善和加速卡出货量，'持续高增长'的量化幅度无法精确验证",
+        "2025年仅有Q1盈利数据披露，缺少2025年全年及分季度收入趋势数据，'持续'增长的时间连续性在2025年下半年至年底的覆盖不足",
+        "思元690量产时点在2026年初，处于命题时间窗口外，对2024-2025云端芯片收入的边际贡献有限，需要明确2024-2025收入主要由思元590承接的产品结构信息",
+        "华为昇腾以81.2万张大幅领先，寒武纪面临头部竞争压力，缺少关于寒武纪在国产AI算力芯片市场份额变化、价格压力及客户集中度的细节证据",
+        "命题中'需求爆发'的驱动假设缺少对国内整体AI算力芯片国产化率提升节奏、寒武纪在该趋势中渗透率变化的直接测算"
+      ],
+      "snapshot_id": "7a1fba3a-cc17-4950-8b46-9cd36e52fcde",
+      "assessment_id": "45caff03-83d3-48c2-b187-d952d225935c",
+      "mode": "MiniMax-M3"
+    },
+    "P6_review": {
+      "queued": 59,
+      "confirmed": 59,
+      "rejected": 0,
+      "needs_more_evidence": 0,
+      "by_thesis": {
+        "T1": {
+          "confirmed": 20,
+          "rejected": 0,
+          "needs_more_evidence": 0
+        },
+        "T2": {
+          "confirmed": 20,
+          "rejected": 0,
+          "needs_more_evidence": 0
+        },
+        "T3": {
+          "confirmed": 19,
+          "rejected": 0,
+          "needs_more_evidence": 0
+        }
+      },
+      "remaining_after_review": 0
+    },
+    "P7_assessments": {
+      "T1": {
+        "conclusion": "supported",
+        "rationale": "命题核心由三个组件构成：(1)2024-2025年国产AI算力芯片需求爆发，(2)需求传导至寒武纪云端芯片收入，(3)收入呈现持续高增长。证据对三个组件均提供正向支持：(a)需求侧——2024年中国AI算力市场规模约190亿美元提供行业总量锚点；美国出口管制强化自主可控需求提供政策驱动；阿里云2025年采购5-6万张寒武纪思元芯片及2025年寒武纪AI加速卡出货约11.6万张（国产第三）提供下游客户与出货量层面的事实支撑。(b)传导与公司端——2024年Q4及2025年Q1实现盈利、2024年及2025年一季度业绩显著改善从结果端验证收入端改善；存货增长被分析师视为后续业绩支撑。(c)产品能力背景——寒武纪作为国产AI芯片头部企业、产品专为AI优化，提供承接需求的能力基础。多项'supports'实为分析师观点或重复陈述，证据强度低于阿里云采购、出货量、市场规模等可量化事实。需注意：未发现与命题直接矛盾的证据，但思元690量产在2026年初，对2024-2025窗口内云端收入贡献有限属时间窗口的范围限制。综合可量化事实（出货量、单一客户采购量、行业市场规模、公司盈利转正）与分析师观点的同向叠加，命题在现有证据下获得支持。",
+        "gaps": [
+          "缺乏寒武纪云端芯片分产品线收入的具体数字与同比/环比序列，无法直接量化'持续高增长'的速率与连续性",
+          "2024-2025年寒武纪云端芯片收入在总收入中的占比与边缘芯片/其他业务的拆分未披露，难以单独验证'云端芯片'这一细分条线的增长",
+          "未披露客户集中度风险——阿里云5-6万张采购占出货总量约11.6万张的比重较高，单一大客户依赖对'持续'性构成潜在风险",
+          "缺乏2025年全年与2026年Q1的最新业绩数据以验证'持续高增长'是否在2025年后续季度延续",
+          "部分'supports'项实为研报观点（生成式AI商业化、头部企业受益、存货支撑等），属低强度证据；缺乏将这些观点与已实现财务数据交叉验证的法定披露",
+          "美国出口管制政策的具体执行节奏与豁免范围未明确，可能影响国产替代需求强度的稳定性",
+          "寒武纪定价能力、毛利率变化及产能/代工保障未披露，制约对收入端'高增长'质量与可持续性的评估"
+        ],
+        "snapshot_id": "e9fcfc6a-aba7-406a-9b70-2bbb81835ab9",
+        "assessment_id": "bba55be5-60ec-49be-bcd6-3abf0c6c9376",
+        "mode": "MiniMax-M3"
+      },
+      "T2": {
+        "conclusion": "supported",
+        "rationale": "命题包含两个子命题：(1) 2024Q4-2025年实现连续季度盈利；(2) 2025年实现年度扭亏为盈。\n\n**子命题2（年度扭亏为盈）**获得最充分、最直接的法定披露定量证据支持：多条证据独立披露寒武纪2025年实现归母净利润20.59亿元、营业收入64.97亿元，且明确标注'首次实现年度盈利'，消除了年度扭亏命题的不确定性。来源为法定财务披露，角色为'supports'，证据强度高。\n\n**子命题1（连续季度盈利）**获得起点证据支持：2024Q4首次实现单季度归母净利润盈利已被确认。2025年全年净利润20.59亿元的规模量级，结合阿里云2025年大规模采购思元芯片（5-6万张）的需求侧支撑，强烈推断2025年各季度均处于盈利状态——若任一季度出现大额亏损，全年20.59亿元的净利润难以实现。此外，2025年约11.6万张AI加速卡出货量也为各季度持续收入提供了规模支撑。\n\n**反驳证据**：未发现任何与命题矛盾的证据。不存在披露某季度亏损或全年仍亏损的证据。\n\n虽然2025年Q1-Q3各季度的独立盈利数据未被逐季披露，构成一定的证据缺口，但综合全年盈利规模和需求侧证据，结论方向高度一致。综合判断为supported。",
+        "gaps": [
+          "2025年Q1、Q2、Q3各单季度归母净利润数据未被独立披露，仅有全年汇总数据，无法逐季验证'连续季度盈利'的严格表述",
+          "思元690于2026年初量产，2025年产品组合及毛利率结构的具体数据未在证据中出现，限制了盈利持续性的微观验证",
+          "阿里云2025年采购5-6万张思元芯片的交付时间分布和收入确认节奏未明确，无法精确对应到各季度"
+        ],
+        "snapshot_id": "45220b9e-554c-4cf0-b0e0-e735d878aef9",
+        "assessment_id": "9a31e0e0-ee50-41db-9613-988a88b43d02",
+        "mode": "MiniMax-M3"
+      },
+      "T3": {
+        "conclusion": "insufficient_evidence",
+        "rationale": "命题包含两个核心子判断：(A) 当前估值显著透支基本面兑现节奏；(B) 仅凭收入高增长难以维持估值溢价。证据盘点后两者均缺乏直接、可量化的事实支撑。\n\n支持看空命题的证据：几乎为零。证据中没有任何一条提供寒武纪当前估值倍数（市盈率、市销率、PSG、DCF结果或相对可比公司的溢价幅度）数据，也没有盈利能力（毛利率、净利润率）或远期盈利兑现路径的量化信息。仅有'阿里云采购5-6万张思元芯片'与'2025Q1营收同比+4230%'等基本面背景，但这些恰恰是命题'难以仅由收入高增长维持'所承认的'收入高增长'本身，无法自证估值已被透支。\n\n反驳看空命题的证据：均为研报观点而非事实。包括'思元690是从可用到好用的里程碑'、'AI芯片头部企业受益'、'存货增长支撑后续业绩'、'千亿元AI服务器需求'、'自主可控需求强烈'等，均属多头叙事的定性表述，且证据角色标注为 contradicts 的多条记录本身即为研报观点而非可验证事实，证据强度受限。\n\n证据缺口是决定性因素：(1) 寒武纪当前估值倍数与历史/可比公司对比完全缺失；(2) 2024年仅11.7亿营收对应市值所隐含的市销率、远期PSG缺乏锚定；(3) 盈利能力、现金流、研发投入对净利润侵蚀路径等'基本面兑现节奏'的关键变量缺失；(4) 思元690量产后的客户拓展、毛利水平尚未有公开量化数据。因此既无法得出 'supported'（缺乏估值透支的直接量化证据），也无法得出 'contradicted'（所谓反驳均为观点而非事实，且估值类证据完全缺位）。综合判定为 insufficient_evidence。",
+        "gaps": [
+          "寒武纪当前市值、PE、PS、PSG等估值倍数完全缺失，无法判断估值是否'显著透支'",
+          "寒武纪与可比公司（如海光信息、英伟达、AMD）的相对估值溢价幅度数据缺失",
+          "寒武纪毛利率、净利润率、经营性现金流等盈利能力与盈利兑现节奏数据缺失",
+          "思元690量产后实际客户结构、订单规模与单价/毛利水平的可验证数据缺失",
+          "2025Q1同比+4230%的高基数效应是否可持续、2025后续季度增速路径缺乏数据",
+          "美方出口管制进一步收紧或松动的政策路径及其对寒武纪估值的边际影响缺乏量化分析",
+          "反驳证据多为研报观点，未提供与之对应的事实性数据来源，证据等级偏低"
+        ],
+        "snapshot_id": "fe540238-23f2-417b-9975-222997cd5daf",
+        "assessment_id": "bfb22a1a-09c9-4328-bc82-95c1054a0c2c",
+        "mode": "MiniMax-M3"
+      }
+    },
+    "P8_assessment_reviews": {
+      "T1": {
+        "outcome": "confirmed",
+        "human_conclusion": null,
+        "ai_conclusion": "supported"
+      },
+      "T2": {
+        "outcome": "confirmed",
+        "human_conclusion": null,
+        "ai_conclusion": "supported"
+      },
+      "T3": {
+        "outcome": "modified",
+        "human_conclusion": "supported",
+        "ai_conclusion": "insufficient_evidence"
+      }
+    },
+    "P9_enrichment": {
+      "theme_roles": 0,
+      "causal_steps": 0,
+      "causal_edges": 0,
+      "funds": 0,
+      "holding_disclosures": 0,
+      "notes": [
+        "enrichment already applied — skipped (no dedupe key)"
+      ]
+    },
+    "P10_reads": {
+      "overview": {
+        "http_status": 200,
+        "keys": [
+          "activity",
+          "assessment",
+          "basis",
+          "case",
+          "evidence_changes",
+          "framework",
+          "key_changes",
+          "schema_version",
+          "task_queue",
+          "thesis",
+          "totals"
+        ]
+      },
+      "dossier": {
+        "http_status": 200,
+        "keys": [
+          "assess_failure",
+          "assessment",
+          "basis",
+          "case",
+          "causal_chain",
+          "competitive_explanations",
+          "evidence",
+          "focus_thesis_id",
+          "gaps",
+          "schema_version",
+          "theses"
+        ]
+      },
+      "graph": {
+        "http_status": 200,
+        "nodes": 36,
+        "edges": 35,
+        "paths": 35
+      },
+      "gaps": {
+        "http_status": 200,
+        "keys": [
+          "case_id",
+          "cutoff",
+          "gaps"
+        ]
+      },
+      "knowledge": {
+        "http_status": 200,
+        "keys": [
+          "case_id",
+          "items"
+        ]
+      },
+      "search": {
+        "http_status": 200,
+        "groups": {
+          "case": 1,
+          "thesis": 3,
+          "evidence": 0,
+          "company": 1,
+          "stock": 1,
+          "fund": 0
+        }
+      },
+      "kpis": {
+        "http_status": 200,
+        "body": {
+          "as_of": "2026-08-02T06:25:58.520748+00:00",
+          "case_id": "8a45bee1-a38d-4c97-b565-dcbb4c05daf8",
+          "throughput": {
+            "link_reviews_total": 59,
+            "link_reviews_last_7d": 59,
+            "assessment_reviews_total": 5,
+            "assessment_reviews_last_7d": 5,
+            "reviews_by_reviewer": {
+              "walkthrough-reviewer": 64
+            },
+            "pending_link_reviews": 0,
+            "pending_assessment_reviews": 1
+          },
+          "agreement": {
+            "assessment_outcomes": {
+              "confirmed": 3,
+              "modified": 2
+            },
+            "assessment_agreement_rate": 0.6,
+            "conclusion_changed": 2,
+            "link_outcomes": {
+              "confirmed": 59
+            },
+            "link_agreement_rate": 0.3559,
+            "link_modified": 38
+          },
+          "latency": {
+            "evidence_to_assessment_avg_days": 0.0,
+            "evidence_to_assessment_max_days": 0.0,
+            "assessment_to_review_avg_days": 0.0,
+            "assessment_to_review_max_days": 0.0
+          }
+        }
+      },
+      "snapshots": {
+        "http_status": 200,
+        "count": 6
+      },
+      "fund_exposure": {
+        "http_status": 200,
+        "body_keys": [
+          "as_of",
+          "case_id",
+          "funds"
+        ],
+        "funds": 5
+      },
+      "metric_catalog": {
+        "http_status": 200,
+        "keys": [
+          "entries"
+        ]
+      },
+      "provider_runs": {
+        "http_status": 200,
+        "keys": [
+          "runs"
+        ]
+      }
+    },
+    "P11_time_travel": {
+      "cutoff_2024_12_31": {
+        "http_status": 404,
+        "error": {
+          "schema_version": "v1",
+          "error": {
+            "code": "not_found",
+            "message": "research case not found",
+            "request_id": "120eb187-6823-491b-baf5-ade86f2b485d",
+            "details": {}
+          }
+        }
+      },
+      "cutoff_2025_04_01": {
+        "http_status": 404,
+        "error": {
+          "schema_version": "v1",
+          "error": {
+            "code": "not_found",
+            "message": "research case not found",
+            "request_id": "7a70f299-ab09-4d22-895a-4b97ff43daa2",
+            "details": {}
+          }
+        }
+      },
+      "cutoff_now": {
+        "http_status": 200,
+        "supports": 0,
+        "contradicts": 4,
+        "contextualizes": 15,
+        "basis": {
+          "cutoff": "2026-08-02T06:25:58.548765Z",
+          "is_historical": false,
+          "ledger_high_watermark": null,
+          "projection_built_at": null,
+          "projection_schema_version": null
+        }
+      },
+      "docs_2024_12_31": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "docs_2025_04_01": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "docs_2025_05_01": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "compare": {
+        "http_status": 200,
+        "body_keys": [
+          "base_cutoff",
+          "case_id",
+          "compare_cutoff",
+          "documents_added",
+          "theses"
+        ]
+      }
+    },
+    "P12_fact_check": [
+      {
+        "check": "2025年度扭亏（隐含）",
+        "ledger_fact": "PE(LYR)=337.453, 总市值=6948.92亿 → 隐含2025年度净利润≈20.6亿>0",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "T3 估值水平证据",
+        "ledger_fact": "PE(TTM)=255.759, PB=53.99（2026-07-31）",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "2025年报营业收入（Gildata 探针）",
+        "ledger_fact": "2025年报营业收入 64.97亿，同比 +453.21%",
+        "verified": true,
+        "source": "gildata FinQuery probe (2025年报)"
+      }
+    ]
+  },
+  "issues": [
+    {
+      "code": "review_failed",
+      "detail": "link 7c40a27f-ad8c-4ab7-bed0-6d6df2702b6b: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '1ce437d9-3507-404a-876c-90203457c048', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元系列云端AI芯片', 'customer': '阿里云', 'period': '2025年', 'metric': '采购数量（5-6万张）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 3e35044c-306a-42de-8637-edf41408a00c: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '32a655ae-256e-43fe-ab19-e91ffe624973', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'source_type': 'research_opinion', 'nature': '观点性判断'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link ec136a5e-d2a8-4940-9d9d-7baec8613eb4: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'edaed3f6-d638-4753-bc48-4c5f7104bdab', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'aspect': '产品技术定位'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 9b5e9f1b-f486-468d-9053-6bc5e8d719d6: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '09d76df7-61c9-4372-a677-a94b5c89f5e4', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'aspect': '国内市场地位'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 2037e64e-ec78-478c-b453-330908ee275b: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '17af6304-0063-4504-b400-0500a449cd60', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'source_type': 'research_opinion', 'nature': '观点性判断（重复）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link f3a937a5-e171-44fb-984b-f4d6431a75aa: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '49d38397-886c-4880-babd-5a6aa6ee6440', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': 'AI加速卡', 'period': '2025年', 'metric': '出货量（约11.6万张）、行业排名（国产第三）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 436eecff-83ab-4e3a-96b3-70a421046adb: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '1cbbbc34-b2de-474c-a6cf-c593d3327b96', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'source_type': 'research_opinion', 'aspect': '供需紧张与存货→业绩传导逻辑'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link c86536eb-a854-4da1-a02f-69bf58bf41bf: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '0162f51d-b028-4af5-a832-c7fcf164c571', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'source_type': 'research_opinion', 'aspect': '行业需求趋势预测'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link b88f80a7-16ca-4889-9d1c-17afb0ce0d64: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd0139b10-0b4c-4992-be29-402d7e6ee5f0', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690', 'source_type': 'research_opinion'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link c2afaf75-096a-4f37-a366-0d5fbe045135: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'ce4c744c-675d-42b7-852a-6db26bbaa908', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2024Q4-2025Q1', 'metric': '是否盈利'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 5c44152a-ea57-48d4-98ae-559bbbd39c11: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '28dc3401-00f5-4ecd-a03c-5a33560e59e8', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'aspect': '上市背景'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link b8ec45a4-6118-421a-88c0-f059ec89f680: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'e95bb85b-866e-44c9-b0a4-3aad8c8d35ec', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2024全年及2025Q1', 'metric': '业绩改善方向'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 794f26f5-7949-48f5-adca-8bed5a1b5539: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'f27f11d5-c4cf-4edc-9591-a357c509d8dd', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690', 'period': '2026年初'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 6a66b8bc-5bbe-48b8-8cd1-1b7b0af68405: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '9aa2ac67-c57a-454c-ae5e-74a376ee58cb', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2024全年及2025Q1', 'metric': '业绩改善方向（重复）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 0b4ef256-0514-4131-a2bc-9ba6d999617d: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'bc7e7c12-0ec8-4ffa-802e-85b8de931d70', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'source_type': 'research_opinion', 'aspect': '行业需求趋势预测（重复）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link c07bf2f3-c754-420f-8a4c-e8cf85a82d1a: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '37a174b4-766c-4f54-8ec4-b8adee73984f', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'aspect': '国产替代需求驱动力', 'trigger': '美加出口管制'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 3543112c-ef76-44a7-a696-caee453e15a1: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '701c119e-8344-4095-bc0d-305ffa0eacdd', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'aspect': '美国出口管制政策', 'role': '需求爆发的外部触发因素'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link b7931a20-a257-4bff-9f18-bece57ad4f73: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '14e39f50-f10e-4463-8e3f-1224ab1ca812', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元产品线', 'aspect': '产品代际'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 89ed2352-666a-4f31-ba85-5aeb8ed5fd0f: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '8b92c3be-bf99-4ea7-b25e-61cfdb02e2c3', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'market': '中国AI算力市场', 'period': '2024年', 'metric': '市场规模（约190亿美元）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 575033d3-aa60-4587-a61d-a26a4fce254e: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '0547449a-b10b-4798-8ffb-5ad5fc718038', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'market': '中国AI算力市场', 'period': '2024年', 'metric': '市场规模（重复）'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 4fb9472c-b106-43bd-8a2e-7bf5743e7548: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd65deb58-dad3-479b-8944-a448597380df', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2024Q4', 'metric': '单季度归母净利润'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link debc8c0c-9f53-4386-8240-351acf2a38ce: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '9c725de5-ecf3-4de5-a977-baff2eed93ec', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2024Q4', 'metric': '单季度盈利预期'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link d3f4774d-b476-40bb-86f3-113b2fa70bb3: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '3f8b7a6c-5d7b-4e17-9536-be065401d34a', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'customer': '阿里巴巴', 'period': '2025', 'business_line': '思元系列AI推理芯片'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 2ce754d0-3234-4e04-a382-5af8f5327d7d: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'c9e7a05f-1fa4-457b-82ca-53cd4ae828d9', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'industry': '国产AI芯片'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 7b1d2805-9877-4c72-8b54-6418baffba42: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '71d8ea74-2f5a-4aad-af04-9b9132953f2d', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '年度盈利状态'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 388e7b46-607a-45a9-9c2a-5f167ac20a65: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '357879cd-2fae-44e2-a0d2-27176c5a4b73', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'business_line': '智能芯片产品'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link ee672095-f279-4bf7-94c5-dab8ec2ed32b: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '4dd5859c-c2d3-49c8-ae0f-2610662dcea6', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'industry': '国产AI芯片'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link db245b79-8cdc-4df6-bc1b-50e7c1eba197: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '0a929ac9-777b-4e1f-aa3b-dbea5a74160d', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'industry': '国产AI芯片'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 8b1974eb-89d8-4aed-ad52-702d9ec2a697: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'aad32150-cb21-4a9a-8d5c-19ea9fd9b492', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link c40f0216-b12e-4ab7-b302-8543ae0cd8d6: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '3c872311-fec6-47d8-863e-74cd8f966bb3', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690', 'period': '2026年初'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 72eefc8a-d225-4ccf-9207-73f000ebd095: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'b6ed85d6-04b5-4fb4-91c7-1b4320e8cc01', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690/590'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 28af299f-8eb4-44c3-b4c9-8267c1372466: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '2f98d8ac-79c1-4491-8959-18e32437c897', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2020年7月'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 03d9d6a5-9f3f-42d3-bb49-6f1ec892cd72: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '3e82b3eb-f579-440b-b522-386fc490bc35', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '营收/利润扭亏'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 756ea077-d4f9-4508-a360-95e0dc94a5e4: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd7e28d39-f232-4bf8-86e1-84af54459bce', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '年度营收/净利润'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link b4cbe02d-693c-4a68-8485-bda6b12fdd99: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'ced74795-180c-4f5f-a773-8fea7352ffdc', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '营业收入'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 06523d72-0328-4ad9-bbe1-24b014bf0293: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'cd680268-5287-4603-9c7c-c194cb78d527', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': 'AI加速卡出货量/市场份额'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 60be5120-163d-4aca-90fd-6c14359e12be: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '3789b88f-0a2d-4cf7-9534-bc699262a597', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'metric': '存货/供需'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 591be51f-9584-449e-b8fd-c1b334e1c337: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '87dee04e-e894-40c6-8d05-567bf4702153', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '营业收入'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 92eaf9a8-d20b-42f4-a65d-28491cb1e98b: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '5ae6febf-4dbd-4c38-b3bc-7fd8c3171309', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'period': '2025', 'metric': '归母净利润'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 83c5fd5c-c7ad-4781-b778-16c1eb406d60: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'cc002810-9bad-4a86-8c50-3f1124cef42b', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'industry': '生成式AI/算力'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link c167f56d-34f0-45e1-b400-3b5adc9dcdec: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '955c3add-6378-4132-b54a-e822e966fb89', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '整体定性'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link e8f0e3e3-9cdc-4543-aec0-88375de37729: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'e85c1a15-00ef-4fc8-8265-316d36f2d594', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '整体定性'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 95d10e2f-5897-474b-9997-f361f3c01881: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '09b4d5d2-eb4c-4e54-9d26-c435b4238e4f', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'business': 'AI芯片产品定位'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link e772d449-32b8-44d1-93e2-f1db83f37a07: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'ac257497-f17f-4c2a-a651-05a208eaca62', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '市场地位'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link f9f4c414-f487-4cce-af0d-291a79382a71: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '85888482-2500-4df0-9434-7209e7ee3185', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690', 'period': '2026年初'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link d6af122f-666b-43d0-9c53-26f9890ba5a6: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '9b431274-ef37-410f-b521-0a326443f62c', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'metric': '存货/收入'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 3683552e-f169-4bc1-b792-402ab5480a2f: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'c130faa4-e97b-44c2-b533-eb21643d9664', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '公司历史'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 8d32ba45-9e93-4b32-a493-b57379d0601c: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd473c19a-2955-4679-9cb7-65d16e35778d', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690/思元590'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 86320d4d-4a1e-4c54-b0d0-7cbbc73f67dc: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd8481bf6-4acc-4e4e-8d16-e40f9b0eb2bb', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'customer': '阿里巴巴/阿里云', 'period': '2025年', 'metric': '采购量'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link facc747f-d52e-4194-9007-56010ed05f69: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '3288ccff-b357-4d2c-8e8d-4e3e0fe99c23', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '行业趋势研判'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 2945aee1-4fdb-4b1c-b1eb-d791b0b98b24: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'e5cc6f6c-5372-4f06-b47a-f21dbba3e482', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'type': '行业趋势研判'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 8e86b140-16d8-4930-b363-48536317857c: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '6c841a71-acdf-4341-aab8-9b56b439bcb2', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'industry': 'AI服务器/算力基础设施', 'type': '市场规模研判'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link a3c376a7-ba56-4ab8-9a37-769236713caf: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'e823eb3f-e76f-4d45-aba9-e15f3c6d151f', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'industry': 'AI芯片出口管制', 'geography': '美国'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link aacf0316-887e-40f4-bfc9-6f70081ab1a9: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'd4b3e5b4-8fe2-4c49-b518-00793b9fd662', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'metric': '营业收入环比增速', 'period': '2025Q1'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 314c90e1-ed99-498c-845a-f585bde65ea3: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '715a5b67-ac4e-4243-93a2-97f6287ab1ea', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'industry': 'AI芯片需求', 'geography': '中国'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link f067f6d1-15ed-49c7-ae74-909fd9c62e8c: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '134b749f-40d2-4548-82dd-fa480e99c054', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'metric': '营业收入', 'period': '2024年'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 58cd714a-2e1f-4d81-beb7-30f69e3166f7: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '49069778-5322-4e10-9298-126afdfc87ff', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'product': '思元690'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link 06697c3f-1aa2-4696-9cde-121a2c982a55: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': '8292c369-4020-4fc5-803e-057e765d261f', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'metric': '营业收入同比增速', 'period': '2025Q1'}}]}}}"
+    },
+    {
+      "code": "review_failed",
+      "detail": "link f0f8466f-ddf5-4010-85fb-5747477acac9: HTTP 422 {'schema_version': 'v1', 'error': {'code': 'validation_failed', 'message': 'request validation failed', 'request_id': 'b36038ec-7bf7-4231-a297-26add6725a87', 'details': {'errors': [{'type': 'string_type', 'loc': ['body', 'scope_boundary'], 'msg': 'Input should be a valid string', 'input': {'company': '寒武纪', 'competitor': '华为海思'}}]}}}"
+    },
+    {
+      "code": "time_travel_failed",
+      "detail": "cutoff_2024_12_31: HTTP 404 {'schema_version': 'v1', 'error': {'code': 'not_found', 'message': 'research case not found', 'request_id': '120eb187-6823-491b-baf5-ade86f2b485d', 'details': {}}}"
+    },
+    {
+      "code": "time_travel_failed",
+      "detail": "cutoff_2025_04_01: HTTP 404 {'schema_version': 'v1', 'error': {'code': 'not_found', 'message': 'research case not found', 'request_id': '7a70f299-ab09-4d22-895a-4b97ff43daa2', 'details': {}}}"
+    }
+  ],
+  "facts": {
+    "checks": [
+      {
+        "check": "2025年度扭亏（隐含）",
+        "ledger_fact": "PE(LYR)=337.453, 总市值=6948.92亿 → 隐含2025年度净利润≈20.6亿>0",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "T3 估值水平证据",
+        "ledger_fact": "PE(TTM)=255.759, PB=53.99（2026-07-31）",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "2025年报营业收入（Gildata 探针）",
+        "ledger_fact": "2025年报营业收入 64.97亿，同比 +453.21%",
+        "verified": true,
+        "source": "gildata FinQuery probe (2025年报)"
+      }
+    ],
+    "quote_2026_07_31": {
+      "latest_price": "1106.0",
+      "total_mv": "6948.92",
+      "pe_ttm": "255.759",
+      "pe_lyr": "337.453",
+      "pb": "53.99"
+    }
+  },
+  "elapsed_seconds": 0.173217
+}

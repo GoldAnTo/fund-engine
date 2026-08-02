@@ -1,0 +1,98 @@
+# 寒武纪案例全流程走查报告（真实数据 · 历史已验证）
+
+> 日期：2026-08-02
+> 走查方式：真实 v1 HTTP 契约（FastAPI TestClient 走完整 ASGI 栈）+ 真实数据源（Gildata MCP）+ 真实 LLM（MiniMax-M3，非 mock）
+> 驱动脚本：`backend/scripts/walkthrough_cambricon_case.py`（分阶段可重跑）
+> 留痕：`cambricon_walkthrough_20260802T060609Z.jsonl`（全量请求/响应）、`cambricon_walkthrough_20260802T060609Z_summary.json`（阶段汇总）、`backend/evidence_walkthrough.db`（走查账本，gitignored）
+> 基线：走查前后 `218 passed, 2 skipped`；发布门禁 10 项 `PASS`（projection_rebuilds 因本地无 Neo4j SKIP）
+
+## 1. 案例设计与历史验证依据
+
+选例：**国产AI算力芯片（寒武纪 688256）**。理由：
+
+1. 历史结果已确定、公开披露可独立验证；
+2. Gildata 真实数据路径对该标的最成熟（ingest 默认查询族）；
+3. 覆盖"需求→收入→盈利→估值"四类命题形态，能压到合规门边界。
+
+| 命题 | 内容 | 历史事实（独立验证） | 验证来源 |
+|---|---|---|---|
+| T1 收入高增长 | 2024-2025 国产AI算力需求爆发驱动寒武纪云端收入持续高增长 | 2024 营收 11.74 亿（+65.56%），云端产品线收入 +1187.78%；2025 年报营收 64.97 亿（+453.21%） | 业绩快报/年报（2025-02-27、2025-04-18 披露）；Gildata FinQuery 2025 年报探针 |
+| T2 盈利拐点 | 2024Q4-2025 连续季度盈利并走向年度扭亏 | 2024Q4 归母 +2.72 亿（上市首次单季盈利）；2025Q1 +3.55 亿连续盈利；2026-07-31 PE(LYR)=337.45 × 市值 6948.92 亿 → 隐含 2025 年度净利 ≈20.6 亿 >0，年度扭亏成立 | 年报/一季报（2025-04-18 披露）；Gildata 行情探针 |
+| T3 估值透支 | 当前估值显著透支基本面兑现节奏 | 2026-07-31：PE(TTM) 255.76、PB 53.99；属主观判断型命题，证据天然稀少 | Gildata 行情探针 |
+
+## 2. 全流程逐环节结果
+
+| 环节 | 路径 | 结果 | 说明 |
+|---|---|---|---|
+| 案例/命题创建 | `POST /research-cases` | ✅ | 3 条人工命题直接 confirmed |
+| 真实数据采集 | `POST /documents/ingest` ×2 轮 | ✅ | 研报 18 + 公告 6 + 新闻 6 = 30 span；内容哈希去重生效（30→26 文档）；寒武纪/工业富联 ValuationSnapshot 各 3 条 |
+| LLM 原子陈述抽取 | `POST /documents/{id}/extract` ×26 | ✅⚠️ | 399 条陈述（含规则化表格抽取）；**5 篇文档 span 退化（如 4 字"相关研究"）→ 0 陈述且永久 pending** |
+| 混合召回 + 证据提议 | `POST /theses/{id}/propose` | ✅ | 59 条链接提议（T1 20 / T2 20 / T3 19），召回正确圈定案例内相关陈述 |
+| 人工审核 | `GET /review-queue` + `POST /evidence-links/{id}/reviews` | ✅ | 59 条 ReviewDecision 落账；dossier/graph 经 effective state 派生正确透出已复核证据 |
+| AI 判断（合规门） | `POST /theses/{id}/rerun` | ✅⚠️ | T1 supported；T2 首轮 insufficient_evidence、次轮 supported；**T3 首轮被合规门拒绝（命中"目标价"类），次轮通过（insufficient_evidence）** |
+| 判断人工复核 | `POST /assessments/{id}/reviews` | ✅ | confirmed×3 / modified×2，AI 原始结论 append-only 保留；T2、T3 各被人工修正一次 |
+| 因果链/主题角色/基金持仓 | **无 API**，走查经 repository 直写 | ⚠️ | T2 人工因果链 5 步 4 边、主题角色 2 条、基金 5 只/持仓披露 5 条 |
+| 基金穿透 | `GET /research-cases/{id}/fund-exposure` | ✅ | 5 只 ETF 按主题暴露排序（华夏科创50ETF 1.27% 居首）；**权重口径为"占流通A股比例"（数据源语义），非占净值** |
+| 研究运营 KPI | `GET /research-ops/kpis` | ✅ | 链接审核 59、判断复核 5、人机一致率 60%、链接一致率 35.59%（人工改关系 38/59）、待审队列清零 |
+| 快照比较 | `GET /research-cases/{id}/compare` | ✅ | 结论变化 + 新增链接可追溯；暴露近重复链接（见缺陷 5） |
+| 历史回放 | dossier/documents `?cutoff=` | ⚠️ | 见缺陷 6：回放的是**系统账本时间**，不是市场时间 |
+| 全局搜索 | `GET /search?q=` | ❌ | 见缺陷 1：已复核证据在默认模式下永远搜不到 |
+| 关系图 | `GET /research-cases/{id}/graph` | ⚠️ | 36 节点/35 边，含 evidence/theme_role/company_stock/holding/valuation 边；**无 DocumentVersion/SourceSpan 层**，连续路径到 statement 为止 |
+
+AI 判断质量（MiniMax-M3 live）：rationale 引用具体证据（"阿里云 2025 年采购 5-6 万张思元芯片""2025 年出货约 11.6 万张"），区分法定披露与分析师观点的证据等级，gaps 列出真实信息缺口（缺云端分项收入、缺市占率拆解）。T3 判 insufficient_evidence 本身是**正确判断**——语料几乎全为多头研报/公告，风险类证据确实缺失；人工凭市场估值数据将其修正为 supported，人机边界按设计工作。
+
+## 3. 缺陷清单（按严重度）
+
+### ✅ 缺陷 1（P0 bug，已于 2026-08-02 修复）：全局搜索遗漏 effective-state 迁移，已复核证据永久不可搜
+
+`app/queries/search.py` 仍过滤冻结列 `EvidenceLink.review_state IN {'reviewed'}`，而账本 append-only、审核结论只追加到 `evidence_reviews`，冻结列永远是 `machine_generated`。dossier/graph/knowledge/compare 已迁移到 `effective_review_state` 派生（见 frontend-api-binding 文档 2026-08-02 节的配套修复），**search 被漏掉**。
+实证：默认模式 `search?q=寒武纪` evidence 组 0 命中；`research_mode=true`（放行 machine_generated）同查询 10 命中。
+
+**修复（2026-08-02）**：evidence 分支把 `effective_state.OUTCOME_TO_STATE` 派生下推到 SQL（cutoff 约束的最新审核子查询 + CASE），保持 `limit+1`/`has_more` 契约精确；hit 的 `review_state` 返回派生后的有效状态。回归测试 `tests/test_search_read_api_v1.py` 新增 2 条：审核后默认搜索可见（API 驱动）、cutoff 前审核不存在/rejected 永不返回（时点语义）。修复后走查库实证：默认搜索 `q=寒武纪` evidence 命中 10 条且 `review_state=reviewed`。
+
+### ⚠️ 缺陷 2（P1 能力缺口）：四类核心对象无 API，全流程无法纯产品化走通
+
+ThemeRole、CausalStep/CausalEdge、Fund/HoldingDisclosure、Company/Stock 管理只有 repository 层（仅种子脚本使用）。走查的"证券映射/基金穿透"环节必须绕过 API 直写账本。设计文档阶段 4 已规划，走查证实这是当前全流程断点。
+
+### ⚠️ 缺陷 3（P1）：无抽取/解析运行水位，零产出文档永久 pending
+
+`_pending_versions` 语义是"有 span 无陈述"，抽取返回 0 条的文档与从未抽取的文档不可区分，批处理会反复重抽（走查中 5 篇文档被重复抽取 5 轮共 25 次 LLM 调用）。需要 ExtractRun/ParseRun 水位或"已抽取·零产出"标记。
+
+### ⚠️ 缺陷 4（P1）：采集无内容质量校验
+
+Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个月 | …`）被原样冻结为正式 DocumentVersion，标题（取自 locator）显示为正经研报，文档库可信度被稀释。需要最小内容长度/结构校验与 quarantine 状态。
+
+### ⚠️ 缺陷 5（P2）：近重复内容无对齐，产生重复陈述与链接
+
+两轮接入取回同题研报的不同片段（hash 不同，内容高度重叠），LLM 提议理由自曝"与 7ad1c056 内容重复"。无文档级/陈述级近重复检测或 EntityAlignment 式的合并审核。
+
+### ⚠️ 缺陷 6（设计边界，需显性告知）：历史回放 = 系统账本时间，不是市场时间
+
+- 案例在历史 cutoff 直接 404（案例 created_at > cutoff）；
+- 文档 `available_at = 采集时刻`（`services/ingest.py:49`），今天接入的 2024 年报在 `cutoff=2025-04-01` 下不可见（实测 documents 列表 0 条）。
+
+`visible_links` 同时过滤 `available_at` 与 `created_at` 正是为了防后见之明污染——这是**诚实的架构选择**，但意味着"以 2024 年视角模拟研究"在生产路径上做不到，只能靠 created_at 伪造进过去的冻结 fixture。产品文档/界面应明确这一语义，避免用户误以为能做市场时间回放。
+
+### ⚠️ 缺陷 7（P2）：判断非确定性 + 合规结果随措辞抽签
+
+同一命题同一证据：T2 两次评估结论不同（insufficient→supported）；T3 一次被合规门拒、一次通过。评估可复现性（温度/种子/输入排序）与合规门稳定性需要评测约束，否则"相同 cutoff 重复得到相同 citation manifest"的硬验收在 live 模式下不成立（manifest 可复现，结论不可复现）。
+
+### ⚠️ 缺陷 8（P2）：估值快照 as_of 取采集日而非行情日
+
+2026-07-31 15:00 的行情被记为 `as_of_date = 2026-08-02`（ingest 日）。口径偏小但破坏"估值按 as_of 对齐"的语义，应取行情的 交易时间。
+
+### ⚠️ 缺陷 9（P2）：关系图缺原文层
+
+图节点从 SourceStatement 开始，无 DocumentVersion/SourceSpan 节点与 contains/derived 边，设计 §5.5 的"DocumentVersion→SourceSpan→SourceStatement"连续路径未在图读模型落地（statement properties 内有 source_refs 但不可视化）。另外默认只展开焦点命题（contains_thesis 边=1），多命题全景需要逐命题切换。
+
+### 备注（非缺陷）
+
+- 合规门 fail-closed 行为正确：拒绝不留快照/评估，仅留失败 AIRun，422 语义正确透传；
+- assessment 证据可见性：`visible_links` 不过滤审核态，AI 判断可基于未审核机器链接（与设计"默认不允许"有出入，属已知设计取舍，建议显式研究模式开关）；
+- 基金穿透权重口径依赖数据源语义（占流通A股比例 vs 占净值比例），账本已如实记录 source 定义，穿透展示时应透出该口径。
+
+## 4. 结论
+
+**生产路径（非 fixture）已端到端打通**：真实数据源 → 冻结去重 → live LLM 抽取/召回/提议 → 人工审核 → AI 判断（含合规门）→ 人工复核 → KPI/穿透/比较/快照，全链路 API 可达且留痕完整；三个命题的历史验证结果（supported/supported/supported）与系统产出+人工复核结论一致。
+
+**当前最大短板**：~~全局搜索的 effective-state 遗漏（P0，建议立即修）~~（已于 2026-08-02 修复并补回归测试）；其次是证券/基金侧的写路径缺失（P1，全流程产品化的最后断点）与抽取水位/采集质检两个数据质量基础设施。
