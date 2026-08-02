@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
+from app.models.ledger import SourceSpan
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
     effective_review_state,
@@ -145,11 +146,16 @@ class RelationshipGraphQueries:
                 statement = self._research.get_statement(link.source_statement_id)
                 if statement is None:
                     continue
+                # 携带来源文档 id，前端"跳转原文"据此定位到资料库对应文档
+                span = self._session.get(SourceSpan, statement.source_span_id)
                 add_node(
                     statement.id,
                     "statement",
                     statement.normalized_text,
                     statement_kind=statement.kind,
+                    document_id=(
+                        str(span.document_version_id) if span is not None else None
+                    ),
                 )
                 add_edge(
                     link.id,

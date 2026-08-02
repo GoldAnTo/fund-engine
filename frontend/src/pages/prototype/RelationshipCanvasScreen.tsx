@@ -1,24 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
-  GraphLayer,
   GraphNodeView,
   RelationshipGraphView,
 } from "../../domain/prototypeTypes";
+import { WikiGraph } from "./WikiGraph";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
   message?: string;
 }
-
-const LAYER_LABEL: Record<GraphLayer["key"], string> = {
-  evidence: "证据",
-  thesis: "命题",
-  causal: "因果链",
-  company: "公司",
-  fund: "基金",
-};
 
 export function RelationshipCanvasScreen() {
   const params = useParams<{ caseId?: string }>();
@@ -26,7 +18,6 @@ export function RelationshipCanvasScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<RelationshipGraphView | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [zoom, setZoom] = useState<number>(100);
   // 同案例多命题共享一个图谱；让用户选择聚焦哪一条命题的证据层
   // （无后端 thesis_id 时退化到后端默认最新命题）
   const [thesisId, setThesisId] = useState<string>("");
@@ -123,7 +114,7 @@ export function RelationshipCanvasScreen() {
         <section className="prototype-graph-canvas" aria-label="证据关系 canvas">
           <div className="prototype-section-header">
             <div>
-              <p className="section-kicker">FIVE-LAYER RELATIONSHIP CANVAS</p>
+              <p className="section-kicker">WIKI RELATIONSHIP GRAPH</p>
               <h2>证据 → 命题 → 因果链 → 公司 → 基金</h2>
             </div>
             <span className="state-badge ai">
@@ -131,86 +122,7 @@ export function RelationshipCanvasScreen() {
             </span>
           </div>
 
-          <div style={{ overflow: "hidden" }}>
-            <svg
-              className="prototype-graph-svg"
-              viewBox="0 0 800 220"
-              role="img"
-              aria-label="五层关系连线示意"
-              style={{
-                transform: `scale(${zoom / 100})`,
-                transformOrigin: "top left",
-              }}
-            >
-            {/* Cross-layer curves */}
-            {view.layers.flatMap((layer, li) =>
-              layer.nodes.flatMap((node, ni) =>
-                li < view.layers.length - 1
-                  ? view.layers[li + 1].nodes.slice(0, 2).map((target, ti) => {
-                      const fromX = (li + 0.5) * (760 / view.layers.length) + 20;
-                      const fromY = (ni + 1) * (180 / (layer.nodes.length + 1)) + 20;
-                      const toX = (li + 1.5) * (760 / view.layers.length) + 20;
-                      const toY = (ti + 1) * (180 / (view.layers[li + 1].nodes.length + 1)) + 20;
-                      const variant =
-                        node.kind === "contradictory"
-                          ? "contradict"
-                          : node.kind === "ai-proposed"
-                            ? "proposed"
-                            : layer.key === "thesis" && view.layers[li + 1].key === "causal"
-                              ? "proposed"
-                              : layer.key === "company" || layer.key === "fund"
-                                ? "projection"
-                                : "support";
-                      return (
-                        <path
-                          key={`edge-${layer.key}-${node.id}-${target.id}-${ti}`}
-                          className={`edge ${variant}`}
-                          d={`M ${fromX} ${fromY} C ${(fromX + toX) / 2} ${fromY}, ${(fromX + toX) / 2} ${toY}, ${toX} ${toY}`}
-                        />
-                      );
-                    })
-                  : [],
-              ),
-            )}
-            {/* Nodes */}
-            {view.layers.flatMap((layer, li) =>
-              layer.nodes.map((node, ni) => {
-                const x = (li + 0.5) * (760 / view.layers.length) + 20;
-                const y = (ni + 1) * (180 / (layer.nodes.length + 1)) + 20;
-                const fill =
-                  node.kind === "source-fact"
-                    ? "var(--reviewed)"
-                    : node.kind === "contradictory"
-                      ? "var(--contradict)"
-                      : node.kind === "ai-proposed"
-                        ? "var(--ai-draft)"
-                        : node.kind === "company-node"
-                          ? "var(--provider-accent)"
-                          : "var(--warning)";
-                return (
-                  <g key={`${layer.key}-${node.id}`} className="series-point usable">
-                    <circle
-                      cx={x}
-                      cy={y}
-                      r={selectedId === node.id ? 9 : 6}
-                      fill={fill}
-                      stroke="var(--paper)"
-                      strokeWidth={selectedId === node.id ? 3 : 2}
-                      onClick={() => setSelectedId(node.id)}
-                      style={{ cursor: "pointer" }}
-                    />
-                    <text x={x + 10} y={y - 6} fontWeight="600">
-                      {LAYER_LABEL[layer.key]}
-                    </text>
-                    <text x={x + 10} y={y + 8}>
-                      {node.title.slice(0, 16)}
-                    </text>
-                  </g>
-                );
-              }),
-            )}
-          </svg>
-          </div>
+          <WikiGraph view={view} selectedId={selectedId} onSelect={setSelectedId} />
 
           <div className="canvas-layers">
             {view.layers.map((layer) => (
@@ -234,18 +146,6 @@ export function RelationshipCanvasScreen() {
             ))}
           </div>
 
-          <div className="prototype-graph-legend" aria-label="图例">
-            <span style={{ color: "var(--reviewed)" }}>证据 · 已审核</span>
-            <span style={{ color: "var(--support)" }}>命题 / 因果 · 已审核关系</span>
-            <span style={{ color: "var(--contradict)" }}>反驳关系 · 红线</span>
-            <span style={{ color: "var(--ai-draft)" }}>绿色链路头 · AI 提议</span>
-            <span style={{ color: "var(--provider-accent)" }}>实线链接 · 已人工复核</span>
-            <span className="prototype-zoom-controls" aria-label="缩放">
-              <button type="button" onClick={() => setZoom((z) => Math.max(60, z - 10))}>−</button>
-              <span>{zoom}%</span>
-              <button type="button" onClick={() => setZoom((z) => Math.min(160, z + 10))}>+</button>
-            </span>
-          </div>
         </section>
 
         <aside className="prototype-inspector relationship-inspector" aria-label="固定证据容器">
@@ -356,9 +256,9 @@ function NodeInspector({ node }: { node: GraphNodeView }) {
         )}
       </dl>
       {node.sourceHref && (
-        <a className="prototype-next-action" href={node.sourceHref}>
+        <Link className="prototype-next-action" to={node.sourceHref}>
           跳转原文 →
-        </a>
+        </Link>
       )}
     </div>
   );

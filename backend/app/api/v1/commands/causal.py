@@ -13,10 +13,10 @@ from app.errors import NotFoundError
 from app.models.ledger import CausalEdge, CausalStep, Thesis
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.causal_commands import (
-    CausalEdgeDTO,
-    CausalStepDTO,
     CreateCausalEdgeRequest,
+    CreatedCausalEdgeDTO,
     CreateCausalStepRequest,
+    CreatedCausalStepDTO,
 )
 from app.services.research import ResearchService
 
@@ -36,7 +36,7 @@ def _get_thesis(db: Session, thesis_id: uuid.UUID) -> Thesis:
 
 @router.post(
     "/theses/{thesis_id}/causal-steps",
-    response_model=CausalStepDTO,
+    response_model=CreatedCausalStepDTO,
     status_code=201,
 )
 def create_causal_step(
@@ -57,7 +57,7 @@ def create_causal_step(
 
 @router.post(
     "/theses/{thesis_id}/causal-edges",
-    response_model=CausalEdgeDTO,
+    response_model=CreatedCausalEdgeDTO,
     status_code=201,
 )
 def create_causal_edge(

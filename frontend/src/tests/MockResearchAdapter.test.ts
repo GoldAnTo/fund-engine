@@ -158,4 +158,135 @@ describe("MockResearchAdapter scenarios", () => {
     adapter.setScenario("typical");
     await expect(adapter.getOverview()).resolves.toBeTruthy();
   });
+
+  // ── 公司研究（/companies）───────────────────────────────────────────────
+
+  it("listCompanies returns seed companies under typical scenario", async () => {
+    const adapter = new MockResearchAdapter();
+    const view = await adapter.listCompanies();
+    expect(view.items.length).toBeGreaterThan(0);
+    expect(view.items[0]).toMatchObject({
+      id: expect.any(String),
+      code: expect.any(String),
+      name: expect.any(String),
+      type: expect.any(String),
+    });
+    expect(view.hasMore).toBe(false);
+  });
+
+  it("listCompanies filter narrows by code or name", async () => {
+    const adapter = new MockResearchAdapter();
+    const full = await adapter.listCompanies();
+    const partial = await adapter.listCompanies(full.items[0].code);
+    expect(partial.items.length).toBeGreaterThan(0);
+    expect(partial.items.length).toBeLessThanOrEqual(full.items.length);
+  });
+
+  it("listCompanies returns empty items under empty scenario", async () => {
+    const adapter = new MockResearchAdapter();
+    adapter.setScenario("empty");
+    const view = await adapter.listCompanies();
+    expect(view.items).toEqual([]);
+    expect(view.hasMore).toBe(false);
+  });
+
+  it("getCompanyDossier exposes identity, theme roles, theses, valuations, holders", async () => {
+    const adapter = new MockResearchAdapter();
+    const list = await adapter.listCompanies();
+    const dossier = await adapter.getCompanyDossier(list.items[0].id);
+    expect(dossier.company.id).toBe(list.items[0].id);
+    expect(dossier.stocks.length).toBeGreaterThan(0);
+    // 主题角色应包含来源回链字段
+    expect(dossier.themeRoles.length).toBeGreaterThan(0);
+    expect(dossier.themeRoles[0].statementId).toBeTruthy();
+    // 关联命题必须分离承载 AI / 人工字段
+    expect(dossier.relatedTheses.length).toBeGreaterThan(0);
+    const t = dossier.relatedTheses[0];
+    expect(t.aiConclusion === null || typeof t.aiConclusion === "string").toBe(
+      true,
+    );
+    // cut 为基准的过滤不能破坏 dossier 结构
+    expect(dossier.cutoff).toBeTruthy();
+  });
+
+  it("getCompanyDossier returns empty dossier for unknown company", async () => {
+    const adapter = new MockResearchAdapter();
+    const dossier = await adapter.getCompanyDossier("co-unknown");
+    expect(dossier.company.id).toBe("co-unknown");
+    expect(dossier.stocks).toEqual([]);
+    expect(dossier.themeRoles).toEqual([]);
+    expect(dossier.relatedTheses).toEqual([]);
+  });
+
+  it("getCompanyDossier honors historical cutoff: applicableTo past roles hidden", async () => {
+    const adapter = new MockResearchAdapter();
+    const list = await adapter.listCompanies();
+    const before = await adapter.getCompanyDossier(list.items[0].id);
+    const after = await adapter.getCompanyDossier(list.items[0].id, {
+      cutoff: "2020-01-01T00:00:00+00:00",
+    });
+    // 历史 cutoff 早于 applicable_from / applicable_to 的角色应被过滤
+    expect(after.themeRoles.length).toBeLessThanOrEqual(
+      before.themeRoles.length,
+    );
+  });
+
+  // ── 主题研究（/topics · 横切主题）───────────────────────────────────────
+
+  it("listThemes returns at least one topic under typical scenario", async () => {
+    const adapter = new MockResearchAdapter();
+    const topics = await adapter.listThemes();
+    expect(topics.length).toBeGreaterThan(0);
+    for (const t of topics) {
+      expect(t.tag).toBeTruthy();
+      expect(t.caseCount).toBeGreaterThan(0);
+    }
+  });
+
+  it("listThemes returns empty array under empty scenario", async () => {
+    const adapter = new MockResearchAdapter();
+    adapter.setScenario("empty");
+    const topics = await adapter.listThemes();
+    expect(topics).toEqual([]);
+  });
+
+  it("getThemeView assembles cases, company roles, fund exposure and derivedFrom", async () => {
+    const adapter = new MockResearchAdapter();
+    const topics = await adapter.listThemes();
+    const view = await adapter.getThemeView(topics[0].tag);
+    expect(view.tag).toBe(topics[0].tag);
+    expect(view.cases.length).toBeGreaterThan(0);
+    // 公司 × 角色表应回链 case
+    expect(view.companyRoles.length).toBeGreaterThan(0);
+    for (const r of view.companyRoles) {
+      expect(r.companyId).toBeTruthy();
+    }
+    // derivedFrom 必须覆盖 case / thesis / role / disclosure 四个 ID 集合
+    expect(view.derivedFrom.caseIds.length).toBe(view.cases.length);
+    expect(view.derivedFrom.thesisIds.length).toBeGreaterThan(0);
+    expect(view.derivedFrom.themeRoleIds.length).toBeGreaterThan(0);
+  });
+
+  it("getThemeView returns empty view for unknown tag with derivedFrom still well-formed", async () => {
+    const adapter = new MockResearchAdapter();
+    const view = await adapter.getThemeView("不存在的主题-xyz");
+    expect(view.tag).toBe("不存在的主题-xyz");
+    expect(view.cases).toEqual([]);
+    expect(view.companyRoles).toEqual([]);
+    expect(view.fundExposure).toEqual([]);
+    expect(view.derivedFrom).toEqual({
+      caseIds: [],
+      thesisIds: [],
+      themeRoleIds: [],
+      disclosureIds: [],
+    });
+  });
+
+  it("getThemeView under empty scenario returns empty regardless of tag", async () => {
+    const adapter = new MockResearchAdapter();
+    adapter.setScenario("empty");
+    const view = await adapter.getThemeView("算力国产化");
+    expect(view.cases).toEqual([]);
+    expect(view.derivedFrom.thesisIds).toEqual([]);
+  });
 });

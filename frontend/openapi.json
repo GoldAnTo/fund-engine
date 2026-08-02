@@ -998,6 +998,262 @@
         }
       }
     },
+    "/api/v1/companies": {
+      "get": {
+        "tags": [
+          "companies-v1"
+        ],
+        "summary": "List Companies",
+        "operationId": "list_companies_api_v1_companies_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Company",
+        "operationId": "create_company_api_v1_companies_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCompanyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/companies/{company_id}": {
+      "get": {
+        "tags": [
+          "companies-v1"
+        ],
+        "summary": "Company Dossier",
+        "operationId": "company_dossier_api_v1_companies__company_id__get",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Company Id"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyDossierResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/themes": {
+      "get": {
+        "tags": [
+          "themes-v1"
+        ],
+        "summary": "List Themes",
+        "operationId": "list_themes_api_v1_themes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/themes/{tag}": {
+      "get": {
+        "tags": [
+          "themes-v1"
+        ],
+        "summary": "Theme View",
+        "operationId": "theme_view_api_v1_themes__tag__get",
+        "parameters": [
+          {
+            "name": "tag",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tag"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeViewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/metrics/catalog": {
       "get": {
         "tags": [
@@ -1718,6 +1974,418 @@
         }
       }
     },
+    "/api/v1/companies/{company_id}/stocks": {
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Stock",
+        "operationId": "create_stock_api_v1_companies__company_id__stocks_post",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Company Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/funds": {
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Fund",
+        "operationId": "create_fund_api_v1_funds_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/funds/{fund_id}/holding-disclosures": {
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Holding Disclosure",
+        "operationId": "create_holding_disclosure_api_v1_funds__fund_id__holding_disclosures_post",
+        "parameters": [
+          {
+            "name": "fund_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Fund Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateHoldingDisclosureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldingDisclosureDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{stock_id}/valuation-snapshots": {
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Valuation Snapshot",
+        "operationId": "create_valuation_snapshot_api_v1_stocks__stock_id__valuation_snapshots_post",
+        "parameters": [
+          {
+            "name": "stock_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Stock Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateValuationSnapshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValuationSnapshotDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/companies/{company_id}/theme-roles": {
+      "post": {
+        "tags": [
+          "instrument-commands-v1"
+        ],
+        "summary": "Create Theme Role",
+        "operationId": "create_theme_role_api_v1_companies__company_id__theme_roles_post",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Company Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateThemeRoleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeRoleDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/causal-steps": {
+      "post": {
+        "tags": [
+          "causal-commands-v1"
+        ],
+        "summary": "Create Causal Step",
+        "operationId": "create_causal_step_api_v1_theses__thesis_id__causal_steps_post",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCausalStepRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedCausalStepDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/causal-edges": {
+      "post": {
+        "tags": [
+          "causal-commands-v1"
+        ],
+        "summary": "Create Causal Edge",
+        "operationId": "create_causal_edge_api_v1_theses__thesis_id__causal_edges_post",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCausalEdgeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedCausalEdgeDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/theme-tags": {
+      "patch": {
+        "tags": [
+          "theme-commands-v1"
+        ],
+        "summary": "Update Theme Tags",
+        "operationId": "update_theme_tags_api_v1_research_cases__case_id__theme_tags_patch",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateThemeTagsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeTagsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -1923,6 +2591,43 @@
           "created_at"
         ],
         "title": "AssessmentReviewResponse"
+      },
+      "AssessmentViewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "provisional": {
+            "type": "boolean",
+            "title": "Provisional"
+          },
+          "assessed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "conclusion",
+          "provisional"
+        ],
+        "title": "AssessmentViewDTO",
+        "description": "The latest AI assessment at the cutoff, always visibly provisional."
       },
       "CaseCompareResponse": {
         "properties": {
@@ -2180,6 +2885,224 @@
         ],
         "title": "CausalStepDTO"
       },
+      "CompanyDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "type",
+          "created_at"
+        ],
+        "title": "CompanyDTO"
+      },
+      "CompanyDossierResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/HistoricalBasisDTO"
+          },
+          "company": {
+            "$ref": "#/components/schemas/CompanyIdentityDTO"
+          },
+          "stocks": {
+            "items": {
+              "$ref": "#/components/schemas/StockViewDTO"
+            },
+            "type": "array",
+            "title": "Stocks"
+          },
+          "theme_roles": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeRoleViewDTO"
+            },
+            "type": "array",
+            "title": "Theme Roles"
+          },
+          "related_theses": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedThesisDTO"
+            },
+            "type": "array",
+            "title": "Related Theses"
+          },
+          "valuations": {
+            "items": {
+              "$ref": "#/components/schemas/ValuationViewDTO"
+            },
+            "type": "array",
+            "title": "Valuations"
+          },
+          "fund_holders": {
+            "items": {
+              "$ref": "#/components/schemas/FundHolderDTO"
+            },
+            "type": "array",
+            "title": "Fund Holders"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "company",
+          "stocks",
+          "theme_roles",
+          "related_theses",
+          "valuations",
+          "fund_holders"
+        ],
+        "title": "CompanyDossierResponse"
+      },
+      "CompanyIdentityDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "type"
+        ],
+        "title": "CompanyIdentityDTO"
+      },
+      "CompanyListItemDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "stock_count": {
+            "type": "integer",
+            "title": "Stock Count"
+          },
+          "theme_role_count": {
+            "type": "integer",
+            "title": "Theme Role Count"
+          },
+          "latest_report_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Report Period"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "type",
+          "stock_count",
+          "theme_role_count"
+        ],
+        "title": "CompanyListItemDTO"
+      },
+      "CompanyListResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyListItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "page": {
+            "$ref": "#/components/schemas/CursorPage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "page"
+        ],
+        "title": "CompanyListResponse"
+      },
       "CompareLinkDTO": {
         "properties": {
           "link_id": {
@@ -2413,6 +3336,286 @@
         ],
         "title": "CreateCaseResponse"
       },
+      "CreateCausalEdgeRequest": {
+        "properties": {
+          "source_step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Step Id"
+          },
+          "target_step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Step Id"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "creator_type": {
+            "type": "string",
+            "title": "Creator Type",
+            "default": "human"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_step_id",
+          "target_step_id",
+          "rationale"
+        ],
+        "title": "CreateCausalEdgeRequest"
+      },
+      "CreateCausalStepRequest": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "description",
+          "sequence"
+        ],
+        "title": "CreateCausalStepRequest"
+      },
+      "CreateCompanyRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "type"
+        ],
+        "title": "CreateCompanyRequest"
+      },
+      "CreateFundRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "fund_type": {
+            "type": "string",
+            "title": "Fund Type"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scale"
+          },
+          "establish_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Establish Date"
+          },
+          "management_company_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Management Company Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "fund_type"
+        ],
+        "title": "CreateFundRequest"
+      },
+      "CreateHoldingDisclosureRequest": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "format": "date",
+            "title": "Report Period"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "weight",
+          "report_period",
+          "published_at",
+          "source"
+        ],
+        "title": "CreateHoldingDisclosureRequest"
+      },
+      "CreateStockRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "market"
+        ],
+        "title": "CreateStockRequest"
+      },
+      "CreateThemeRoleRequest": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "applicable_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable From"
+          },
+          "applicable_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable To"
+          },
+          "source_statement_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Statement Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "CreateThemeRoleRequest"
+      },
       "CreateThesisRequest": {
         "properties": {
           "statement": {
@@ -2525,6 +3728,134 @@
         ],
         "title": "CreateThesisResponse"
       },
+      "CreateValuationSnapshotRequest": {
+        "properties": {
+          "as_of_date": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of Date"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "metric_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Metric Value"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "definition": {
+            "type": "string",
+            "title": "Definition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "as_of_date",
+          "metric_name",
+          "metric_value",
+          "source",
+          "definition"
+        ],
+        "title": "CreateValuationSnapshotRequest"
+      },
+      "CreatedCausalEdgeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "source_step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Step Id"
+          },
+          "target_step_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Step Id"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "creator_type": {
+            "type": "string",
+            "title": "Creator Type"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "source_step_id",
+          "target_step_id",
+          "rationale",
+          "creator_type",
+          "review_state",
+          "created_at"
+        ],
+        "title": "CreatedCausalEdgeDTO"
+      },
+      "CreatedCausalStepDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Thesis Id"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "thesis_id",
+          "description",
+          "sequence",
+          "created_at"
+        ],
+        "title": "CreatedCausalStepDTO"
+      },
       "CreatedThesisDTO": {
         "properties": {
           "id": {
@@ -2588,6 +3919,51 @@
         "additionalProperties": false,
         "type": "object",
         "title": "CursorPage"
+      },
+      "DerivedFromDTO": {
+        "properties": {
+          "case_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Case Ids"
+          },
+          "thesis_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Thesis Ids"
+          },
+          "theme_role_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Theme Role Ids"
+          },
+          "disclosure_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Disclosure Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_ids",
+          "thesis_ids",
+          "theme_role_ids",
+          "disclosure_ids"
+        ],
+        "title": "DerivedFromDTO"
       },
       "DocumentDetailResponse": {
         "properties": {
@@ -2711,6 +4087,44 @@
             ],
             "title": "Parse State"
           },
+          "extraction_state": {
+            "type": "string",
+            "enum": [
+              "extracted",
+              "extracted_empty",
+              "failed",
+              "not_attempted"
+            ],
+            "title": "Extraction State"
+          },
+          "last_extracted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Extracted At"
+          },
+          "content_quality": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degenerate",
+              "unknown"
+            ],
+            "title": "Content Quality",
+            "default": "unknown"
+          },
+          "quality_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Quality Reasons"
+          },
           "title": {
             "anyOf": [
               {
@@ -2769,7 +4183,8 @@
           "supersedes_id",
           "span_count",
           "statement_count",
-          "parse_state"
+          "parse_state",
+          "extraction_state"
         ],
         "title": "DocumentSummaryDTO"
       },
@@ -3157,6 +4572,17 @@
             "type": "integer",
             "title": "Statement Count"
           },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
           "statements": {
             "items": {
               "$ref": "#/components/schemas/ExtractStatementDTO"
@@ -3174,7 +4600,7 @@
           "statements"
         ],
         "title": "ExtractResponse",
-        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only)."
+        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (无片段 / 表格无可提\n事实 / LLM 拒答)."
       },
       "ExtractStatementDTO": {
         "properties": {
@@ -3251,6 +4677,78 @@
         "title": "FundCompositionResponse",
         "description": "反向穿透: 这只基金「真正装了什么」——持仓 + 命中的主题."
       },
+      "FundDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "fund_type": {
+            "type": "string",
+            "title": "Fund Type"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scale"
+          },
+          "establish_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Establish Date"
+          },
+          "management_company_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Management Company Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "fund_type",
+          "created_at"
+        ],
+        "title": "FundDTO"
+      },
       "FundExposureDTO": {
         "properties": {
           "fund_id": {
@@ -3316,6 +4814,79 @@
         ],
         "title": "FundExposureResponse",
         "description": "正向穿透: 主题/案件 → 命中基金（按主题暴露度排序）."
+      },
+      "FundHolderDTO": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Fund Id"
+          },
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "title": "Report Period"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "acquired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquired At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_id",
+          "fund_code",
+          "fund_name",
+          "stock_id",
+          "stock_code",
+          "weight",
+          "report_period",
+          "source"
+        ],
+        "title": "FundHolderDTO"
       },
       "GraphEdgeDTO": {
         "properties": {
@@ -3599,6 +5170,68 @@
         ],
         "title": "HistoricalBasisDTO"
       },
+      "HoldingDisclosureDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "fund_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Fund Id"
+          },
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "weight": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "format": "date",
+            "title": "Report Period"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "acquired_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Acquired At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "fund_id",
+          "stock_id",
+          "weight",
+          "report_period",
+          "published_at",
+          "acquired_at",
+          "source",
+          "created_at"
+        ],
+        "title": "HoldingDisclosureDTO"
+      },
       "HumanAiAgreementDTO": {
         "properties": {
           "assessment_outcomes": {
@@ -3729,6 +5362,20 @@
               }
             ],
             "title": "Quote Stock Code"
+          },
+          "macro_queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Macro Queries"
           }
         },
         "additionalProperties": false,
@@ -3749,6 +5396,11 @@
           "news": {
             "type": "integer",
             "title": "News"
+          },
+          "macro_series": {
+            "type": "integer",
+            "title": "Macro Series",
+            "default": 0
           },
           "spans": {
             "type": "integer",
@@ -4572,6 +6224,68 @@
         ],
         "title": "ProviderRunsResponse"
       },
+      "RelatedThesisDTO": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Thesis Id"
+          },
+          "case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "ai_assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssessmentViewDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoleReviewDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "case_id",
+          "case_title",
+          "statement"
+        ],
+        "title": "RelatedThesisDTO"
+      },
       "RerunAssessmentDTO": {
         "properties": {
           "id": {
@@ -4897,6 +6611,64 @@
         "title": "ReviewThroughputDTO",
         "description": "审核吞吐: review output vs the pending machine-generated queue."
       },
+      "RoleReviewDTO": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "RoleReviewDTO"
+      },
       "SearchGroupDTO": {
         "properties": {
           "object_type": {
@@ -5067,6 +6839,314 @@
         ],
         "title": "SourceSpanDTO"
       },
+      "StockDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "company_id",
+          "code",
+          "name",
+          "market",
+          "created_at"
+        ],
+        "title": "StockDTO"
+      },
+      "StockViewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "market"
+        ],
+        "title": "StockViewDTO"
+      },
+      "ThemeCaseDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "thesis_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Thesis Counts"
+          },
+          "theses": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeCaseThesisDTO"
+            },
+            "type": "array",
+            "title": "Theses"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "case_title",
+          "thesis_counts",
+          "theses"
+        ],
+        "title": "ThemeCaseDTO"
+      },
+      "ThemeCaseThesisDTO": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Thesis Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "ai_assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssessmentViewDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoleReviewDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "statement"
+        ],
+        "title": "ThemeCaseThesisDTO"
+      },
+      "ThemeCompanyRoleDTO": {
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "company_code": {
+            "type": "string",
+            "title": "Company Code"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "case_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Title"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Scope"
+          },
+          "applicable_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable From"
+          },
+          "applicable_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable To"
+          },
+          "statement_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "company_id",
+          "company_code",
+          "company_name",
+          "role",
+          "scope"
+        ],
+        "title": "ThemeCompanyRoleDTO"
+      },
+      "ThemeExposurePositionDTO": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Fund Id"
+          },
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "title": "Report Period"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_id",
+          "fund_code",
+          "fund_name",
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "weight",
+          "report_period",
+          "source"
+        ],
+        "title": "ThemeExposurePositionDTO"
+      },
       "ThemeHitDTO": {
         "properties": {
           "case_id": {
@@ -5085,6 +7165,354 @@
           "role"
         ],
         "title": "ThemeHitDTO"
+      },
+      "ThemeListItemDTO": {
+        "properties": {
+          "tag": {
+            "type": "string",
+            "title": "Tag"
+          },
+          "case_count": {
+            "type": "integer",
+            "title": "Case Count"
+          },
+          "company_count": {
+            "type": "integer",
+            "title": "Company Count"
+          },
+          "thesis_count": {
+            "type": "integer",
+            "title": "Thesis Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tag",
+          "case_count",
+          "company_count",
+          "thesis_count"
+        ],
+        "title": "ThemeListItemDTO"
+      },
+      "ThemeListResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeListItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ThemeListResponse"
+      },
+      "ThemeRoleDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "applicable_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable From"
+          },
+          "applicable_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable To"
+          },
+          "source_statement_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Statement Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "company_id",
+          "role",
+          "created_at"
+        ],
+        "title": "ThemeRoleDTO"
+      },
+      "ThemeRoleViewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "case_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Title"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Scope"
+          },
+          "applicable_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable From"
+          },
+          "applicable_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable To"
+          },
+          "statement_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Id"
+          },
+          "statement_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Text"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Version Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "scope"
+        ],
+        "title": "ThemeRoleViewDTO"
+      },
+      "ThemeTagsResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Case Id"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "events_appended": {
+            "type": "integer",
+            "title": "Events Appended"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "tags",
+          "events_appended"
+        ],
+        "title": "ThemeTagsResponse"
+      },
+      "ThemeViewResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/HistoricalBasisDTO"
+          },
+          "tag": {
+            "type": "string",
+            "title": "Tag"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeCaseDTO"
+            },
+            "type": "array",
+            "title": "Cases"
+          },
+          "company_roles": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeCompanyRoleDTO"
+            },
+            "type": "array",
+            "title": "Company Roles"
+          },
+          "fund_exposure": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeExposurePositionDTO"
+            },
+            "type": "array",
+            "title": "Fund Exposure"
+          },
+          "derived_from": {
+            "$ref": "#/components/schemas/DerivedFromDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "tag",
+          "cases",
+          "company_roles",
+          "fund_exposure",
+          "derived_from"
+        ],
+        "title": "ThemeViewResponse"
       },
       "ThesisCompareDTO": {
         "properties": {
@@ -5388,6 +7816,23 @@
         ],
         "title": "ThesisSummaryDTO"
       },
+      "UpdateThemeTagsRequest": {
+        "properties": {
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "title": "UpdateThemeTagsRequest"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -5427,6 +7872,105 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValuationSnapshotDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "as_of_date": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of Date"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "metric_value": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Metric Value"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "definition": {
+            "type": "string",
+            "title": "Definition"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "stock_id",
+          "as_of_date",
+          "metric_name",
+          "metric_value",
+          "source",
+          "definition",
+          "created_at"
+        ],
+        "title": "ValuationSnapshotDTO"
+      },
+      "ValuationViewDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "metric_value": {
+            "type": "number",
+            "title": "Metric Value"
+          },
+          "as_of_date": {
+            "type": "string",
+            "title": "As Of Date"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "definition": {
+            "type": "string",
+            "title": "Definition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "metric_name",
+          "metric_value",
+          "as_of_date",
+          "source",
+          "definition"
+        ],
+        "title": "ValuationViewDTO"
       },
       "ErrorEnvelope": {
         "additionalProperties": false,

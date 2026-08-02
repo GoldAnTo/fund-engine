@@ -33,6 +33,8 @@ import type {
   CaseWorkbenchSourceRow,
   CaseWorkbenchThesisRow,
   CaseWorkbenchView,
+  CompanyDossierView,
+  CompanyListView,
   CreateCaseInput,
   CreateCaseResult,
   DataCenterView,
@@ -40,6 +42,7 @@ import type {
   DataRevisionComparison,
   DataSeriesPoint,
   ExtractStatementsResult,
+  GraphEdgeView,
   GraphLayer,
   GraphNodeView,
   IngestRunResult,
@@ -61,6 +64,8 @@ import type {
   ThemeStock,
   ThemeWorkbenchView,
   ThesisRerunResult,
+  TopicListItem,
+  TopicView,
   VersionsView,
   WorkspaceOverviewScreen,
 } from "../domain/prototypeTypes";
@@ -1262,13 +1267,17 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getCaseWorkbenchView(
     caseId: string,
+    options?: { thesisId?: string },
   ): Promise<CaseWorkbenchView> {
     const resolvedCaseId = await this.resolveCaseId(caseId);
     // research_mode reveals AI-proposed links; the view labels each record's
     // review state so unreviewed evidence is never presented as confirmed.
+    // thesisId lets the workbench focus on a non-default thesis (e.g. when
+    // arriving from a version-compare row).
     const dto = await this.get<Schemas["DossierResponse"]>(
       `/research-cases/${resolvedCaseId}/dossier${this.buildQuery({
         research_mode: "true",
+        ...(options?.thesisId ? { thesis_id: options.thesisId } : {}),
       })}`,
     );
     const focus =
@@ -1553,6 +1562,7 @@ export class HttpResearchAdapter implements ResearchClient {
 
     const toNodeView = (node: Schemas["GraphNodeDTO"]): GraphNodeView => {
       const review = reviewByStatement.get(node.id);
+      const documentId = node.properties?.document_id;
       return {
         id: node.id,
         layer: node.kind,
@@ -1568,7 +1578,10 @@ export class HttpResearchAdapter implements ResearchClient {
           : "—",
         sourceName: "—",
         sourceSpan: "—",
-        sourceHref: "",
+        sourceHref:
+          typeof documentId === "string" && documentId
+            ? `/library?document=${documentId}`
+            : "",
         attachment: "—",
         publicationDate: "—",
         asOf: "—",
@@ -1585,6 +1598,44 @@ export class HttpResearchAdapter implements ResearchClient {
       "fund",
     ];
     const nodes = dto.nodes.filter((n) => n.kind !== "case").map(toNodeView);
+
+    // 图谱画布使用后端真实边绘制逻辑关系（此前画布靠"每个节点连下一层
+    // 前两个节点"造假线，节点一多就糊成一团）。只保留两端都在展示节点
+    // 集合内的边；evidence 边用 properties.role 区分支持/反驳。
+    const EDGE_LABEL: Record<string, string> = {
+      evidence: "证据",
+      causal: "因果",
+      contains_step: "因果步骤",
+      contains_thesis: "包含命题",
+      company_stock: "上市证券",
+      holding: "持仓",
+      valuation: "估值",
+      theme_role: "主题角色",
+    };
+    const ROLE_LABEL: Record<string, string> = {
+      supports: "支持",
+      support: "支持",
+      contradicts: "反驳",
+      contradict: "反驳",
+      contextualizes: "背景",
+    };
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges: GraphEdgeView[] = dto.edges
+      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+      .map((e) => {
+        const role = (e.properties as Record<string, unknown> | undefined)
+          ?.role;
+        const roleLabel = typeof role === "string" ? ROLE_LABEL[role] : undefined;
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          kind: e.semantic_kind,
+          label: roleLabel ?? EDGE_LABEL[e.semantic_kind] ?? e.semantic_kind,
+          role: typeof role === "string" ? role : undefined,
+          reviewState: e.review_state ?? undefined,
+        };
+      });
     // 提取图谱里出现的所有命题节点，供"命题切换器"使用——同一案例的多条
     // 命题共享一个图谱，需要用户主动选择聚焦哪一条的证据层。
     const theses = dto.nodes
@@ -1608,6 +1659,7 @@ export class HttpResearchAdapter implements ResearchClient {
       },
       layers,
       nodes,
+      edges,
       selectedNodeId: nodes[0]?.id ?? "",
       theses,
     };
@@ -1886,7 +1938,10 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async getVersionsView(caseId?: string): Promise<VersionsView> {
+  async getVersionsView(
+    caseId?: string,
+    options?: { base?: string; compare?: string },
+  ): Promise<VersionsView> {
     const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
     if (cases.items.length === 0) {
       throw new PageStateError("parse_failed", "no research case exists yet");
@@ -1899,15 +1954,15 @@ export class HttpResearchAdapter implements ResearchClient {
     );
     // Latest two distinct cutoffs define base/compare; with fewer than two
     // the compare degenerates to "from the beginning" (epoch -> latest),
-    // showing every visible link as newly added.
+    // showing every visible link as newly added. Callers may override via
+    // options.base / options.compare (e.g. to inspect mid-history diffs).
     const cutoffs = [
       ...new Set(snapshotsDto.snapshots.map((s) => s.cutoff)),
     ].sort();
-    const compareCutoff = cutoffs[cutoffs.length - 1] ?? new Date().toISOString();
-    const baseCutoff =
-      cutoffs.length > 1
-        ? cutoffs[cutoffs.length - 2]
-        : "1970-01-01T00:00:00Z";
+    const latestCutoff = cutoffs[cutoffs.length - 1] ?? new Date().toISOString();
+    const defaultBase = cutoffs.length > 1 ? cutoffs[cutoffs.length - 2] : "1970-01-01T00:00:00Z";
+    const compareCutoff = options?.compare ?? latestCutoff;
+    const baseCutoff = options?.base ?? defaultBase;
 
     const compare = await this.get<Schemas["CaseCompareResponse"]>(
       `/research-cases/${firstCase.id}/compare${this.buildQuery({
@@ -2006,6 +2061,17 @@ export class HttpResearchAdapter implements ResearchClient {
           : "（暂无 AI 评估运行记录）",
         boundary: "AI 生成 · 未经人工复核",
       },
+      perThesisChanges: (compare.theses ?? []).map((t) => ({
+        thesisId: t.thesis_id,
+        statement: t.statement,
+        conclusionBefore: t.conclusion_before ?? null,
+        conclusionAfter: t.conclusion_after ?? null,
+        gapsBeforeCount: t.gaps_before?.length ?? 0,
+        gapsAfterCount: t.gaps_after?.length ?? 0,
+        addedLinks: t.added_links?.length ?? 0,
+        removedLinks: t.removed_links?.length ?? 0,
+      })),
+      availableCutoffs: cutoffs.filter((c) => c !== "1970-01-01T00:00:00Z"),
     };
   }
 
@@ -2137,5 +2203,178 @@ export class HttpResearchAdapter implements ResearchClient {
       `/evidence-links/${linkId}/reviews`,
       payload,
     );
+  }
+
+  // ── 公司研究（/companies）───────────────────────────────────────────────
+
+  async listCompanies(
+    query?: string,
+    cursor?: string | null,
+  ): Promise<CompanyListView> {
+    const qs = this.buildQuery({ q: query, cursor: cursor ?? undefined });
+    const dto = await this.get<Schemas["CompanyListResponse"]>(
+      `/companies${qs}`,
+    );
+    return {
+      items: dto.items.map((i) => ({
+        id: i.id,
+        code: i.code,
+        name: i.name,
+        type: i.type,
+        stockCount: i.stock_count,
+        themeRoleCount: i.theme_role_count,
+        latestReportPeriod: i.latest_report_period ?? null,
+      })),
+      hasMore: dto.page.has_more,
+      nextCursor: dto.page.next_cursor ?? null,
+    };
+  }
+
+  async getCompanyDossier(
+    companyId: string,
+    opts?: { cutoff?: string },
+  ): Promise<CompanyDossierView> {
+    const qs = this.buildQuery({ cutoff: opts?.cutoff });
+    const dto = await this.get<Schemas["CompanyDossierResponse"]>(
+      `/companies/${companyId}${qs}`,
+    );
+    return {
+      cutoff: dto.basis.cutoff,
+      isHistorical: dto.basis.is_historical,
+      company: {
+        id: dto.company.id,
+        code: dto.company.code,
+        name: dto.company.name,
+        type: dto.company.type,
+        createdAt: dto.company.created_at ?? null,
+      },
+      stocks: dto.stocks.map((s) => ({
+        id: s.id,
+        code: s.code,
+        name: s.name,
+        market: s.market,
+      })),
+      themeRoles: dto.theme_roles.map((r) => ({
+        id: r.id,
+        caseId: r.case_id ?? null,
+        caseTitle: r.case_title ?? null,
+        role: r.role,
+        scope: r.scope,
+        applicableFrom: r.applicable_from ?? null,
+        applicableTo: r.applicable_to ?? null,
+        statementId: r.statement_id ?? null,
+        statementText: r.statement_text ?? null,
+        spanId: r.span_id ?? null,
+        documentVersionId: r.document_version_id ?? null,
+      })),
+      relatedTheses: dto.related_theses.map((t) => ({
+        thesisId: t.thesis_id,
+        caseId: t.case_id,
+        caseTitle: t.case_title,
+        statement: t.statement,
+        title: t.title ?? null,
+        aiConclusion: t.ai_assessment?.conclusion ?? null,
+        aiProvisional: t.ai_assessment?.provisional ?? false,
+        assessedAt: t.ai_assessment?.assessed_at ?? null,
+        reviewOutcome: t.review?.outcome ?? null,
+        reviewConclusion: t.review?.conclusion ?? null,
+        reviewReason: t.review?.reason ?? null,
+        reviewer: t.review?.reviewer ?? null,
+        reviewedAt: t.review?.reviewed_at ?? null,
+      })),
+      valuations: dto.valuations.map((v) => ({
+        stockId: v.stock_id,
+        stockCode: v.stock_code,
+        metricName: v.metric_name,
+        metricValue: v.metric_value,
+        asOfDate: v.as_of_date,
+        source: v.source,
+        definition: v.definition,
+      })),
+      fundHolders: dto.fund_holders.map((h) => ({
+        fundId: h.fund_id,
+        fundCode: h.fund_code,
+        fundName: h.fund_name,
+        stockId: h.stock_id,
+        stockCode: h.stock_code,
+        weight: h.weight,
+        reportPeriod: h.report_period,
+        publishedAt: h.published_at ?? null,
+        acquiredAt: h.acquired_at ?? null,
+        source: h.source,
+      })),
+    };
+  }
+
+  // ── 主题研究（/topics · 横切主题）───────────────────────────────────────
+
+  async listThemes(): Promise<TopicListItem[]> {
+    const dto = await this.get<Schemas["ThemeListResponse"]>(`/themes`);
+    return dto.items.map((i) => ({
+      tag: i.tag,
+      caseCount: i.case_count,
+      companyCount: i.company_count,
+      thesisCount: i.thesis_count,
+    }));
+  }
+
+  async getThemeView(
+    tag: string,
+    opts?: { cutoff?: string },
+  ): Promise<TopicView> {
+    const qs = this.buildQuery({ cutoff: opts?.cutoff });
+    const dto = await this.get<Schemas["ThemeViewResponse"]>(
+      `/themes/${encodeURIComponent(tag)}${qs}`,
+    );
+    return {
+      cutoff: dto.basis.cutoff,
+      isHistorical: dto.basis.is_historical,
+      tag: dto.tag,
+      cases: dto.cases.map((c) => ({
+        caseId: c.case_id,
+        caseTitle: c.case_title,
+        thesisCounts: c.thesis_counts,
+        theses: c.theses.map((t) => ({
+          thesisId: t.thesis_id,
+          statement: t.statement,
+          title: t.title ?? null,
+          aiConclusion: t.ai_assessment?.conclusion ?? null,
+          aiProvisional: t.ai_assessment?.provisional ?? false,
+          assessedAt: t.ai_assessment?.assessed_at ?? null,
+          reviewOutcome: t.review?.outcome ?? null,
+          reviewConclusion: t.review?.conclusion ?? null,
+          reviewedAt: t.review?.reviewed_at ?? null,
+        })),
+      })),
+      companyRoles: dto.company_roles.map((r) => ({
+        companyId: r.company_id,
+        companyCode: r.company_code,
+        companyName: r.company_name,
+        caseId: r.case_id ?? null,
+        caseTitle: r.case_title ?? null,
+        role: r.role,
+        scope: r.scope,
+        applicableFrom: r.applicable_from ?? null,
+        applicableTo: r.applicable_to ?? null,
+        statementId: r.statement_id ?? null,
+      })),
+      fundExposure: dto.fund_exposure.map((p) => ({
+        fundId: p.fund_id,
+        fundCode: p.fund_code,
+        fundName: p.fund_name,
+        stockId: p.stock_id,
+        stockCode: p.stock_code,
+        stockName: p.stock_name,
+        weight: p.weight,
+        reportPeriod: p.report_period,
+        source: p.source,
+      })),
+      derivedFrom: {
+        caseIds: dto.derived_from.case_ids,
+        thesisIds: dto.derived_from.thesis_ids,
+        themeRoleIds: dto.derived_from.theme_role_ids,
+        disclosureIds: dto.derived_from.disclosure_ids,
+      },
+    };
   }
 }

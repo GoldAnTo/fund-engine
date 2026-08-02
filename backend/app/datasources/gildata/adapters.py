@@ -110,6 +110,18 @@ _NEWS_FIELD_ALIASES: dict[str, str] = {
     "正文": "content",
 }
 
+# MacroIndustryData table columns -> canonical keys (时序数值).  The table
+# always carries 指标代码 / 指标名称 / 频率 / 单位 / 值 / 日期 / 数据来源.
+_MACRO_ALIASES: dict[str, str] = {
+    "指标代码": "metric_code",
+    "指标名称": "metric_name",
+    "频率": "frequency",
+    "单位": "unit",
+    "值": "value",
+    "日期": "date",
+    "数据来源": "source",
+}
+
 
 # ---------------------------------------------------------------------------
 # Low-level markdown / text parsing
@@ -339,3 +351,25 @@ def fetch_quote(client, query: str) -> list[dict]:
         for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             quotes.append(_normalize(row, _QUOTE_ALIASES))
     return quotes
+
+
+def fetch_macro_series(client, query: str) -> list[dict]:
+    """Pull a time series (价格水平 / 环比) from ``MacroIndustryData``.
+
+    Returns ``[{metric_code, metric_name, frequency, unit, value, date, source}]``
+    rows.  The metric rows are unbounded across time windows; the caller is
+    expected to slice (peak vs latest) and freeze the slice as a single
+    document so statement extraction can turn it into disclosed facts.
+
+    用途：把"商品价格时序"作为 SourceSpan 接入台账，与研报/公告走相同的
+    extract / propose / rerun 链路，让"碳酸锂价格跌幅 > 80%"这类命题有
+    第三方价格源可校验。
+    """
+    text = client.call_tool("MacroIndustryData", {"query": query})
+    rows: list[dict] = []
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
+            normalized = _normalize(row, _MACRO_ALIASES)
+            if "metric_name" in normalized:
+                rows.append(normalized)
+    return rows

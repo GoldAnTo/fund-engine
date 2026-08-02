@@ -19,6 +19,7 @@ from app.models.ledger import (
     SourceStatement as Statement,
     Stock,
     ThemeRole,
+    ValuationSnapshot,
 )
 from app.schemas.v1.instrument_commands import (
     CompanyDTO,
@@ -27,10 +28,12 @@ from app.schemas.v1.instrument_commands import (
     CreateHoldingDisclosureRequest,
     CreateStockRequest,
     CreateThemeRoleRequest,
+    CreateValuationSnapshotRequest,
     FundDTO,
     HoldingDisclosureDTO,
     StockDTO,
     ThemeRoleDTO,
+    ValuationSnapshotDTO,
 )
 from app.services.instruments import InstrumentService
 
@@ -119,6 +122,33 @@ def create_holding_disclosure(
     )
     commit_or_rollback(db)
     return row
+
+
+@router.post(
+    "/stocks/{stock_id}/valuation-snapshots",
+    response_model=ValuationSnapshotDTO,
+    status_code=201,
+)
+def create_valuation_snapshot(
+    stock_id: uuid.UUID,
+    payload: CreateValuationSnapshotRequest,
+    db: Session = Depends(get_db),
+) -> ValuationSnapshot:
+    stock = db.get(Stock, stock_id)
+    if stock is None:
+        raise NotFoundError("Stock", str(stock_id))
+
+    snapshot = translate_validation(
+        InstrumentService(db).add_valuation_snapshot,
+        stock=stock,
+        as_of_date=payload.as_of_date,
+        metric_name=payload.metric_name,
+        metric_value=payload.metric_value,
+        source=payload.source,
+        definition=payload.definition,
+    )
+    commit_or_rollback(db)
+    return snapshot
 
 
 @router.post(

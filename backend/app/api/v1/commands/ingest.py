@@ -67,6 +67,7 @@ def ingest_documents(
             news_query=payload.news_query,
             quote_query=payload.quote_query,
             quote_stock_code=payload.quote_stock_code,
+            macro_queries=payload.macro_queries,
         )
     except GildataMCPError as exc:
         db.rollback()

@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
-export interface PaperCardProps {
+export interface PaperCardProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {
   title?: ReactNode;
   kicker?: string;
   actions?: ReactNode;
@@ -12,7 +12,8 @@ export interface PaperCardProps {
 /**
  * Paper card surface used across prototype screens. Provides a consistent
  * padding/border treatment and an optional header row with kicker + title +
- * actions.
+ * actions. 透传剩余 HTML 属性（含 data-testid / aria-*），便于 e2e 与可访问
+ * 性测试在不破坏视觉一致性的前提下锚定卡片。
  */
 export function PaperCard({
   title,
@@ -21,10 +22,12 @@ export function PaperCard({
   children,
   variant = "default",
   padding = "default",
+  ...rest
 }: PaperCardProps) {
   return (
     <article
-      className={`prototype-paper prototype-paper-card prototype-paper-card--${variant} prototype-paper-card--${padding}`}
+      {...rest}
+      className={`prototype-paper prototype-paper-card prototype-paper-card--${variant} prototype-paper-card--${padding}${rest.className ? " " + rest.className : ""}`}
     >
       {(title || actions) && (
         <header className="prototype-section-header">

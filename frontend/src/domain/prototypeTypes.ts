@@ -481,10 +481,26 @@ export interface GraphLayer {
   nodes: GraphNodeView[];
 }
 
+export interface GraphEdgeView {
+  id: string;
+  /** 两端节点 id（方向以后端语义为准，展示层按层序左右排布）。 */
+  source: string;
+  target: string;
+  /** 后端 semantic_kind：evidence / causal / contains_step / holding / … */
+  kind: string;
+  /** 关系中文标签，如 支持 / 反驳 / 因果 / 持仓。 */
+  label: string;
+  /** evidence 边的 properties.role：supports / contradicts / contextualizes。 */
+  role?: string;
+  /** 后端 review_state（如 reviewed）；空表示未经人工复核。 */
+  reviewState?: string;
+}
+
 export interface RelationshipGraphView {
   case: { id: string; title: string; question: string; cutoff: string; snapshotId: string };
   layers: GraphLayer[];
   nodes: GraphNodeView[];
+  edges: GraphEdgeView[];
   selectedNodeId: string;
   theses?: { id: string; title: string; statement: string }[];
 }
@@ -682,6 +698,11 @@ export interface VersionsView {
   before: VersionColumnContent;
   after: VersionColumnContent;
   changeRail: VersionChangeRail;
+  /** 每条命题的 before→after 变化总览：结论、缺口、关系数。供版本页
+   *  "多命题概览" 表格使用，避免只看到 focus 命题而忽略其他命题的进展。 */
+  perThesisChanges: ThesisVersionChange[];
+  /** 案例可用的全部快照 cutoff（按时间升序），供 base/compare 下拉使用。 */
+  availableCutoffs: string[];
   aiProposal: {
     runId: string;
     observedAt: string;
@@ -689,6 +710,17 @@ export interface VersionsView {
     text: string;
     boundary: string;
   };
+}
+
+export interface ThesisVersionChange {
+  thesisId: string;
+  statement: string;
+  conclusionBefore: string | null;
+  conclusionAfter: string | null;
+  gapsBeforeCount: number;
+  gapsAfterCount: number;
+  addedLinks: number;
+  removedLinks: number;
 }
 
 // ── Theme (主题) ─ 一等公民 ───────────────────────────────────────────
@@ -844,14 +876,20 @@ export interface PrototypeClient {
   createCase(input: CreateCaseInput): Promise<CreateCaseResult>;
   listCaseSummaries(): Promise<CaseSummaryItem[]>;
   getResearchPlanView(caseId?: string): Promise<ResearchPlanView>;
-  getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView>;
+  getCaseWorkbenchView(
+    caseId: string,
+    options?: { thesisId?: string },
+  ): Promise<CaseWorkbenchView>;
   getRelationshipGraphView(
     caseId: string,
     thesisId?: string,
   ): Promise<RelationshipGraphView>;
   getLibraryView(): Promise<LibraryView>;
   getDataCenterView(): Promise<DataCenterView>;
-  getVersionsView(caseId?: string): Promise<VersionsView>;
+  getVersionsView(
+    caseId?: string,
+    options?: { base?: string; compare?: string },
+  ): Promise<VersionsView>;
   getThemeIndexView(): Promise<ThemeIndexView>;
   getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
 }
@@ -861,7 +899,8 @@ export type ResearchClient = BaseResearchClient &
   ReviewQueueClient &
   VersionsClient &
   EngineClient &
-  DataCenterClient;
+  DataCenterClient &
+  CompanyThemeClient;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 
 /** One pending link-level review, mapped from ReviewQueueItemDTO. */
@@ -992,4 +1031,186 @@ export interface DataCenterClient {
     stockId: string,
     metricName: string,
   ): Promise<DataMetricSelection>;
+}
+
+// ── 公司研究（/companies · live API slice）─────────────────────────────────
+//
+// CompanyDossierView 是后端 CompanyDossierResponse 的领域映射：以公司
+// 为入口的逆向读视图。AI 判断与人工复核分离承载（aiConclusion/aiProvisional
+// vs review*），页面用与案例页相同的双编码语义渲染，不合成公司级结论。
+
+export interface CompanyListItem {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  stockCount: number;
+  themeRoleCount: number;
+  latestReportPeriod: string | null;
+}
+
+export interface CompanyListView {
+  items: CompanyListItem[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+export interface CompanyStockView {
+  id: string;
+  code: string;
+  name: string;
+  market: string;
+}
+
+export interface CompanyThemeRoleView {
+  id: string;
+  caseId: string | null;
+  caseTitle: string | null;
+  role: string;
+  scope: Record<string, unknown>;
+  applicableFrom: string | null;
+  applicableTo: string | null;
+  statementId: string | null;
+  statementText: string | null;
+  spanId: string | null;
+  documentVersionId: string | null;
+}
+
+export interface CompanyThesisJudgment {
+  thesisId: string;
+  caseId: string;
+  caseTitle: string;
+  statement: string;
+  title: string | null;
+  aiConclusion: string | null;
+  aiProvisional: boolean;
+  assessedAt: string | null;
+  reviewOutcome: string | null;
+  reviewConclusion: string | null;
+  reviewReason: string | null;
+  reviewer: string | null;
+  reviewedAt: string | null;
+}
+
+export interface CompanyValuationView {
+  stockId: string;
+  stockCode: string;
+  metricName: string;
+  metricValue: number;
+  asOfDate: string;
+  source: string;
+  definition: string;
+}
+
+export interface CompanyFundHolderView {
+  fundId: string;
+  fundCode: string;
+  fundName: string;
+  stockId: string;
+  stockCode: string;
+  weight: number;
+  reportPeriod: string;
+  publishedAt: string | null;
+  acquiredAt: string | null;
+  source: string;
+}
+
+export interface CompanyDossierView {
+  cutoff: string;
+  isHistorical: boolean;
+  company: {
+    id: string;
+    code: string;
+    name: string;
+    type: string;
+    createdAt: string | null;
+  };
+  stocks: CompanyStockView[];
+  themeRoles: CompanyThemeRoleView[];
+  relatedTheses: CompanyThesisJudgment[];
+  valuations: CompanyValuationView[];
+  fundHolders: CompanyFundHolderView[];
+}
+
+// ── 主题研究（/topics · 横切主题 live API slice）───────────────────────────
+//
+// TopicView 是后端 ThemeViewResponse 的领域映射：跨案例聚合投影。为避免
+// 与案例中心「主题」（ThemeIndexView / ThemeWorkbenchView）混淆，横切
+// 主题一律使用 Topic 前缀。thesisCounts 是案例层有效判断的分桶计数，
+// 不构成主题级总结论；derivedFrom 携带全部聚合来源引用。
+
+export interface TopicListItem {
+  tag: string;
+  caseCount: number;
+  companyCount: number;
+  thesisCount: number;
+}
+
+export interface TopicThesisView {
+  thesisId: string;
+  statement: string;
+  title: string | null;
+  aiConclusion: string | null;
+  aiProvisional: boolean;
+  assessedAt: string | null;
+  reviewOutcome: string | null;
+  reviewConclusion: string | null;
+  reviewedAt: string | null;
+}
+
+export interface TopicCaseView {
+  caseId: string;
+  caseTitle: string;
+  thesisCounts: Record<string, number>;
+  theses: TopicThesisView[];
+}
+
+export interface TopicCompanyRoleView {
+  companyId: string;
+  companyCode: string;
+  companyName: string;
+  caseId: string | null;
+  caseTitle: string | null;
+  role: string;
+  scope: Record<string, unknown>;
+  applicableFrom: string | null;
+  applicableTo: string | null;
+  statementId: string | null;
+}
+
+export interface TopicExposurePosition {
+  fundId: string;
+  fundCode: string;
+  fundName: string;
+  stockId: string;
+  stockCode: string;
+  stockName: string;
+  weight: number;
+  reportPeriod: string;
+  source: string;
+}
+
+export interface TopicView {
+  cutoff: string;
+  isHistorical: boolean;
+  tag: string;
+  cases: TopicCaseView[];
+  companyRoles: TopicCompanyRoleView[];
+  fundExposure: TopicExposurePosition[];
+  derivedFrom: {
+    caseIds: string[];
+    thesisIds: string[];
+    themeRoleIds: string[];
+    disclosureIds: string[];
+  };
+}
+
+export interface CompanyThemeClient {
+  listCompanies(query?: string, cursor?: string | null): Promise<CompanyListView>;
+  getCompanyDossier(
+    companyId: string,
+    opts?: { cutoff?: string },
+  ): Promise<CompanyDossierView>;
+  listThemes(): Promise<TopicListItem[]>;
+  getThemeView(tag: string, opts?: { cutoff?: string }): Promise<TopicView>;
 }

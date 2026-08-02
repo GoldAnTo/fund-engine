@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type { LibraryView } from "../../domain/prototypeTypes";
 
@@ -23,13 +23,21 @@ export function LibraryScreen() {
   const [reuseFilter, setReuseFilter] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [extractNotice, setExtractNotice] = useState<string | null>(null);
+  // 证据图谱"跳转原文"通过 /library?document=<id> 定位到指定文档
+  const [searchParams] = useSearchParams();
+  const requestedDocRef = useRef<string | null>(searchParams.get("document"));
 
   const loadView = useCallback(() => {
     return researchClient.getLibraryView().then((v) => {
       setView(v);
-      setSelectedId((prev) =>
-        v.documents.some((d) => d.id === prev) ? prev : v.selected.id,
-      );
+      setSelectedId((prev) => {
+        if (v.documents.some((d) => d.id === prev)) return prev;
+        const requested = requestedDocRef.current;
+        if (requested && v.documents.some((d) => d.id === requested)) {
+          return requested;
+        }
+        return v.selected.id;
+      });
     });
   }, []);
 

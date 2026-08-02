@@ -34,6 +34,10 @@ import { DataCenterScreen } from "./pages/prototype/DataCenterScreen";
 import { VersionsScreen } from "./pages/prototype/VersionsScreen";
 import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
 import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
+import { CompanyListPage } from "./pages/prototype/CompanyListPage";
+import { CompanyDossierPage } from "./pages/prototype/CompanyDossierPage";
+import { TopicListPage } from "./pages/prototype/TopicListPage";
+import { TopicViewPage } from "./pages/prototype/TopicViewPage";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -65,25 +69,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           {/* 兼容旧版研究案例工作台 */}
           <Route path="cases" element={<CaseWorkbenchScreen />} />
           <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
-          {/* 二级研究对象入口（建设中） */}
+          {/* 二级研究对象入口：读模型已上线，无写路径（命令 API 在后端提供） */}
+          <Route path="companies" element={<CompanyListPage />} />
           <Route
-            path="companies"
-            element={
-              <NotImplementedPage
-                title="公司研究"
-                hint="公司层面证据关系与个股深度跟踪正在搭建。"
-              />
-            }
+            path="companies/:companyId"
+            element={<CompanyDossierPage />}
           />
-          <Route
-            path="topics"
-            element={
-              <NotImplementedPage
-                title="主题研究"
-                hint="跨行业主题（如 AI 算力、新能源、半导体）的横切研究空间建设中。"
-              />
-            }
-          />
+          <Route path="topics" element={<TopicListPage />} />
+          <Route path="topics/:tag" element={<TopicViewPage />} />
           {/* 未匹配路由兜底：旧链接/书签（如 /cases/:id/graph）不再渲染
               空白页，回到主题入口。React Router 按特异性排序，* 优先级
               最低，不会吞掉下方 legacy 路由。 */}

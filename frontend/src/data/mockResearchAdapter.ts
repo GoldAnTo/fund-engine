@@ -30,6 +30,9 @@ import type {
   AssessmentReviewResult,
   CaseSummaryItem,
   CaseWorkbenchView,
+  CompanyDossierView,
+  CompanyListItem,
+  CompanyListView,
   CreateCaseInput,
   CreateCaseResult,
   DataCenterView,
@@ -48,6 +51,8 @@ import type {
   ThemeIndexView,
   ThesisRerunResult,
   ThemeWorkbenchView,
+  TopicListItem,
+  TopicView,
   VersionsView,
   WorkspaceOverviewScreen,
   WorkspaceOverviewView,
@@ -1145,6 +1150,422 @@ function parseFailedDocs(): SourceDocumentView[] {
   }));
 }
 
+// ── 公司研究 / 主题研究（横切）stable mock ────────────────────────────────
+//
+// 与 AI 算力链 fixture 同一世界：寒武纪 + 工业富联、算力国产化 + 云厂商
+// CapEx 两个横切主题。AI 草案与人工复核分离承载；cutoff 过滤与后端读
+// 模型语义一致（角色适用窗口、估值 as_of、披露 published_at）。
+
+const COMPANY_LIST: CompanyListItem[] = [
+  {
+    id: "co-cambricon",
+    code: "688256",
+    name: "寒武纪",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 1,
+    latestReportPeriod: "2026-03-31",
+  },
+  {
+    id: "co-foxconn",
+    code: "601138",
+    name: "工业富联",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 1,
+    latestReportPeriod: "2026-03-31",
+  },
+];
+
+const MOCK_CUTOFF_NOW = "2026-08-02T08:00:00+00:00";
+
+const COMPANY_DOSSIERS: Record<string, CompanyDossierView> = {
+  "co-cambricon": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-cambricon",
+      code: "688256",
+      name: "寒武纪",
+      type: "listed",
+      createdAt: "2026-05-24T02:30:00+00:00",
+    },
+    stocks: [
+      { id: "st-cambricon", code: "688256.SH", name: "寒武纪-U", market: "SSE" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-cambricon-ai",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "算力芯片受益方",
+        scope: { chain: "AI 算力", segment: "上游芯片" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: "stmt-cambricon-orders",
+        statementText: "阿里云 2025 年采购 5-6 万张思元芯片",
+        spanId: "span-cambricon-1",
+        documentVersionId: "dv-cambricon-1",
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-capex",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        statement: "云厂商 CapEx 将在 2026 年继续增长",
+        title: "CapEx 上行",
+        aiConclusion: "supported",
+        aiProvisional: true,
+        assessedAt: "2026-07-28T09:12:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+      {
+        thesisId: "th-transmit",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        statement: "CapEx 增长将传导至国产 AI 芯片采购放量",
+        title: "采购传导",
+        aiConclusion: "supported",
+        aiProvisional: true,
+        assessedAt: "2026-07-28T09:20:00+00:00",
+        reviewOutcome: "modified",
+        reviewConclusion: "contradicted",
+        reviewReason: "订单可见性不足以支撑当前估值隐含的预期",
+        reviewer: "陈子仪",
+        reviewedAt: "2026-07-30T03:22:00+00:00",
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-cambricon",
+        stockCode: "688256.SH",
+        metricName: "PE_TTM",
+        metricValue: 45.2,
+        asOfDate: "2026-06-30",
+        source: "wind",
+        definition: "总市值/近四月归母净利润",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-star50",
+        fundCode: "588000",
+        fundName: "华夏科创50ETF",
+        stockId: "st-cambricon",
+        stockCode: "688256.SH",
+        weight: 1.27,
+        reportPeriod: "2026-03-31",
+        publishedAt: "2026-04-22T08:00:00+00:00",
+        acquiredAt: "2026-04-22T09:00:00+00:00",
+        source: "基金2026年一季报",
+      },
+    ],
+  },
+  "co-foxconn": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-foxconn",
+      code: "601138",
+      name: "工业富联",
+      type: "listed",
+      createdAt: "2026-05-24T02:30:00+00:00",
+    },
+    stocks: [
+      { id: "st-foxconn", code: "601138.SH", name: "工业富联", market: "SSE" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-foxconn-ai",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "AI服务器代工方",
+        scope: { chain: "AI 算力", segment: "中游整机" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-capex",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        statement: "云厂商 CapEx 将在 2026 年继续增长",
+        title: "CapEx 上行",
+        aiConclusion: "supported",
+        aiProvisional: true,
+        assessedAt: "2026-07-28T09:12:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-foxconn",
+        stockCode: "601138.SH",
+        metricName: "PB",
+        metricValue: 3.8,
+        asOfDate: "2026-06-30",
+        source: "wind",
+        definition: "总市值/归母净资产",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-eft",
+        fundCode: "005827",
+        fundName: "易方达蓝筹精选",
+        stockId: "st-foxconn",
+        stockCode: "601138.SH",
+        weight: 0.82,
+        reportPeriod: "2026-03-31",
+        publishedAt: "2026-04-22T08:00:00+00:00",
+        acquiredAt: "2026-04-22T09:05:00+00:00",
+        source: "基金2026年一季报",
+      },
+    ],
+  },
+};
+
+const TOPIC_LIST: TopicListItem[] = [
+  { tag: "算力国产化", caseCount: 2, companyCount: 2, thesisCount: 3 },
+  { tag: "云厂商CapEx", caseCount: 1, companyCount: 1, thesisCount: 1 },
+];
+
+const TOPIC_VIEWS: Record<string, TopicView> = {
+  算力国产化: {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "算力国产化",
+    cases: [
+      {
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        thesisCounts: {
+          supported: 0,
+          contradicted: 1,
+          insufficient_evidence: 0,
+          ai_pending: 1,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-capex",
+            statement: "云厂商 CapEx 将在 2026 年继续增长",
+            title: "CapEx 上行",
+            aiConclusion: "supported",
+            aiProvisional: true,
+            assessedAt: "2026-07-28T09:12:00+00:00",
+            reviewOutcome: null,
+            reviewConclusion: null,
+            reviewedAt: null,
+          },
+          {
+            thesisId: "th-transmit",
+            statement: "CapEx 增长将传导至国产 AI 芯片采购放量",
+            title: "采购传导",
+            aiConclusion: "supported",
+            aiProvisional: true,
+            assessedAt: "2026-07-28T09:20:00+00:00",
+            reviewOutcome: "modified",
+            reviewConclusion: "contradicted",
+            reviewedAt: "2026-07-30T03:22:00+00:00",
+          },
+        ],
+      },
+      {
+        caseId: "RC-CLOUD-2026-02",
+        caseTitle: "云端 CapEx 传导",
+        thesisCounts: {
+          supported: 1,
+          contradicted: 0,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-cloud-capex",
+            statement: "头部云厂商 2026 年资本开支指引上调",
+            title: "指引上调",
+            aiConclusion: "supported",
+            aiProvisional: true,
+            assessedAt: "2026-07-26T11:00:00+00:00",
+            reviewOutcome: "confirmed",
+            reviewConclusion: null,
+            reviewedAt: "2026-07-27T02:10:00+00:00",
+          },
+        ],
+      },
+    ],
+    companyRoles: [
+      {
+        companyId: "co-cambricon",
+        companyCode: "688256",
+        companyName: "寒武纪",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "算力芯片受益方",
+        scope: { chain: "AI 算力", segment: "上游芯片" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: "stmt-cambricon-orders",
+      },
+      {
+        companyId: "co-foxconn",
+        companyCode: "601138",
+        companyName: "工业富联",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "AI服务器代工方",
+        scope: { chain: "AI 算力", segment: "中游整机" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+    ],
+    fundExposure: [
+      {
+        fundId: "fd-star50",
+        fundCode: "588000",
+        fundName: "华夏科创50ETF",
+        stockId: "st-cambricon",
+        stockCode: "688256.SH",
+        stockName: "寒武纪-U",
+        weight: 1.27,
+        reportPeriod: "2026-03-31",
+        source: "基金2026年一季报",
+      },
+      {
+        fundId: "fd-eft",
+        fundCode: "005827",
+        fundName: "易方达蓝筹精选",
+        stockId: "st-foxconn",
+        stockCode: "601138.SH",
+        stockName: "工业富联",
+        weight: 0.82,
+        reportPeriod: "2026-03-31",
+        source: "基金2026年一季报",
+      },
+    ],
+    derivedFrom: {
+      caseIds: ["RC-AIC-2025-01", "RC-CLOUD-2026-02"],
+      thesisIds: ["th-capex", "th-transmit", "th-cloud-capex"],
+      themeRoleIds: ["tr-cambricon-ai", "tr-foxconn-ai"],
+      disclosureIds: ["hd-star50-q1", "hd-eft-q1"],
+    },
+  },
+  云厂商CapEx: {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "云厂商CapEx",
+    cases: [
+      {
+        caseId: "RC-CLOUD-2026-02",
+        caseTitle: "云端 CapEx 传导",
+        thesisCounts: {
+          supported: 1,
+          contradicted: 0,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-cloud-capex",
+            statement: "头部云厂商 2026 年资本开支指引上调",
+            title: "指引上调",
+            aiConclusion: "supported",
+            aiProvisional: true,
+            assessedAt: "2026-07-26T11:00:00+00:00",
+            reviewOutcome: "confirmed",
+            reviewConclusion: null,
+            reviewedAt: "2026-07-27T02:10:00+00:00",
+          },
+        ],
+      },
+    ],
+    companyRoles: [],
+    fundExposure: [],
+    derivedFrom: {
+      caseIds: ["RC-CLOUD-2026-02"],
+      thesisIds: ["th-cloud-capex"],
+      themeRoleIds: [],
+      disclosureIds: [],
+    },
+  },
+};
+
+function emptyTopicView(tag: string): TopicView {
+  return {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag,
+    cases: [],
+    companyRoles: [],
+    fundExposure: [],
+    derivedFrom: {
+      caseIds: [],
+      thesisIds: [],
+      themeRoleIds: [],
+      disclosureIds: [],
+    },
+  };
+}
+
+/** cutoff 过滤与后端读模型语义一致：角色适用窗口、估值 as_of、披露
+ * published_at、assessment/review 的创建时间均按 cutoff 截断。 */
+function applyCompanyCutoff(
+  dossier: CompanyDossierView,
+  cutoff: string,
+): CompanyDossierView {
+  const day = cutoff.slice(0, 10);
+  return {
+    ...dossier,
+    cutoff,
+    isHistorical: true,
+    themeRoles: dossier.themeRoles.filter(
+      (r) =>
+        (!r.applicableFrom || r.applicableFrom <= day) &&
+        (!r.applicableTo || r.applicableTo >= day),
+    ),
+    valuations: dossier.valuations.filter((v) => v.asOfDate <= day),
+    fundHolders: dossier.fundHolders.filter(
+      (h) => (h.publishedAt ?? "") <= cutoff,
+    ),
+  };
+}
+
+function applyTopicCutoff(view: TopicView, cutoff: string): TopicView {
+  const day = cutoff.slice(0, 10);
+  return {
+    ...view,
+    cutoff,
+    isHistorical: true,
+    companyRoles: view.companyRoles.filter(
+      (r) =>
+        (!r.applicableFrom || r.applicableFrom <= day) &&
+        (!r.applicableTo || r.applicableTo >= day),
+    ),
+    fundExposure: [],
+  };
+}
+
 // ── Adapter ───────────────────────────────────────────────────────────────
 
 export class MockResearchAdapter implements ResearchClient {
@@ -1396,7 +1817,10 @@ export class MockResearchAdapter implements ResearchClient {
     ]);
   }
 
-  async getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView> {
+  async getCaseWorkbenchView(
+    caseId: string,
+    _options?: { thesisId?: string },
+  ): Promise<CaseWorkbenchView> {
     if (this.createdCases.has(caseId)) {
       return simulateLatency(this.buildCreatedCaseWorkbenchView(caseId));
     }
@@ -1535,6 +1959,7 @@ export class MockResearchAdapter implements ResearchClient {
         { key: "fund", label: "基金", nodes: [] },
       ],
       nodes: thesisNodes,
+      edges: [],
       selectedNodeId: thesisNodes[0]?.id ?? "",
     });
   }
@@ -1559,7 +1984,10 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
-  async getVersionsView(_caseId?: string): Promise<VersionsView> {
+  async getVersionsView(
+    _caseId?: string,
+    _options?: { base?: string; compare?: string },
+  ): Promise<VersionsView> {
     return simulateLatency(buildVersionsView());
   }
 
@@ -1693,6 +2121,76 @@ export class MockResearchAdapter implements ResearchClient {
       statementCount: 0,
       reason: "离线原型未运行 LLM 抽取",
     });
+  }
+
+  // ── 公司研究（/companies）───────────────────────────────────────────────
+
+  async listCompanies(
+    query?: string,
+    cursor?: string | null,
+  ): Promise<CompanyListView> {
+    this.throwIfOffline();
+    if (this.scenario === "empty") {
+      return simulateLatency({ items: [], hasMore: false, nextCursor: null });
+    }
+    const q = query?.trim().toLowerCase();
+    const items = q
+      ? COMPANY_LIST.filter(
+          (c) =>
+            c.name.toLowerCase().includes(q) ||
+            c.code.toLowerCase().includes(q),
+        )
+      : COMPANY_LIST;
+    // mock 数据量小：cursor 仅透传分页契约，不真正切片。
+    void cursor;
+    return simulateLatency({ items, hasMore: false, nextCursor: null });
+  }
+
+  async getCompanyDossier(
+    companyId: string,
+    opts?: { cutoff?: string },
+  ): Promise<CompanyDossierView> {
+    this.throwIfOffline();
+    const base = COMPANY_DOSSIERS[companyId];
+    if (!base || this.scenario === "empty") {
+      return simulateLatency({
+        cutoff: opts?.cutoff ?? MOCK_CUTOFF_NOW,
+        isHistorical: Boolean(opts?.cutoff),
+        company: {
+          id: companyId,
+          code: "",
+          name: "",
+          type: "",
+          createdAt: null,
+        },
+        stocks: [],
+        themeRoles: [],
+        relatedTheses: [],
+        valuations: [],
+        fundHolders: [],
+      });
+    }
+    if (opts?.cutoff) return simulateLatency(applyCompanyCutoff(base, opts.cutoff));
+    return simulateLatency(base);
+  }
+
+  // ── 主题研究（/topics · 横切主题）───────────────────────────────────────
+
+  async listThemes(): Promise<TopicListItem[]> {
+    this.throwIfOffline();
+    if (this.scenario === "empty") return simulateLatency([]);
+    return simulateLatency(TOPIC_LIST);
+  }
+
+  async getThemeView(
+    tag: string,
+    opts?: { cutoff?: string },
+  ): Promise<TopicView> {
+    this.throwIfOffline();
+    if (this.scenario === "empty") return simulateLatency(emptyTopicView(tag));
+    const base = TOPIC_VIEWS[tag] ?? emptyTopicView(tag);
+    if (opts?.cutoff) return simulateLatency(applyTopicCutoff(base, opts.cutoff));
+    return simulateLatency(base);
   }
 }
 

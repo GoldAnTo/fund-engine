@@ -1922,6 +1922,148 @@ a.prototype-button { text-decoration: none; }
 }
 .prototype-zoom-controls span { min-width: 36px; text-align: center; color: var(--ink); }
 
+/* ── Wiki 风格证据图谱 ─────────────────────────────────────────────── */
+.wiki-graph__scroll {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background:
+    linear-gradient(to bottom, transparent 0, transparent calc(100% - 1px), var(--rule) 100%),
+    var(--paper-soft);
+}
+.wiki-graph__svg text { font-family: inherit; }
+
+.wiki-graph__colhead-label {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.wiki-graph__colhead-count {
+  font-size: 10px;
+  fill: var(--ink-muted);
+}
+.wiki-graph__colhead-rule {
+  stroke: var(--rule-strong, var(--rule));
+  stroke-width: 1;
+}
+
+.wiki-edge path {
+  fill: none;
+  stroke-width: 1.6;
+  opacity: 0.75;
+}
+.wiki-edge.support path { stroke: var(--support); }
+.wiki-edge.contradict path { stroke: var(--contradict); stroke-width: 2; }
+.wiki-edge.proposed path { stroke: var(--ai-draft); stroke-dasharray: 5 4; }
+.wiki-edge.projection path { stroke: var(--provider-accent); }
+.wiki-edge.is-active path { stroke-width: 2.6; opacity: 1; }
+.wiki-edge.is-dim { opacity: 0.14; }
+.wiki-edge.is-dim path { opacity: 1; }
+
+.wiki-edge__label {
+  font-size: 9.5px;
+  fill: var(--ink-soft);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--paper-soft);
+  stroke-width: 3px;
+}
+.wiki-edge.is-active .wiki-edge__label { font-weight: 600; fill: var(--ink); }
+
+.wiki-arrow.support { fill: var(--support); }
+.wiki-arrow.contradict { fill: var(--contradict); }
+.wiki-arrow.proposed { fill: var(--ai-draft); }
+.wiki-arrow.projection { fill: var(--provider-accent); }
+
+.wiki-node__card {
+  fill: var(--paper);
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.wiki-node.is-selected .wiki-node__card {
+  stroke-width: 2.2;
+}
+.wiki-node.is-dim { opacity: 0.32; }
+
+.wiki-node.tone-fact .wiki-node__bar { fill: var(--reviewed); }
+.wiki-node.tone-thesis .wiki-node__bar { fill: var(--ai-draft); }
+.wiki-node.tone-contradict .wiki-node__bar { fill: var(--contradict); }
+.wiki-node.tone-ai .wiki-node__bar { fill: var(--ai-draft); }
+.wiki-node.tone-causal .wiki-node__bar { fill: var(--warning); }
+.wiki-node.tone-company .wiki-node__bar { fill: var(--provider-accent); }
+.wiki-node.tone-fund .wiki-node__bar { fill: var(--gap-accent, var(--warning)); }
+
+.wiki-node.tone-fact.is-selected .wiki-node__card { stroke: var(--reviewed); }
+.wiki-node.tone-thesis.is-selected .wiki-node__card { stroke: var(--ai-draft); }
+.wiki-node.tone-contradict.is-selected .wiki-node__card { stroke: var(--contradict); }
+.wiki-node.tone-ai.is-selected .wiki-node__card { stroke: var(--ai-draft); }
+.wiki-node.tone-causal.is-selected .wiki-node__card { stroke: var(--warning); }
+.wiki-node.tone-company.is-selected .wiki-node__card { stroke: var(--provider-accent); }
+.wiki-node.tone-fund.is-selected .wiki-node__card { stroke: var(--gap-accent, var(--warning)); }
+
+.wiki-node.tone-ai .wiki-node__card { stroke-dasharray: 5 4; stroke: var(--ai-draft); }
+.wiki-node.tone-contradict .wiki-node__card { stroke: var(--contradict); }
+
+.wiki-node__kind {
+  font-size: 9px;
+  fill: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.wiki-node__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.wiki-node__meta {
+  font-size: 10px;
+  fill: var(--ink-soft);
+}
+
+.wiki-graph .legend-item::before {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  border-top: 2px solid currentColor;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.wiki-graph .legend-support { color: var(--support); }
+.wiki-graph .legend-contradict { color: var(--contradict); }
+.wiki-graph .legend-proposed { color: var(--ai-draft); }
+.wiki-graph .legend-proposed::before { border-top-style: dashed; }
+.wiki-graph .legend-projection { color: var(--provider-accent); }
+.wiki-graph .legend-hint { color: var(--ink-muted); }
+
+.wiki-graph__export {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.wiki-graph__export button {
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.wiki-graph__export button:hover:not(:disabled) {
+  border-color: var(--rule-strong, var(--rule));
+  color: var(--ink);
+}
+.wiki-graph__export button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.wiki-graph__export + .prototype-zoom-controls { margin-left: 0; }
+.wiki-graph__export-error {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--contradict);
+}
+
 .relationship-inspector { padding: 16px 16px 18px; }
 .evidence-stack {
   margin-top: 12px;

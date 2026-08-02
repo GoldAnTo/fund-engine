@@ -134,10 +134,14 @@ def extract_statements(
     client = LLMClient.from_env()
     statements = StatementExtractor(client).extract(document_version_id, db)
     commit_or_rollback(db)
+    # Honest reason when no statements were produced — distinguishes
+    # "nothing to extract" from "LLM refused / blank input".
+    reason = _extract_reason(db, document_version_id, statements)
     return ExtractResponse(
         document_version_id=str(document_version_id),
         mode="mock" if client._mock else client.model_version,
         statement_count=len(statements),
+        reason=reason,
         statements=[
             ExtractStatementDTO(
                 id=str(s.id),
@@ -150,3 +154,30 @@ def extract_statements(
             for s in statements
         ],
     )
+
+
+def _extract_reason(db: Session, version_id: uuid.UUID, statements) -> str | None:
+    """Surface a one-line explanation whenever statement_count is 0."""
+    if statements:
+        return None
+    from app.models.ledger import AIRun, SourceSpan
+    from sqlalchemy import func, select
+
+    span_count = db.scalar(
+        select(func.count()).select_from(SourceSpan).where(
+            SourceSpan.document_version_id == version_id
+        )
+    )
+    if not span_count:
+        return "该版本没有附加来源片段，无法抽取陈述"
+    last_run = db.scalar(
+        select(AIRun)
+        .where(AIRun.kind == "extract")
+        .where(AIRun.input_ref["document_version_id"].as_string() == str(version_id))
+        .order_by(AIRun.started_at.desc())
+        .limit(1)
+    )
+    summary = last_run.output_summary if last_run else None
+    if summary and "llm returned 0" in summary:
+        return "LLM 抽取调用完成但未返回任何陈述（可能为纯结构化或合规受限）"
+    return f"提取运行记录：{summary}" if summary else "提取未产生陈述"

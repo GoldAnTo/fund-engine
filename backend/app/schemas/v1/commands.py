@@ -203,12 +203,15 @@ class ExtractResponse(V1Model):
     Append-only: re-running extraction on a version that already has
     statements will append duplicates; the engine script only feeds
     pending versions (spans present, no statements yet).  ``mode`` is
-    ``mock`` without an LLM key (non-production only).
+    ``mock`` without an LLM key (non-production only).  ``reason`` is the
+    honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
+    事实 / LLM 拒答).
     """
 
     document_version_id: str
     mode: str
     statement_count: int
+    reason: str | None = None
     statements: list[ExtractStatementDTO]
 
 
@@ -255,6 +258,10 @@ class IngestRequest(V1Model):
     news_query: str | None = None
     quote_query: str | None = None
     quote_stock_code: str | None = None
+    # 宏观/行业时序查询（价格水平、环比增长率等）。每个查询会把返回的整段
+    # 时序冷冻为一份 DocumentVersion + SourceSpan，自然键 (query+metric)
+    # 去重，append-only 不重复入库。
+    macro_queries: list[str] | None = None
 
 
 class IngestResponse(V1Model):
@@ -268,6 +275,7 @@ class IngestResponse(V1Model):
     research_reports: int
     announcements: int
     news: int
+    macro_series: int = 0
     spans: int
     valuations_written: int
     valuations_skipped: int

@@ -534,4 +534,260 @@ describe("HttpResearchAdapter", () => {
     expect(view.researchOps.agreement.linkModified).toBe(1);
     expect(view.researchOps.latency.assessmentToReviewAvgDays).toBe(2.25);
   });
+
+  it("maps listCompanies DTO to CompanyListView and strips wire-only basis", async () => {
+    const listDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2026-08-02T00:00:00+00:00", is_historical: false },
+      page: { has_more: false, next_cursor: null },
+      items: [
+        {
+          id: "co-a",
+          code: "688256",
+          name: "寒武纪",
+          type: "listed",
+          stock_count: 1,
+          theme_role_count: 2,
+          latest_report_period: "2026-03-31",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/companies")) return jsonResponse(listDto);
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.listCompanies("寒武纪");
+
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0]).toEqual({
+      id: "co-a",
+      code: "688256",
+      name: "寒武纪",
+      type: "listed",
+      stockCount: 1,
+      themeRoleCount: 2,
+      latestReportPeriod: "2026-03-31",
+    });
+    expect(view.hasMore).toBe(false);
+    expect(view.nextCursor).toBeNull();
+    // 传输层 basis 不应泄漏到领域类型
+    expect(
+      (view as unknown as Record<string, unknown>).basis
+    ).toBeUndefined();
+  });
+
+  it("maps getCompanyDossier DTO without leaking wire-only fields", async () => {
+    const dossierDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2026-08-02T00:00:00+00:00", is_historical: false },
+      company: {
+        id: "co-a",
+        code: "688256",
+        name: "寒武纪",
+        type: "listed",
+        created_at: "2026-05-24T02:30:00+00:00",
+      },
+      stocks: [{ id: "st-a", code: "688256.SH", name: "寒武纪-U", market: "SSE" }],
+      theme_roles: [
+        {
+          id: "tr-1",
+          case_id: "RC-AIC-2025-01",
+          case_title: "AI 算力链",
+          role: "算力芯片受益方",
+          scope: { chain: "AI 算力" },
+          applicable_from: "2026-01-01",
+          applicable_to: null,
+          statement_id: "stmt-1",
+          statement_text: "阿里云 2025 采购 5-6 万张思元",
+          span_id: "span-1",
+          document_version_id: "dv-1",
+        },
+      ],
+      related_theses: [
+        {
+          thesis_id: "th-1",
+          case_id: "RC-AIC-2025-01",
+          case_title: "AI 算力链",
+          statement: "CapEx 增长",
+          title: "CapEx 上行",
+          ai_assessment: {
+            conclusion: "supported",
+            provisional: true,
+            assessed_at: "2026-07-28T09:12:00+00:00",
+          },
+          review: null,
+        },
+      ],
+      valuations: [
+        {
+          stock_id: "st-a",
+          stock_code: "688256.SH",
+          metric_name: "PE_TTM",
+          metric_value: 255.76,
+          as_of_date: "2026-07-31",
+          source: "gildata",
+          definition: "PE(TTM) · 占总市值",
+        },
+      ],
+      fund_holders: [
+        {
+          fund_id: "f-1",
+          fund_code: "588200",
+          fund_name: "科创50ETF",
+          stock_id: "st-a",
+          stock_code: "688256.SH",
+          weight: 1.27,
+          report_period: "2026-03-31",
+          published_at: "2026-04-22T00:00:00+00:00",
+          acquired_at: "2026-04-23T00:00:00+00:00",
+          source: "占流通A股",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/companies/co-a")) return jsonResponse(dossierDto);
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.getCompanyDossier("co-a");
+
+    expect(view.company.name).toBe("寒武纪");
+    expect(view.stocks[0].code).toBe("688256.SH");
+    expect(view.themeRoles[0]).toMatchObject({
+      caseId: "RC-AIC-2025-01",
+      role: "算力芯片受益方",
+      statementId: "stmt-1",
+    });
+    // AI 草案与人工复核分离承载
+    expect(view.relatedTheses[0].aiConclusion).toBe("supported");
+    expect(view.relatedTheses[0].aiProvisional).toBe(true);
+    expect(view.relatedTheses[0].reviewOutcome).toBeNull();
+    expect(view.valuations[0].metricValue).toBe(255.76);
+    expect(view.fundHolders[0].source).toBe("占流通A股");
+    expect(
+      (view as unknown as Record<string, unknown>).basis
+    ).toBeUndefined();
+  });
+
+  it("maps listThemes DTO with page-shaped envelopes stripped", async () => {
+    const listDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2026-08-02T00:00:00+00:00", is_historical: false },
+      items: [
+        { tag: "算力国产化", case_count: 2, company_count: 2, thesis_count: 3 },
+        { tag: "云厂商CapEx", case_count: 1, company_count: 1, thesis_count: 1 },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/themes")) return jsonResponse(listDto);
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.listThemes();
+
+    expect(view).toEqual([
+      { tag: "算力国产化", caseCount: 2, companyCount: 2, thesisCount: 3 },
+      { tag: "云厂商CapEx", caseCount: 1, companyCount: 1, thesisCount: 1 },
+    ]);
+  });
+
+  it("maps getThemeView DTO and preserves derivedFrom references", async () => {
+    const viewDto = {
+      schema_version: "v1",
+      basis: { cutoff: "2026-08-02T00:00:00+00:00", is_historical: false },
+      tag: "算力国产化",
+      cases: [
+        {
+          case_id: "RC-AIC-2025-01",
+          case_title: "AI 算力链",
+          thesis_counts: { supported: 1, contradicted: 0, ai_pending: 1 },
+          theses: [
+            {
+              thesis_id: "th-1",
+              statement: "CapEx 上行",
+              title: "CapEx 上行",
+              ai_assessment: {
+                conclusion: "supported",
+                provisional: true,
+                assessed_at: "2026-07-28T09:12:00+00:00",
+              },
+              review: null,
+            },
+          ],
+        },
+      ],
+      company_roles: [
+        {
+          company_id: "co-a",
+          company_code: "688256",
+          company_name: "寒武纪",
+          case_id: "RC-AIC-2025-01",
+          case_title: "AI 算力链",
+          role: "算力芯片受益方",
+          scope: {},
+          applicable_from: "2026-01-01",
+          applicable_to: null,
+          statement_id: "stmt-1",
+        },
+      ],
+      fund_exposure: [
+        {
+          fund_id: "f-1",
+          fund_code: "588200",
+          fund_name: "科创50ETF",
+          stock_id: "st-a",
+          stock_code: "688256.SH",
+          stock_name: "寒武纪-U",
+          weight: 1.27,
+          report_period: "2026-03-31",
+          source: "占流通A股",
+        },
+      ],
+      derived_from: {
+        case_ids: ["RC-AIC-2025-01"],
+        thesis_ids: ["th-1"],
+        theme_role_ids: ["tr-1"],
+        disclosure_ids: ["hd-1"],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        // 标签含中文，需要 percent-encode 检查
+        if (url.includes("/themes/")) return jsonResponse(viewDto);
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.getThemeView("算力国产化");
+
+    expect(view.tag).toBe("算力国产化");
+    expect(view.cases[0].theses[0].aiConclusion).toBe("supported");
+    expect(view.companyRoles[0].companyId).toBe("co-a");
+    expect(view.fundExposure[0].weight).toBe(1.27);
+    expect(view.derivedFrom).toEqual({
+      caseIds: ["RC-AIC-2025-01"],
+      thesisIds: ["th-1"],
+      themeRoleIds: ["tr-1"],
+      disclosureIds: ["hd-1"],
+    });
+  });
 });

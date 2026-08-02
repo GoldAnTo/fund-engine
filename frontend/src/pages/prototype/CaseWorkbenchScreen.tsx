@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   AssessmentReviewPayload,
@@ -30,10 +30,15 @@ const RELATION_LABEL: Record<string, string> = {
 export function CaseWorkbenchScreen() {
   const params = useParams<{ caseId?: string }>();
   const caseId = params.caseId ?? "RC-AIC-2025-01";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialThesisId = searchParams.get("thesis_id") ?? undefined;
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<CaseWorkbenchView | null>(null);
   const [tab, setTab] = useState(0);
   const [selectedCaseId, setSelectedCaseId] = useState<string>(caseId);
+  const [selectedThesisId, setSelectedThesisId] = useState<string | undefined>(
+    initialThesisId,
+  );
   const [cases, setCases] = useState<CaseSummaryItem[]>([]);
   const [proposing, setProposing] = useState(false);
   const [proposeNotice, setProposeNotice] = useState<string | null>(null);
@@ -63,9 +68,11 @@ export function CaseWorkbenchScreen() {
 
   const loadCaseView = useCallback(() => {
     return researchClient
-      .getCaseWorkbenchView(selectedCaseId)
+      .getCaseWorkbenchView(selectedCaseId, {
+        thesisId: selectedThesisId,
+      })
       .then((v) => setView(v));
-  }, [selectedCaseId]);
+  }, [selectedCaseId, selectedThesisId]);
 
   useEffect(() => {
     let cancelled = false;

@@ -10,6 +10,8 @@ from app.api.v1.commands.engine import router as engine_commands_router
 from app.api.v1.commands.ingest import router as ingest_commands_router
 from app.api.v1.commands.instruments import router as instrument_commands_router
 from app.api.v1.commands.reviews import router as review_commands_router
+from app.api.v1.commands.themes import router as theme_commands_router
+from app.api.v1.companies import router as companies_router
 from app.api.v1.compare import router as compare_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.graph import router as graph_router
@@ -20,6 +22,7 @@ from app.api.v1.penetration import router as penetration_router
 from app.api.v1.provider_runs import router as provider_runs_router
 from app.api.v1.research_ops import router as research_ops_router
 from app.api.v1.search import router as search_router
+from app.api.v1.themes import router as themes_router
 from app.schemas.v1.common import HealthResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -40,6 +43,8 @@ router.include_router(documents_router)
 router.include_router(search_router)
 router.include_router(overview_router)
 router.include_router(penetration_router)
+router.include_router(companies_router)
+router.include_router(themes_router)
 router.include_router(metrics_router)
 router.include_router(provider_runs_router)
 router.include_router(research_ops_router)
@@ -52,3 +57,4 @@ router.include_router(engine_doc_commands_router)
 router.include_router(ingest_commands_router)
 router.include_router(instrument_commands_router)
 router.include_router(causal_commands_router)
+router.include_router(theme_commands_router)

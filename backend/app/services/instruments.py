@@ -26,6 +26,7 @@ from app.models.ledger import (
     Stock,
     ThemeRole,
     ValidationError,
+    ValuationSnapshot,
 )
 from app.repositories.instruments import InstrumentRepository
 
@@ -148,6 +149,44 @@ class InstrumentService:
             report_period=report_period,
             published_at=published_at,
             source=source,
+        )
+
+    def add_valuation_snapshot(
+        self,
+        *,
+        stock: Stock,
+        as_of_date: date,
+        metric_name: str,
+        metric_value: Decimal,
+        source: str,
+        definition: str,
+    ) -> ValuationSnapshot:
+        metric_name = _require_non_empty(metric_name, "metric_name", 64)
+        source = _require_non_empty(source, "source", 128)
+        definition = _require_non_empty(definition, "definition", 255)
+        if not metric_value.is_finite():
+            raise ValidationError("metric_value 必须是有限数值")
+
+        existing = self._session.scalar(
+            select(func.count())
+            .select_from(ValuationSnapshot)
+            .where(
+                ValuationSnapshot.stock_id == stock.id,
+                ValuationSnapshot.metric_name == metric_name,
+                ValuationSnapshot.as_of_date == as_of_date,
+                ValuationSnapshot.source == source,
+            )
+        )
+        if existing:
+            raise ValidationError("该股票在该日期该指标的同一来源估值快照已存在")
+
+        return self._instruments.add_valuation_snapshot(
+            stock_id=stock.id,
+            as_of_date=as_of_date,
+            metric_name=metric_name,
+            metric_value=metric_value,
+            source=source,
+            definition=definition,
         )
 
     def add_theme_role(

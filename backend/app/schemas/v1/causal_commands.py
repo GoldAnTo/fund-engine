@@ -13,7 +13,7 @@ class CreateCausalStepRequest(V1Model):
     sequence: int
 
 
-class CausalStepDTO(V1Model):
+class CreatedCausalStepDTO(V1Model):
     id: uuid.UUID
     thesis_id: uuid.UUID
     description: str
@@ -28,7 +28,7 @@ class CreateCausalEdgeRequest(V1Model):
     creator_type: str = "human"
 
 
-class CausalEdgeDTO(V1Model):
+class CreatedCausalEdgeDTO(V1Model):
     id: uuid.UUID
     source_step_id: uuid.UUID
     target_step_id: uuid.UUID

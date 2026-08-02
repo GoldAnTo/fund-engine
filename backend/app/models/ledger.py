@@ -59,6 +59,7 @@ IMMUTABLE_TABLES = frozenset(
         "valuation_snapshots",
         "holding_disclosures",
         "theme_roles",
+        "case_theme_tag_events",
         "ai_runs",
     }
 )
@@ -113,6 +114,10 @@ class DocumentVersion(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     content_sha256: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # (source_prefix, normalized_title, published_at) 的 SHA256 前 32 字符，
+    # 用于跨入口合并"同来源 + 同标题 + 同发布日期"的不同抓取版本，避免
+    # 年报正文/摘要/港股版各自入库造成重复入队。
+    natural_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -452,6 +457,28 @@ class ThemeRole(Base):
     source_statement_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("source_statements.id"), nullable=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class CaseThemeTagEvent(Base):
+    """Append-only theme-tag assignment event for a ResearchCase.
+
+    A case's effective theme tags are derived by folding these events in
+    ``created_at`` order: ``add`` inserts the tag, ``remove`` deletes it.
+    Tags are classification metadata (横切主题), not research judgments, and
+    never participate in effective-state derivation.
+    """
+
+    __tablename__ = "case_theme_tag_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    op: Mapped[str] = mapped_column(String(8), nullable=False)  # add | remove
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

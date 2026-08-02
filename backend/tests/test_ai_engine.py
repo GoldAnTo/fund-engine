@@ -75,7 +75,7 @@ def test_extraction_records_no_spans(session, document_service):
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
     assert len(runs) == 1
     assert runs[0].status == "success"
-    assert "no spans" in runs[0].output_summary
+    assert "no source spans" in runs[0].output_summary
 
 
 # ---------------------------------------------------------------------------

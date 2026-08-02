@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import (
     AIAssessment,
+    CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
     DocumentVersion,
@@ -63,6 +64,34 @@ class ResearchRepository:
         self._session.add(case)
         self._session.flush()
         return case
+
+    def add_theme_tag_event(
+        self,
+        *,
+        research_case_id: uuid.UUID,
+        tag: str,
+        op: str,
+    ) -> CaseThemeTagEvent:
+        event = CaseThemeTagEvent(
+            research_case_id=research_case_id,
+            tag=tag,
+            op=op,
+            created_at=_utcnow(),
+        )
+        self._session.add(event)
+        self._session.flush()
+        return event
+
+    def theme_tag_events(
+        self, research_case_id: uuid.UUID | None = None
+    ) -> list[CaseThemeTagEvent]:
+        """All tag events in creation order (optionally for one case)."""
+        query = select(CaseThemeTagEvent).order_by(CaseThemeTagEvent.created_at)
+        if research_case_id is not None:
+            query = query.where(
+                CaseThemeTagEvent.research_case_id == research_case_id
+            )
+        return list(self._session.scalars(query))
 
     def add_thesis(
         self,

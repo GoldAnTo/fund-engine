@@ -139,6 +139,53 @@
 | 命中基金（ThemeFund） | fund-exposure funds（theme_exposure 排序） | ✅ |
 | 基金反穿 | `GET /api/v1/funds/{id}/composition` | ✅ |
 
+## 12. CompanyListPage（公司研究 · 列表）— `listCompanies()`
+
+| 数据块 | 来源 | 状态 |
+|---|---|---|
+| 公司列表（代码/名称/类型/股票数/角色数/最新披露期） | `GET /api/v1/companies?q=&cursor=` | ✅ |
+| 公司行点击进入档案 | 路由 `/companies/:companyId` | ✅ |
+| 右侧检查器预览（角色/命题摘要） | `getCompanyDossier(id)` 增量调用 | ✅ |
+| 过滤（按代码/名称） | 前端二次过滤（mock 阶段足够，真实后端用 `q`） | ✅ |
+
+## 13. CompanyDossierPage（公司档案）— `getCompanyDossier()`
+
+| 数据块 | 来源 | 状态 |
+|---|---|---|
+| 身份 + 股票 | dossier `company` + `stocks[]` | ✅ |
+| 跨案例主题角色（适用期间 + 来源 statement/span 回链） | dossier `theme_roles[]` | ✅ |
+| 关联命题及判断（AI 草案与人工复核分离承载） | dossier `related_theses[]`（`ai_assessment` + `review` 双段） | ✅ |
+| 估值快照（每股票每指标按 `as_of_date ≤ cutoff` 取最新） | dossier `valuations[]` | ✅ |
+| 基金披露持仓（报告期 + 披露日 + 采集日 + source 口径） | dossier `fund_holders[]` | ✅ |
+| 时点回放 | `?cutoff=` query；`basis.is_historical` 标记历史视图 | ✅ |
+| 主题角色过期隐藏 | 前端按 `applicable_to` 过滤（与案例 dossier 同源） | ✅ |
+
+## 14. TopicListPage（横切主题 · 列表）— `listThemes()`
+
+| 数据块 | 来源 | 状态 |
+|---|---|---|
+| 主题标签列表（标签/案例数/公司数/命题数） | `GET /api/v1/themes` | ✅ |
+| 顶部固定提示「聚合投影、非主题级结论」 | UI 静态文案 | ✅ |
+| 行点击进入主题视图 | 路由 `/topics/:tag` | ✅ |
+| 标签过滤 | 前端二次过滤（标签量级小） | ✅ |
+
+## 15. TopicViewPage（横切主题 · 视图）— `getThemeView()`
+
+| 数据块 | 来源 | 状态 |
+|---|---|---|
+| 参与案例与命题有效状态（每案例 supported/contradicted/insufficient/ai_pending 计数） | 视图 `cases[]`（从案例层 dossier 派生，**不合成主题级结论**） | ✅ |
+| 公司 × 主题角色表（公司→案例→角色→适用期间→来源 statement） | 视图 `company_roles[]` | ✅ |
+| 基金披露持仓构成（按主题内已映射股票聚合） | 视图 `fund_exposure[]`（与案例 fund-exposure 同口径） | ✅ |
+| derivedFrom 引用列表 | 视图 `derived_from.{case_ids, thesis_ids, theme_role_ids, disclosure_ids}` | ✅ |
+| 时点回放 | `?cutoff=` query；`basis.is_historical` 标记 | ✅ |
+| 空主题（无标签案例） | 服务端返回 `cases=[]` + 完整空 derivedFrom；前端显示空态 | ✅ |
+
+**写路径（命令 API）**：
+- 主题标签：`PATCH /api/v1/research-cases/{case_id}/theme-tags`（受控词汇，不在表 → 422；diff 当前有效标签 → 追加 add/remove 事件）。
+- 公司/股票/估值：`POST /api/v1/companies` / `POST /api/v1/companies/{id}/stocks` / `POST /api/v1/stocks/{id}/valuation-snapshots`（沿用既有 `instrument-commands-v1` 模式）。
+
+**Spec 与 plan 文档**：`docs/superpowers/specs/2026-08-02-theme-company-research.md` / `docs/superpowers/plans/2026-08-02-company-research-plan-a.md` / `docs/superpowers/plans/2026-08-02-theme-research-plan-b.md`。
+
 ---
 
 ## 缺口清单（已全部补齐 ✅，2026-08-01）

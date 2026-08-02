@@ -63,7 +63,7 @@ class StatementExtractor:
                 model_version=self._client.model_version,
                 prompt_version=EXTRACT_PROMPT_VERSION,
                 input_ref=input_ref,
-                output_summary="no spans found",
+                output_summary="skipped: no source spans attached to this version",
                 status="success",
                 started_at=started_at,
             )
@@ -127,7 +127,15 @@ class StatementExtractor:
                 input_ref=input_ref,
                 output_summary=(
                     f"extracted {len(created)} statements "
-                    f"({len(rule_based)} rule-based) from {len(spans)} spans"
+                    f"({len(rule_based)} rule-based, "
+                    f"{len(created) - len(rule_based)} llm) from {len(spans)} spans"
+                    + (
+                        "; llm returned 0 statements"
+                        if len(created) - len(rule_based) == 0
+                        and len(rule_based) == 0
+                        and llm_spans
+                        else ""
+                    )
                 ),
                 status="success",
                 started_at=started_at,

@@ -1,0 +1,307 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>证据驱动的行业研究系统：方法论与验证结果</title><style>
+@page { size: A4; margin: 20mm 18mm; }
+* { box-sizing: border-box; }
+html, body { background: #ffffff; }
+body {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  font-size: 10.5pt; line-height: 1.75; color: #1a2330; margin: 0;
+}
+h1 {
+  font-size: 19pt; line-height: 1.35; color: #0f1c2e;
+  border-bottom: 2.5px solid #2f5d8a; padding-bottom: 10px; margin: 0 0 6px;
+}
+h2 {
+  font-size: 13.5pt; color: #17335c; margin: 26px 0 10px;
+  border-left: 4px solid #2f5d8a; padding-left: 10px;
+  page-break-after: avoid;
+}
+h3 { font-size: 11.5pt; color: #24466f; margin: 18px 0 8px; page-break-after: avoid; }
+p { margin: 7px 0; }
+strong { color: #10243e; }
+table {
+  border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 9.5pt;
+  page-break-inside: avoid;
+}
+th, td { border: 1px solid #c9d4e0; padding: 5px 8px; text-align: left; vertical-align: top; }
+th { background: #eef3f9; color: #17335c; font-weight: 600; }
+tr:nth-child(even) td { background: #f8fafc; }
+code {
+  font-family: "SF Mono", Menlo, monospace; font-size: 8.8pt;
+  background: #f2f5f8; padding: 1px 4px; border-radius: 3px; color: #243b55;
+}
+pre {
+  background: #f6f8fa; border: 1px solid #dde4ec; border-radius: 6px;
+  padding: 12px 14px; overflow-x: auto; page-break-inside: avoid;
+}
+pre code { background: none; padding: 0; font-size: 8.5pt; line-height: 1.5; }
+ol, ul { padding-left: 22px; margin: 7px 0; }
+li { margin: 3px 0; }
+blockquote {
+  margin: 10px 0; padding: 6px 14px; border-left: 3px solid #b7c6d8;
+  background: #f7f9fb; color: #44576d;
+}
+hr { border: none; border-top: 1px solid #d5dee8; margin: 20px 0; }
+a { color: #2f5d8a; text-decoration: none; }
+em { color: #44576d; }
+</style></head><body><h1>证据驱动的行业研究系统：方法论与验证结果</h1>
+<p><strong>版本</strong>：v1.0（2026-08-02）
+<strong>对应代码状态</strong>：<code>main @ ba07d3a</code>（CI 全绿，分支保护已启用）
+<strong>素材来源</strong>：<code>CONTEXT.md</code>、<code>PRODUCT.md</code>、<code>docs/evaluation/</code> 证据包</p>
+<hr>
+<h2>摘要</h2>
+<p>Fund Engine 是一套证据驱动的行业研究系统，目标不是&quot;生成一份看起来完整的研究报告&quot;，而是让研究员能够持续回答四个问题：当前行业命题得到什么支持、受到什么反驳、仍缺什么证据、判断如何随时间变化。系统以<strong>不可变证据账本</strong>为核心，AI 判断与人类复核以分离记录共存、机器结论永不被覆盖；所有判断可沿&quot;评估 → 快照 → 证据关系 → 原子陈述 → 原文片段&quot;链条逐层回溯到冻结原文。</p>
+<p>本文总结系统的方法论、关键工程机制与验证结果。核心数据：混合召回将金标证据 recall@20 从 <strong>0.7333 提升至 1.0000</strong>（4 条金标陈述全部找回，0 丢失）；发布门禁 10 项检查中 9 项通过、1 项按设计跳过；验证体系覆盖 218 个后端测试、62 个前端测试、32 条端到端用例，并已全部接入 CI 与 main 分支保护。</p>
+<hr>
+<h2>1. 背景与问题</h2>
+<p>专业行业研究员的日常不是浏览一次性报告，而是持续处理新材料、审核机器提议、维护行业命题、识别证据冲突，并把已验证的研究关系穿透到公司、股票、估值与基金披露持仓（<code>PRODUCT.md</code>）。</p>
+<p>现有工具的三个结构性缺陷：</p>
+<ol>
+<li><strong>结论与证据脱节</strong>：AI 生成的研究结论无法回溯到具体原文位置，无法回答&quot;这句话凭什么这么说&quot;。</li>
+<li><strong>人机边界模糊</strong>：机器草稿与人工结论混在一起，复核动作覆盖原始输出，审计无从谈起。</li>
+<li><strong>时间语义缺失</strong>：&quot;当前状态&quot;掩盖了信息可见性——站在历史时点回放时，后公开的材料不应出现。</li>
+</ol>
+<p>系统的设计回应是三条不可妥协的原则：<strong>证据始终可追溯</strong>、<strong>AI 与人工边界可见</strong>、<strong>时点可回放</strong>。</p>
+<h2>2. 方法论：不可变账本上的研究语义</h2>
+<h3>2.1 核心词汇表（Ubiquitous Language）</h3>
+<p>系统对研究对象做了严格的语义区分（<code>CONTEXT.md</code>），每个概念都有明确的&quot;反义词&quot;防止退化：</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>定义</th>
+<th>明确不是</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Thesis</strong></td>
+<td>可检验、可证伪、有时间边界的命题</td>
+<td>主题、结论、推荐</td>
+</tr>
+<tr>
+<td><strong>AIAssessment</strong></td>
+<td>基于冻结证据快照的<strong>不可变临时</strong> AI 判断，在人工决策前始终显著标记为未复核</td>
+<td>最终结论、置信分数</td>
+</tr>
+<tr>
+<td><strong>ReviewDecision</strong></td>
+<td>不可变人工决策，确认/修改/驳回并记录理由，<strong>不替换机器输出</strong></td>
+<td>编辑、审批标志、可变状态</td>
+</tr>
+<tr>
+<td><strong>Proposal</strong></td>
+<td>机器或人工提出的关系建议，经人工复核发布前不是正式研究关系</td>
+<td>证据、已批准关系</td>
+</tr>
+<tr>
+<td><strong>SourceStatement</strong></td>
+<td>来源明确做出的原子陈述（披露事实/管理层归因/预测/研究观点）</td>
+<td>客观事实</td>
+</tr>
+<tr>
+<td><strong>EvidenceLink</strong></td>
+<td>解释某陈述为何在特定时间与范围内支持/反驳/补充某命题的<strong>带版本论证</strong></td>
+<td>自动 SUPPORTS 边、语义相似度</td>
+</tr>
+<tr>
+<td><strong>EvidenceSnapshot</strong></td>
+<td>一次 AI 评估在其截止时点可见的冻结集合</td>
+<td>当前数据库状态</td>
+</tr>
+</tbody></table>
+<h3>2.2 三条架构原则</h3>
+<p><strong>原则一：一切判断可回溯到冻结原文。</strong> 每个 <code>AIAssessment</code> 必须能沿 <code>评估 → EvidenceSnapshot → EvidenceLink → SourceStatement → SourceSpan</code> 链条追到带确切位置（页区/段落/表格单元格/字符区间）的原文片段。这不是产品文案，而是门禁检查 3（<code>assessment_source_spans_complete</code>）的强制约束。</p>
+<p><strong>原则二：AI 与人工是两类记录，不是两种状态。</strong> AI 结论永远标记为临时（<code>displayed_as_provisional = True</code>）；人工复核以独立的 <code>ReviewDecision</code> 追加，原始机器结论保持原样。门禁检查 6、7 分别强制&quot;边界可见&quot;与&quot;每个 AI 判断都有人工复核记录&quot;（review_coverage == 1.0）。</p>
+<p><strong>原则三：时点可回放。</strong> 历史截止日之后的材料（含基金持仓披露）必须从技术视图中消失。门禁检查 5（<code>future_material_excluded</code>）用 cutoff=2026-04-01 验证后公开披露不出现在敞口计算中。</p>
+<h3>2.3 谨慎的投资映射</h3>
+<p>研究关系向证券的映射经过显式的 <code>ThemeRole</code>（公司在主题中的角色，含适用范围与期间）与 <code>Expression</code>（考虑估值、敞口、新鲜度与约束后的敞口表达）两层抽象——敞口表达<strong>本身不是推荐</strong>。基金侧只使用<strong>带报告期与发布日期双时间戳</strong>的持仓披露（门禁检查 4 强制），杜绝&quot;实时持仓&quot;幻觉。</p>
+<h2>3. 系统架构</h2>
+<pre><code>┌─────────────────────────────────────────────────────┐
+│ 前端（React 18 + Vite，PrototypeShell 主题化外壳）      │
+│ 主题 → 工作台 → 审核中心 → 数据中心 → 快照版本           │
+├─────────────────────────────────────────────────────┤
+│ 契约层（OpenAPI → openapi-typescript 生成 v1.ts）      │
+├─────────────────────────────────────────────────────┤
+│ 后端（FastAPI + SQLAlchemy，/api/v1）                 │
+│ RecallService │ ExposureService │ WorkbenchService   │
+│ ComplianceGate │ ResearchOpsKPI │ PdfTextService     │
+├─────────────────────────────────────────────────────┤
+│ 不可变账本（sqlite/PostgreSQL，Alembic 迁移）          │
+│ 可选投影（Neo4j，可从账本完整重建）                     │
+└─────────────────────────────────────────────────────┘
+</code></pre>
+<p>前端与后端通过 OpenAPI 契约生成类型（<code>frontend/src/contracts/v1.ts</code>），前端另有内存 mock 适配器，使界面开发与 e2e 测试不依赖后端可用性。</p>
+<h2>4. 关键工程机制</h2>
+<h3>4.1 混合召回（P0）</h3>
+<p>问题：粗粒度分词器把整段中文连续文本切成单个大 token，使部分金标证据对 BM25 完全不可见（寒武纪命题的 3 条证据即属此列）。</p>
+<p>方案：<code>RecallService</code> 采用三路融合——BM25（粗 token）+ 本地确定性 char-n-gram TF-IDF 稠密路（恢复子词匹配）+ 词汇信号，以 RRF 融合；<code>mode=&quot;bm25&quot;</code> 保留为评估基线。真实嵌入后端可在同一契约后替换 <code>tfidf_rank</code>。</p>
+<p>结果（<code>backend/scripts/eval_recall_ab.py</code>，冻结切片离线回放）：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>BM25 基线</th>
+<th>混合召回</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>总体 recall@10</td>
+<td>0.6667</td>
+<td>0.7333</td>
+</tr>
+<tr>
+<td>总体 recall@20</td>
+<td>0.7333</td>
+<td><strong>1.0000</strong></td>
+</tr>
+</tbody></table>
+<p>4 条金标陈述全部找回、0 丢失；脚本内置&quot;混合不得低于基线&quot;的回退守卫，低于基线即退出码 1。</p>
+<h3>4.2 真实 PDF 解析路径（P1）</h3>
+<p>第二金标案例&quot;锂电储能链&quot;引入了首个真实二进制 PDF fixture（阳光电源年报摘要）。<code>app/services/pdf_text.py</code> 将 PDF 文本层解析为可复现的 SourceSpan（CJK 软换行重组、表格块行保留），无文本层 PDF <strong>fail-closed</strong>；文档加盖 <code>parser_version=pypdf-v1</code> 戳。门禁检查 9 以 sha256 哈希 + 金标事实双重校验：fixture 被重新生成而未重冻结清单、或 pypdf 升级改变抽取行为，都会使门禁失败。</p>
+<h3>4.3 合规重写回路（P2）</h3>
+<p>三动作合规契约：REFUSE 类命中直接拒绝、不进入重写；REWRITE 类命中（目标价/收益承诺）获得<strong>恰好一次</strong> LLM 重写（<code>rewrite-v1</code> prompt），重写结果经同一合规门复检，残留命中则整个运行拒绝。被修复的评估在 AIRun 上记录 <code>rewritten_for_compliance</code>；前端以 422 感知被拒绝的重跑。</p>
+<h3>4.4 研究效能 KPI（P3）</h3>
+<p><code>GET /api/v1/research-ops/kpis</code> 只从账本推导管理指标，无自报数字：审核吞吐（含按审核人分布与待审队列）、人机一致率（评估级与链路级，无数据时返回 null 而非编造）、判断时滞（证据→AI 判断、AI 判断→首次人工复核，以天计）。支持 <code>as_of</code> 时点回放。前端数据中心页以&quot;研究效能&quot;区块呈现，空态诚实显示&quot;暂无数据&quot;。</p>
+<h2>5. 验证体系</h2>
+<p>验证是本系统的一等公民，分四层：</p>
+<h3>5.1 双金标案例与发布门禁</h3>
+<p>两个冻结案例（AI 算力链 + 锂电储能链）构成金标语料。发布门禁（<code>backend/scripts/verify_ai_compute_slice.py</code>，一键复现 <code>docs/evaluation/reproduce.sh</code>）执行 10 项显式检查，fail-closed 设计：数据集清单缺失时<strong>在触碰数据库之前</strong>退出。</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>检查</th>
+<th>语义</th>
+<th>最新结果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>document_versions_present</td>
+<td>≥6 份冻结文档版本</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>2</td>
+<td>gold_manifest_matches_ledger</td>
+<td>清单哈希集与账本精确一致（fail-closed）</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>3</td>
+<td>assessment_source_spans_complete</td>
+<td>每个评估可回溯至原文片段</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>4</td>
+<td>holding_disclosures_dated</td>
+<td>持仓披露双时间戳齐全</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>5</td>
+<td>future_material_excluded</td>
+<td>历史时点不泄漏未公开材料</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>6</td>
+<td>ai_human_boundary_visible</td>
+<td>AI 临时标记 + 复核独立记录</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>7</td>
+<td>review_outcomes_tracked</td>
+<td>复核覆盖率 1.0</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>8</td>
+<td>table_extraction_gold_accuracy</td>
+<td>表格抽取精确复现金标（fail-closed）</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>9</td>
+<td>pdf_fixture_parse_gold</td>
+<td>PDF 二进制解析端到端复现（fail-closed）</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>10</td>
+<td>projection_rebuilds</td>
+<td>图投影可从账本重建（无 Neo4j 时跳过，不判失败）</td>
+<td>SKIP</td>
+</tr>
+</tbody></table>
+<p>（来源：<code>docs/evaluation/reports/20260802T070947Z.json</code>）</p>
+<p>每次运行生成带时间戳的摘要 JSON 并入库留存，形成门禁趋势记录。</p>
+<h3>5.2 单元与契约测试</h3>
+<p>后端 218 个 pytest（sqlite 默认，pg/neo4j 标记测试无环境时自动跳过）；前端 62 个 vitest（含 mock 适配器行为与 HTTP 适配器契约）。</p>
+<h3>5.3 端到端测试</h3>
+<p>32 条 Playwright 用例分三层：<strong>结构层</strong>（新外壳全页面锚点与可访问性）、<strong>只读层</strong>（模式无关断言，mock 与真实后端均可通过）、<strong>写入闭环层</strong>（审核决策 → 队列收缩 → 审计入口 → 快照版本页）。写入用例通过 <code>?client=mock</code> 测试钩子强制内存适配器，并附带&quot;全程零 API 请求&quot;的防护断言，杜绝决策落入真实后端。</p>
+<h3>5.4 CI 与分支保护</h3>
+<p>两条 GitHub Actions 流水线：<code>backend-ci</code>（pytest + 门禁独立 job）、<code>frontend-ci</code>（tsc + vitest + Playwright）。main 分支保护要求全部 4 项检查通过方可合并（strict 模式），禁止 force push 与分支删除。</p>
+<p>验证体系自身的价值已被实证：CI 首跑即发现&quot;本地绿、提交树红&quot;的不一致（接口扩展漏同步代理层 + 未提交改动被单独入库），这类问题在分支保护下将无法进入 main。</p>
+<h2>6. 结果汇总</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>金标证据召回</td>
+<td>recall@20：0.7333 → 1.0000</td>
+</tr>
+<tr>
+<td>发布门禁</td>
+<td>9 PASS + 1 SKIP（按设计）</td>
+</tr>
+<tr>
+<td>测试规模</td>
+<td>后端 218 / 前端 62 / e2e 32</td>
+</tr>
+<tr>
+<td>CI</td>
+<td>双流水线全绿（<code>ba07d3a</code>）</td>
+</tr>
+<tr>
+<td>分支保护</td>
+<td>4 项必需检查 + strict + 禁 force push</td>
+</tr>
+</tbody></table>
+<h2>7. 局限与未来工作</h2>
+<p><strong>已知局限</strong>：</p>
+<ol>
+<li>金标集规模小（2 案例、15 金标陈述），recall@20 = 1.0 不应外推为普遍水平；需要第三、第四案例扩大覆盖。</li>
+<li>混合召回的稠密路是确定性 TF-IDF 占位，真实嵌入后端尚未接入（契约已预留）。</li>
+<li>mock 适配器的快照版本视图是冻结 fixture，&quot;决策 → 新快照数据&quot;联动仅由后端集成测试覆盖。</li>
+<li>Neo4j 投影检查在 CI 中跳过，图投影回归需带服务的流水线变体。</li>
+</ol>
+<p><strong>未来工作</strong>：</p>
+<ul>
+<li>嵌入后端替换 <code>tfidf_rank</code>，并用同一 A/B 脚本对比；</li>
+<li>金标集扩充至多行业（半导体、新能源外的新案例）；</li>
+<li>带 Neo4j/PostgreSQL 服务的 CI 变体，解锁 <code>pg_only</code> / <code>neo4j_only</code> 测试与门禁检查 10；</li>
+<li>研究效能 KPI 的趋势视图（当前为单时点）。</li>
+</ul>
+<h2>8. 复现</h2>
+<pre><code class="language-bash"># 发布门禁（10 项检查）
+docs/evaluation/reproduce.sh
+
+# 召回 A/B 评估
+cd backend &amp;&amp; python scripts/eval_recall_ab.py
+
+# 后端测试
+cd backend &amp;&amp; python -m pytest -q
+
+# 前端测试与 e2e
+cd frontend &amp;&amp; npm test &amp;&amp; npm run e2e
+</code></pre>
+<hr>
+<p><em>本报告所有数据均可沿上述复现路径验证；门禁与召回结果引用自 <code>docs/evaluation/reports/</code> 中入库的带时间戳运行记录。</em></p>
+
+</body></html>

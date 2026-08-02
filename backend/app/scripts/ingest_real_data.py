@@ -45,6 +45,7 @@ SOURCE_GILDATA = "gildata"
 RESEARCH_SOURCE_URL = "gildata://research_report"
 ANNOUNCEMENT_SOURCE_URL = "gildata://announcement"
 NEWS_SOURCE_URL = "gildata://news"
+MACRO_SOURCE_URL = "gildata://macro_industry"
 PARSER_VERSION = "gildata-mcp-1"
 
 # Fixed queries verified against the Gildata MCP tools.
@@ -191,6 +192,7 @@ def ingest(
     news_query: str | None = None,
     quote_query: str | None = None,
     quote_stock_code: str | None = None,
+    macro_queries: list[str] | None = None,
 ) -> dict:
     """Ingest real Gildata data into *session*.
 
@@ -213,6 +215,7 @@ def ingest(
         "research_reports": 0,
         "announcements": 0,
         "news": 0,
+        "macro_series": 0,
         "spans": 0,
         "valuations_written": 0,
         "valuations_skipped": 0,
@@ -232,11 +235,15 @@ def ingest(
             if not content:
                 continue
             published_at = _parse_datetime(report.get("publish_date", ""))
-            version = document_service.freeze(
+            # 传 title 让自然键判重：同来源 + 同标题 + 同发布日期视为同一份
+            # 研报；之前仅靠 SHA256 会被正文/摘要/港股版绕过去重。
+            version, created = document_service._freeze(
                 raw=content.encode("utf-8"),
                 source_url=RESEARCH_SOURCE_URL,
                 published_at=published_at,
                 parser_version=PARSER_VERSION,
+                title=report.get("title", ""),
+                natural_key=None,
             )
             document_service.add_span(
                 document_version_id=version.id,
@@ -250,8 +257,9 @@ def ingest(
                 },
                 verbatim_text=content,
             )
-            summary["research_reports"] += 1
-            summary["spans"] += 1
+            if created:
+                summary["research_reports"] += 1
+                summary["spans"] += 1
 
     # 2. Announcements -> DocumentVersion + SourceSpan.
     announcements = adapters.fetch_announcement(client, announcement_query)
@@ -260,11 +268,13 @@ def ingest(
         if not content:
             continue
         published_at = _parse_datetime(ann.get("publish_date", ""))
-        version = document_service.freeze(
+        version, created = document_service._freeze(
             raw=content.encode("utf-8"),
             source_url=ANNOUNCEMENT_SOURCE_URL,
             published_at=published_at,
             parser_version=PARSER_VERSION,
+            title=ann.get("title", ""),
+            natural_key=None,
         )
         document_service.add_span(
             document_version_id=version.id,
@@ -278,8 +288,9 @@ def ingest(
             },
             verbatim_text=content,
         )
-        summary["announcements"] += 1
-        summary["spans"] += 1
+        if created:
+            summary["announcements"] += 1
+            summary["spans"] += 1
 
     # 2b. News/舆情 -> DocumentVersion + SourceSpan.
     news_items = adapters.fetch_news(client, news_query)
@@ -288,11 +299,13 @@ def ingest(
         if not content:
             continue
         published_at = _parse_datetime(news.get("publish_date", ""))
-        version = document_service.freeze(
+        version, created = document_service._freeze(
             raw=content.encode("utf-8"),
             source_url=NEWS_SOURCE_URL,
             published_at=published_at,
             parser_version=PARSER_VERSION,
+            title=news.get("title", ""),
+            natural_key=None,
         )
         document_service.add_span(
             document_version_id=version.id,
@@ -306,8 +319,84 @@ def ingest(
             },
             verbatim_text=content,
         )
-        summary["news"] += 1
-        summary["spans"] += 1
+        if created:
+            summary["news"] += 1
+            summary["spans"] += 1
+
+    # 2c. Macro/commodity time series (MacroIndustryData) -> DocumentVersion +
+    # SourceSpan.  Each query's returned slice is frozen as one version so
+    # extract/propose can reference the peak/latest pair as disclosed facts.
+    # Natural-key dedup keeps re-ingest idempotent without hashing the whole
+    # table.
+    for mquery in macro_queries or []:
+        rows = adapters.fetch_macro_series(client, mquery)
+        if not rows:
+            continue
+        # Group by metric so peak/latest can be cited individually; each
+        # group becomes one SourceSpan on the same document version.
+        by_metric: dict[str, list[dict]] = {}
+        for row in rows:
+            name = row.get("metric_name", "")
+            by_metric.setdefault(name, []).append(row)
+
+        # The document "title" includes the user query + metric count so it
+        # stays unique per query while remaining human-readable.
+        title = f"宏观时序 · {mquery[:40]}（{len(by_metric)} 个指标）"
+        body_lines = [f"# 查询: {mquery}", ""]
+        for metric_name, items in by_metric.items():
+            body_lines.append(f"## {metric_name}")
+            items_sorted = sorted(items, key=lambda r: r.get("date", ""))
+            for r in items_sorted[-10:]:
+                body_lines.append(
+                    f"- {r.get('date','')} | {r.get('value','')} {r.get('unit','')} | {r.get('source','')}"
+                )
+            body_lines.append("")
+        body = "\n".join(body_lines).encode("utf-8")
+
+        # Use latest item's date as published_at so the natural key captures
+        # the slice; freeze metadata stays query-driven.
+        latest = max(rows, key=lambda r: r.get("date", ""))
+        published_at = _parse_datetime(latest.get("date", ""))
+        version, created = document_service._freeze(
+            raw=body,
+            source_url=MACRO_SOURCE_URL,
+            published_at=published_at,
+            parser_version=PARSER_VERSION,
+            title=title,
+            natural_key=None,
+        )
+        # Each metric group becomes its own span so extract can pin facts
+        # to that metric without ambiguity.
+        for metric_name, items in by_metric.items():
+            items_sorted = sorted(items, key=lambda r: r.get("date", ""))
+            peak = max(items_sorted, key=lambda r: float(r.get("value") or 0))
+            tail = items_sorted[-1]
+            span_text = "\n".join(
+                f"{r.get('date','')}: {r.get('value','')} {r.get('unit','')}"
+                for r in items_sorted[-20:]
+            )
+            document_service.add_span(
+                document_version_id=version.id,
+                locator={
+                    "kind": "macro_series",
+                    "query": mquery,
+                    "metric_name": metric_name,
+                    "metric_code": items_sorted[0].get("metric_code", ""),
+                    "frequency": items_sorted[0].get("frequency", ""),
+                    "unit": items_sorted[0].get("unit", ""),
+                    "source": items_sorted[0].get("source", ""),
+                    "peak_date": peak.get("date", ""),
+                    "peak_value": peak.get("value", ""),
+                    "latest_date": tail.get("date", ""),
+                    "latest_value": tail.get("value", ""),
+                    "n_points": len(items_sorted),
+                    **span_locator_extra,
+                },
+                verbatim_text=span_text,
+            )
+        if created:
+            summary["macro_series"] += 1
+            summary["spans"] += len(by_metric)
 
     # 3. Market quote -> ValuationSnapshot rows for the resolved stock.
     quotes = adapters.fetch_quote(client, quote_query)

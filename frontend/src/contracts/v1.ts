@@ -255,6 +255,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Companies */
+        get: operations["list_companies_api_v1_companies_get"];
+        put?: never;
+        /** Create Company */
+        post: operations["create_company_api_v1_companies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/companies/{company_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Company Dossier */
+        get: operations["company_dossier_api_v1_companies__company_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Themes */
+        get: operations["list_themes_api_v1_themes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/themes/{tag}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Theme View */
+        get: operations["theme_view_api_v1_themes__tag__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metrics/catalog": {
         parameters: {
             query?: never;
@@ -496,6 +565,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/companies/{company_id}/stocks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Stock */
+        post: operations["create_stock_api_v1_companies__company_id__stocks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Fund */
+        post: operations["create_fund_api_v1_funds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funds/{fund_id}/holding-disclosures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Holding Disclosure */
+        post: operations["create_holding_disclosure_api_v1_funds__fund_id__holding_disclosures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stocks/{stock_id}/valuation-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Valuation Snapshot */
+        post: operations["create_valuation_snapshot_api_v1_stocks__stock_id__valuation_snapshots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/companies/{company_id}/theme-roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Theme Role */
+        post: operations["create_theme_role_api_v1_companies__company_id__theme_roles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/causal-steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Causal Step */
+        post: operations["create_causal_step_api_v1_theses__thesis_id__causal_steps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/causal-edges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Causal Edge */
+        post: operations["create_causal_edge_api_v1_theses__thesis_id__causal_edges_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/theme-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Theme Tags */
+        patch: operations["update_theme_tags_api_v1_research_cases__case_id__theme_tags_patch"];
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -586,6 +791,23 @@ export interface components {
             reviewer: string;
             /** Created At */
             created_at: string;
+        };
+        /**
+         * AssessmentViewDTO
+         * @description The latest AI assessment at the cutoff, always visibly provisional.
+         */
+        AssessmentViewDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Conclusion */
+            conclusion: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Assessed At */
+            assessed_at?: string | null;
         };
         /**
          * CaseCompareResponse
@@ -692,6 +914,94 @@ export interface components {
             /** Description */
             description: string;
         };
+        /** CompanyDTO */
+        CompanyDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** CompanyDossierResponse */
+        CompanyDossierResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            basis: components["schemas"]["HistoricalBasisDTO"];
+            company: components["schemas"]["CompanyIdentityDTO"];
+            /** Stocks */
+            stocks: components["schemas"]["StockViewDTO"][];
+            /** Theme Roles */
+            theme_roles: components["schemas"]["ThemeRoleViewDTO"][];
+            /** Related Theses */
+            related_theses: components["schemas"]["RelatedThesisDTO"][];
+            /** Valuations */
+            valuations: components["schemas"]["ValuationViewDTO"][];
+            /** Fund Holders */
+            fund_holders: components["schemas"]["FundHolderDTO"][];
+        };
+        /** CompanyIdentityDTO */
+        CompanyIdentityDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** CompanyListItemDTO */
+        CompanyListItemDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+            /** Stock Count */
+            stock_count: number;
+            /** Theme Role Count */
+            theme_role_count: number;
+            /** Latest Report Period */
+            latest_report_period?: string | null;
+        };
+        /** CompanyListResponse */
+        CompanyListResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            /** Items */
+            items: components["schemas"]["CompanyListItemDTO"][];
+            page: components["schemas"]["CursorPage"];
+        };
         /** CompareLinkDTO */
         CompareLinkDTO: {
             /** Link Id */
@@ -757,6 +1067,105 @@ export interface components {
             /** Theses */
             theses: components["schemas"]["CreatedThesisDTO"][];
         };
+        /** CreateCausalEdgeRequest */
+        CreateCausalEdgeRequest: {
+            /**
+             * Source Step Id
+             * Format: uuid
+             */
+            source_step_id: string;
+            /**
+             * Target Step Id
+             * Format: uuid
+             */
+            target_step_id: string;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Creator Type
+             * @default human
+             */
+            creator_type: string;
+        };
+        /** CreateCausalStepRequest */
+        CreateCausalStepRequest: {
+            /** Description */
+            description: string;
+            /** Sequence */
+            sequence: number;
+        };
+        /** CreateCompanyRequest */
+        CreateCompanyRequest: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+        };
+        /** CreateFundRequest */
+        CreateFundRequest: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Fund Type */
+            fund_type: string;
+            /** Scale */
+            scale?: number | string | null;
+            /** Establish Date */
+            establish_date?: string | null;
+            /** Management Company Id */
+            management_company_id?: string | null;
+        };
+        /** CreateHoldingDisclosureRequest */
+        CreateHoldingDisclosureRequest: {
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Weight */
+            weight: number | string;
+            /**
+             * Report Period
+             * Format: date
+             */
+            report_period: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Source */
+            source: string;
+        };
+        /** CreateStockRequest */
+        CreateStockRequest: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Market */
+            market: string;
+        };
+        /** CreateThemeRoleRequest */
+        CreateThemeRoleRequest: {
+            /** Role */
+            role: string;
+            /** Research Case Id */
+            research_case_id?: string | null;
+            /** Scope */
+            scope?: {
+                [key: string]: unknown;
+            } | null;
+            /** Applicable From */
+            applicable_from?: string | null;
+            /** Applicable To */
+            applicable_to?: string | null;
+            /** Source Statement Id */
+            source_statement_id?: string | null;
+        };
         /**
          * CreateThesisRequest
          * @description Add one proposition to an existing case (AI 协助拆分 or human).
@@ -789,6 +1198,73 @@ export interface components {
         CreateThesisResponse: {
             thesis: components["schemas"]["CreatedThesisDTO"];
         };
+        /** CreateValuationSnapshotRequest */
+        CreateValuationSnapshotRequest: {
+            /**
+             * As Of Date
+             * Format: date
+             */
+            as_of_date: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Metric Value */
+            metric_value: number | string;
+            /** Source */
+            source: string;
+            /** Definition */
+            definition: string;
+        };
+        /** CreatedCausalEdgeDTO */
+        CreatedCausalEdgeDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Source Step Id
+             * Format: uuid
+             */
+            source_step_id: string;
+            /**
+             * Target Step Id
+             * Format: uuid
+             */
+            target_step_id: string;
+            /** Rationale */
+            rationale: string;
+            /** Creator Type */
+            creator_type: string;
+            /** Review State */
+            review_state: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** CreatedCausalStepDTO */
+        CreatedCausalStepDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Thesis Id
+             * Format: uuid
+             */
+            thesis_id: string;
+            /** Description */
+            description: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** CreatedThesisDTO */
         CreatedThesisDTO: {
             /** Id */
@@ -811,6 +1287,17 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** DerivedFromDTO */
+        DerivedFromDTO: {
+            /** Case Ids */
+            case_ids: string[];
+            /** Thesis Ids */
+            thesis_ids: string[];
+            /** Theme Role Ids */
+            theme_role_ids: string[];
+            /** Disclosure Ids */
+            disclosure_ids: string[];
         };
         /** DocumentDetailResponse */
         DocumentDetailResponse: {
@@ -864,6 +1351,21 @@ export interface components {
              * @enum {string}
              */
             parse_state: "parsed" | "unparsed";
+            /**
+             * Extraction State
+             * @enum {string}
+             */
+            extraction_state: "extracted" | "extracted_empty" | "failed" | "not_attempted";
+            /** Last Extracted At */
+            last_extracted_at?: string | null;
+            /**
+             * Content Quality
+             * @default unknown
+             * @enum {string}
+             */
+            content_quality: "ok" | "degenerate" | "unknown";
+            /** Quality Reasons */
+            quality_reasons?: string[];
             /** Title */
             title?: string | null;
             /** Org */
@@ -992,7 +1494,9 @@ export interface components {
          *     Append-only: re-running extraction on a version that already has
          *     statements will append duplicates; the engine script only feeds
          *     pending versions (spans present, no statements yet).  ``mode`` is
-         *     ``mock`` without an LLM key (non-production only).
+         *     ``mock`` without an LLM key (non-production only).  ``reason`` is the
+         *     honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
+         *     事实 / LLM 拒答).
          */
         ExtractResponse: {
             /** Document Version Id */
@@ -1036,6 +1540,31 @@ export interface components {
             /** Positions */
             positions: components["schemas"]["CompositionPositionDTO"][];
         };
+        /** FundDTO */
+        FundDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Fund Type */
+            fund_type: string;
+            /** Scale */
+            scale?: string | null;
+            /** Establish Date */
+            establish_date?: string | null;
+            /** Management Company Id */
+            management_company_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /**
          * FundExposureDTO
          * @description One fund's aggregate exposure to the case's theme stocks.
@@ -1063,6 +1592,35 @@ export interface components {
             as_of: string;
             /** Funds */
             funds: components["schemas"]["FundExposureDTO"][];
+        };
+        /** FundHolderDTO */
+        FundHolderDTO: {
+            /**
+             * Fund Id
+             * Format: uuid
+             */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Weight */
+            weight: number;
+            /** Report Period */
+            report_period: string;
+            /** Published At */
+            published_at?: string | null;
+            /** Acquired At */
+            acquired_at?: string | null;
+            /** Source */
+            source: string;
         };
         /** GraphEdgeDTO */
         GraphEdgeDTO: {
@@ -1162,6 +1720,48 @@ export interface components {
             /** Projection Schema Version */
             projection_schema_version?: string | null;
         };
+        /** HoldingDisclosureDTO */
+        HoldingDisclosureDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Fund Id
+             * Format: uuid
+             */
+            fund_id: string;
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Weight */
+            weight: string;
+            /**
+             * Report Period
+             * Format: date
+             */
+            report_period: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /**
+             * Acquired At
+             * Format: date-time
+             */
+            acquired_at: string;
+            /** Source */
+            source: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /**
          * HumanAiAgreementDTO
          * @description 人机一致率: agreement between AI drafts and human decisions.
@@ -1232,8 +1832,11 @@ export interface components {
             announcements: number;
             /** News */
             news: number;
-            /** Macro Series */
-            macro_series?: number;
+            /**
+             * Macro Series
+             * @default 0
+             */
+            macro_series: number;
             /** Spans */
             spans: number;
             /** Valuations Written */
@@ -1520,6 +2123,27 @@ export interface components {
             /** Runs */
             runs: components["schemas"]["ProviderRunDTO"][];
         };
+        /** RelatedThesisDTO */
+        RelatedThesisDTO: {
+            /**
+             * Thesis Id
+             * Format: uuid
+             */
+            thesis_id: string;
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Statement */
+            statement: string;
+            /** Title */
+            title?: string | null;
+            ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
+            review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
         /** RerunAssessmentDTO */
         RerunAssessmentDTO: {
             /** Id */
@@ -1653,6 +2277,19 @@ export interface components {
             /** Pending Assessment Reviews */
             pending_assessment_reviews: number;
         };
+        /** RoleReviewDTO */
+        RoleReviewDTO: {
+            /** Outcome */
+            outcome: string;
+            /** Conclusion */
+            conclusion?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Reviewer */
+            reviewer?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+        };
         /** SearchGroupDTO */
         SearchGroupDTO: {
             /** Object Type */
@@ -1712,12 +2349,256 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** StockDTO */
+        StockDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Market */
+            market: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** StockViewDTO */
+        StockViewDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Market */
+            market: string;
+        };
+        /** ThemeCaseDTO */
+        ThemeCaseDTO: {
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Thesis Counts */
+            thesis_counts: {
+                [key: string]: number;
+            };
+            /** Theses */
+            theses: components["schemas"]["ThemeCaseThesisDTO"][];
+        };
+        /** ThemeCaseThesisDTO */
+        ThemeCaseThesisDTO: {
+            /**
+             * Thesis Id
+             * Format: uuid
+             */
+            thesis_id: string;
+            /** Statement */
+            statement: string;
+            /** Title */
+            title?: string | null;
+            ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
+            review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
+        /** ThemeCompanyRoleDTO */
+        ThemeCompanyRoleDTO: {
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /** Company Code */
+            company_code: string;
+            /** Company Name */
+            company_name: string;
+            /** Case Id */
+            case_id?: string | null;
+            /** Case Title */
+            case_title?: string | null;
+            /** Role */
+            role: string;
+            /** Scope */
+            scope: {
+                [key: string]: unknown;
+            };
+            /** Applicable From */
+            applicable_from?: string | null;
+            /** Applicable To */
+            applicable_to?: string | null;
+            /** Statement Id */
+            statement_id?: string | null;
+        };
+        /** ThemeExposurePositionDTO */
+        ThemeExposurePositionDTO: {
+            /**
+             * Fund Id
+             * Format: uuid
+             */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Weight */
+            weight: number;
+            /** Report Period */
+            report_period: string;
+            /** Source */
+            source: string;
+        };
         /** ThemeHitDTO */
         ThemeHitDTO: {
             /** Case Id */
             case_id: string;
             /** Role */
             role: string;
+        };
+        /** ThemeListItemDTO */
+        ThemeListItemDTO: {
+            /** Tag */
+            tag: string;
+            /** Case Count */
+            case_count: number;
+            /** Company Count */
+            company_count: number;
+            /** Thesis Count */
+            thesis_count: number;
+        };
+        /** ThemeListResponse */
+        ThemeListResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            /** Items */
+            items: components["schemas"]["ThemeListItemDTO"][];
+        };
+        /** ThemeRoleDTO */
+        ThemeRoleDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /** Research Case Id */
+            research_case_id?: string | null;
+            /** Role */
+            role: string;
+            /** Scope */
+            scope?: {
+                [key: string]: unknown;
+            } | null;
+            /** Applicable From */
+            applicable_from?: string | null;
+            /** Applicable To */
+            applicable_to?: string | null;
+            /** Source Statement Id */
+            source_statement_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ThemeRoleViewDTO */
+        ThemeRoleViewDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Case Id */
+            case_id?: string | null;
+            /** Case Title */
+            case_title?: string | null;
+            /** Role */
+            role: string;
+            /** Scope */
+            scope: {
+                [key: string]: unknown;
+            };
+            /** Applicable From */
+            applicable_from?: string | null;
+            /** Applicable To */
+            applicable_to?: string | null;
+            /** Statement Id */
+            statement_id?: string | null;
+            /** Statement Text */
+            statement_text?: string | null;
+            /** Span Id */
+            span_id?: string | null;
+            /** Document Version Id */
+            document_version_id?: string | null;
+        };
+        /** ThemeTagsResponse */
+        ThemeTagsResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /** Tags */
+            tags: string[];
+            /** Events Appended */
+            events_appended: number;
+        };
+        /** ThemeViewResponse */
+        ThemeViewResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            basis: components["schemas"]["HistoricalBasisDTO"];
+            /** Tag */
+            tag: string;
+            /** Cases */
+            cases: components["schemas"]["ThemeCaseDTO"][];
+            /** Company Roles */
+            company_roles: components["schemas"]["ThemeCompanyRoleDTO"][];
+            /** Fund Exposure */
+            fund_exposure: components["schemas"]["ThemeExposurePositionDTO"][];
+            derived_from: components["schemas"]["DerivedFromDTO"];
         };
         /** ThesisCompareDTO */
         ThesisCompareDTO: {
@@ -1803,6 +2684,11 @@ export interface components {
              */
             review_state: string;
         };
+        /** UpdateThemeTagsRequest */
+        UpdateThemeTagsRequest: {
+            /** Tags */
+            tags: string[];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1815,6 +2701,57 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ValuationSnapshotDTO */
+        ValuationSnapshotDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /**
+             * As Of Date
+             * Format: date
+             */
+            as_of_date: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Metric Value */
+            metric_value: string;
+            /** Source */
+            source: string;
+            /** Definition */
+            definition: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ValuationViewDTO */
+        ValuationViewDTO: {
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Metric Value */
+            metric_value: number;
+            /** As Of Date */
+            as_of_date: string;
+            /** Source */
+            source: string;
+            /** Definition */
+            definition: string;
         };
         /** ErrorEnvelope */
         ErrorEnvelope: {
@@ -2341,6 +3278,158 @@ export interface operations {
             };
         };
     };
+    list_companies_api_v1_companies_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_company_api_v1_companies_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCompanyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    company_dossier_api_v1_companies__company_id__get: {
+        parameters: {
+            query?: {
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyDossierResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_themes_api_v1_themes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeListResponse"];
+                };
+            };
+        };
+    };
+    theme_view_api_v1_themes__tag__get: {
+        parameters: {
+            query?: {
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeViewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     metric_catalog_api_v1_metrics_catalog_get: {
         parameters: {
             query?: {
@@ -2752,6 +3841,284 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_stock_api_v1_companies__company_id__stocks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStockRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_fund_api_v1_funds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFundRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_holding_disclosure_api_v1_funds__fund_id__holding_disclosures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHoldingDisclosureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HoldingDisclosureDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_valuation_snapshot_api_v1_stocks__stock_id__valuation_snapshots_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stock_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateValuationSnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValuationSnapshotDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_theme_role_api_v1_companies__company_id__theme_roles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateThemeRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeRoleDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_causal_step_api_v1_theses__thesis_id__causal_steps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCausalStepRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedCausalStepDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_causal_edge_api_v1_theses__thesis_id__causal_edges_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCausalEdgeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedCausalEdgeDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_theme_tags_api_v1_research_cases__case_id__theme_tags_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateThemeTagsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeTagsResponse"];
                 };
             };
             /** @description Validation Error */

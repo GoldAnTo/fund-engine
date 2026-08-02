@@ -423,3 +423,99 @@ def test_theme_role_inverted_applicability_is_422(cmd_client, cmd_session):
     )
     assert response.status_code == 422
     assert _error_code(response) == "validation_failed"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/stocks/{stock_id}/valuation-snapshots
+# ---------------------------------------------------------------------------
+
+
+def _valuation_payload() -> dict:
+    return {
+        "as_of_date": "2026-06-30",
+        "metric_name": "PE_TTM",
+        "metric_value": "45.2",
+        "source": "wind",
+        "definition": "总市值/近四月归母净利润",
+    }
+
+
+def test_create_valuation_snapshot_persists_ledger_row(cmd_client, cmd_session):
+    from app.models.ledger import ValuationSnapshot
+
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+
+    response = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots",
+        json=_valuation_payload(),
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["stock_id"] == str(stock.id)
+    assert body["metric_name"] == "PE_TTM"
+    assert float(body["metric_value"]) == pytest.approx(45.2)
+    assert body["as_of_date"] == "2026-06-30"
+
+    row = cmd_session.scalar(select(ValuationSnapshot))
+    assert row is not None
+    assert row.as_of_date == date(2026, 6, 30)
+    assert row.definition == "总市值/近四月归母净利润"
+
+
+def test_valuation_snapshot_missing_stock_is_404(cmd_client):
+    response = cmd_client.post(
+        "/api/v1/stocks/00000000-0000-0000-0000-000000000000/valuation-snapshots",
+        json=_valuation_payload(),
+    )
+    assert response.status_code == 404
+    assert _error_code(response) == "not_found"
+
+
+@pytest.mark.parametrize("field", ["metric_name", "source", "definition"])
+def test_valuation_snapshot_blank_field_is_422(cmd_client, cmd_session, field):
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+
+    payload = _valuation_payload()
+    payload[field] = "  "
+    response = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots", json=payload
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
+def test_valuation_snapshot_nan_value_is_422(cmd_client, cmd_session):
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+
+    payload = _valuation_payload()
+    payload["metric_value"] = "NaN"
+    response = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots", json=payload
+    )
+    assert response.status_code == 422
+
+
+def test_valuation_snapshot_duplicate_is_422(cmd_client, cmd_session):
+    from app.models.ledger import ValuationSnapshot
+
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+
+    first = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots",
+        json=_valuation_payload(),
+    )
+    assert first.status_code == 201, first.text
+
+    second = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots",
+        json=_valuation_payload(),
+    )
+    assert second.status_code == 422
+    assert _error_code(second) == "validation_failed"
+
+    count = cmd_session.scalar(select(func.count()).select_from(ValuationSnapshot))
+    assert count == 1

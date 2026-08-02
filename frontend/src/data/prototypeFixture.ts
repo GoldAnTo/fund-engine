@@ -1275,7 +1275,7 @@ export function buildRelationshipGraphView(): RelationshipGraphView {
   const fundAi = FUNDS.find((f) => f.id === "FUND-ETF-AI-INFRA")!;
   const fundSemi = FUNDS.find((f) => f.id === "FUND-SEMI-INDEX")!;
   const sourceHref = (documentId: string, sourceSpan: string) =>
-    `?screen=library&document=${documentId}&span=${encodeURIComponent(sourceSpan)}`;
+    `/library?document=${documentId}&span=${encodeURIComponent(sourceSpan)}`;
 
   const layers = [
     {
@@ -1588,7 +1588,7 @@ export function buildRelationshipGraphView(): RelationshipGraphView {
           review: "披露记录已人工复核",
           sourceName: "基金 2025 年一季报",
           sourceSpan: fundAi.sourceSpan,
-          sourceHref: "?screen=library&document=fund-report-2025q1-v1",
+          sourceHref: "/library?document=fund-report-2025q1-v1",
           attachment: fundAi.sourceVersion,
           publicationDate: fundAi.publishedAt.slice(0, 10),
           asOf: fundAi.disclosureDate,
@@ -1606,7 +1606,7 @@ export function buildRelationshipGraphView(): RelationshipGraphView {
           review: "披露记录已人工复核",
           sourceName: "基金 2025 年一季报",
           sourceSpan: fundAi.sourceSpan,
-          sourceHref: "?screen=library&document=fund-report-2025q1-v1",
+          sourceHref: "/library?document=fund-report-2025q1-v1",
           attachment: fundAi.sourceVersion,
           publicationDate: fundAi.publishedAt.slice(0, 10),
           asOf: fundAi.disclosureDate,
@@ -1625,7 +1625,7 @@ export function buildRelationshipGraphView(): RelationshipGraphView {
           review: "待人工审核",
           sourceName: "基金 2025 年一季报",
           sourceSpan: fundSemi.sourceSpan,
-          sourceHref: "?screen=library&document=fund-report-2025q1-v2",
+          sourceHref: "/library?document=fund-report-2025q1-v2",
           attachment: fundSemi.sourceVersion,
           publicationDate: fundSemi.publishedAt.slice(0, 10),
           asOf: fundSemi.disclosureDate,
@@ -1635,10 +1635,31 @@ export function buildRelationshipGraphView(): RelationshipGraphView {
       ],
     },
   ];
+  // Wiki 图谱使用的真实边：证据→命题（支持/反驳）、命题→因果链、链内步骤
+  // 顺序、因果→公司投影、公司→基金持仓。source/target 方向仅作语义记录，
+  // 展示层按层序左右排布。
+  const edges: RelationshipGraphView["edges"] = [
+    { id: "EL-001", source: "ST-001", target: "TH-AIC-01", kind: "evidence", label: "支持", role: "supports", reviewState: "reviewed" },
+    { id: "EL-002", source: "ST-002", target: "TH-AIC-03", kind: "evidence", label: "支持", role: "supports", reviewState: "reviewed" },
+    { id: "EL-004", source: "ST-004", target: "TH-AIC-03", kind: "evidence", label: "反驳", role: "contradicts", reviewState: "reviewed" },
+    { id: "EG-TH01-CAPEX", source: "TH-AIC-01", target: "CS-CAPEX", kind: "causal", label: "因果", reviewState: "reviewed" },
+    { id: "EG-TH03-DELIVERY", source: "TH-AIC-03", target: "EL-PROPOSED-CAUSAL", kind: "causal", label: "因果 · AI 提议" },
+    { id: "EG-STEP-1", source: "CS-CAPEX", target: "CS-PROCUREMENT", kind: "contains_step", label: "下一步" },
+    { id: "EG-STEP-2", source: "CS-PROCUREMENT", target: "CS-BACKLOG", kind: "contains_step", label: "下一步" },
+    { id: "EG-STEP-3", source: "CS-BACKLOG", target: "EL-PROPOSED-CAUSAL", kind: "contains_step", label: "下一步" },
+    { id: "EG-STEP-4", source: "EL-PROPOSED-CAUSAL", target: "CS-REVENUE", kind: "contains_step", label: "下一步", reviewState: "reviewed" },
+    { id: "EG-CAPEX-MSFT", source: "CS-CAPEX", target: "CO-MSFT", kind: "company_stock", label: "主体映射", reviewState: "reviewed" },
+    { id: "EG-REV-NVDA", source: "CS-REVENUE", target: "CO-NVDA", kind: "company_stock", label: "主体映射", reviewState: "reviewed" },
+    { id: "EG-TH02-TSM", source: "TH-AIC-02", target: "CO-TSM", kind: "company_stock", label: "主体映射", reviewState: "reviewed" },
+    { id: "EG-NVDA-HOLD", source: "CO-NVDA", target: "HOLDING-FUND-NVDA-2025Q1", kind: "holding", label: "披露持仓 8.4%", reviewState: "reviewed" },
+    { id: "EG-NVDA-FUND", source: "CO-NVDA", target: "FUND-ETF-AI-INFRA", kind: "holding", label: "持仓 8.4%", reviewState: "reviewed" },
+    { id: "EG-TSM-FUND", source: "CO-TSM", target: "FUND-SEMI-INDEX", kind: "holding", label: "持仓 6.1%" },
+  ];
   return {
     case: { id: CASE_ID, title: CASE_TITLE, question: CASE_QUESTION, cutoff: CUTOFF, snapshotId: SNAPSHOT_ID },
     layers,
     nodes: layers.flatMap((layer) => layer.nodes),
+    edges,
     selectedNodeId: "ST-004",
   };
 }
@@ -1938,6 +1959,29 @@ export function buildVersionsView(): VersionsView {
       text: "新采集的 10-Q 来源确认没有改变数值；模型建议复核传导因素措辞。",
       boundary: "发生在 v3 冻结之后，不属于本次正式快照变更原因；仅可进入下一快照的审核队列。",
     },
+    perThesisChanges: [
+      {
+        thesisId: "thesis-fixture-1",
+        statement: "本季度收入因价格回升显著改善",
+        conclusionBefore: "insufficient_evidence",
+        conclusionAfter: "supported",
+        gapsBeforeCount: 4,
+        gapsAfterCount: 2,
+        addedLinks: 7,
+        removedLinks: 0,
+      },
+      {
+        thesisId: "thesis-fixture-2",
+        statement: "细分市场销量已恢复至同期水平",
+        conclusionBefore: null,
+        conclusionAfter: "supported",
+        gapsBeforeCount: 0,
+        gapsAfterCount: 1,
+        addedLinks: 5,
+        removedLinks: 0,
+      },
+    ],
+    availableCutoffs: ["2025-03-31", "2025-06-30"],
   };
 }
 

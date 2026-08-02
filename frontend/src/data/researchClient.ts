@@ -41,12 +41,14 @@ export const researchClient: ResearchClient = {
   createCase: (input) => _client.createCase(input),
   listCaseSummaries: () => _client.listCaseSummaries(),
   getResearchPlanView: (caseId) => _client.getResearchPlanView(caseId),
-  getCaseWorkbenchView: (id) => _client.getCaseWorkbenchView(id),
+  getCaseWorkbenchView: (id, options) =>
+    _client.getCaseWorkbenchView(id, options),
   getRelationshipGraphView: (id, thesisId) =>
     _client.getRelationshipGraphView(id, thesisId),
   getLibraryView: () => _client.getLibraryView(),
   getDataCenterView: () => _client.getDataCenterView(),
-  getVersionsView: (caseId) => _client.getVersionsView(caseId),
+  getVersionsView: (caseId, options) =>
+    _client.getVersionsView(caseId, options),
   getThemeIndexView: () => _client.getThemeIndexView(),
   getThemeWorkbenchView: (themeId: string) =>
     _client.getThemeWorkbenchView(themeId),
@@ -61,6 +63,11 @@ export const researchClient: ResearchClient = {
   extractStatements: (versionId) => _client.extractStatements(versionId),
   getDataCenterMetric: (stockId, metricName) =>
     _client.getDataCenterMetric(stockId, metricName),
+  listCompanies: (query, cursor) => _client.listCompanies(query, cursor),
+  getCompanyDossier: (companyId, opts) =>
+    _client.getCompanyDossier(companyId, opts),
+  listThemes: () => _client.listThemes(),
+  getThemeView: (tag, opts) => _client.getThemeView(tag, opts),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

@@ -80,6 +80,25 @@ class HoldingDisclosureDTO(V1Model):
     created_at: datetime
 
 
+class CreateValuationSnapshotRequest(V1Model):
+    as_of_date: date
+    metric_name: str
+    metric_value: Decimal
+    source: str
+    definition: str
+
+
+class ValuationSnapshotDTO(V1Model):
+    id: uuid.UUID
+    stock_id: uuid.UUID
+    as_of_date: date
+    metric_name: str
+    metric_value: Decimal
+    source: str
+    definition: str
+    created_at: datetime
+
+
 class CreateThemeRoleRequest(V1Model):
     role: str
     research_case_id: uuid.UUID | None = None

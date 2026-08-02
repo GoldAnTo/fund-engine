@@ -12,6 +12,24 @@ interface PageState {
   message?: string;
 }
 
+const CONCLUSION_LABELS: Record<string, string> = {
+  supported: "支持",
+  insufficient_evidence: "证据不足",
+  refuted: "反驳",
+  contested: "争议",
+  pending: "待评估",
+};
+function conclusionLabel(c: string): string {
+  return CONCLUSION_LABELS[c] ?? c;
+}
+function badgeFor(c: string): string {
+  if (c === "supported") return "reviewed";
+  if (c === "insufficient_evidence") return "monitoring";
+  if (c === "refuted") return "rejected";
+  if (c === "contested") return "pending";
+  return "pending";
+}
+
 function renderColumn(label: string, content: VersionColumnContent, accent: string) {
   return (
     <article className="version-column" data-snapshot={accent}>
@@ -77,9 +95,17 @@ export function VersionsScreen() {
   const [rerunSucceeded, setRerunSucceeded] = useState(false);
   const [cases, setCases] = useState<CaseSummaryItem[]>([]);
   const [caseId, setCaseId] = useState<string>("");
+  const [baseCutoff, setBaseCutoff] = useState<string>("");
+  const [compareCutoff, setCompareCutoff] = useState<string>("");
 
   const loadView = useCallback(
-    (id?: string) => researchClient.getVersionsView(id).then((v) => setView(v)),
+    (id?: string, opts?: { base?: string; compare?: string }) =>
+      researchClient.getVersionsView(id, opts).then((v) => {
+        setView(v);
+        if (!opts?.base) setBaseCutoff(v.beforeSnapshot.cutoff);
+        if (!opts?.compare) setCompareCutoff(v.afterSnapshot.cutoff);
+        return v;
+      }),
     [],
   );
 
@@ -175,6 +201,65 @@ export function VersionsScreen() {
                 </option>
               ))}
             </select>
+          </div>
+        ) : null}
+        {view.availableCutoffs.length > 0 ? (
+          <div
+            data-testid="version-snapshot-pickers"
+            style={{
+              display: "flex",
+              gap: 16,
+              alignItems: "center",
+              marginTop: 8,
+              fontSize: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <label>
+              基准快照：&nbsp;
+              <select
+                value={baseCutoff}
+                onChange={(e) => {
+                  const newBase = e.target.value;
+                  setBaseCutoff(newBase);
+                  loadView(caseId || undefined, {
+                    base: newBase,
+                    compare: compareCutoff,
+                  });
+                }}
+              >
+                <option value="1970-01-01T00:00:00Z">（最早 / 起点）</option>
+                {view.availableCutoffs.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span>→</span>
+            <label>
+              当前快照：&nbsp;
+              <select
+                value={compareCutoff}
+                onChange={(e) => {
+                  const newCompare = e.target.value;
+                  setCompareCutoff(newCompare);
+                  loadView(caseId || undefined, {
+                    base: baseCutoff,
+                    compare: newCompare,
+                  });
+                }}
+              >
+                {view.availableCutoffs.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span style={{ color: "var(--ink-muted)" }}>
+              （共 {view.availableCutoffs.length} 个快照点可对比）
+            </span>
           </div>
         ) : null}
       </header>
@@ -274,6 +359,80 @@ export function VersionsScreen() {
             "after",
           )}
         </div>
+      </section>
+
+      <section style={{ marginTop: 32 }}>
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">多命题概览</p>
+            <h2>本轮快照内全部命题的 before → after 变化</h2>
+          </div>
+        </div>
+        {view.perThesisChanges.length === 0 ? (
+          <p>（本案例当前没有可对比的命题）</p>
+        ) : (
+          <table
+            className="prototype-table"
+            data-testid="version-thesis-changes"
+            style={{ width: "100%", borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 6 }}>命题</th>
+                <th style={{ textAlign: "left", padding: 6 }}>结论 before</th>
+                <th style={{ textAlign: "left", padding: 6 }}>结论 after</th>
+                <th style={{ textAlign: "right", padding: 6 }}>缺口 before</th>
+                <th style={{ textAlign: "right", padding: 6 }}>缺口 after</th>
+                <th style={{ textAlign: "right", padding: 6 }}>新增关系</th>
+                <th style={{ textAlign: "right", padding: 6 }}>移除关系</th>
+              </tr>
+            </thead>
+            <tbody>
+              {view.perThesisChanges.map((t) => (
+                <tr key={t.thesisId} data-testid="version-thesis-row">
+                  <td style={{ padding: 6, maxWidth: 320 }}>
+                    <Link
+                      to={`/cases/${view.case.id}?thesis_id=${t.thesisId}`}
+                      style={{ fontSize: 12, color: "var(--accent)" }}
+                    >
+                      {t.statement}
+                    </Link>
+                  </td>
+                  <td style={{ padding: 6 }}>
+                    {t.conclusionBefore ? (
+                      <span className={`state-badge ${badgeFor(t.conclusionBefore)}`}>
+                        {conclusionLabel(t.conclusionBefore)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--ink-muted)", fontSize: 12 }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: 6 }}>
+                    {t.conclusionAfter ? (
+                      <span className={`state-badge ${badgeFor(t.conclusionAfter)}`}>
+                        {conclusionLabel(t.conclusionAfter)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--ink-muted)", fontSize: 12 }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: 6, textAlign: "right" }}>{t.gapsBeforeCount}</td>
+                  <td style={{ padding: 6, textAlign: "right" }}>{t.gapsAfterCount}</td>
+                  <td style={{ padding: 6, textAlign: "right" }}>
+                    <strong style={{ color: "var(--positive)" }}>+{t.addedLinks}</strong>
+                  </td>
+                  <td style={{ padding: 6, textAlign: "right" }}>
+                    {t.removedLinks > 0 ? (
+                      <strong style={{ color: "var(--negative)" }}>−{t.removedLinks}</strong>
+                    ) : (
+                      <span style={{ color: "var(--ink-muted)" }}>0</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   );

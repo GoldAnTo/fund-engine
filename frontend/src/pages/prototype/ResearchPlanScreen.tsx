@@ -133,6 +133,26 @@ export function ResearchPlanScreen() {
           ) : null}
         </div>
         <div>
+          <label
+            htmlFor="macro-queries"
+            style={{ display: "block", fontSize: 11, color: "var(--ink-muted)" }}
+          >
+            宏观/商品时序查询（每行一条，可选）
+          </label>
+          <textarea
+            id="macro-queries"
+            rows={2}
+            placeholder="例：&#10;中国电池级碳酸锂现货平均价价格水平 2022年至2025年&#10;全国生猪出厂价 月度 时序"
+            value={macroQueriesText}
+            onChange={(e) => setMacroQueriesText(e.target.value)}
+            style={{
+              width: 360,
+              fontFamily: "inherit",
+              fontSize: 12,
+              marginBottom: 6,
+            }}
+            data-testid="macro-queries"
+          />
           <button
             type="button"
             className="prototype-button primary"

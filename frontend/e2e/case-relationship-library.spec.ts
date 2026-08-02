@@ -49,3 +49,84 @@ test.describe("Library", () => {
     await expect(screen.getByRole("heading", { name: /份冻结资料/ })).toBeVisible();
   });
 });
+
+// Wiki 图谱为 2026-08 重写的画布：真实边、卡片节点、聚焦模式与导出走
+// fixture 数据（?client=mock），断言与具体节点解耦。
+test.describe("Wiki relationship graph (mock client)", () => {
+  test("renders real edges with labels and five column headers", async ({
+    page,
+  }) => {
+    await page.goto("/relationships?client=mock");
+    const graph = page.getByTestId("wiki-graph");
+    await expect(graph).toBeVisible();
+    for (const label of ["证据", "命题", "因果链", "公司", "基金"]) {
+      await expect(
+        graph.locator(".wiki-graph__colhead-label", { hasText: label }),
+      ).toBeVisible();
+    }
+    // 边标签来自 fixture 真实边数据，不再是假连线
+    await expect(
+      graph.locator(".wiki-edge__label", { hasText: "反驳" }).first(),
+    ).toBeVisible();
+    await expect(
+      graph.locator(".wiki-edge__label", { hasText: "支持" }).first(),
+    ).toBeVisible();
+    await expect(
+      graph.locator(".wiki-edge__label", { hasText: /持仓/ }).first(),
+    ).toBeVisible();
+  });
+
+  test("clicking a card focuses its chain and clicking again clears", async ({
+    page,
+  }) => {
+    await page.goto("/relationships?client=mock");
+    const graph = page.getByTestId("wiki-graph");
+    await expect(graph).toBeVisible();
+    const cards = graph.locator(".wiki-node");
+    expect(await cards.count()).toBeGreaterThan(10);
+    await cards.first().click();
+    expect(await graph.locator(".wiki-node.is-dim").count()).toBeGreaterThan(0);
+    // 再点同一张卡片取消聚焦，恢复全图
+    await cards.first().click();
+    await expect(graph.locator(".wiki-node.is-dim")).toHaveCount(0);
+  });
+
+  test("跳转原文 navigates to the library with the document selected", async ({
+    page,
+  }) => {
+    await page.goto("/relationships?client=mock");
+    // fixture 默认选中 ST-004（业绩说明会反面证据）
+    const inspector = page.getByTestId("node-inspector");
+    await expect(inspector).toBeVisible();
+    await inspector.getByRole("link", { name: "跳转原文" }).click();
+    await page.waitForURL(/\/library\?document=DOC-MSFT-FY25Q3-CALL/);
+    await expect(page.getByTestId("library-screen")).toBeVisible();
+    // 资料库应定位到目标文档，而不是默认第一篇
+    await expect(
+      page.locator(".prototype-library-source-list a.is-selected"),
+    ).toContainText("业绩说明会");
+  });
+
+  test("PNG export triggers a graph download", async ({ page }) => {
+    await page.goto("/relationships?client=mock");
+    const graph = page.getByTestId("wiki-graph");
+    await expect(graph).toBeVisible();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      graph.getByRole("button", { name: "导出 PNG" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toContain("证据图谱");
+  });
+
+  test("research brief export triggers a PDF download", async ({ page }) => {
+    await page.goto("/relationships?client=mock");
+    const graph = page.getByTestId("wiki-graph");
+    await expect(graph).toBeVisible();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      graph.getByRole("button", { name: "导出研究简报" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toContain("研究简报");
+    expect(download.suggestedFilename()).toMatch(/\.pdf$/);
+  });
+});

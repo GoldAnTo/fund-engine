@@ -25,6 +25,16 @@ class DocumentRepository:
             )
         )
 
+    def by_natural_key(self, natural_key: str) -> DocumentVersion | None:
+        # 跨入口合并"同源 + 同标题 + 同发布日期"：返回最早写入的版本，
+        # 后续抓取视为该文档的重复抓取而非新版本。
+        return self._session.scalar(
+            select(DocumentVersion)
+            .where(DocumentVersion.natural_key == natural_key)
+            .order_by(DocumentVersion.acquired_at.asc())
+            .limit(1)
+        )
+
     def latest_for_source(self, source_url: str) -> DocumentVersion | None:
         return self._session.scalar(
             select(DocumentVersion)
@@ -43,10 +53,12 @@ class DocumentRepository:
         acquired_at: datetime,
         parser_version: str,
         supersedes_id: uuid.UUID | None,
+        natural_key: str | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
             source_url=source_url,
+            natural_key=natural_key,
             published_at=published_at,
             available_at=available_at,
             acquired_at=acquired_at,
