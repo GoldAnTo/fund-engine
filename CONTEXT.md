@@ -81,3 +81,10 @@ Four hardening rounds landed on top of the MVP (commits `5963ffb`, `631b9c2`, `9
 **Research-ops KPIs (P3).** `GET /api/v1/research-ops/kpis?case_id=&as_of=` derives management metrics from the ledger only: review throughput (with pending queue via effective review state), human-AI agreement (assessment- and link-level; null when no data), and judgment latency (evidence→assessment, assessment→first-review, in days). Supports point-in-time replay via `as_of`.
 
 **Quality posture:** 218 backend tests (+24 across the four rounds), release gate 10 checks green via `docs/evaluation/reproduce.sh`, frontend contract regenerated after the KPI endpoint.
+
+**Verification stack + CI (2026-08-02, commits `2b07cda`–`9992940`).** Both tiers are now enforced by GitHub Actions on every push/PR touching the relevant tree:
+
+- `backend-ci` (`.github/workflows/backend.yml`): pytest on sqlite (218 passed; `pg_only`/`neo4j_only` auto-skip without env vars) plus the 10-check release gate as its own job (`projection_rebuilds` skips without `NEO4J_URL`, never fails the gate).
+- `frontend-ci` (`.github/workflows/frontend.yml`): `tsc --noEmit` + 62 vitest tests, and a Playwright job running 32 e2e specs against the dev server in mock mode (deterministic; bundled Chromium on ubuntu, `PW_BROWSER_CHANNEL=chrome` exists only as a macOS 12 local fallback).
+- The e2e suite was rewritten for the PrototypeShell (theme-first) app shell — the 13 legacy specs asserted a retired UI. New coverage: shell navigation/search, theme → workbench flow, case/relationship/library/review/versions screens, data-center research-ops section, legacy-route cutoff banners, and a review-decision **write loop** (queue shrinks, audit link reaches snapshot versions) that runs only under `?client=mock`, a main.tsx test hook guaranteeing zero API calls to a live backend. All other specs are read-only and mode-agnostic (mock or live backend).
+- Mock fidelity fix: `MockResearchAdapter.search` now filters by query and returns an honest empty state, matching live-backend semantics (caught by the mock-mode e2e run).
