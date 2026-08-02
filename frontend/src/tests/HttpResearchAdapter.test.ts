@@ -479,4 +479,59 @@ describe("HttpResearchAdapter", () => {
       kind: "backend_unavailable",
     });
   });
+
+  it("maps research-ops KPIs into the data-center view", async () => {
+    const kpisDto = {
+      as_of: "2026-08-02T04:00:00+00:00",
+      case_id: null,
+      throughput: {
+        link_reviews_total: 4,
+        link_reviews_last_7d: 2,
+        assessment_reviews_total: 3,
+        assessment_reviews_last_7d: 3,
+        reviews_by_reviewer: { "analyst-a": 3, "analyst-b": 1 },
+        pending_link_reviews: 12,
+        pending_assessment_reviews: 0,
+      },
+      agreement: {
+        assessment_outcomes: { confirmed: 2, modified: 1 },
+        assessment_agreement_rate: 0.6667,
+        conclusion_changed: 1,
+        link_outcomes: { confirmed: 3, rejected: 1 },
+        link_agreement_rate: 0.75,
+        link_modified: 1,
+      },
+      latency: {
+        evidence_to_assessment_avg_days: 1.5,
+        evidence_to_assessment_max_days: 4.0,
+        assessment_to_review_avg_days: 2.25,
+        assessment_to_review_max_days: 6.0,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/research-ops/kpis")) return jsonResponse(kpisDto);
+        if (url.includes("/metrics/catalog"))
+          return jsonResponse({ entries: [] });
+        if (url.includes("/provider-runs")) return jsonResponse({ runs: [] });
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.getDataCenterView();
+
+    expect(view.researchOps.asOf).toBe("2026-08-02T04:00:00+00:00");
+    expect(view.researchOps.throughput.pendingLinkReviews).toBe(12);
+    expect(view.researchOps.throughput.reviewsByReviewer).toEqual([
+      { reviewer: "analyst-a", count: 3 },
+      { reviewer: "analyst-b", count: 1 },
+    ]);
+    expect(view.researchOps.agreement.assessmentAgreementRate).toBe(0.6667);
+    expect(view.researchOps.agreement.linkAgreementRate).toBe(0.75);
+    expect(view.researchOps.agreement.linkModified).toBe(1);
+    expect(view.researchOps.latency.assessmentToReviewAvgDays).toBe(2.25);
+  });
 });

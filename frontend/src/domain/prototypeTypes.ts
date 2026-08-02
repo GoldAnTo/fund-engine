@@ -505,6 +505,8 @@ export interface LibraryDocument {
   reuseHistory: { caseId: string; label: string; reusedAt: string }[];
   sourceExcerpt: string;
   exactSpan: string;
+  /** 有待抽取片段但尚无陈述（span_count > 0 且 statement_count = 0）。 */
+  pendingExtraction?: boolean;
 }
 
 export interface LibraryKnowledge {
@@ -580,9 +582,39 @@ export interface DataPlannedAttempt {
   meaning: string;
 }
 
+// ── Research-ops KPI block (GET /api/v1/research-ops/kpis) ────────────────
+
+export interface ResearchOpsKpisView {
+  asOf: string;
+  throughput: {
+    linkReviewsTotal: number;
+    linkReviewsLast7d: number;
+    assessmentReviewsTotal: number;
+    assessmentReviewsLast7d: number;
+    reviewsByReviewer: { reviewer: string; count: number }[];
+    pendingLinkReviews: number;
+    pendingAssessmentReviews: number;
+  };
+  agreement: {
+    assessmentAgreementRate: number | null;
+    assessmentOutcomes: { outcome: string; count: number }[];
+    conclusionChanged: number;
+    linkAgreementRate: number | null;
+    linkModified: number;
+    linkOutcomes: { outcome: string; count: number }[];
+  };
+  latency: {
+    evidenceToAssessmentAvgDays: number | null;
+    evidenceToAssessmentMaxDays: number | null;
+    assessmentToReviewAvgDays: number | null;
+    assessmentToReviewMaxDays: number | null;
+  };
+}
+
 export interface DataCenterView {
   cutoff: string;
   snapshotId: string;
+  researchOps: ResearchOpsKpisView;
   catalog: DataCatalogItem[];
   selectedMetricId: string;
   selectedMetric: {
@@ -794,11 +826,20 @@ export interface CreateCaseResult {
   thesisIds: string[];
 }
 
+/** Lightweight case list row (screen 4 · 案例工作台 sidebar). */
+export interface CaseSummaryItem {
+  id: string;
+  title: string;
+  topic: string;
+  updatedAt: string;
+}
+
 export interface PrototypeClient {
   getWorkspaceOverviewView(): Promise<WorkspaceOverviewView>;
   getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen>;
   getNewResearchView(): Promise<NewResearchView>;
   createCase(input: CreateCaseInput): Promise<CreateCaseResult>;
+  listCaseSummaries(): Promise<CaseSummaryItem[]>;
   getResearchPlanView(): Promise<ResearchPlanView>;
   getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView>;
   getRelationshipGraphView(caseId: string): Promise<RelationshipGraphView>;
@@ -813,6 +854,7 @@ export type ResearchClient = BaseResearchClient &
   PrototypeClient &
   ReviewQueueClient &
   VersionsClient &
+  EngineClient &
   DataCenterClient;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 
@@ -871,6 +913,39 @@ export interface ThesisRerunResult {
 
 export interface VersionsClient {
   rerunThesis(thesisId: string): Promise<ThesisRerunResult>;
+}
+
+// ── Engine commands (propose · AI 提议证据关系) ──────────────────────────
+
+/** Result of POST /theses/{id}/propose: proposed links enter the review queue. */
+export interface ProposeEvidenceResult {
+  thesisId: string;
+  mode: string;
+  linkCount: number;
+}
+
+export interface EngineClient {
+  proposeEvidence(thesisId: string): Promise<ProposeEvidenceResult>;
+  ingestDocuments(caseId?: string): Promise<IngestRunResult>;
+  extractStatements(documentVersionId: string): Promise<ExtractStatementsResult>;
+}
+
+/** Result of POST /documents/{id}/extract (陈述抽取 · append-only). */
+export interface ExtractStatementsResult {
+  documentVersionId: string;
+  mode: string;
+  statementCount: number;
+}
+
+/** Result of POST /documents/ingest (数据接入 · Gildata). */
+export interface IngestRunResult {
+  researchReports: number;
+  announcements: number;
+  news: number;
+  spans: number;
+  valuationsWritten: number;
+  valuationsSkipped: number;
+  caseId: string | null;
 }
 
 // ── Data center (screen 8 · live API slice) ──────────────────────────────

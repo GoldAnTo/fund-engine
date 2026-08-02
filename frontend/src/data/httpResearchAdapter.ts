@@ -37,8 +37,10 @@ import type {
   DataMetricSelection,
   DataRevisionComparison,
   DataSeriesPoint,
+  ExtractStatementsResult,
   GraphLayer,
   GraphNodeView,
+  IngestRunResult,
   LibraryView,
   LinkReviewPayload,
   NewResearchView,
@@ -1680,6 +1682,7 @@ export class HttpResearchAdapter implements ResearchClient {
         reuseHistory: [],
         sourceExcerpt: excerptOf(span?.verbatim_text),
         exactSpan: span ? JSON.stringify(span.locator) : "—",
+        pendingExtraction: d.statement_count === 0 && d.span_count > 0,
       };
     };
     const docs = documents.items.map(toDocument);
@@ -1750,9 +1753,51 @@ export class HttpResearchAdapter implements ResearchClient {
       `/provider-runs${this.buildQuery({ limit: "8" })}`,
     );
 
+    const kpis = await this.get<Schemas["ResearchOpsResponse"]>(
+      `/research-ops/kpis`,
+    );
+
     return {
       cutoff: first?.latest_as_of ?? "",
       snapshotId: "",
+      researchOps: {
+        asOf: kpis.as_of,
+        throughput: {
+          linkReviewsTotal: kpis.throughput.link_reviews_total,
+          linkReviewsLast7d: kpis.throughput.link_reviews_last_7d,
+          assessmentReviewsTotal: kpis.throughput.assessment_reviews_total,
+          assessmentReviewsLast7d: kpis.throughput.assessment_reviews_last_7d,
+          reviewsByReviewer: Object.entries(
+            kpis.throughput.reviews_by_reviewer,
+          ).map(([reviewer, count]) => ({ reviewer, count })),
+          pendingLinkReviews: kpis.throughput.pending_link_reviews,
+          pendingAssessmentReviews:
+            kpis.throughput.pending_assessment_reviews,
+        },
+        agreement: {
+          assessmentAgreementRate:
+            kpis.agreement.assessment_agreement_rate,
+          assessmentOutcomes: Object.entries(
+            kpis.agreement.assessment_outcomes,
+          ).map(([outcome, count]) => ({ outcome, count })),
+          conclusionChanged: kpis.agreement.conclusion_changed,
+          linkAgreementRate: kpis.agreement.link_agreement_rate,
+          linkModified: kpis.agreement.link_modified,
+          linkOutcomes: Object.entries(kpis.agreement.link_outcomes).map(
+            ([outcome, count]) => ({ outcome, count }),
+          ),
+        },
+        latency: {
+          evidenceToAssessmentAvgDays:
+            kpis.latency.evidence_to_assessment_avg_days,
+          evidenceToAssessmentMaxDays:
+            kpis.latency.evidence_to_assessment_max_days,
+          assessmentToReviewAvgDays:
+            kpis.latency.assessment_to_review_avg_days,
+          assessmentToReviewMaxDays:
+            kpis.latency.assessment_to_review_max_days,
+        },
+      },
       catalog: entries.map((e) => ({
         id: `${e.stock_id}::${e.metric_name}`,
         label: e.metric_name,
@@ -1976,6 +2021,36 @@ export class HttpResearchAdapter implements ResearchClient {
       thesisId: dto.thesis_id,
       mode: dto.mode,
       linkCount: dto.link_count,
+    };
+  }
+
+  async ingestDocuments(caseId?: string): Promise<IngestRunResult> {
+    const dto = await this.post<Schemas["IngestResponse"]>(
+      `/documents/ingest`,
+      { case_id: caseId ?? null },
+    );
+    return {
+      researchReports: dto.research_reports,
+      announcements: dto.announcements,
+      news: dto.news,
+      spans: dto.spans,
+      valuationsWritten: dto.valuations_written,
+      valuationsSkipped: dto.valuations_skipped,
+      caseId: dto.case_id,
+    };
+  }
+
+  async extractStatements(
+    documentVersionId: string,
+  ): Promise<ExtractStatementsResult> {
+    const dto = await this.post<Schemas["ExtractResponse"]>(
+      `/documents/${documentVersionId}/extract`,
+      {},
+    );
+    return {
+      documentVersionId: dto.document_version_id,
+      mode: dto.mode,
+      statementCount: dto.statement_count,
     };
   }
 

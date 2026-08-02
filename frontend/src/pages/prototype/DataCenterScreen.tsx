@@ -303,6 +303,122 @@ export function DataCenterScreen() {
             为什么重要：{view.revisionComparison.whyItMatters}
           </p>
 
+          <h3 style={{ fontSize: 13, marginTop: 16 }}>研究效能</h3>
+          <section
+            className="prototype-paper"
+            data-testid="research-ops-section"
+            aria-label="研究效能指标"
+          >
+            <p style={{ fontSize: 11, color: "var(--ink-muted)", margin: 0 }}>
+              统计时点 {view.researchOps.asOf.slice(0, 10)} ·
+              全部指标由不可变账本推导，无自报数字
+            </p>
+
+            <h4 style={{ fontSize: 12, margin: "12px 0 4px" }}>审核吞吐</h4>
+            <dl
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                gap: 8,
+                margin: 0,
+                fontSize: 12,
+              }}
+            >
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>待审链路</dt>
+                <dd style={{ margin: 0, fontSize: 16 }}>
+                  <strong>{view.researchOps.throughput.pendingLinkReviews}</strong>
+                </dd>
+              </div>
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>待审评估</dt>
+                <dd style={{ margin: 0, fontSize: 16 }}>
+                  <strong>{view.researchOps.throughput.pendingAssessmentReviews}</strong>
+                </dd>
+              </div>
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>近 7 天链路复核</dt>
+                <dd style={{ margin: 0, fontSize: 16 }}>
+                  <strong>{view.researchOps.throughput.linkReviewsLast7d}</strong>
+                  <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>
+                    {" "}/ 累计 {view.researchOps.throughput.linkReviewsTotal}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>近 7 天评估复核</dt>
+                <dd style={{ margin: 0, fontSize: 16 }}>
+                  <strong>{view.researchOps.throughput.assessmentReviewsLast7d}</strong>
+                  <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>
+                    {" "}/ 累计 {view.researchOps.throughput.assessmentReviewsTotal}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+            {view.researchOps.throughput.reviewsByReviewer.length > 0 && (
+              <p style={{ fontSize: 11, color: "var(--ink-muted)", margin: "6px 0 0" }}>
+                按审核人：
+                {view.researchOps.throughput.reviewsByReviewer
+                  .map((r) => `${r.reviewer} ${r.count}`)
+                  .join(" · ")}
+              </p>
+            )}
+
+            <h4 style={{ fontSize: 12, margin: "12px 0 4px" }}>人机一致率</h4>
+            <p style={{ fontSize: 12, margin: 0 }}>
+              评估级：
+              {view.researchOps.agreement.assessmentAgreementRate !== null
+                ? `${Math.round(view.researchOps.agreement.assessmentAgreementRate * 100)}%`
+                : "—（暂无复核数据）"}
+              <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>
+                {view.researchOps.agreement.assessmentOutcomes.length > 0 &&
+                  `（${view.researchOps.agreement.assessmentOutcomes
+                    .map((o) => `${o.outcome} ${o.count}`)
+                    .join(" / ")}）`}
+                {view.researchOps.agreement.conclusionChanged > 0 &&
+                  ` · 结论被改 ${view.researchOps.agreement.conclusionChanged} 次`}
+              </span>
+            </p>
+            <p style={{ fontSize: 12, margin: "4px 0 0" }}>
+              链路级：
+              {view.researchOps.agreement.linkAgreementRate !== null
+                ? `${Math.round(view.researchOps.agreement.linkAgreementRate * 100)}%`
+                : "—（暂无链路复核数据）"}
+              <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>
+                {view.researchOps.agreement.linkModified > 0 &&
+                  ` · 人工改判关系 ${view.researchOps.agreement.linkModified} 条`}
+              </span>
+            </p>
+
+            <h4 style={{ fontSize: 12, margin: "12px 0 4px" }}>判断时滞（天）</h4>
+            <dl
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: 8,
+                margin: 0,
+                fontSize: 12,
+              }}
+            >
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>证据 → AI 判断</dt>
+                <dd style={{ margin: 0 }}>
+                  {view.researchOps.latency.evidenceToAssessmentAvgDays !== null
+                    ? `均 ${view.researchOps.latency.evidenceToAssessmentAvgDays} / 峰 ${view.researchOps.latency.evidenceToAssessmentMaxDays}`
+                    : "—（暂无评估）"}
+                </dd>
+              </div>
+              <div>
+                <dt style={{ color: "var(--ink-muted)" }}>AI 判断 → 人工复核</dt>
+                <dd style={{ margin: 0 }}>
+                  {view.researchOps.latency.assessmentToReviewAvgDays !== null
+                    ? `均 ${view.researchOps.latency.assessmentToReviewAvgDays} / 峰 ${view.researchOps.latency.assessmentToReviewMaxDays}`
+                    : "—（暂无复核）"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
           <h3 style={{ fontSize: 13, marginTop: 16 }}>计划中的尝试</h3>
           <div className="prototype-paper">
             <strong>{view.plannedAttempt.label}</strong>

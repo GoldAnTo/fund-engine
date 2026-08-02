@@ -1713,6 +1713,35 @@ export function buildDataCenterView(): DataCenterView {
   return {
     cutoff: CUTOFF,
     snapshotId: SNAPSHOT_ID,
+    // Mirrors the seeded AI-compute slice so the research-ops section is
+    // reviewable without a backend: 3 confirmed assessment reviews, 15
+    // human-curated gold links still pending link-level review.
+    researchOps: {
+      asOf: CUTOFF,
+      throughput: {
+        linkReviewsTotal: 0,
+        linkReviewsLast7d: 0,
+        assessmentReviewsTotal: 3,
+        assessmentReviewsLast7d: 3,
+        reviewsByReviewer: [{ reviewer: "seed-human-reviewer", count: 3 }],
+        pendingLinkReviews: 15,
+        pendingAssessmentReviews: 0,
+      },
+      agreement: {
+        assessmentAgreementRate: 1.0,
+        assessmentOutcomes: [{ outcome: "confirmed", count: 3 }],
+        conclusionChanged: 0,
+        linkAgreementRate: null,
+        linkModified: 0,
+        linkOutcomes: [],
+      },
+      latency: {
+        evidenceToAssessmentAvgDays: 0.0,
+        evidenceToAssessmentMaxDays: 0.0,
+        assessmentToReviewAvgDays: 0.0,
+        assessmentToReviewMaxDays: 0.0,
+      },
+    },
     catalog: [
       {
         id: "M-NVDA-DC-REV",
