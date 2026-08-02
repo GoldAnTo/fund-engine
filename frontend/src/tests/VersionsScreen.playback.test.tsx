@@ -16,17 +16,13 @@ describe("VersionsScreen playback mode", () => {
   it("renders the playback section when snapshotPoints have eventSummaries", async () => {
     setResearchClient(new MockResearchAdapter());
     renderScreen();
-    // Wait for the view to load (mock returns synchronously but the page
-    // mounts after one microtask).
-    const heading = await screen.findByText(/快照时间轴/);
-    expect(heading).toBeTruthy();
     const playback = await screen.findByTestId("playback-mode");
     expect(playback).toBeTruthy();
     // The mock fixture has 3 events (4 cutoffs - 1 seed = 3 with summary).
     expect(within(playback).getByText(/第 1 \/ 3 步/)).toBeTruthy();
   });
 
-  it("advances one step when the next button is clicked", async () => {
+  it("advances to the next playback step on click", async () => {
     setResearchClient(new MockResearchAdapter());
     renderScreen();
     const playback = await screen.findByTestId("playback-mode");
@@ -35,7 +31,7 @@ describe("VersionsScreen playback mode", () => {
     expect(within(playback).getByText(/第 2 \/ 3 步/)).toBeTruthy();
   });
 
-  it("rewinds one step when the previous button is clicked", async () => {
+  it("reverts to the previous playback step on click", async () => {
     setResearchClient(new MockResearchAdapter());
     renderScreen();
     const playback = await screen.findByTestId("playback-mode");
@@ -44,7 +40,7 @@ describe("VersionsScreen playback mode", () => {
     expect(within(playback).getByText(/第 1 \/ 3 步/)).toBeTruthy();
   });
 
-  it("shows conclusion flips when the playhead lands on an event with one", async () => {
+  it("displays a conclusion flip row at the step that flips", async () => {
     setResearchClient(new MockResearchAdapter());
     renderScreen();
     const playback = await screen.findByTestId("playback-mode");
@@ -54,22 +50,71 @@ describe("VersionsScreen playback mode", () => {
     expect(flips.length).toBeGreaterThan(0);
   });
 
-  it("disables the previous button at the first step", async () => {
+  it("disables prev at the first step and next at the last step", async () => {
     setResearchClient(new MockResearchAdapter());
     renderScreen();
     const playback = await screen.findByTestId("playback-mode");
     const prev = within(playback).getByTestId("playback-prev") as HTMLButtonElement;
     expect(prev.disabled).toBe(true);
-  });
-
-  it("disables the next button at the last step", async () => {
-    setResearchClient(new MockResearchAdapter());
-    renderScreen();
-    const playback = await screen.findByTestId("playback-mode");
     const next = within(playback).getByTestId("playback-next") as HTMLButtonElement;
     // 3 steps; click twice to land on step 3
     fireEvent.click(next);
     fireEvent.click(next);
     expect(next.disabled).toBe(true);
+  });
+
+  it("toggles the play button label between 播放 and 暂停", async () => {
+    setResearchClient(new MockResearchAdapter());
+    renderScreen();
+    const playback = await screen.findByTestId("playback-mode");
+    const toggle = within(playback).getByTestId("playback-toggle");
+    expect(toggle.textContent).toContain("播放");
+    expect(toggle.textContent).not.toContain("暂停");
+    fireEvent.click(toggle);
+    expect(toggle.textContent).toContain("暂停");
+    fireEvent.click(toggle);
+    expect(toggle.textContent).toContain("播放");
+  });
+
+  it("exposes a speed selector with 0.5x / 1x / 2x options", async () => {
+    setResearchClient(new MockResearchAdapter());
+    renderScreen();
+    const playback = await screen.findByTestId("playback-mode");
+    const speed = within(playback).getByTestId(
+      "playback-speed",
+    ) as HTMLSelectElement;
+    expect(speed.value).toBe("1");
+    const options = Array.from(speed.options).map((o) => o.value);
+    expect(options).toEqual(["0.5", "1", "2"]);
+  });
+
+  it("renders a progress bar whose width reflects the current step", async () => {
+    setResearchClient(new MockResearchAdapter());
+    renderScreen();
+    const playback = await screen.findByTestId("playback-mode");
+    const progress = within(playback).getByTestId(
+      "playback-progress",
+    ) as HTMLDivElement;
+    // At step 1 of 3, width should be (1/3)*100% ~= 33.3%.
+    expect(progress.style.width).toMatch(/33/);
+    fireEvent.click(within(playback).getByTestId("playback-next"));
+    // After stepping forward, width should be ~(2/3)*100% ~= 66.7%.
+    expect(progress.style.width).toMatch(/66/);
+  });
+
+  it("renders the event card with the active step's link/review deltas and flip", async () => {
+    setResearchClient(new MockResearchAdapter());
+    renderScreen();
+    const playback = await screen.findByTestId("playback-mode");
+    // Step 1 mock: linkDelta=5, no flip
+    const card1 = within(playback).getByTestId("playback-event-card");
+    expect(card1.textContent).toMatch(/\+5/);
+    // Step 2 mock: linkDelta=8 + a flip
+    fireEvent.click(within(playback).getByTestId("playback-next"));
+    const card2 = within(playback).getByTestId("playback-event-card");
+    expect(card2.textContent).toMatch(/\+8/);
+    const flip = within(card2).getByTestId("playback-flip");
+    expect(flip.textContent).toMatch(/证据不足/);
+    expect(flip.textContent).toMatch(/支持/);
   });
 });

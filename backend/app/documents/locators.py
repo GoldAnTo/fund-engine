@@ -324,7 +324,10 @@ def coerce_locator_v1(
     # so the schema check passes.  Prefer ``paragraph`` (the legacy pypdf
     # anchor); fall back to ``page_no`` if only the page is known (e.g. an
     # old stock-news page where the embedder lost paragraph offsets).
-    # Mark the upgrade as degraded via ``extra.__upgraded``.
+    # Mark the upgrade as degraded via ``extra.__upgraded``.  The original
+    # ``paragraph`` / ``page_no`` value is preserved in ``extra`` so legacy
+    # call sites that read ``locator["paragraph"]`` keep working until
+    # they migrate (see seed_storage_chain_case.py:462).
     needs_synth = (
         "text_position" not in out
         and "text_quote" not in out
@@ -334,15 +337,19 @@ def coerce_locator_v1(
     )
     if needs_synth:
         synth_id: str | None = None
+        synth_key: str | None = None
         if "paragraph" in legacy and legacy["paragraph"] is not None:
             synth_id = f"#/legacy-paragraph/{legacy['paragraph']}"
             degraded = "paragraph-only"
+            synth_key = "paragraph"
         elif "page_no" in legacy and legacy["page_no"] is not None:
             synth_id = f"#/legacy-page/{legacy['page_no']}"
             degraded = "page-only"
+            synth_key = "page_no"
         elif "page" in legacy and legacy["page"] is not None:
             synth_id = f"#/legacy-page/{legacy['page']}"
             degraded = "page-only"
+            synth_key = "page"
         if synth_id is None:
             raise LocatorInvalidError(
                 "legacy locator has no recoverable localization "
@@ -350,7 +357,10 @@ def coerce_locator_v1(
                 legacy,
             )
         out["parser_item_ref"] = synth_id
-        out.setdefault("extra", {})["__upgraded"] = degraded
+        extra_block = out.setdefault("extra", {})
+        extra_block["__upgraded"] = degraded
+        if synth_key is not None and synth_key in legacy:
+            extra_block[synth_key] = legacy[synth_key]
 
     return validate_locator_v1(out)
 
