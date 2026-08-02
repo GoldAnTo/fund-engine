@@ -1,98 +1,140 @@
 import { test, expect } from "@playwright/test";
 
-// 公司研究（/companies）与主题研究（/topics · 横切主题）只读 e2e 断言。
-// e2e 套件可能跑在真实后端或 mock 适配器下（main.tsx 测试钩子
-// `?client=mock`），写入闭环不在本套件覆盖范围。
+// 公司研究（/companies · 设计图 10）与主题研究（/topics · 设计图 9）
+// 三栏布局：左 280 目录 + 中 内容 + 右 320 固定证据检查器。
+// e2e 套件只读断言；写入闭环在 vitest/mock 层覆盖。
+// 路由兼容：/companies/:id 与 /topics/:tag 自动重定向到主路由 + ?id / ?tag。
 
-test.describe("Company research", () => {
-  test("company list renders table and links to dossier", async ({ page }) => {
+test.describe("Company research (设计图 10)", () => {
+  test("company list shows the directory, header meta and main area", async ({
+    page,
+  }) => {
     await page.goto("/companies");
     const screen = page.getByTestId("company-list-screen");
     await expect(screen).toBeVisible();
-    // 表格至少有一行；点击档案链接跳转到 dossier
-    const firstLink = page.getByRole("link", { name: /档案/ }).first();
-    await expect(firstLink).toBeVisible();
-    await firstLink.click();
-    await expect(page).toHaveURL(/\/companies\/.+/);
-    await expect(page.getByTestId("company-dossier-screen")).toBeVisible();
+    // 左栏：标题 + 搜索框 + 至少 1 行公司
+    const dir = page.getByTestId("company-list-directory");
+    await expect(dir).toBeVisible();
+    await expect(
+      page.getByTestId("company-list-filter-input"),
+    ).toBeVisible();
+    const rows = page.locator(".company-list__dir-item");
+    expect(await rows.count()).toBeGreaterThan(0);
+    // 主区：5 段（角色 / 关联命题 / 估值 / 持仓 / 路径）
+    await expect(page.getByTestId("company-list-roles")).toBeVisible();
+    await expect(page.getByTestId("company-list-theses")).toBeVisible();
+    await expect(page.getByTestId("company-list-valuations")).toBeVisible();
+    await expect(page.getByTestId("company-list-holders")).toBeVisible();
+    await expect(page.getByTestId("company-list-path")).toBeVisible();
+    // 右栏：固定证据检查器
+    await expect(page.getByTestId("company-list-inspector-card")).toBeVisible();
   });
 
-  test("company list filter input narrows the table", async ({ page }) => {
+  test("clicking a company in the left directory updates the main area", async ({
+    page,
+  }) => {
     await page.goto("/companies");
-    const screen = page.getByTestId("company-list-screen");
-    await expect(screen).toBeVisible();
+    // 默认选中 co-nvda；点击第二行（如有）切换
+    const firstRow = page.locator(".company-list__dir-item").first();
+    const secondRow = page.locator(".company-list__dir-item").nth(1);
+    if (await secondRow.count() > 0) {
+      await secondRow.locator("button").click();
+    } else {
+      await firstRow.locator("button").click();
+    }
+    // URL 包含 ?id=
+    await expect(page).toHaveURL(/\/companies\?id=/);
+    // 页面 title 反映公司
+    const title = await page.locator("h1").first().textContent();
+    expect(title).toBeTruthy();
+  });
+
+  test("company list filter narrows the directory", async ({ page }) => {
+    await page.goto("/companies");
     const filter = page.getByTestId("company-list-filter-input");
     await expect(filter).toBeVisible();
-    // 输入一个不存在的关键字后表格进入空态（"未匹配到公司"）
     await filter.fill("zzzz-no-such-company");
-    await expect(screen.getByText("未匹配到公司")).toBeVisible();
+    // 空态
+    await expect(page.getByText("未匹配到公司。")).toBeVisible();
   });
 
-  test("company dossier shows identity, theme roles, theses, valuations, holders", async ({ page }) => {
-    await page.goto("/companies");
-    const firstLink = page.getByRole("link", { name: /档案/ }).first();
-    await firstLink.click();
-    const screen = page.getByTestId("company-dossier-screen");
-    await expect(screen).toBeVisible();
-    // 五个段落均渲染（mock 数据完整）
-    await expect(screen.getByTestId("company-dossier-roles")).toBeVisible();
-    await expect(screen.getByTestId("company-dossier-theses")).toBeVisible();
-    await expect(screen.getByTestId("company-dossier-valuations")).toBeVisible();
-    await expect(screen.getByTestId("company-dossier-holders")).toBeVisible();
+  test("pinned inspector card shows the current thesis + source span", async ({
+    page,
+  }) => {
+    await page.goto("/companies?id=co-nvda");
+    const card = page.getByTestId("company-list-inspector-card");
+    await expect(card).toBeVisible();
+    // 标题、id、摘录都渲染
+    await expect(page.getByTestId("company-inspector-title")).toBeVisible();
+    await expect(page.getByTestId("company-inspector-excerpt")).toBeVisible();
   });
 
-  test("company dossier historical cutoff button rewrites the URL", async ({ page }) => {
-    await page.goto("/companies");
-    const firstLink = page.getByRole("link", { name: /档案/ }).first();
-    await firstLink.click();
-    await expect(page.getByTestId("company-dossier-screen")).toBeVisible();
-    // 切到 2025-06-30 回放，URL 应写入 cutoff 查询参数
-    await page.getByRole("button", { name: /切到 2025-06-30 回放/ }).click();
-    await expect(page).toHaveURL(/cutoff=2025-06-30/);
-    // 再点"回到当下"应清空 cutoff
-    await page.getByRole("button", { name: /回到当下/ }).click();
-    await expect(page).not.toHaveURL(/cutoff=/);
+  test("/companies/:id legacy URL redirects to /companies?id=...", async ({
+    page,
+  }) => {
+    await page.goto("/companies/co-nvda");
+    await expect(page).toHaveURL(/\/companies\?id=co-nvda/);
+    await expect(page.getByTestId("company-list-screen")).toBeVisible();
   });
 });
 
-test.describe("Topic research (cross-cutting)", () => {
-  test("topic list renders table and links to topic view", async ({ page }) => {
+test.describe("Topic research / 横切主题 (设计图 9)", () => {
+  test("topic list shows the directory, banner, main area and fixed inspector", async ({
+    page,
+  }) => {
     await page.goto("/topics");
     const screen = page.getByTestId("topic-list-screen");
     await expect(screen).toBeVisible();
-    // 顶部固定提示：聚合投影、非主题级结论
-    await expect(screen.getByText(/聚合投影/).first()).toBeVisible();
-    const firstLink = page.getByRole("link", { name: /视图/ }).first();
-    await expect(firstLink).toBeVisible();
-    await firstLink.click();
-    await expect(page).toHaveURL(/\/topics\/.+/);
-    await expect(page.getByTestId("topic-view-screen")).toBeVisible();
+    // 顶部警告条
+    await expect(page.getByTestId("topic-list-banner")).toBeVisible();
+    // 左栏目录
+    const dir = page.getByTestId("topic-list-directory");
+    await expect(dir).toBeVisible();
+    const rows = page.locator(".topic-list__dir-item");
+    expect(await rows.count()).toBeGreaterThan(0);
+    // 主区四段
+    await expect(page.getByTestId("topic-list-cases")).toBeVisible();
+    await expect(page.getByTestId("topic-list-roles")).toBeVisible();
+    await expect(page.getByTestId("topic-list-exposure")).toBeVisible();
+    await expect(page.getByTestId("topic-list-path")).toBeVisible();
+    // 右栏固定证据检查器
+    await expect(page.getByTestId("topic-list-inspector-card")).toBeVisible();
   });
 
-  test("topic view shows banner, cases, company roles and derivedFrom", async ({ page }) => {
+  test("clicking a topic in the left directory updates the main area", async ({
+    page,
+  }) => {
     await page.goto("/topics");
-    const firstLink = page.getByRole("link", { name: /视图/ }).first();
-    await firstLink.click();
-    const screen = page.getByTestId("topic-view-screen");
-    await expect(screen).toBeVisible();
-    // 顶部固定提示（不构成主题级结论）
-    await expect(page.getByTestId("topic-view-banner")).toBeVisible();
-    // 三个核心段落：案例 / 公司角色 / 持仓
-    await expect(page.getByTestId("topic-view-cases")).toBeVisible();
-    await expect(page.getByTestId("topic-view-roles")).toBeVisible();
-    await expect(page.getByTestId("topic-view-exposure")).toBeVisible();
-    // derivedFrom 引用列表
-    await expect(page.getByTestId("topic-view-derived")).toBeVisible();
+    const firstRow = page.locator(".topic-list__dir-item").first();
+    await firstRow.locator("button").click();
+    await expect(page).toHaveURL(/\/topics\?tag=/);
   });
 
-  test("topic view historical cutoff button rewrites the URL", async ({ page }) => {
+  test("topic path chain renders 5 nodes for the pinned topic", async ({
+    page,
+  }) => {
     await page.goto("/topics");
-    const firstLink = page.getByRole("link", { name: /视图/ }).first();
-    await firstLink.click();
-    await expect(page.getByTestId("topic-view-screen")).toBeVisible();
-    await page.getByRole("button", { name: /切到 2025-06-30 回放/ }).click();
-    await expect(page).toHaveURL(/cutoff=2025-06-30/);
-    await page.getByRole("button", { name: /回到当下/ }).click();
-    await expect(page).not.toHaveURL(/cutoff=/);
+    const chain = page.getByTestId("topic-list-path-chain");
+    await expect(chain).toBeVisible();
+    const nodes = page.locator('[data-testid^="topic-path-node-"]');
+    expect(await nodes.count()).toBe(5);
+  });
+
+  test("pinned inspector card shows the current thesis + source excerpt", async ({
+    page,
+  }) => {
+    await page.goto("/topics?tag=AI 算力基础设施");
+    const card = page.getByTestId("topic-list-inspector-card");
+    await expect(card).toBeVisible();
+    await expect(page.getByTestId("topic-inspector-title")).toBeVisible();
+    await expect(page.getByTestId("topic-inspector-excerpt")).toBeVisible();
+  });
+
+  test("/topics/:tag legacy URL redirects to /topics?tag=...", async ({
+    page,
+  }) => {
+    await page.goto("/topics/AI 算力基础设施");
+    await expect(page).toHaveURL(/\/topics\?tag=/);
+    await expect(page.getByTestId("topic-list-screen")).toBeVisible();
   });
 });

@@ -5,6 +5,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useParams,
 } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { PrototypeShell } from "./components/PrototypeShell";
@@ -35,9 +36,7 @@ import { VersionsScreen } from "./pages/prototype/VersionsScreen";
 import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
 import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
 import { CompanyListPage } from "./pages/prototype/CompanyListPage";
-import { CompanyDossierPage } from "./pages/prototype/CompanyDossierPage";
 import { TopicListPage } from "./pages/prototype/TopicListPage";
-import { TopicViewPage } from "./pages/prototype/TopicViewPage";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -69,14 +68,20 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           {/* 兼容旧版研究案例工作台 */}
           <Route path="cases" element={<CaseWorkbenchScreen />} />
           <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
-          {/* 二级研究对象入口：读模型已上线，无写路径（命令 API 在后端提供） */}
+          {/* 二级研究对象入口：读模型已上线，无写路径（命令 API 在后端提供）。
+              子路由 /companies/:id 与 /topics/:tag 复用同一个三栏页
+              （设计图 9/10 视觉，左栏目录 + 中主区 + 右固定证据检查器），
+              用 query string 决定选中；URL 兼容旧链接。 */}
           <Route path="companies" element={<CompanyListPage />} />
           <Route
             path="companies/:companyId"
-            element={<CompanyDossierPage />}
+            element={<CompanyDossierRedirect />}
           />
           <Route path="topics" element={<TopicListPage />} />
-          <Route path="topics/:tag" element={<TopicViewPage />} />
+          <Route
+            path="topics/:tag"
+            element={<TopicViewRedirect />}
+          />
           {/* 未匹配路由兜底：旧链接/书签（如 /cases/:id/graph）不再渲染
               空白页，回到主题入口。React Router 按特异性排序，* 优先级
               最低，不会吞掉下方 legacy 路由。 */}
@@ -137,4 +142,28 @@ function LegacyDossierRoute() {
 // Old relationship canvas lives behind /legacy/graph/:caseId.
 function LegacyGraphRoute() {
   return <RelationshipCanvasPage />;
+}
+
+// /companies/:id → /companies?id=...（设计图 10 视觉在 /companies 主路由）
+function CompanyDossierRedirect() {
+  const params = useParams<{ companyId?: string }>();
+  const id = params.companyId ?? "";
+  return (
+    <Navigate
+      to={`/companies${id ? `?id=${encodeURIComponent(id)}` : ""}`}
+      replace
+    />
+  );
+}
+
+// /topics/:tag → /topics?tag=...（设计图 9 视觉在 /topics 主路由）
+function TopicViewRedirect() {
+  const params = useParams<{ tag?: string }>();
+  const tag = params.tag ?? "";
+  return (
+    <Navigate
+      to={`/topics${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`}
+      replace
+    />
+  );
 }
