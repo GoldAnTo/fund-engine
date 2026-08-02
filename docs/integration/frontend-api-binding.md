@@ -145,8 +145,15 @@
 | 提案 | `POST /api/v1/theses/{thesis_id}/propose` | 201；产出全部进审核队列（machine_generated），不自动确认；404 thesis 不存在 |
 | 评估 | `POST /api/v1/theses/{thesis_id}/rerun` | 201；冻结新快照 + 追加临时评估；**422 `validation_failed` = 合规拒绝**（AI 文本命中投资建议用语，拒绝文本不入账，但失败 AIRun 已留作审计，前端应展示为"被合规拦截"状态而非报错） |
 
-**合规拒绝的透出设计**（2026-08-01）：
+**读端点补充**（2026-08-02）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/research-ops/kpis?case_id=&as_of=` | 研究效能 KPI：审核吞吐（含有效状态待审队列）、人机一致率（评估级+链路级，无数据返回 null）、判断时滞（证据→评估、评估→复核，天数均值/峰值）。`as_of` 支持时点回放。尚未绑定页面，适合挂数据中心或投研管理视图 |
+
+**合规拒绝的透出设计**（2026-08-01；2026-08-02 补重写回路）：
 - rerun 被合规门拒绝时：快照不落库（合规先于持久化，账本不可变约束下无法删半成品快照），失败的 AIRun 保留为审计痕迹。
+- 2026-08-02 起合规门为有界三段：REFUSE 类（买卖建议/荐股/仓位/个性化投顾）命中立即拒绝；REWRITE 类（目标价/收益预测）命中先给模型一次修复机会，修复文本重过合规门，残留违规才拒绝。修复成功的 rerun 返回 201，评估文本为清理后版本，AIRun 的 `output_summary` 带 `rewritten_for_compliance` 标记（provider-runs 可见）。前端语义不变：422 仍只表示"被合规拦截"。
 - dossier 新增 `assess_failure` 字段（`{model_version, error, failed_at}`）：仅当失败比最新成功评估**更新**时透出；后续 rerun 成功后自动隐藏。完整运行历史走 `GET /api/v1/provider-runs?kind=assess&status=`。
 - 引擎脚本按 thesis 容错：单个 thesis 被拒不中断整跑。
 

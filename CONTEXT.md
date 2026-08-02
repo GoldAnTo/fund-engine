@@ -67,3 +67,17 @@ _Avoid_: Current holding, real-time position
 **Expression**:
 A stock or fund used to express exposure to a supported research idea after considering valuation, exposure, freshness, and constraints. It is not a recommendation by itself.
 _Avoid_: Pick, recommendation, portfolio
+
+## Implementation Status (2026-08-02)
+
+Four hardening rounds landed on top of the MVP (commits `5963ffb`, `631b9c2`, `95cf64f`, `c472e36`):
+
+**Hybrid recall (P0).** `RecallService` now fuses two legs with RRF: BM25 over coarse tokens plus a local, deterministic char-n-gram TF-IDF dense leg (recovers sub-word matches the whole-CJK-run tokenizer makes BM25-invisible); the lexical signal is fused as a third leg. `mode="bm25"` remains as the evaluation baseline. `backend/scripts/eval_recall_ab.py` replays the frozen AI-compute slice against the human-curated gold links: overall recall@20 0.7333 → 1.0000 (4 gold statements recovered, 0 lost), with a hybrid-below-baseline regression guard. A real embedding backend can replace `tfidf_rank` behind the same contract.
+
+**Second gold case + real PDF path (P1).** New frozen case 锂电储能链 (`seed_storage_chain_case.py`): 6 fixtures — including the first real binary PDF (`06_sungrow_annual_summary.pdf`) — 15 statements, 15 links, 3 theses with human reviews, fund penetration, human causal chain. `app/services/pdf_text.py` parses PDF text layers into reproducible spans (CJK soft-wrap rejoining, table-block line preservation, fail-closed on text-less PDFs; documents stamped `parser_version=pypdf-v1`). The dataset manifest is now v2 (per-case hash sets attributed by `source_url` prefix); the release gate runs 10 checks including `pdf_fixture_parse_gold`.
+
+**Compliance rewrite loop (P2).** The three-action compliance contract is live: REFUSE-category hits refuse immediately and never reach the rewrite stage; REWRITE-category hits (target price / return promise) get exactly one LLM rewrite attempt (`rewrite-v1` prompt), the result is re-evaluated through the same gate, and any residual hit refuses the whole run. Repaired assessments record `rewritten_for_compliance` on the AIRun. 422 still signals a refused rerun to the frontend.
+
+**Research-ops KPIs (P3).** `GET /api/v1/research-ops/kpis?case_id=&as_of=` derives management metrics from the ledger only: review throughput (with pending queue via effective review state), human-AI agreement (assessment- and link-level; null when no data), and judgment latency (evidence→assessment, assessment→first-review, in days). Supports point-in-time replay via `as_of`.
+
+**Quality posture:** 218 backend tests (+24 across the four rounds), release gate 10 checks green via `docs/evaluation/reproduce.sh`, frontend contract regenerated after the KPI endpoint.
