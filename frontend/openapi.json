@@ -1178,6 +1178,74 @@
         }
       }
     },
+    "/api/v1/research-ops/kpis": {
+      "get": {
+        "tags": [
+          "research-ops-v1"
+        ],
+        "summary": "Research Ops Kpis",
+        "description": "研究效能 KPI 快照：审核吞吐、人机一致率、判断时滞。\n\n``as_of`` 缺省为当前时间；传入历史时点则按时点回放语义统计（之后\n创建的记录不参与）。",
+        "operationId": "research_ops_kpis_api_v1_research_ops_kpis_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchOpsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/knowledge": {
       "get": {
         "tags": [
@@ -3531,6 +3599,66 @@
         ],
         "title": "HistoricalBasisDTO"
       },
+      "HumanAiAgreementDTO": {
+        "properties": {
+          "assessment_outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Assessment Outcomes"
+          },
+          "assessment_agreement_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Agreement Rate"
+          },
+          "conclusion_changed": {
+            "type": "integer",
+            "title": "Conclusion Changed"
+          },
+          "link_outcomes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Link Outcomes"
+          },
+          "link_agreement_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Agreement Rate"
+          },
+          "link_modified": {
+            "type": "integer",
+            "title": "Link Modified"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_outcomes",
+          "assessment_agreement_rate",
+          "conclusion_changed",
+          "link_outcomes",
+          "link_agreement_rate",
+          "link_modified"
+        ],
+        "title": "HumanAiAgreementDTO",
+        "description": "人机一致率: agreement between AI drafts and human decisions.\n\nAssessment level: a ``confirmed`` ReviewDecision is agreement; a\n``modified``/``rejected`` one is not; ``conclusion_changed`` counts\nreviews whose conclusion differs from the original AI conclusion.\n\nLink level: a ``confirmed`` EvidenceReview whose ``relation`` equals the\nlink's AI-proposed ``role`` is agreement; confirmed with a different\nrelation is a modification (counted separately); ``rejected`` and\n``needs_more_evidence`` are disagreement / deferral."
+      },
       "IngestRequest": {
         "properties": {
           "case_id": {
@@ -3655,6 +3783,64 @@
         ],
         "title": "IngestResponse",
         "description": "Summary of one ingest run.\n\nIdempotent: documents dedupe by content hash and valuation snapshots\nby stock + date + metric + source, so re-runs report skips instead of\nduplicating rows."
+      },
+      "JudgmentLatencyDTO": {
+        "properties": {
+          "evidence_to_assessment_avg_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence To Assessment Avg Days"
+          },
+          "evidence_to_assessment_max_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence To Assessment Max Days"
+          },
+          "assessment_to_review_avg_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment To Review Avg Days"
+          },
+          "assessment_to_review_max_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment To Review Max Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "evidence_to_assessment_avg_days",
+          "evidence_to_assessment_max_days",
+          "assessment_to_review_avg_days",
+          "assessment_to_review_max_days"
+        ],
+        "title": "JudgmentLatencyDTO",
+        "description": "判断时滞 (days): evidence -> AI judgment, and AI judgment -> human review."
       },
       "KeyChangeDTO": {
         "properties": {
@@ -4441,6 +4627,45 @@
         "title": "RerunResponse",
         "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
       },
+      "ResearchOpsResponse": {
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "throughput": {
+            "$ref": "#/components/schemas/ReviewThroughputDTO"
+          },
+          "agreement": {
+            "$ref": "#/components/schemas/HumanAiAgreementDTO"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/JudgmentLatencyDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "as_of",
+          "case_id",
+          "throughput",
+          "agreement",
+          "latency"
+        ],
+        "title": "ResearchOpsResponse",
+        "description": "研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。"
+      },
       "ReviewDecisionDTO": {
         "properties": {
           "outcome": {
@@ -4607,6 +4832,54 @@
           "items"
         ],
         "title": "ReviewQueueResponse"
+      },
+      "ReviewThroughputDTO": {
+        "properties": {
+          "link_reviews_total": {
+            "type": "integer",
+            "title": "Link Reviews Total"
+          },
+          "link_reviews_last_7d": {
+            "type": "integer",
+            "title": "Link Reviews Last 7D"
+          },
+          "assessment_reviews_total": {
+            "type": "integer",
+            "title": "Assessment Reviews Total"
+          },
+          "assessment_reviews_last_7d": {
+            "type": "integer",
+            "title": "Assessment Reviews Last 7D"
+          },
+          "reviews_by_reviewer": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Reviews By Reviewer"
+          },
+          "pending_link_reviews": {
+            "type": "integer",
+            "title": "Pending Link Reviews"
+          },
+          "pending_assessment_reviews": {
+            "type": "integer",
+            "title": "Pending Assessment Reviews"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_reviews_total",
+          "link_reviews_last_7d",
+          "assessment_reviews_total",
+          "assessment_reviews_last_7d",
+          "reviews_by_reviewer",
+          "pending_link_reviews",
+          "pending_assessment_reviews"
+        ],
+        "title": "ReviewThroughputDTO",
+        "description": "审核吞吐: review output vs the pending machine-generated queue."
       },
       "SearchGroupDTO": {
         "properties": {

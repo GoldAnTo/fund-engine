@@ -306,6 +306,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-ops/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Research Ops Kpis
+         * @description 研究效能 KPI 快照：审核吞吐、人机一致率、判断时滞。
+         *
+         *     ``as_of`` 缺省为当前时间；传入历史时点则按时点回放语义统计（之后
+         *     创建的记录不参与）。
+         */
+        get: operations["research_ops_kpis_api_v1_research_ops_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/knowledge": {
         parameters: {
             query?: never;
@@ -1138,6 +1161,37 @@ export interface components {
             projection_schema_version?: string | null;
         };
         /**
+         * HumanAiAgreementDTO
+         * @description 人机一致率: agreement between AI drafts and human decisions.
+         *
+         *     Assessment level: a ``confirmed`` ReviewDecision is agreement; a
+         *     ``modified``/``rejected`` one is not; ``conclusion_changed`` counts
+         *     reviews whose conclusion differs from the original AI conclusion.
+         *
+         *     Link level: a ``confirmed`` EvidenceReview whose ``relation`` equals the
+         *     link's AI-proposed ``role`` is agreement; confirmed with a different
+         *     relation is a modification (counted separately); ``rejected`` and
+         *     ``needs_more_evidence`` are disagreement / deferral.
+         */
+        HumanAiAgreementDTO: {
+            /** Assessment Outcomes */
+            assessment_outcomes: {
+                [key: string]: number;
+            };
+            /** Assessment Agreement Rate */
+            assessment_agreement_rate: number | null;
+            /** Conclusion Changed */
+            conclusion_changed: number;
+            /** Link Outcomes */
+            link_outcomes: {
+                [key: string]: number;
+            };
+            /** Link Agreement Rate */
+            link_agreement_rate: number | null;
+            /** Link Modified */
+            link_modified: number;
+        };
+        /**
          * IngestRequest
          * @description Trigger a Gildata ingest run.
          *
@@ -1180,6 +1234,20 @@ export interface components {
             stock_id: string | null;
             /** Case Id */
             case_id: string | null;
+        };
+        /**
+         * JudgmentLatencyDTO
+         * @description 判断时滞 (days): evidence -> AI judgment, and AI judgment -> human review.
+         */
+        JudgmentLatencyDTO: {
+            /** Evidence To Assessment Avg Days */
+            evidence_to_assessment_avg_days: number | null;
+            /** Evidence To Assessment Max Days */
+            evidence_to_assessment_max_days: number | null;
+            /** Assessment To Review Avg Days */
+            assessment_to_review_avg_days: number | null;
+            /** Assessment To Review Max Days */
+            assessment_to_review_max_days: number | null;
         };
         /** KeyChangeDTO */
         KeyChangeDTO: {
@@ -1475,6 +1543,19 @@ export interface components {
             mode: string;
             assessment: components["schemas"]["RerunAssessmentDTO"];
         };
+        /**
+         * ResearchOpsResponse
+         * @description 研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。
+         */
+        ResearchOpsResponse: {
+            /** As Of */
+            as_of: string;
+            /** Case Id */
+            case_id: string | null;
+            throughput: components["schemas"]["ReviewThroughputDTO"];
+            agreement: components["schemas"]["HumanAiAgreementDTO"];
+            latency: components["schemas"]["JudgmentLatencyDTO"];
+        };
         /** ReviewDecisionDTO */
         ReviewDecisionDTO: {
             /**
@@ -1539,6 +1620,28 @@ export interface components {
         ReviewQueueResponse: {
             /** Items */
             items: components["schemas"]["ReviewQueueItemDTO"][];
+        };
+        /**
+         * ReviewThroughputDTO
+         * @description 审核吞吐: review output vs the pending machine-generated queue.
+         */
+        ReviewThroughputDTO: {
+            /** Link Reviews Total */
+            link_reviews_total: number;
+            /** Link Reviews Last 7D */
+            link_reviews_last_7d: number;
+            /** Assessment Reviews Total */
+            assessment_reviews_total: number;
+            /** Assessment Reviews Last 7D */
+            assessment_reviews_last_7d: number;
+            /** Reviews By Reviewer */
+            reviews_by_reviewer: {
+                [key: string]: number;
+            };
+            /** Pending Link Reviews */
+            pending_link_reviews: number;
+            /** Pending Assessment Reviews */
+            pending_assessment_reviews: number;
         };
         /** SearchGroupDTO */
         SearchGroupDTO: {
@@ -2311,6 +2414,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    research_ops_kpis_api_v1_research_ops_kpis_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                as_of?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchOpsResponse"];
                 };
             };
             /** @description Validation Error */

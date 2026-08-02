@@ -16,6 +16,7 @@ from app.api.v1.metrics import router as metrics_router
 from app.api.v1.overview import router as overview_router
 from app.api.v1.penetration import router as penetration_router
 from app.api.v1.provider_runs import router as provider_runs_router
+from app.api.v1.research_ops import router as research_ops_router
 from app.api.v1.search import router as search_router
 from app.schemas.v1.common import HealthResponse
 
@@ -39,6 +40,7 @@ router.include_router(overview_router)
 router.include_router(penetration_router)
 router.include_router(metrics_router)
 router.include_router(provider_runs_router)
+router.include_router(research_ops_router)
 router.include_router(knowledge_router)
 # Command (write) routes live in app/api/v1/commands/, decoupled from reads.
 router.include_router(case_commands_router)
