@@ -96,9 +96,16 @@ Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个�
 
 测试 `tests/test_content_quality.py` 新增 11 条（三条规则单测、真实表格不误伤、读侧透出、pending 排除），全量 313 passed，发布门禁 PASS。注：缺陷 5 的近重复根因（年报正文/摘要/港股版多次入库）已由并行进行的 natural_key 去重工作覆盖（`compute_natural_key` 二级判重 + alembic 0006），本修复与其正交。
 
-### ⚠️ 缺陷 5（P2）：近重复内容无对齐，产生重复陈述与链接
+### ✅ 缺陷 5（P2，已于 2026-08-02 修复）：natural_key 二级判重，文档入库前消重
 
-两轮接入取回同题研报的不同片段（hash 不同，内容高度重叠），LLM 提议理由自曝"与 7ad1c056 内容重复"。无文档级/陈述级近重复检测或 EntityAlignment 式的合并审核。
+两轮接入取回同题研报的不同片段（hash 不同，内容高度重叠），LLM 提议理由自曝"与 7ad1c056 内容重复"。原 SHA256-only 去重会把"年报正文版 vs 摘要 vs 港股版"（不同字节）全部入库——同份内容不同呈现未被识别。
+
+**修复（2026-08-02，与 1e898f8 同期落地）**：
+
+- alembic `0006_document_natural_key.py` 在 `document_versions` 加 `natural_key` 列 + 唯一约束；键为 SHA256(`source_url_prefix`, `title_normalized`, `published_at`) 前 32 字符（`compute_natural_key` in `app/services/ingest.py`）
+- 同发布机构 + 同标题 + 同发布日期视为同一份文档，仅保留首份；旧重复行回填时保留最早 natural_key、其他 NULL 让新约束通过
+- 与缺陷 4 内容质量校验正交：内容质量是 span 文本层判重（孤立表头/4 字短文），natural_key 是文档语义层判重（跨入口同篇）——两道闸门一起关
+- 测试新增合并入 1e898f8 公司研究/横切主题完整闭环 commit 段，walkthrough 第二轮接入的同题研报不再重复入库
 
 ### ⚠️ 缺陷 6（设计边界，需显性告知）：历史回放 = 系统账本时间，不是市场时间
 
@@ -107,13 +114,26 @@ Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个�
 
 `visible_links` 同时过滤 `available_at` 与 `created_at` 正是为了防后见之明污染——这是**诚实的架构选择**，但意味着"以 2024 年视角模拟研究"在生产路径上做不到，只能靠 created_at 伪造进过去的冻结 fixture。产品文档/界面应明确这一语义，避免用户误以为能做市场时间回放。
 
-### ⚠️ 缺陷 7（P2）：判断非确定性 + 合规结果随措辞抽签
+### ✅ 缺陷 7（P2，已于 2026-08-02 修复）：LLM 评估可复现性约束（温度归零 + 可选 seed）
 
-同一命题同一证据：T2 两次评估结论不同（insufficient→supported）；T3 一次被合规门拒、一次通过。评估可复现性（温度/种子/输入排序）与合规门稳定性需要评测约束，否则"相同 cutoff 重复得到相同 citation manifest"的硬验收在 live 模式下不成立（manifest 可复现，结论不可复现）。
+同一命题同一证据：T2 两次评估结论不同（insufficient→supported）；T3 一次被合规门拒、一次通过。LLM 抽样是最主要的不可复现源；合规门有界重写也加入方差，但属已知设计取舍。
 
-### ⚠️ 缺陷 8（P2）：估值快照 as_of 取采集日而非行情日
+**修复（2026-08-02, commit 6239786）**：
 
-2026-07-31 15:00 的行情被记为 `as_of_date = 2026-08-02`（ingest 日）。口径偏小但破坏"估值按 as_of 对齐"的语义，应取行情的 交易时间。
+- `app/ai/client.py`: `LLMClient` 默认 `temperature=0.0` + 可选 `seed` 转发到 OpenAI；`chat_json` 在 seed=None 时**省略**该 key（避免 SDK 把 None 序列化成 0 误用）；mock 模式本来 deterministic（启发式 lookup），仍走同一 plumbing 让生产 config 跟测试 config 一致
+- `from_env` 读 `LLM_TEMPERATURE`（默认 0.0）与 `LLM_SEED`（空串 = None，`0` = 0 显式区别——空字符串约定区分"未设"与"0"）
+- 新增 9 条测试：默认温度=0、live 透传、显式 temperature、seed 透传、None 省略、mock 不触达 live、env 三态
+- 「相同结论」仍是 best-effort——OpenAI 的 `seed` 字段是提示而非保证（版本/区域可能漂移），但温度归零 + seed 固定已闭合大部分方差。生产仍需配合 prompt 稳定 + 输入排序规范化做断言型验收（与合规门有界重写一并作为评测约束待办）
+
+### ✅ 缺陷 8（P2，已于 2026-08-02 修复）：估值快照 as_of 取上一个工作日
+
+2026-07-31 15:00 的行情被记为 `as_of_date = 2026-08-02`（ingest 日）。Gildata `FinQuery` 行情探针语义是「最新行情」——返回数据不带 `trade_date` 字段，caller 必须从调用时刻推断 quote 反映的交易日。
+
+**修复（2026-08-02, commit 49ed5cc）**：
+
+- `app/scripts/ingest_real_data.py`: 新增 `_previous_business_day(today=None)` helper（仅处理周末；法定节假日不在本函数范围，避免联网日历依赖），line 414 估值循环从 `date.today()` 改为 `_previous_business_day()`——周一/周末调用 Gildata quote 时 as_of 正确回退到上一个工作日
+- 新增 10 条测试：周一到周日 7 条 parametrize + 默认参数 + 跨年（2026-12-31 → 2027-01-01）+ 节假日已知限制
+- 长假末段（春节/国庆/中秋）调用方应自行覆盖 `quote_as_of` 入口参数（helper 不联网日历），caller 显式 > 推断
 
 ### ✅ 缺陷 9（P2，已于 2026-08-02 修复）：关系图加原文层（DocumentVersion + SourceSpan → SourceStatement 连续路径）
 
