@@ -22,6 +22,27 @@
 >   review outcome ∈ `confirmed|rejected|needs_more_evidence`；
 >   relation ∈ `supports|contradicts|contextualizes|evidence_gap`；
 >   thesis.review_state ∈ `draft|confirmed`
+>
+> ### 时间点语义与回放边界（缺陷 6 显性告知）
+>
+> `cutoff` 与 `as_of` 控制不同轴的可见性，**不**互相替代：
+>
+> | 参数 | 类型 | 控制的可见性 | 含义 |
+> |---|---|---|---|
+> | `cutoff` | datetime (UTC) | 账本写入时间 | 只返回 `created_at <= cutoff` 的对象（且 `available_at <= cutoff` 的 evidence） |
+> | `as_of` | date | 披露/数据时间 | 只返回数据本身的 `as_of_date <= as_of` 快照（估值、行情、披露） |
+>
+> **关键告知：`cutoff` 回放 ≠ 市场时间模拟**。
+>
+> `cutoff=X` 表示「系统时间 X 那一时刻，研究员**已经看见的**账本内容」——案例、文档、链接的可见性按系统写入时间过滤。**不**等于「X 那个市场交易日研究员能看见的市场」：今天采集的 2024 年报在 `cutoff=2024-12-31` 下不可见（`available_at > cutoff`），即使市场在 2024 年已披露。案例在 `cutoff < case.created_at` 时直接 404 也是同一约束。
+>
+> 这是**诚实的架构选择**——`visible_links` 同时过滤 `available_at` 与 `created_at` 正是为了防后见之明污染；账本不可变约束下无法用 `created_at` 伪造市场时间。生产路径上**做不了真正的「以历史视角模拟研究」**，只能靠预冻结 fixture 走查（见走查报告 `2026-08-02-cambricon-full-pipeline-walkthrough.md` 缺陷 6）。
+>
+> **前端展示建议**：
+>
+> - dossier / documents / graph 接受 `cutoff` 时，响应应回显 `cutoff` + 提示文本（「回放下不显示 cutoff 之后采集的文档/已写入账本」）；
+> - 列表分页的 `total` 应区分 `cutoff_visible_total` 与 `ledger_total`，避免 cutoff 过滤后被误显为「全量」；
+> - `cutoff < case.created_at` 时案例 404 是**预期行为**，不是 bug——前端在新建案例后不要立即用过去 cutoff 查询同一案例。
 
 ---
 
