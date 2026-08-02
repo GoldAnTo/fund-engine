@@ -26,14 +26,20 @@ import type {
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
 import type {
+  AssessmentReviewPayload,
+  AssessmentReviewResult,
+  CaseSummaryItem,
   CaseWorkbenchView,
   CreateCaseInput,
   CreateCaseResult,
   DataCenterView,
   DataMetricSelection,
+  ExtractStatementsResult,
+  IngestRunResult,
   LibraryView,
   LinkReviewPayload,
   NewResearchView,
+  ProposeEvidenceResult,
   RelationshipGraphView,
   ResearchClient,
   ResearchPlanView,
@@ -58,6 +64,9 @@ import {
   buildVersionsView,
   buildWorkspaceOverview,
   buildWorkspaceOverviewScreen,
+  CASE_ID as FIXTURE_CASE_ID,
+  CASE_TITLE as FIXTURE_CASE_TITLE,
+  CUTOFF as FIXTURE_CUTOFF,
   EVIDENCE_LINKS as PROTOTYPE_EVIDENCE_LINKS,
   REVIEW_QUEUE as PROTOTYPE_REVIEW_QUEUE,
   STATEMENTS as PROTOTYPE_STATEMENTS,
@@ -1271,9 +1280,9 @@ export class MockResearchAdapter implements ResearchClient {
 
   async search(query: string): Promise<SearchHit[]> {
     this.throwIfOffline();
-    const q = query.trim();
+    const q = query.trim().toLowerCase();
     if (!q) return [];
-    return simulateLatency<SearchHit[]>([
+    const all: SearchHit[] = [
       {
         group: "案例",
         id: "ai-compute",
@@ -1302,7 +1311,14 @@ export class MockResearchAdapter implements ResearchClient {
         hint: "持仓宁德时代 8.72%",
         navigate_to: `/funds/fd-1`,
       },
-    ]);
+    ];
+    // 与真实后端一致的诚实语义：按分组/标题/提示过滤，
+    // 无匹配时返回空数组，前端据此展示「无匹配结果」空态。
+    return simulateLatency<SearchHit[]>(
+      all.filter((h) =>
+        `${h.group} ${h.title} ${h.hint}`.toLowerCase().includes(q),
+      ),
+    );
   }
 
   async getCaseSummaries(): Promise<ResearchCaseSummary[]> {
@@ -1339,24 +1355,185 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(buildNewResearchView());
   }
 
+  // ── Created cases (screen 2 → screen 4 chain) ─────────────────────────
+  // Cases created via createCase live in memory so the case workbench and
+  // relationship canvas render the case the user just created instead of
+  // falling back to the frozen fixture case.
+
+  private createdCases = new Map<
+    string,
+    { input: CreateCaseInput; result: CreateCaseResult }
+  >();
+
   async createCase(input: CreateCaseInput): Promise<CreateCaseResult> {
-    // Mock: simulate case creation without touching the fixture store.
-    return simulateLatency({
+    const result: CreateCaseResult = {
       caseId: `RC-MOCK-${Date.now()}`,
       thesisIds: input.theses.map((_, i) => `TH-MOCK-${i + 1}`),
-    });
+    };
+    this.createdCases.set(result.caseId, { input, result });
+    return simulateLatency(result);
   }
 
   async getResearchPlanView(): Promise<ResearchPlanView> {
     return simulateLatency(buildResearchPlanView());
   }
 
-  async getCaseWorkbenchView(_caseId: string): Promise<CaseWorkbenchView> {
+  async listCaseSummaries(): Promise<CaseSummaryItem[]> {
+    const created = [...this.createdCases.values()].map(({ input, result }) => ({
+      id: result.caseId,
+      title: input.title,
+      topic: input.industryTopic,
+      updatedAt: new Date().toISOString(),
+    }));
+    return simulateLatency([
+      ...created,
+      {
+        id: FIXTURE_CASE_ID,
+        title: FIXTURE_CASE_TITLE,
+        topic: "ai_compute",
+        updatedAt: FIXTURE_CUTOFF,
+      },
+    ]);
+  }
+
+  async getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView> {
+    if (this.createdCases.has(caseId)) {
+      return simulateLatency(this.buildCreatedCaseWorkbenchView(caseId));
+    }
     return simulateLatency(buildCaseWorkbenchView());
   }
 
-  async getRelationshipGraphView(_caseId: string): Promise<RelationshipGraphView> {
-    return simulateLatency(buildRelationshipGraphView());
+  private buildCreatedCaseWorkbenchView(caseId: string): CaseWorkbenchView {
+    const record = this.createdCases.get(caseId)!;
+    const { input, result } = record;
+    return {
+      case: {
+        id: caseId,
+        title: input.title,
+        question: input.coreQuestion ?? "",
+        researchObject: input.researchObject || input.industryTopic,
+        researchPeriod:
+          [input.periodStart, input.periodEnd].filter(Boolean).join(" — ") ||
+          "未设定",
+        cutoff: input.periodEnd
+          ? `${input.periodEnd}T23:59:59+08:00`
+          : new Date().toISOString(),
+        snapshotId: "尚未冻结",
+        aiState: "草稿",
+        humanReviewState: "未人工复核",
+      },
+      tabs: ["研究摘要", "关键图表", "核心观点", "风险与假设", "相关公司", "研究日志"],
+      formalJudgment: {
+        text: "该案例尚未形成正式结论：请先执行研究计划、收集证据并提交人工复核。",
+        rationale: "新建案例暂无已审核证据，正式判断留空。",
+        reviewState: "pending",
+        snapshotId: "",
+        reviewedAt: "",
+      },
+      aiDraft: "",
+      contradiction: { id: "", label: "暂无反驳线索" },
+      gap: { id: "", label: "尚未识别缺口", explanation: "" },
+      nextValidation: {
+        thesisId: result.thesisIds[0] ?? "",
+        event:
+          input.theses[0]?.nextVerificationEvent ||
+          "制定研究计划并开始收集证据。",
+      },
+      thesisRows: input.theses.map((t, i) => ({
+        id: result.thesisIds[i] ?? `TH-MOCK-${i + 1}`,
+        title: t.title || t.statement.slice(0, 30),
+        supportCondition: t.supportCondition ?? "",
+        evidenceState: "尚无证据关系",
+        relationLabels: "",
+        scope: input.researchObject || input.industryTopic,
+        falsifier: t.falsificationCondition ?? "",
+        reviewState: "pending",
+        evidenceReviewState: "no_links",
+        frozenEligibility: "excluded" as const,
+        selected: i === 0,
+      })),
+      rebuttal: {
+        id: "-",
+        statement: "暂无反驳证据。",
+        documentId: "-",
+        documentTitle: "-",
+        sourceVersion: "-",
+        publishedDate: "-",
+        sourceSpan: "-",
+        reviewLabel: "无",
+        reviewState: "pending",
+        relation: "",
+        snapshotMembership: "-",
+        frozenEligibility: "-",
+      },
+      factorRows: [],
+      selectedFactor: {
+        factorId: "",
+        groupLabel: "",
+        roleLabel: "",
+        statusLabel: "",
+        label: "暂无因素",
+        timeOrder: "",
+        mechanism: "",
+        directEvidence: "",
+        alternatives: "",
+        differenceExplanation: "",
+        scope: "",
+        falsifier: "",
+        counterexample: "",
+        impactObject: "",
+      },
+      sources: [],
+    };
+  }
+
+  async getRelationshipGraphView(caseId: string): Promise<RelationshipGraphView> {
+    const record = this.createdCases.get(caseId);
+    if (!record) return simulateLatency(buildRelationshipGraphView());
+    const { input, result } = record;
+    // Newly created cases have no reviewed evidence yet: only the thesis
+    // layer is populated, the other four layers start empty.
+    const thesisNodes: RelationshipGraphView["nodes"] = input.theses.map(
+      (t, i) => ({
+        id: result.thesisIds[i] ?? `TH-MOCK-${i + 1}`,
+        layer: "命题",
+        title: t.title || t.statement.slice(0, 30),
+        meta: t.creatorType === "ai" ? "AI 提议" : "人工创建",
+        kind: t.creatorType === "ai" ? "ai-proposed" : "reviewed",
+        kindLabel: t.creatorType === "ai" ? "AI 提议" : "人工命题",
+        relation: "",
+        review: "待复核",
+        sourceName: "-",
+        sourceSpan: "-",
+        sourceHref: "",
+        attachment: "-",
+        publicationDate: "-",
+        asOf: input.periodEnd || "-",
+        scope: input.researchObject || input.industryTopic,
+        citations: [],
+        note: t.statement,
+      }),
+    );
+    return simulateLatency({
+      case: {
+        id: caseId,
+        title: input.title,
+        question: input.coreQuestion ?? "",
+        cutoff: input.periodEnd
+          ? `${input.periodEnd}T23:59:59+08:00`
+          : new Date().toISOString(),
+        snapshotId: "尚未冻结",
+      },
+      layers: [
+        { key: "evidence", label: "证据", nodes: [] },
+        { key: "thesis", label: "命题", nodes: thesisNodes },
+        { key: "causal", label: "因果链", nodes: [] },
+        { key: "company", label: "公司", nodes: [] },
+        { key: "fund", label: "基金", nodes: [] },
+      ],
+      nodes: thesisNodes,
+      selectedNodeId: thesisNodes[0]?.id ?? "",
+    });
   }
 
   async getLibraryView(): Promise<LibraryView> {
@@ -1442,6 +1619,26 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(undefined);
   }
 
+  private assessmentReviews: {
+    assessmentId: string;
+    payload: AssessmentReviewPayload;
+  }[] = [];
+
+  async reviewAssessment(
+    assessmentId: string,
+    payload: AssessmentReviewPayload,
+  ): Promise<AssessmentReviewResult> {
+    this.throwIfOffline();
+    this.throwIfPermissionDenied();
+    this.assessmentReviews.push({ assessmentId, payload });
+    return simulateLatency({
+      id: `AR-MOCK-${this.assessmentReviews.length}`,
+      outcome: payload.outcome,
+      reviewer: payload.reviewer,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   async rerunThesis(thesisId: string): Promise<ThesisRerunResult> {
     this.throwIfOffline();
     return simulateLatency({
@@ -1453,6 +1650,38 @@ export class MockResearchAdapter implements ResearchClient {
       rationale: "mock rerun：结论与证据集合无漂移。",
       gaps: ["需要补充直接传导证据"],
       createdAt: new Date().toISOString(),
+    });
+  }
+
+  async proposeEvidence(thesisId: string): Promise<ProposeEvidenceResult> {
+    this.throwIfOffline();
+    // 离线原型无法真正运行 AI 提议；如实返回 0 条，由页面提示用户。
+    return simulateLatency({ thesisId, mode: "mock", linkCount: 0 });
+  }
+
+  async ingestDocuments(caseId?: string): Promise<IngestRunResult> {
+    this.throwIfOffline();
+    // 离线原型不接外部数据源；如实返回全 0，由页面提示用户。
+    return simulateLatency({
+      researchReports: 0,
+      announcements: 0,
+      news: 0,
+      spans: 0,
+      valuationsWritten: 0,
+      valuationsSkipped: 0,
+      caseId: caseId ?? null,
+    });
+  }
+
+  async extractStatements(
+    documentVersionId: string,
+  ): Promise<ExtractStatementsResult> {
+    this.throwIfOffline();
+    // 离线原型无法运行 LLM 抽取；如实返回 0 条。
+    return simulateLatency({
+      documentVersionId,
+      mode: "mock",
+      statementCount: 0,
     });
   }
 }
