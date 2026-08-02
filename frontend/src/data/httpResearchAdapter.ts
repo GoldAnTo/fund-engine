@@ -55,6 +55,7 @@ import type {
   ResearchPlanView,
   ReviewQueueView,
   ReviewQueueViewItem,
+  SnapshotPoint,
   ThemeClaim,
   ThemeFund,
   ThemeHypothesisLink,
@@ -2085,18 +2086,70 @@ export class HttpResearchAdapter implements ResearchClient {
       // (one per thesis); we sum link_count so the timeline reflects the
       // case-wide relationship growth.
       snapshotPoints: (() => {
-        const byCutoff = new Map<string, { id: string; cutoff: string; linkCount: number }>();
-        for (const s of snapshotsDto.snapshots) {
+        const byCutoff = new Map<
+          string,
+          {
+            id: string;
+            cutoff: string;
+            linkCount: number;
+            eventSummary: SnapshotPoint["eventSummary"];
+          }
+        >();
+        // The OpenAPI schema may be regenerated out-of-sync; cast to access
+        // event_summary (a server-side addition for the playback feature).
+        const rawSnapshots = snapshotsDto.snapshots as Array<Schemas["CaseSnapshotDTO"] & {
+          event_summary?: {
+            link_delta: number;
+            removed_link_delta: number;
+            conclusion_flips?: Array<Record<string, string>>;
+            gaps_delta?: Record<string, number>;
+            reviewed_delta: number;
+          };
+        }>;
+        for (const s of rawSnapshots) {
           const existing = byCutoff.get(s.cutoff);
           if (existing) {
             existing.linkCount += s.link_count;
-            // Use the most recent snapshot_id at this cutoff.
             existing.id = s.snapshot_id.slice(0, 8);
+            // Promote event_summary if any of the per-thesis rows carries
+            // one (only one thesis per cutoff will, the first non-null wins).
+            if (!existing.eventSummary && s.event_summary) {
+              existing.eventSummary = {
+                linkDelta: s.event_summary.link_delta,
+                removedLinkDelta: s.event_summary.removed_link_delta,
+                conclusionFlips: (s.event_summary.conclusion_flips ?? []).map(
+                  (f: Record<string, string>) => ({
+                    thesisId: f.thesis_id,
+                    from: f.from,
+                    to: f.to,
+                    statement: f.statement,
+                  }),
+                ),
+                gapsDelta: s.event_summary.gaps_delta ?? {},
+                reviewedDelta: s.event_summary.reviewed_delta,
+              };
+            }
           } else {
             byCutoff.set(s.cutoff, {
               id: s.snapshot_id.slice(0, 8),
               cutoff: s.cutoff,
               linkCount: s.link_count,
+              eventSummary: s.event_summary
+                ? {
+                    linkDelta: s.event_summary.link_delta,
+                    removedLinkDelta: s.event_summary.removed_link_delta,
+                    conclusionFlips: (s.event_summary.conclusion_flips ?? []).map(
+                      (f: Record<string, string>) => ({
+                        thesisId: f.thesis_id,
+                        from: f.from,
+                        to: f.to,
+                        statement: f.statement,
+                      }),
+                    ),
+                    gapsDelta: s.event_summary.gaps_delta ?? {},
+                    reviewedDelta: s.event_summary.reviewed_delta,
+                  }
+                : null,
             });
           }
         }
@@ -2373,6 +2426,8 @@ export class HttpResearchAdapter implements ResearchClient {
           assessedAt: t.ai_assessment?.assessed_at ?? null,
           reviewOutcome: t.review?.outcome ?? null,
           reviewConclusion: t.review?.conclusion ?? null,
+          reviewReason: t.review?.reason ?? null,
+          reviewer: t.review?.reviewer ?? null,
           reviewedAt: t.review?.reviewed_at ?? null,
         })),
       })),

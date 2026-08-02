@@ -6,6 +6,26 @@ from typing import Any
 from app.schemas.v1.common import V1Model
 
 
+class CaseSnapshotEventSummary(V1Model):
+    """Incremental summary of what changed at this snapshot vs. the
+    case-wide previous distinct cutoff (prototype 回放模式).
+
+    - link_delta: number of new evidence links the previous cutoff did not have
+    - removed_link_delta: number of evidence links that disappeared
+    - conclusion_flips: thesis_id -> {from, to, statement}; one entry per
+      conclusion that changed value between cutoffs
+    - gaps_delta: {thesis_id: int} where positive = gaps grew, negative =
+      gaps shrank (signals the case is converging)
+    - reviewed_delta: number of new AssessmentReview records at this cutoff
+    """
+
+    link_delta: int
+    removed_link_delta: int
+    conclusion_flips: list[dict[str, str]]
+    gaps_delta: dict[str, int]
+    reviewed_delta: int
+
+
 class CaseSnapshotDTO(V1Model):
     """One frozen snapshot row (prototype 版本比较 · 快照列表)."""
 
@@ -15,6 +35,7 @@ class CaseSnapshotDTO(V1Model):
     cutoff: str
     created_at: str
     link_count: int
+    event_summary: CaseSnapshotEventSummary | None = None
 
 
 class CaseSnapshotsResponse(V1Model):

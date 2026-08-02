@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   CaseSummaryItem,
+  PlaybackEvent,
   SnapshotPoint,
   VersionColumnContent,
   VersionsView,
 } from "../../domain/prototypeTypes";
+
+interface PlaybackStep {
+  id: string;
+  index: number;
+  cutoff: string;
+  linkCount: number;
+  event: PlaybackEvent;
+}
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -259,6 +268,73 @@ export function VersionsScreen() {
       .finally(() => setRerunning(false));
   };
 
+  // Derive the playback list. We reuse snapshotPoints so the UI is a single
+  // source of truth; filter out the first cutoff (eventSummary=null) and
+  // attach a stable id so React keys are stable across re-renders.
+  const playbackSteps: PlaybackStep[] = useMemo(() => {
+    if (!view) return [];
+    return view.snapshotPoints
+      .filter((p) => p.eventSummary !== null)
+      .map((p, i) => ({
+        id: p.id + ":" + p.cutoff,
+        index: i,
+        cutoff: p.cutoff,
+        linkCount: p.linkCount,
+        event: p.eventSummary as PlaybackEvent,
+      }));
+  }, [view]);
+
+  const [playbackIndex, setPlaybackIndex] = useState(0);
+  // Re-sync the cursor when the playback list changes (e.g. user switched
+  // case or modified the cutoff window).
+  useEffect(() => {
+    if (playbackSteps.length > 0) {
+      setPlaybackIndex((idx) => Math.min(idx, playbackSteps.length - 1));
+    } else {
+      setPlaybackIndex(0);
+    }
+  }, [playbackSteps.length]);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState<0.5 | 1 | 2>(1);
+  // Auto-advance one step every (1500 / speed) ms while playing.
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (playbackSteps.length === 0) return;
+    const id = window.setInterval(() => {
+      setPlaybackIndex((i) => {
+        if (i >= playbackSteps.length - 1) {
+          setIsPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, Math.round(1500 / playbackSpeed));
+    return () => window.clearInterval(id);
+  }, [isPlaying, playbackSpeed, playbackSteps.length]);
+
+  // Sync the timeline cursor to the current playback step. We treat the
+  // active step's cutoff as the "current" compare cutoff so the rest of the
+  // page (主对比区 / 多命题概览表) reflects the playhead.
+  useEffect(() => {
+    if (playbackSteps.length === 0) return;
+    const cur = playbackSteps[Math.min(playbackIndex, playbackSteps.length - 1)];
+    if (cur && cur.cutoff !== compareCutoff) {
+      setCompareCutoff(cur.cutoff);
+      loadView(caseId || undefined, { base: baseCutoff, compare: cur.cutoff });
+    }
+  }, [playbackIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onTogglePlay = useCallback(() => {
+    setIsPlaying((p) => {
+      if (!p && playbackSteps.length - 1 <= playbackIndex) {
+        // Re-start from beginning when play is hit at the tail.
+        setPlaybackIndex(0);
+      }
+      return !p;
+    });
+  }, [playbackSteps.length, playbackIndex]);
+
   if (state.kind === "loading") {
     return (
       <div className="prototype-screen" data-testid="versions-loading">
@@ -399,6 +475,173 @@ export function VersionsScreen() {
               loadView(caseId || undefined, { base: c, compare: compareCutoff });
             }}
           />
+        </section>
+      ) : null}
+
+      {playbackSteps.length > 0 ? (
+        <section
+          data-testid="playback-mode"
+          style={{ marginBottom: 24, padding: 12, background: "var(--surface-subtle, #fafafa)", borderRadius: 6 }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              marginBottom: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <strong>回放模式</strong>
+            <button
+              type="button"
+              data-testid="playback-toggle"
+              onClick={onTogglePlay}
+              className="prototype-button primary"
+              disabled={playbackSteps.length === 0}
+            >
+              {isPlaying ? "⏸ 暂停" : "▶ 播放"}
+            </button>
+            <label style={{ fontSize: 12 }}>
+              速度：
+              <select
+                data-testid="playback-speed"
+                value={playbackSpeed}
+                onChange={(e) =>
+                  setPlaybackSpeed(parseFloat(e.target.value) as 0.5 | 1 | 2)
+                }
+              >
+                <option value={0.5}>0.5x</option>
+                <option value={1}>1x</option>
+                <option value={2}>2x</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              data-testid="playback-prev"
+              onClick={() =>
+                setPlaybackIndex((i) => Math.max(0, i - 1))
+              }
+              disabled={playbackIndex === 0}
+            >
+              ◀ 上一帧
+            </button>
+            <button
+              type="button"
+              data-testid="playback-next"
+              onClick={() =>
+                setPlaybackIndex((i) =>
+                  Math.min(playbackSteps.length - 1, i + 1),
+                )
+              }
+              disabled={playbackIndex >= playbackSteps.length - 1}
+            >
+              下一帧 ▶
+            </button>
+            <span style={{ fontSize: 12, color: "var(--ink-muted)" }}>
+              第 {playbackIndex + 1} / {playbackSteps.length} 步
+            </span>
+          </div>
+          <div
+            style={{
+              height: 6,
+              background: "var(--surface, #eee)",
+              borderRadius: 3,
+              overflow: "hidden",
+              marginBottom: 12,
+            }}
+          >
+            <div
+              data-testid="playback-progress"
+              style={{
+                width: `${
+                  playbackSteps.length === 0
+                    ? 0
+                    : ((playbackIndex + 1) / playbackSteps.length) * 100
+                }%`,
+                height: "100%",
+                background: "var(--accent, #f59e0b)",
+                transition: "width 200ms ease",
+              }}
+            />
+          </div>
+          {(() => {
+            const cur = playbackSteps[Math.min(playbackIndex, playbackSteps.length - 1)];
+            if (!cur) return null;
+            return (
+              <div
+                data-testid="playback-event-card"
+                style={{
+                  background: "var(--surface, #fff)",
+                  border: "1px solid var(--ink-muted, #ccc)",
+                  borderRadius: 4,
+                  padding: 12,
+                }}
+              >
+                <div style={{ fontSize: 11, color: "var(--ink-muted)" }}>
+                  {cur.cutoff.replace("T", " ")} · 总关系 {cur.linkCount}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 13 }}>
+                  增量{" "}
+                  <strong style={{ color: "var(--positive)" }}>
+                    +{cur.event.linkDelta}
+                  </strong>{" "}
+                  关系
+                  {cur.event.removedLinkDelta > 0 ? (
+                    <span>
+                      {" / "}移除{" "}
+                      <strong style={{ color: "var(--negative)" }}>
+                        −{cur.event.removedLinkDelta}
+                      </strong>
+                    </span>
+                  ) : null}
+                  {cur.event.reviewedDelta > 0 ? (
+                    <span>
+                      {" / "}复核{" "}
+                      <strong style={{ color: "var(--info, #3b82f6)" }}>
+                        +{cur.event.reviewedDelta}
+                      </strong>
+                    </span>
+                  ) : null}
+                </div>
+                {cur.event.conclusionFlips.length > 0 ? (
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
+                    {cur.event.conclusionFlips.map((f, i) => (
+                      <li key={i} data-testid="playback-flip">
+                        <span className={`state-badge ${badgeFor(f.from)}`}>
+                          {conclusionLabel(f.from)}
+                        </span>{" "}
+                        →{" "}
+                        <span className={`state-badge ${badgeFor(f.to)}`}>
+                          {conclusionLabel(f.to)}
+                        </span>
+                        <span style={{ marginLeft: 6, color: "var(--ink-muted)" }}>
+                          {f.statement.slice(0, 40)}
+                          {f.statement.length > 40 ? "…" : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {Object.keys(cur.event.gapsDelta).length > 0 ? (
+                  <div style={{ marginTop: 4, fontSize: 12 }}>
+                    缺口变化：
+                    {Object.entries(cur.event.gapsDelta).map(([tid, d]) => (
+                      <span
+                        key={tid}
+                        style={{
+                          marginLeft: 8,
+                          color: d < 0 ? "var(--positive)" : "var(--negative)",
+                        }}
+                      >
+                        {tid.slice(0, 8)} {d > 0 ? `+${d}` : d}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
         </section>
       ) : null}
 

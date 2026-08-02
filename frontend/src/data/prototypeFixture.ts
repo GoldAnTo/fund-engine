@@ -1983,10 +1983,50 @@ export function buildVersionsView(): VersionsView {
     ],
     availableCutoffs: ["2025-03-31", "2025-04-15", "2025-05-15", "2025-06-30"],
     snapshotPoints: [
-      { id: "RS-2025-03-31-v2", cutoff: "2025-03-31", linkCount: 4 },
-      { id: "RS-2025-04-15-v2", cutoff: "2025-04-15", linkCount: 9 },
-      { id: "RS-2025-05-15-v3", cutoff: "2025-05-15", linkCount: 17 },
-      { id: "RS-2025-06-30-v4", cutoff: "2025-06-30", linkCount: 28 },
+      { id: "RS-2025-03-31-v2", cutoff: "2025-03-31", linkCount: 4, eventSummary: null },
+      {
+        id: "RS-2025-04-15-v2",
+        cutoff: "2025-04-15",
+        linkCount: 9,
+        eventSummary: {
+          linkDelta: 5,
+          removedLinkDelta: 0,
+          conclusionFlips: [],
+          gapsDelta: {},
+          reviewedDelta: 0,
+        },
+      },
+      {
+        id: "RS-2025-05-15-v3",
+        cutoff: "2025-05-15",
+        linkCount: 17,
+        eventSummary: {
+          linkDelta: 8,
+          removedLinkDelta: 0,
+          conclusionFlips: [
+            {
+              thesisId: "thesis-fixture-1",
+              from: "insufficient_evidence",
+              to: "supported",
+              statement: "本季度收入因价格回升显著改善",
+            },
+          ],
+          gapsDelta: { "thesis-fixture-1": -2 },
+          reviewedDelta: 1,
+        },
+      },
+      {
+        id: "RS-2025-06-30-v4",
+        cutoff: "2025-06-30",
+        linkCount: 28,
+        eventSummary: {
+          linkDelta: 11,
+          removedLinkDelta: 0,
+          conclusionFlips: [],
+          gapsDelta: {},
+          reviewedDelta: 0,
+        },
+      },
     ],
   };
 }

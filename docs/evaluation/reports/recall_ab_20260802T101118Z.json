@@ -1,0 +1,247 @@
+{
+  "generated_at": "2026-08-02T10:11:18.777644+00:00",
+  "cutoff": "2026-12-31T00:00:00+00:00",
+  "tracked_ks": [
+    10,
+    20
+  ],
+  "cases_seeded": [
+    "AI 算力链",
+    "锂电储能链",
+    "半导体设备国产化"
+  ],
+  "candidate_pool": "all cutoff-visible statements across all seeded cases",
+  "overall": {
+    "bm25": {
+      "recall_at_10": 0.25,
+      "recall_at_20": 0.375
+    },
+    "hybrid": {
+      "recall_at_10": 0.5833,
+      "recall_at_20": 0.6875
+    }
+  },
+  "per_case": [
+    {
+      "case_id": "ae3912af-83ab-4db3-a4ae-9d42402aadf8",
+      "case": "AI 算力链",
+      "overall": {
+        "bm25": {
+          "recall_at_10": 0.4667,
+          "recall_at_20": 0.6
+        },
+        "hybrid": {
+          "recall_at_10": 0.6667,
+          "recall_at_20": 0.7333
+        }
+      },
+      "per_thesis": [
+        {
+          "thesis_id": "9efe191f-25b7-4764-b5d9-d18007236ff8",
+          "thesis": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+          "gold_count": 5,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.4,
+              "recall_at_20": 0.6
+            },
+            "hybrid": {
+              "recall_at_10": 0.6,
+              "recall_at_20": 0.8
+            }
+          },
+          "recovered_by_hybrid": [
+            "7c2a4bdd-bae4-4b7c-aece-517409248e65"
+          ],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "90cbda98-5305-4c6c-a0f2-a7fb6c42b5aa",
+          "thesis": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+          "gold_count": 5,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 1.0,
+              "recall_at_20": 1.0
+            },
+            "hybrid": {
+              "recall_at_10": 1.0,
+              "recall_at_20": 1.0
+            }
+          },
+          "recovered_by_hybrid": [],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "6cd8793e-2138-4a0c-af3e-b1c3c5965eb8",
+          "thesis": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+          "gold_count": 5,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.0,
+              "recall_at_20": 0.2
+            },
+            "hybrid": {
+              "recall_at_10": 0.4,
+              "recall_at_20": 0.4
+            }
+          },
+          "recovered_by_hybrid": [
+            "de177d7e-b438-4d64-8f6b-62d8602739e0"
+          ],
+          "lost_by_hybrid": []
+        }
+      ]
+    },
+    {
+      "case_id": "bfd5e04c-7837-4560-8bde-9a5d5c7fc8a6",
+      "case": "锂电储能链",
+      "overall": {
+        "bm25": {
+          "recall_at_10": 0.2667,
+          "recall_at_20": 0.3333
+        },
+        "hybrid": {
+          "recall_at_10": 0.5333,
+          "recall_at_20": 0.6
+        }
+      },
+      "per_thesis": [
+        {
+          "thesis_id": "56986bcd-6cd7-4a49-af50-68f96ddf4666",
+          "thesis": "2026年全球储能装机高增长将驱动锂电池需求持续扩张",
+          "gold_count": 7,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.2857,
+              "recall_at_20": 0.4286
+            },
+            "hybrid": {
+              "recall_at_10": 0.4286,
+              "recall_at_20": 0.4286
+            }
+          },
+          "recovered_by_hybrid": [],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "c026aa7c-9a09-4a69-a668-ccea81a60b15",
+          "thesis": "碳酸锂价格回升将在2026年修复锂电中游材料环节盈利",
+          "gold_count": 4,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.5,
+              "recall_at_20": 0.5
+            },
+            "hybrid": {
+              "recall_at_10": 0.5,
+              "recall_at_20": 0.5
+            }
+          },
+          "recovered_by_hybrid": [],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "02fb52ed-95d5-469c-8e5c-a22fc3c21221",
+          "thesis": "宁德时代储能业务高增长将支撑其当前估值溢价持续",
+          "gold_count": 4,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.0,
+              "recall_at_20": 0.0
+            },
+            "hybrid": {
+              "recall_at_10": 0.75,
+              "recall_at_20": 1.0
+            }
+          },
+          "recovered_by_hybrid": [
+            "b0b4ef9f-836e-4e8c-b7a2-7a190afab6d3",
+            "50e1949d-ab33-4985-8ce8-3af3d91cbdb9",
+            "f60b4d56-8e54-4ff1-96de-ee95b90bb072",
+            "b6f128db-175f-40aa-8278-a8596b87cc98"
+          ],
+          "lost_by_hybrid": []
+        }
+      ]
+    },
+    {
+      "case_id": "56f04dfe-aa7a-4d22-85b0-769ac2758555",
+      "case": "半导体设备国产化",
+      "overall": {
+        "bm25": {
+          "recall_at_10": 0.0556,
+          "recall_at_20": 0.2222
+        },
+        "hybrid": {
+          "recall_at_10": 0.5556,
+          "recall_at_20": 0.7222
+        }
+      },
+      "per_thesis": [
+        {
+          "thesis_id": "01f4ed67-f9f3-40ca-8532-f3895d4e7af0",
+          "thesis": "2026年国内晶圆厂扩产将驱动国产半导体设备订单持续高增长",
+          "gold_count": 7,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.1429,
+              "recall_at_20": 0.5714
+            },
+            "hybrid": {
+              "recall_at_10": 0.5714,
+              "recall_at_20": 0.5714
+            }
+          },
+          "recovered_by_hybrid": [],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "dc247fb0-fe3a-4472-863d-b2bf1f5f28ba",
+          "thesis": "先进封装扩产将显著修复国产测试设备环节盈利",
+          "gold_count": 5,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.0,
+              "recall_at_20": 0.0
+            },
+            "hybrid": {
+              "recall_at_10": 0.6,
+              "recall_at_20": 1.0
+            }
+          },
+          "recovered_by_hybrid": [
+            "b38e6e99-90d2-4c35-bf84-3ae958100368",
+            "9a80180f-295e-49a9-bfd2-1bcb73684a1e",
+            "5fe2e1a7-b1ce-4a44-ae38-1a1b7263325d",
+            "c6cc9d70-7ec9-4266-ad9b-fa4399f45a84",
+            "0bcc5ad8-e613-43c4-b128-618b3a5b9047"
+          ],
+          "lost_by_hybrid": []
+        },
+        {
+          "thesis_id": "ca2d8d60-b818-46d5-8143-dc293b0ee4f5",
+          "thesis": "光刻环节受限不改国产半导体设备板块整体估值支撑",
+          "gold_count": 6,
+          "modes": {
+            "bm25": {
+              "recall_at_10": 0.0,
+              "recall_at_20": 0.0
+            },
+            "hybrid": {
+              "recall_at_10": 0.5,
+              "recall_at_20": 0.6667
+            }
+          },
+          "recovered_by_hybrid": [
+            "fba0f78e-2bf7-4ce5-9691-afb2936e5ec5",
+            "a1cc3965-a3f0-4e11-9951-ee685db83343",
+            "3730aa86-1263-4075-bac2-ff856381af72",
+            "6324afe0-f47d-456b-a469-70f3cc105fb9"
+          ],
+          "lost_by_hybrid": []
+        }
+      ]
+    }
+  ]
+}

@@ -52,6 +52,8 @@ import type {
   ThesisRerunResult,
   ThemeWorkbenchView,
   TopicListItem,
+  TopicPathNode,
+  TopicThesisView,
   TopicView,
   VersionsView,
   WorkspaceOverviewScreen,
@@ -1158,6 +1160,42 @@ function parseFailedDocs(): SourceDocumentView[] {
 
 const COMPANY_LIST: CompanyListItem[] = [
   {
+    id: "co-nvda",
+    code: "NVDA",
+    name: "NVIDIA Corporation",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 3,
+    latestReportPeriod: "FY2026 Q1",
+  },
+  {
+    id: "co-tsmc",
+    code: "TSM",
+    name: "TSMC",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 3,
+    latestReportPeriod: "2026-05",
+  },
+  {
+    id: "co-msft",
+    code: "MSFT",
+    name: "Microsoft Corporation",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 3,
+    latestReportPeriod: "FY2025 Q3",
+  },
+  {
+    id: "co-avgo",
+    code: "AVGO",
+    name: "Broadcom Inc.",
+    type: "listed",
+    stockCount: 1,
+    themeRoleCount: 2,
+    latestReportPeriod: "FY2025 Q2",
+  },
+  {
     id: "co-cambricon",
     code: "688256",
     name: "寒武纪",
@@ -1337,11 +1375,473 @@ const COMPANY_DOSSIERS: Record<string, CompanyDossierView> = {
       },
     ],
   },
+  "co-nvda": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-nvda",
+      code: "NVDA",
+      name: "NVIDIA Corporation",
+      type: "listed",
+      createdAt: "2025-12-01T00:00:00+00:00",
+    },
+    stocks: [
+      { id: "st-nvda", code: "NVDA", name: "NVIDIA Corp", market: "NASDAQ" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-nvda-aicompute",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "算力芯片与系统供给",
+        scope: { chain: "AI 算力", segment: "上游芯片" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-nvda-fy26q1-dc",
+        statementText:
+          "Data Center revenue reflected continued demand for accelerated computing and AI infrastructure.",
+        spanId: "span-nvda-fy26q1-p38",
+        documentVersionId: "dv-nvda-fy26q1-v1",
+      },
+      {
+        id: "tr-nvda-capex",
+        caseId: "RC-CAPEX-2025-02",
+        caseTitle: "云厂商 CapEx",
+        role: "资本开支承接对象",
+        scope: { chain: "云资本开支", segment: "GPU 与系统" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+      {
+        id: "tr-nvda-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能约束对象",
+        scope: { chain: "先进封装", segment: "CoWoS-L" },
+        applicableFrom: "2025-01-01",
+        applicableTo: "2026-12-31",
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-capex",
+        caseId: "RC-CAPEX-2025-02",
+        caseTitle: "云厂商 CapEx",
+        statement: "云厂商资本开支形成持续算力需求",
+        title: "CapEx 持续",
+        aiConclusion: "supported",
+        aiProvisional: false,
+        assessedAt: "2025-07-30T09:12:00+00:00",
+        reviewOutcome: "confirmed",
+        reviewConclusion: "supported",
+        reviewReason: "三家云厂商财报口径一致",
+        reviewer: "林漠",
+        reviewedAt: "2025-08-02T11:30:00+00:00",
+      },
+      {
+        thesisId: "th-procurement",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        statement: "订单积压到收入的传导需要独立披露验证",
+        title: "订单传导",
+        aiConclusion: "insufficient_evidence",
+        aiProvisional: true,
+        assessedAt: "2025-07-30T09:14:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+      {
+        thesisId: "th-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        statement: "先进制程与互连供给决定交付斜率",
+        title: "交付斜率",
+        aiConclusion: "contradicted",
+        aiProvisional: true,
+        assessedAt: "2025-07-30T09:20:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-nvda",
+        stockCode: "NVDA",
+        metricName: "Forward P/E",
+        metricValue: 32.4,
+        asOfDate: "2025-06-30",
+        source: "factset",
+        definition: "未来 12 个月一致预期 EPS",
+      },
+      {
+        stockId: "st-nvda",
+        stockCode: "NVDA",
+        metricName: "EV / Sales",
+        metricValue: 18.7,
+        asOfDate: "2025-06-30",
+        source: "factset",
+        definition: "企业价值 / TTM 营收",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-aic-etf",
+        fundCode: "159819",
+        fundName: "鹏华中证人工智能 ETF",
+        stockId: "st-nvda",
+        stockCode: "NVDA",
+        weight: 8.4,
+        reportPeriod: "2025-03-31",
+        publishedAt: "2025-04-22T08:00:00+00:00",
+        acquiredAt: "2025-04-22T09:00:00+00:00",
+        source: "fund-report-2025q1-v2",
+      },
+      {
+        fundId: "fd-semi",
+        fundCode: "161725",
+        fundName: "招商中证半导体 ETF",
+        stockId: "st-nvda",
+        stockCode: "NVDA",
+        weight: 6.1,
+        reportPeriod: "2025-03-31",
+        publishedAt: "2025-04-22T08:00:00+00:00",
+        acquiredAt: "2025-04-22T09:05:00+00:00",
+        source: "fund-report-2025q1-v1",
+      },
+    ],
+  },
+  "co-tsmc": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-tsmc",
+      code: "TSM",
+      name: "TSMC",
+      type: "listed",
+      createdAt: "2025-12-01T00:00:00+00:00",
+    },
+    stocks: [
+      { id: "st-tsmc", code: "TSM", name: "Taiwan Semiconductor", market: "NYSE" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-tsmc-aicompute",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "先进制程与封装",
+        scope: { chain: "AI 算力", segment: "晶圆与封装" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-tsmc-2025m05",
+        statementText: "5 月合并营收 1,200 亿新台币，环比 +20%",
+        spanId: "span-tsmc-m05",
+        documentVersionId: "dv-tsmc-m05-v1",
+      },
+      {
+        id: "tr-tsmc-power",
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        role: "电力与并网瓶颈对象",
+        scope: { chain: "电力", segment: "数据中心园区" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+      {
+        id: "tr-tsmc-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能约束对象",
+        scope: { chain: "先进封装", segment: "CoWoS-S" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-power",
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        statement: "电力与并网是否成为瓶颈",
+        title: "电力瓶颈",
+        aiConclusion: "contradicted",
+        aiProvisional: false,
+        assessedAt: "2025-07-30T09:12:00+00:00",
+        reviewOutcome: "modified",
+        reviewConclusion: "contradicted",
+        reviewReason: "地区级项目已并网或缓建中",
+        reviewer: "林漠",
+        reviewedAt: "2025-08-02T11:30:00+00:00",
+      },
+      {
+        thesisId: "th-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        statement: "先进制程与互连供给决定交付斜率",
+        title: "交付斜率",
+        aiConclusion: "supported",
+        aiProvisional: true,
+        assessedAt: "2025-07-30T09:20:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-tsmc",
+        stockCode: "TSM",
+        metricName: "Forward P/E",
+        metricValue: 21.5,
+        asOfDate: "2025-06-30",
+        source: "factset",
+        definition: "未来 12 个月一致预期 EPS",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-aic-etf",
+        fundCode: "159819",
+        fundName: "鹏华中证人工智能 ETF",
+        stockId: "st-tsmc",
+        stockCode: "TSM",
+        weight: 5.2,
+        reportPeriod: "2025-03-31",
+        publishedAt: "2025-04-22T08:00:00+00:00",
+        acquiredAt: "2025-04-22T09:00:00+00:00",
+        source: "fund-report-2025q1-v2",
+      },
+    ],
+  },
+  "co-msft": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-msft",
+      code: "MSFT",
+      name: "Microsoft Corporation",
+      type: "listed",
+      createdAt: "2025-12-01T00:00:00+00:00",
+    },
+    stocks: [
+      { id: "st-msft", code: "MSFT", name: "Microsoft Corp", market: "NASDAQ" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-msft-aicompute",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "需求与资本开支主体",
+        scope: { chain: "AI 算力", segment: "云与 AI 基础设施" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-msft-fy25q3-call",
+        statementText:
+          "Demand for our AI services remained higher than our available capacity.",
+        spanId: "span-msft-call-p4",
+        documentVersionId: "dv-msft-call-2025-04-30-v1",
+      },
+      {
+        id: "tr-msft-capex",
+        caseId: "RC-CAPEX-2025-02",
+        caseTitle: "云厂商 CapEx",
+        role: "需求与资本开支主体",
+        scope: { chain: "云资本开支", segment: "Azure / OpenAI" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+      {
+        id: "tr-msft-power",
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        role: "系统上线与分部收入",
+        scope: { chain: "电力", segment: "数据中心园区" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-demand",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        statement: "需求能否穿透至可验证收入",
+        title: "需求穿透",
+        aiConclusion: "insufficient_evidence",
+        aiProvisional: true,
+        assessedAt: "2025-07-30T09:12:00+00:00",
+        reviewOutcome: "modified",
+        reviewConclusion: "supported",
+        reviewReason: "订单可见性来自业绩说明会陈述",
+        reviewer: "陈子仪",
+        reviewedAt: "2025-08-02T11:30:00+00:00",
+      },
+      {
+        thesisId: "th-capex",
+        caseId: "RC-CAPEX-2025-02",
+        caseTitle: "云厂商 CapEx",
+        statement: "云厂商资本开支形成持续算力需求",
+        title: "CapEx 持续",
+        aiConclusion: "supported",
+        aiProvisional: false,
+        assessedAt: "2025-07-30T09:14:00+00:00",
+        reviewOutcome: "confirmed",
+        reviewConclusion: "supported",
+        reviewReason: "三家云厂商财报口径一致",
+        reviewer: "林漠",
+        reviewedAt: "2025-08-02T11:30:00+00:00",
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-msft",
+        stockCode: "MSFT",
+        metricName: "Forward P/E",
+        metricValue: 33.1,
+        asOfDate: "2025-06-30",
+        source: "factset",
+        definition: "未来 12 个月一致预期 EPS",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-aic-etf",
+        fundCode: "159819",
+        fundName: "鹏华中证人工智能 ETF",
+        stockId: "st-msft",
+        stockCode: "MSFT",
+        weight: 4.1,
+        reportPeriod: "2025-03-31",
+        publishedAt: "2025-04-22T08:00:00+00:00",
+        acquiredAt: "2025-04-22T09:00:00+00:00",
+        source: "fund-report-2025q1-v2",
+      },
+    ],
+  },
+  "co-avgo": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    company: {
+      id: "co-avgo",
+      code: "AVGO",
+      name: "Broadcom Inc.",
+      type: "listed",
+      createdAt: "2025-12-01T00:00:00+00:00",
+    },
+    stocks: [
+      { id: "st-avgo", code: "AVGO", name: "Broadcom Inc.", market: "NASDAQ" },
+    ],
+    themeRoles: [
+      {
+        id: "tr-avgo-aicompute",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "网络与定制芯片",
+        scope: { chain: "AI 算力", segment: "网络与 ASIC" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+      {
+        id: "tr-avgo-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能的来料影响对象",
+        scope: { chain: "先进封装", segment: "CoWoS 与 HBM" },
+        applicableFrom: "2025-01-01",
+        applicableTo: "2026-12-31",
+        statementId: null,
+        statementText: null,
+        spanId: null,
+        documentVersionId: null,
+      },
+    ],
+    relatedTheses: [
+      {
+        thesisId: "th-packaging",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        statement: "CoWoS 与 HBM 共同影响交付",
+        title: "封装与 HBM",
+        aiConclusion: "supported",
+        aiProvisional: true,
+        assessedAt: "2025-07-30T09:20:00+00:00",
+        reviewOutcome: null,
+        reviewConclusion: null,
+        reviewReason: null,
+        reviewer: null,
+        reviewedAt: null,
+      },
+    ],
+    valuations: [
+      {
+        stockId: "st-avgo",
+        stockCode: "AVGO",
+        metricName: "Forward P/E",
+        metricValue: 28.6,
+        asOfDate: "2025-06-30",
+        source: "factset",
+        definition: "未来 12 个月一致预期 EPS",
+      },
+    ],
+    fundHolders: [
+      {
+        fundId: "fd-semi",
+        fundCode: "161725",
+        fundName: "招商中证半导体 ETF",
+        stockId: "st-avgo",
+        stockCode: "AVGO",
+        weight: 3.8,
+        reportPeriod: "2025-03-31",
+        publishedAt: "2025-04-22T08:00:00+00:00",
+        acquiredAt: "2025-04-22T09:05:00+00:00",
+        source: "fund-report-2025q1-v1",
+      },
+    ],
+  },
 };
 
 const TOPIC_LIST: TopicListItem[] = [
-  { tag: "算力国产化", caseCount: 2, companyCount: 2, thesisCount: 3 },
+  { tag: "AI 算力基础设施", caseCount: 3, companyCount: 6, thesisCount: 7 },
+  { tag: "国产算力替代", caseCount: 2, companyCount: 2, thesisCount: 3 },
+  { tag: "数据中心电力约束", caseCount: 2, companyCount: 1, thesisCount: 1 },
   { tag: "云厂商CapEx", caseCount: 1, companyCount: 1, thesisCount: 1 },
+  { tag: "先进封装供给", caseCount: 2, companyCount: 4, thesisCount: 3 },
+  { tag: "主题聚合", caseCount: 1, companyCount: 0, thesisCount: 0 },
 ];
 
 const TOPIC_VIEWS: Record<string, TopicView> = {
@@ -1371,6 +1871,8 @@ const TOPIC_VIEWS: Record<string, TopicView> = {
             assessedAt: "2026-07-28T09:12:00+00:00",
             reviewOutcome: null,
             reviewConclusion: null,
+            reviewReason: null,
+            reviewer: null,
             reviewedAt: null,
           },
           {
@@ -1382,6 +1884,8 @@ const TOPIC_VIEWS: Record<string, TopicView> = {
             assessedAt: "2026-07-28T09:20:00+00:00",
             reviewOutcome: "modified",
             reviewConclusion: "contradicted",
+            reviewReason: "订单可见性不足以支撑当前估值隐含的预期",
+            reviewer: "陈子仪",
             reviewedAt: "2026-07-30T03:22:00+00:00",
           },
         ],
@@ -1407,6 +1911,8 @@ const TOPIC_VIEWS: Record<string, TopicView> = {
             assessedAt: "2026-07-26T11:00:00+00:00",
             reviewOutcome: "confirmed",
             reviewConclusion: null,
+            reviewReason: "三家云厂商财报口径一致",
+            reviewer: "林漠",
             reviewedAt: "2026-07-27T02:10:00+00:00",
           },
         ],
@@ -1495,6 +2001,8 @@ const TOPIC_VIEWS: Record<string, TopicView> = {
             assessedAt: "2026-07-26T11:00:00+00:00",
             reviewOutcome: "confirmed",
             reviewConclusion: null,
+            reviewReason: "三家云厂商财报口径一致",
+            reviewer: "林漠",
             reviewedAt: "2026-07-27T02:10:00+00:00",
           },
         ],
@@ -1507,6 +2015,436 @@ const TOPIC_VIEWS: Record<string, TopicView> = {
       thesisIds: ["th-cloud-capex"],
       themeRoleIds: [],
       disclosureIds: [],
+    },
+  },
+  "AI 算力基础设施": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "AI 算力基础设施",
+    cases: [
+      {
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        thesisCounts: {
+          supported: 1,
+          contradicted: 1,
+          insufficient_evidence: 0,
+          ai_pending: 1,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-demand",
+            statement: "需求能否穿透至可验证收入",
+            title: "需求穿透",
+            aiConclusion: "supported",
+            aiProvisional: false,
+            assessedAt: "2025-07-28T09:12:00+00:00",
+            reviewOutcome: "modified",
+            reviewConclusion: "supported",
+            reviewReason: "订单可见性来自业绩说明会陈述",
+            reviewer: "陈子仪",
+            reviewedAt: "2025-07-30T03:22:00+00:00",
+          },
+          {
+            thesisId: "th-aic-03",
+            statement: "需求高于可供容量，收入兑现仍受约束",
+            title: "收入兑现约束",
+            aiConclusion: "contradicted",
+            aiProvisional: true,
+            assessedAt: "2025-07-28T09:20:00+00:00",
+            reviewOutcome: null,
+            reviewConclusion: null,
+            reviewReason: null,
+            reviewer: null,
+            reviewedAt: null,
+          },
+          {
+            thesisId: "th-procurement",
+            statement: "订单积压到收入的传导需要独立披露验证",
+            title: "订单传导",
+            aiConclusion: "insufficient_evidence",
+            aiProvisional: true,
+            assessedAt: "2025-07-28T09:25:00+00:00",
+            reviewOutcome: null,
+            reviewConclusion: null,
+            reviewReason: null,
+            reviewer: null,
+            reviewedAt: null,
+          },
+        ],
+      },
+      {
+        caseId: "RC-CAPEX-2025-02",
+        caseTitle: "云厂商 CapEx",
+        thesisCounts: {
+          supported: 1,
+          contradicted: 0,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-capex",
+            statement: "云厂商资本开支形成持续算力需求",
+            title: "CapEx 持续",
+            aiConclusion: "supported",
+            aiProvisional: false,
+            assessedAt: "2025-07-30T09:12:00+00:00",
+            reviewOutcome: "confirmed",
+            reviewConclusion: "supported",
+            reviewReason: "三家云厂商财报口径一致",
+            reviewer: "林漠",
+            reviewedAt: "2025-08-02T11:30:00+00:00",
+          },
+        ],
+      },
+      {
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        thesisCounts: {
+          supported: 0,
+          contradicted: 1,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-power",
+            statement: "电力与并网是否成为瓶颈",
+            title: "电力瓶颈",
+            aiConclusion: "contradicted",
+            aiProvisional: false,
+            assessedAt: "2025-07-30T09:14:00+00:00",
+            reviewOutcome: "modified",
+            reviewConclusion: "contradicted",
+            reviewReason: "地区级项目已并网或缓建中",
+            reviewer: "林漠",
+            reviewedAt: "2025-08-02T11:30:00+00:00",
+          },
+        ],
+      },
+    ],
+    companyRoles: [
+      {
+        companyId: "co-nvda",
+        companyCode: "NVDA",
+        companyName: "NVIDIA · NVDA",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "算力芯片与系统供给",
+        scope: { chain: "AI 算力", segment: "上游芯片" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-nvda-fy26q1-dc",
+      },
+      {
+        companyId: "co-tsmc",
+        companyCode: "TSM",
+        companyName: "TSMC · TSM",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "先进制程与封装",
+        scope: { chain: "AI 算力", segment: "晶圆与封装" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-tsmc-2025m05",
+      },
+      {
+        companyId: "co-msft",
+        companyCode: "MSFT",
+        companyName: "Microsoft · MSFT",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "需求与资本开支主体",
+        scope: { chain: "AI 算力", segment: "云与 AI 基础设施" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: "stmt-msft-fy25q3-call",
+      },
+    ],
+    fundExposure: [
+      {
+        fundId: "fd-aic-etf",
+        fundCode: "159819",
+        fundName: "鹏华中证人工智能 ETF",
+        stockId: "st-nvda",
+        stockCode: "NVDA",
+        stockName: "NVIDIA Corp",
+        weight: 18.4,
+        reportPeriod: "2025-03-31",
+        source: "fund-report-2025q1-v2",
+      },
+      {
+        fundId: "fd-semi",
+        fundCode: "161725",
+        fundName: "招商中证半导体 ETF",
+        stockId: "st-tsmc",
+        stockCode: "TSM",
+        stockName: "TSMC",
+        weight: 14.7,
+        reportPeriod: "2025-03-31",
+        source: "fund-report-2025q1-v1",
+      },
+    ],
+    derivedFrom: {
+      caseIds: ["RC-AIC-2025-01", "RC-CAPEX-2025-02", "RC-POWER-2025-03"],
+      thesisIds: [
+        "th-demand",
+        "th-aic-03",
+        "th-procurement",
+        "th-capex",
+        "th-power",
+      ],
+      themeRoleIds: [
+        "tr-nvda-aicompute",
+        "tr-tsmc-aicompute",
+        "tr-msft-aicompute",
+      ],
+      disclosureIds: ["fd-aic-etf", "fd-semi"],
+    },
+  },
+  "国产算力替代": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "国产算力替代",
+    cases: [
+      {
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        thesisCounts: {
+          supported: 0,
+          contradicted: 0,
+          insufficient_evidence: 1,
+          ai_pending: 1,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-domestic",
+            statement: "国产算力能否承接替代",
+            title: "国产承接",
+            aiConclusion: "insufficient_evidence",
+            aiProvisional: true,
+            assessedAt: "2025-07-28T09:30:00+00:00",
+            reviewOutcome: null,
+            reviewConclusion: null,
+            reviewReason: null,
+            reviewer: null,
+            reviewedAt: null,
+          },
+        ],
+      },
+    ],
+    companyRoles: [
+      {
+        companyId: "co-cambricon",
+        companyCode: "688256",
+        companyName: "寒武纪",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "国产算力代表",
+        scope: { chain: "国产算力", segment: "上游芯片" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+      {
+        companyId: "co-foxconn",
+        companyCode: "601138",
+        companyName: "工业富联",
+        caseId: "RC-AIC-2025-01",
+        caseTitle: "AI 算力链",
+        role: "AI 服务器代工",
+        scope: { chain: "国产算力", segment: "中游整机" },
+        applicableFrom: "2026-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+    ],
+    fundExposure: [
+      {
+        fundId: "fd-star50",
+        fundCode: "588000",
+        fundName: "华夏科创50ETF",
+        stockId: "st-cambricon",
+        stockCode: "688256.SH",
+        stockName: "寒武纪-U",
+        weight: 1.27,
+        reportPeriod: "2025-03-31",
+        source: "fund-report-2025q1-v2",
+      },
+    ],
+    derivedFrom: {
+      caseIds: ["RC-AIC-2025-01"],
+      thesisIds: ["th-domestic"],
+      themeRoleIds: ["tr-cambricon-ai", "tr-foxconn-ai"],
+      disclosureIds: ["fd-star50"],
+    },
+  },
+  "数据中心电力约束": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "数据中心电力约束",
+    cases: [
+      {
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        thesisCounts: {
+          supported: 0,
+          contradicted: 1,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-power",
+            statement: "电力与并网是否成为瓶颈",
+            title: "电力瓶颈",
+            aiConclusion: "contradicted",
+            aiProvisional: false,
+            assessedAt: "2025-07-30T09:14:00+00:00",
+            reviewOutcome: "modified",
+            reviewConclusion: "contradicted",
+            reviewReason: "地区级项目已并网或缓建中",
+            reviewer: "林漠",
+            reviewedAt: "2025-08-02T11:30:00+00:00",
+          },
+        ],
+      },
+    ],
+    companyRoles: [
+      {
+        companyId: "co-tsmc",
+        companyCode: "TSM",
+        companyName: "TSMC · TSM",
+        caseId: "RC-POWER-2025-03",
+        caseTitle: "数据中心电力约束",
+        role: "电力与并网瓶颈对象",
+        scope: { chain: "电力", segment: "数据中心园区" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+    ],
+    fundExposure: [],
+    derivedFrom: {
+      caseIds: ["RC-POWER-2025-03"],
+      thesisIds: ["th-power"],
+      themeRoleIds: ["tr-tsmc-power"],
+      disclosureIds: [],
+    },
+  },
+  "先进封装供给": {
+    cutoff: MOCK_CUTOFF_NOW,
+    isHistorical: false,
+    tag: "先进封装供给",
+    cases: [
+      {
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        thesisCounts: {
+          supported: 1,
+          contradicted: 1,
+          insufficient_evidence: 0,
+          ai_pending: 0,
+          rejected: 0,
+          no_assessment: 0,
+        },
+        theses: [
+          {
+            thesisId: "th-packaging",
+            statement: "CoWoS 与 HBM 共同影响交付",
+            title: "封装与 HBM",
+            aiConclusion: "supported",
+            aiProvisional: false,
+            assessedAt: "2025-07-30T09:20:00+00:00",
+            reviewOutcome: "confirmed",
+            reviewConclusion: "supported",
+            reviewReason: "公司财报与渠道一致",
+            reviewer: "林漠",
+            reviewedAt: "2025-08-02T11:30:00+00:00",
+          },
+          {
+            thesisId: "th-slope",
+            statement: "先进制程与互连供给决定交付斜率",
+            title: "交付斜率",
+            aiConclusion: "contradicted",
+            aiProvisional: true,
+            assessedAt: "2025-07-30T09:22:00+00:00",
+            reviewOutcome: null,
+            reviewConclusion: null,
+            reviewReason: null,
+            reviewer: null,
+            reviewedAt: null,
+          },
+        ],
+      },
+    ],
+    companyRoles: [
+      {
+        companyId: "co-tsmc",
+        companyCode: "TSM",
+        companyName: "TSMC · TSM",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能约束对象",
+        scope: { chain: "先进封装", segment: "CoWoS-S" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+      {
+        companyId: "co-nvda",
+        companyCode: "NVDA",
+        companyName: "NVIDIA · NVDA",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能约束对象",
+        scope: { chain: "先进封装", segment: "CoWoS-L" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+      {
+        companyId: "co-avgo",
+        companyCode: "AVGO",
+        companyName: "Broadcom · AVGO",
+        caseId: "RC-PACK-2025-04",
+        caseTitle: "先进封装供给",
+        role: "产能的来料影响对象",
+        scope: { chain: "先进封装", segment: "CoWoS 与 HBM" },
+        applicableFrom: "2025-01-01",
+        applicableTo: null,
+        statementId: null,
+      },
+    ],
+    fundExposure: [
+      {
+        fundId: "fd-semi",
+        fundCode: "161725",
+        fundName: "招商中证半导体 ETF",
+        stockId: "st-tsmc",
+        stockCode: "TSM",
+        stockName: "TSMC",
+        weight: 9.5,
+        reportPeriod: "2025-03-31",
+        source: "fund-report-2025q1-v1",
+      },
+    ],
+    derivedFrom: {
+      caseIds: ["RC-PACK-2025-04"],
+      thesisIds: ["th-packaging", "th-slope"],
+      themeRoleIds: ["tr-tsmc-packaging", "tr-nvda-packaging", "tr-avgo-packaging"],
+      disclosureIds: ["fd-semi"],
     },
   },
 };
@@ -1525,6 +2463,130 @@ function emptyTopicView(tag: string): TopicView {
       themeRoleIds: [],
       disclosureIds: [],
     },
+  };
+}
+
+/** 从 topic view 自动派生 5 节点关系路径（设计图 9 底部链），并选择
+ *  一个主题内最值得固定的命题（右栏检查器默认展示）。 */
+function deriveTopicPathNodes(view: TopicView): {
+  pathNodes: TopicPathNode[];
+  pinnedThesisId: string | null;
+} {
+  const firstCase = view.cases[0];
+  const firstThesis = firstCase?.theses[0];
+  const firstRole = view.companyRoles[0];
+  const firstFund = view.fundExposure[0];
+  // 选最有意思的命题：优先 ai_pending/contradicted/insufficient_evidence，
+  // 否则取第一条。设计图 9 默认为 th-aic-03 (contradicted) 的证据。
+  const pinnedEntry = view.cases
+    .flatMap((c) => c.theses.map((t) => ({ caseId: c.caseId, t })))
+    .find(
+      ({ t }) =>
+        t.aiConclusion === "contradicted" ||
+        t.aiConclusion === "insufficient_evidence" ||
+        t.aiProvisional,
+    );
+  const pinnedThesis: TopicThesisView | undefined =
+    pinnedEntry?.t ?? firstCase?.theses[0];
+  return {
+    pathNodes: [
+      firstThesis
+        ? {
+            kind: "evidence",
+            label: "冻结证据",
+            refId: firstThesis.thesisId,
+            meta: firstCase?.caseTitle ?? "案例",
+          }
+        : { kind: "evidence", label: "冻结证据", refId: "", meta: "—" },
+      firstThesis
+        ? {
+            kind: "thesis",
+            label: firstThesis.title ?? firstThesis.statement.slice(0, 12),
+            refId: firstThesis.thesisId,
+            meta: firstCase?.caseTitle ?? "—",
+          }
+        : { kind: "thesis", label: "命题", refId: "", meta: "—" },
+      firstRole
+        ? {
+            kind: "role",
+            label: firstRole.role,
+            refId: firstRole.companyId,
+            meta: firstRole.companyName,
+          }
+        : { kind: "role", label: "公司角色", refId: "", meta: "—" },
+      firstFund
+        ? {
+            kind: "stock",
+            label: firstFund.stockName,
+            refId: firstFund.stockId,
+            meta: firstFund.stockCode,
+          }
+        : { kind: "stock", label: "股票映射", refId: "", meta: "—" },
+      firstFund
+        ? {
+            kind: "fund",
+            label: firstFund.fundName,
+            refId: firstFund.fundId,
+            meta: `${firstFund.weight.toFixed(1)}% · ${firstFund.reportPeriod}`,
+          }
+        : { kind: "fund", label: "基金披露", refId: "", meta: "—" },
+    ],
+    pinnedThesisId: pinnedThesis?.thesisId ?? null,
+  };
+}
+
+/** 从 company dossier 派生 5 节点关系路径（设计图 10 底部链）。 */
+function deriveCompanyPathNodes(dossier: CompanyDossierView): {
+  pathNodes: TopicPathNode[];
+  pinnedThesisId: string | null;
+} {
+  const firstThesis = dossier.relatedTheses[0];
+  const firstRole = dossier.themeRoles[0];
+  const firstFund = dossier.fundHolders[0];
+  return {
+    pathNodes: [
+      firstThesis
+        ? {
+            kind: "evidence",
+            label: "冻结证据",
+            refId: firstThesis.thesisId,
+            meta: firstThesis.caseTitle,
+          }
+        : { kind: "evidence", label: "冻结证据", refId: "", meta: "—" },
+      firstThesis
+        ? {
+            kind: "thesis",
+            label: firstThesis.title ?? firstThesis.statement.slice(0, 12),
+            refId: firstThesis.thesisId,
+            meta: firstThesis.caseTitle,
+          }
+        : { kind: "thesis", label: "命题", refId: "", meta: "—" },
+      firstRole
+        ? {
+            kind: "role",
+            label: firstRole.role,
+            refId: dossier.company.id,
+            meta: firstRole.caseTitle ?? "—",
+          }
+        : { kind: "role", label: "公司角色", refId: "", meta: "—" },
+      firstFund
+        ? {
+            kind: "stock",
+            label: firstFund.stockCode,
+            refId: firstFund.stockId,
+            meta: firstFund.fundName,
+          }
+        : { kind: "stock", label: "股票", refId: "", meta: "—" },
+      firstFund
+        ? {
+            kind: "fund",
+            label: firstFund.fundName,
+            refId: firstFund.fundId,
+            meta: `${firstFund.weight.toFixed(1)}% · ${firstFund.reportPeriod}`,
+          }
+        : { kind: "fund", label: "基金披露", refId: "", meta: "—" },
+    ],
+    pinnedThesisId: firstThesis?.thesisId ?? null,
   };
 }
 
@@ -1562,7 +2624,11 @@ function applyTopicCutoff(view: TopicView, cutoff: string): TopicView {
         (!r.applicableFrom || r.applicableFrom <= day) &&
         (!r.applicableTo || r.applicableTo >= day),
     ),
-    fundExposure: [],
+    // 持仓过滤：fund_exposure 没有 published_at 字段，按主题内已映射股票
+    // 的 latest report_period ≤ cutoff 过滤（与 dossier 行为对齐）。
+    fundExposure: view.fundExposure.filter(
+      (p) => (p.reportPeriod ?? "") <= day,
+    ),
   };
 }
 
@@ -2151,9 +3217,9 @@ export class MockResearchAdapter implements ResearchClient {
     opts?: { cutoff?: string },
   ): Promise<CompanyDossierView> {
     this.throwIfOffline();
-    const base = COMPANY_DOSSIERS[companyId];
-    if (!base || this.scenario === "empty") {
-      return simulateLatency({
+    let base: CompanyDossierView;
+    if (!COMPANY_DOSSIERS[companyId] || this.scenario === "empty") {
+      base = {
         cutoff: opts?.cutoff ?? MOCK_CUTOFF_NOW,
         isHistorical: Boolean(opts?.cutoff),
         company: {
@@ -2168,10 +3234,14 @@ export class MockResearchAdapter implements ResearchClient {
         relatedTheses: [],
         valuations: [],
         fundHolders: [],
-      });
+      };
+    } else {
+      base = COMPANY_DOSSIERS[companyId];
     }
-    if (opts?.cutoff) return simulateLatency(applyCompanyCutoff(base, opts.cutoff));
-    return simulateLatency(base);
+    if (opts?.cutoff) base = applyCompanyCutoff(base, opts.cutoff);
+    // 派生 5 节点关系路径 + 右栏检查器固定命题（设计图 10 视觉）
+    const derived = deriveCompanyPathNodes(base);
+    return simulateLatency({ ...base, ...derived });
   }
 
   // ── 主题研究（/topics · 横切主题）───────────────────────────────────────
@@ -2187,10 +3257,16 @@ export class MockResearchAdapter implements ResearchClient {
     opts?: { cutoff?: string },
   ): Promise<TopicView> {
     this.throwIfOffline();
-    if (this.scenario === "empty") return simulateLatency(emptyTopicView(tag));
-    const base = TOPIC_VIEWS[tag] ?? emptyTopicView(tag);
-    if (opts?.cutoff) return simulateLatency(applyTopicCutoff(base, opts.cutoff));
-    return simulateLatency(base);
+    let base: TopicView;
+    if (this.scenario === "empty") {
+      base = emptyTopicView(tag);
+    } else {
+      base = TOPIC_VIEWS[tag] ?? emptyTopicView(tag);
+    }
+    if (opts?.cutoff) base = applyTopicCutoff(base, opts.cutoff);
+    // 派生 5 节点关系路径 + 右栏检查器固定命题（设计图 9 视觉）
+    const derived = deriveTopicPathNodes(base);
+    return simulateLatency({ ...base, ...derived });
   }
 }
 

@@ -733,6 +733,26 @@ export interface SnapshotPoint {
   cutoff: string;
   /** 该快照点处该案例下所有证据关系（已审核 + AI 提议）的合计。 */
   linkCount: number;
+  /** 相对前一个 cutoff 的事件概要（仅在第一个 cutoff 上为 null）。 */
+  eventSummary: PlaybackEvent | null;
+}
+
+export interface PlaybackEvent {
+  /** 相对前一个 cutoff 新增的证据关系数。 */
+  linkDelta: number;
+  /** 相对前一个 cutoff 移除的证据关系数。 */
+  removedLinkDelta: number;
+  /** 结论在该 cutoff 发生变化的命题列表。 */
+  conclusionFlips: Array<{
+    thesisId: string;
+    from: string;
+    to: string;
+    statement: string;
+  }>;
+  /** 命题缺口数变化（key=thesisId, value=delta；负=缺口收敛）。 */
+  gapsDelta: Record<string, number>;
+  /** 该 cutoff 新增的人工复核记录数。 */
+  reviewedDelta: number;
 }
 
 // ── Theme (主题) ─ 一等公民 ───────────────────────────────────────────
@@ -1142,6 +1162,10 @@ export interface CompanyDossierView {
   relatedTheses: CompanyThesisJudgment[];
   valuations: CompanyValuationView[];
   fundHolders: CompanyFundHolderView[];
+  // 关系路径：设计图 10 底部 5 节点链（冻结证据→命题→公司角色→股票→基金）
+  pathNodes?: TopicPathNode[];
+  // 右栏检查器锁定的关联命题
+  pinnedThesisId?: string | null;
 }
 
 // ── 主题研究（/topics · 横切主题 live API slice）───────────────────────────
@@ -1167,6 +1191,8 @@ export interface TopicThesisView {
   assessedAt: string | null;
   reviewOutcome: string | null;
   reviewConclusion: string | null;
+  reviewReason: string | null;
+  reviewer: string | null;
   reviewedAt: string | null;
 }
 
@@ -1202,6 +1228,15 @@ export interface TopicExposurePosition {
   source: string;
 }
 
+// 主题关系路径：5 节点链，固定证据→命题→公司角色→股票映射→基金披露。
+// 每个节点都是"可点击回链"——左栏主题目录选中主题后，主区底部展示路径。
+export interface TopicPathNode {
+  kind: "evidence" | "thesis" | "role" | "stock" | "fund";
+  label: string;
+  refId: string;
+  meta: string;
+}
+
 export interface TopicView {
   cutoff: string;
   isHistorical: boolean;
@@ -1209,6 +1244,10 @@ export interface TopicView {
   cases: TopicCaseView[];
   companyRoles: TopicCompanyRoleView[];
   fundExposure: TopicExposurePosition[];
+  // 关系路径（设计图 9 底部 5 节点链），可由 mock 适配器自动派生
+  pathNodes?: TopicPathNode[];
+  // 当前主题内被右栏检查器锁定的命题（默认第一条 ai_pending / contradicted）
+  pinnedThesisId?: string | null;
   derivedFrom: {
     caseIds: string[];
     thesisIds: string[];
