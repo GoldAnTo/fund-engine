@@ -303,10 +303,13 @@ def test_pending_versions_skip_successfully_extracted(
     version = document_service.freeze(
         raw=b"degenerate content", source_url="https://example.test/deg"
     )
-    span = document_service.add_span(
+    document_service.add_span(
         document_version_id=version.id,
         locator={"page": 1},
-        verbatim_text="相关研究",
+        verbatim_text=(
+            "寒武纪2024年营业收入11.74亿元，同比增长65.56%，云端产品线收入"
+            "大幅增长，主要受益于国产AI算力需求持续爆发。"
+        ),
     )
     assert version in _pending_versions(session)
 
@@ -327,7 +330,10 @@ def test_pending_versions_keep_failed_versions_retryable(
     document_service.add_span(
         document_version_id=version.id,
         locator={"page": 1},
-        verbatim_text="text",
+        verbatim_text=(
+            "寒武纪2024年营业收入11.74亿元，同比增长65.56%，云端产品线收入"
+            "大幅增长，主要受益于国产AI算力需求持续爆发。"
+        ),
     )
     _add_extract_run(
         session,

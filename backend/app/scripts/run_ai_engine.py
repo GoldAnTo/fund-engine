@@ -59,11 +59,34 @@ def _pending_versions(session: Session) -> list[DocumentVersion]:
         .where(SourceSpan.document_version_id == DocumentVersion.id)
         .exists()
     )
-    candidates = session.scalars(
-        select(DocumentVersion).where(has_span, ~has_statement)
+    candidates = list(
+        session.scalars(
+            select(DocumentVersion).where(has_span, ~has_statement)
+        )
     )
     extracted = successful_extract_version_ids(session)
-    return [v for v in candidates if v.id not in extracted]
+    retryable = [v for v in candidates if v.id not in extracted]
+
+    # Defect-4 fix: degenerate payloads (4-char bodies, orphan table
+    # headers) are flagged, never LLM-extracted — they cannot yield
+    # statements and burned calls in the walkthrough.
+    from app.services.content_quality import assess_span_texts
+
+    span_rows = session.scalars(
+        select(SourceSpan).where(
+            SourceSpan.document_version_id.in_([v.id for v in retryable])
+        )
+    ).all() if retryable else []
+    texts_by_version: dict[uuid.UUID, list[str]] = {}
+    for span_row in span_rows:
+        texts_by_version.setdefault(span_row.document_version_id, []).append(
+            span_row.verbatim_text
+        )
+    return [
+        v
+        for v in retryable
+        if assess_span_texts(texts_by_version.get(v.id, []))[0] != "degenerate"
+    ]
 
 
 def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False) -> None:

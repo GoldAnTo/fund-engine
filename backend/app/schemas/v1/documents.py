@@ -8,6 +8,8 @@ never invented; they stay ``None`` when no locator provides them.
 
 from typing import Any, Literal
 
+from pydantic import Field
+
 from app.schemas.v1.common import CursorPage, HistoricalBasisDTO, V1Model
 
 
@@ -30,6 +32,11 @@ class DocumentSummaryDTO(V1Model):
         "extracted", "extracted_empty", "failed", "not_attempted"
     ]
     last_extracted_at: str | None = None
+    # Derived content-quality verdict (defect-4 fix): degenerate payloads
+    # (4-char bodies, orphan table headers) stay in the ledger but are
+    # flagged so the UI can badge/filter and extraction batches skip them.
+    content_quality: Literal["ok", "degenerate", "unknown"] = "unknown"
+    quality_reasons: list[str] = Field(default_factory=list)
     # Derived from span locator metadata when available (else None).
     title: str | None = None
     org: str | None = None

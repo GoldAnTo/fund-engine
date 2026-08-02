@@ -84,9 +84,17 @@ ThemeRole、CausalStep/CausalEdge、Fund/HoldingDisclosure、Company/Stock 管�
 
 测试 `tests/test_document_read_api_v1.py` 新增 8 条（四态、latest-run-wins、详情透出、pending 排除成功/保留失败），全量 287 passed，发布门禁 PASS。注：extract 端点本身仍为 append-only（文档化行为），未加服务端重抽守卫——该文件当时处于并行改动中，批处理侧水位已消除浪费路径。
 
-### ⚠️ 缺陷 4（P1）：采集无内容质量校验
+### ✅ 缺陷 4（P1，已于 2026-08-02 修复）：内容质量校验与 quarantine 标记
 
-Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个月 | …`）被原样冻结为正式 DocumentVersion，标题（取自 locator）显示为正经研报，文档库可信度被稀释。需要最小内容长度/结构校验与 quarantine 状态。
+Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个月 | …`）曾被原样冻结为正式 DocumentVersion，标题（取自 locator）显示为正经研报，文档库可信度被稀释。
+
+**修复（2026-08-02）**：不改 schema、不动 append-only 采集链路，读侧派生质量判定：
+
+- 新增独立模块 `app/services/content_quality.py`：`assess_span_texts` 从 span 文本派生三态——`ok` / `degenerate` / `unknown`（无 span），degenerate 携带具体原因：`content_too_short`（有效字符 < 50）、`low_information_density`（有效字符占比 < 30%）、`table_header_only`（全部行均为表格行但非分隔行 ≤ 1，即孤立表头无数据行）；
+- 文档库列表/详情透出 `content_quality` + `quality_reasons`（quarantine 是**标记而非隐藏**——退化版本保留在账本中，前端可按标记过滤/置灰，符合 append-only 哲学）；
+- `_pending_versions` 与走查批处理排除 degenerate 版本，退化内容从源头不再消耗 LLM 抽取调用（与缺陷 3 的水位互补：水位防重复抽取，质量标记防首次抽取）。
+
+测试 `tests/test_content_quality.py` 新增 11 条（三条规则单测、真实表格不误伤、读侧透出、pending 排除），全量 313 passed，发布门禁 PASS。注：缺陷 5 的近重复根因（年报正文/摘要/港股版多次入库）已由并行进行的 natural_key 去重工作覆盖（`compute_natural_key` 二级判重 + alembic 0006），本修复与其正交。
 
 ### ⚠️ 缺陷 5（P2）：近重复内容无对齐，产生重复陈述与链接
 

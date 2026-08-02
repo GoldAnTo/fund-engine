@@ -279,6 +279,9 @@ def phase3_extract(max_docs: int = 8) -> dict:
         i
         for i in items
         if i.get("extraction_state") in ("not_attempted", "failed")
+        # Defect-4 fix: degenerate payloads (4-char bodies, orphan table
+        # headers) are flagged by content_quality and never LLM-extracted.
+        and i.get("content_quality") != "degenerate"
     ]
     batch = pending[:max_docs]
     totals = {"documents_total": len(items), "pending_before": len(pending),

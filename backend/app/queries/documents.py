@@ -16,6 +16,7 @@ from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import AIRun, DocumentVersion, Stock
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
+from app.services.content_quality import assess_span_texts
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.common import CursorPage
@@ -256,6 +257,9 @@ class DocumentReadQueries:
         latest_run: AIRun | None = None,
     ) -> DocumentSummaryDTO:
         meta = self._locator_metadata(spans or [])
+        quality, quality_reasons = assess_span_texts(
+            [s.verbatim_text for s in spans] if spans else []
+        )
         return DocumentSummaryDTO(
             id=str(version.id),
             content_sha256=version.content_sha256,
@@ -278,6 +282,8 @@ class DocumentReadQueries:
                 if latest_run is not None
                 else None
             ),
+            content_quality=quality,
+            quality_reasons=quality_reasons,
             title=meta["title"],
             org=meta["org"],
             doc_kind=meta["doc_kind"],
