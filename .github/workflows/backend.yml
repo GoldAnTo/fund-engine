@@ -43,3 +43,37 @@ jobs:
       - run: pip install -e "./backend[dev]"
       # sqlite 默认；projection_rebuilds 无 NEO4J_URL 时跳过且不判失败
       - run: bash docs/evaluation/reproduce.sh
+
+  recall-eval:
+    name: 召回 A/B 评估（三案例，无下探回归门）
+    runs-on: ubuntu-latest
+    # actions/upload-artifact@v4 需要 actions: write 权限，否则 artifact step 403
+    permissions:
+      contents: read
+      actions: write
+    # 只在召回/评估/门禁自身变更时跑：跑完一轮 ~30s（重建 in-memory db + seed 三案例）
+    # 跟其他 backend/** 变更解耦，避免给无关 PR 加不必要的等待
+    paths:
+      - "backend/app/services/recall.py"
+      - "backend/tests/test_recall.py"
+      - "backend/scripts/eval_recall_ab.py"
+      - "backend/tune_recall_params.py"
+      - "docs/evaluation/**"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - run: pip install -e "./backend[dev]"
+      # 脚本自带 exit 1 守卫：hybrid recall 在任意 (thesis, k) 低于 BM25 即非零退出
+      - run: python scripts/eval_recall_ab.py
+        working-directory: backend
+      # 新报告上传为 artifact，方便对比历史结果（不进 git history 的不写盘）
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recall-ab-report
+          path: docs/evaluation/reports/recall_ab_*.json
+          retention-days: 14
