@@ -2590,6 +2590,234 @@ function deriveCompanyPathNodes(dossier: CompanyDossierView): {
   };
 }
 
+// ── 装饰：用设计图 9/10 的文案/状态字段补全 mock view ──────────────────────
+//
+// 设计图 9 默认选中「AI 算力基础设施」、设计图 10 默认选中「NVIDIA」；
+// 此处为 case card / role row / valuation cell 提供符合设计图视觉的硬编码
+// 文案，避免每次都重新编辑 mock 主表。
+
+const CASE_CARD_DECORATION: Record<
+  string,
+  {
+    summary: string;
+    rebuttalBullet?: string;
+    nextEventBullet?: string;
+    statusLabel: string;
+    statusVariant: "support" | "contradict" | "warning" | "ai" | "draft";
+  }
+> = {
+  "RC-AIC-2025-01": {
+    summary: "订单交付成立，但收入确认仍存在口径缺口。",
+    rebuttalBullet: "主要反证：需求高于可供容量",
+    statusLabel: "证据不足 · 继续验证",
+    statusVariant: "warning",
+  },
+  "RC-CAPEX-2025-02": {
+    summary: "三家云厂商维持 AI 基础设施扩张。",
+    nextEventBullet: "下一事件：FY26 Q2 指引",
+    statusLabel: "支持 · 已复核",
+    statusVariant: "support",
+  },
+  "RC-POWER-2025-03": {
+    summary: "部分地区项目已晚于芯片供给。",
+    nextEventBullet: "缺口：项目级并网数据",
+    statusLabel: "反证关系 · 已复核",
+    statusVariant: "contradict",
+  },
+  "RC-PACK-2025-04": {
+    summary: "CoWoS 与 HBM 共同影响交付节奏。",
+    nextEventBullet: "缺口：HBM 3D 库存口径",
+    statusLabel: "支持 · 已复核",
+    statusVariant: "support",
+  },
+  "RC-CLOUD-2026-02": {
+    summary: "头部云厂商上调 2026 年资本开支指引。",
+    nextEventBullet: "下一事件：FY26 Q2 指引",
+    statusLabel: "支持 · 已复核",
+    statusVariant: "support",
+  },
+  "RC-SUPPLY-2025-04": {
+    summary: "先进制程与互连供给决定交付斜率。",
+    nextEventBullet: "缺口：HBM 3D 库存口径",
+    statusLabel: "AI 提议 · 待复核",
+    statusVariant: "ai",
+  },
+};
+
+const COMPANY_ROLE_DECORATION: Record<
+  string,
+  {
+    transmission: string;
+    statusLabel: string;
+    statusVariant: "reviewed" | "warning" | "ai" | "support" | "contradict" | "draft";
+    applicableScope?: string;
+  }
+> = {
+  tr_nvda_aicompute: {
+    transmission: "资本开支 → 设备交付",
+    statusLabel: "已复核支持",
+    statusVariant: "reviewed",
+    applicableScope: "2025H1 · 全球云商",
+  },
+  tr_nvda_capex: {
+    transmission: "订单积压与交付节奏需单独验证",
+    statusLabel: "待补证据",
+    statusVariant: "warning",
+  },
+  tr_nvda_packaging: {
+    transmission: "CoWoS 与 HBM 共同影响交付",
+    statusLabel: "AI 提议 · 待复核",
+    statusVariant: "ai",
+  },
+  tr_tsmc_aicompute: {
+    transmission: "产能约束 → 交付节奏",
+    statusLabel: "待补证据",
+    statusVariant: "warning",
+    applicableScope: "CoWoS · 2025-2026",
+  },
+  tr_tsmc_power: {
+    transmission: "电力与并网瓶颈对象",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+  tr_tsmc_packaging: {
+    transmission: "产能约束对象",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+  tr_msft_aicompute: {
+    transmission: "系统上线 → 分部收入",
+    statusLabel: "AI 提议 · 待复核",
+    statusVariant: "ai",
+    applicableScope: "Azure AI · FY25",
+  },
+  tr_msft_capex: {
+    transmission: "需求与资本开支主体",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+  tr_msft_power: {
+    transmission: "系统上线 → 分部收入",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+  tr_avgo_aicompute: {
+    transmission: "需求与资本开支主体",
+    statusLabel: "AI 提议 · 待复核",
+    statusVariant: "ai",
+  },
+  tr_avgo_packaging: {
+    transmission: "产能的来料影响对象",
+    statusLabel: "AI 提议 · 待复核",
+    statusVariant: "ai",
+  },
+  tr_cambricon_ai: {
+    transmission: "国产承接",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+  tr_foxconn_ai: {
+    transmission: "AI 服务器代工",
+    statusLabel: "已复核",
+    statusVariant: "reviewed",
+  },
+};
+
+const COMPANY_ROLE_LABEL_DECORATION: Record<string, { statusLabel: string; statusVariant: "reviewed" | "warning" | "ai" }> = {
+  tr_nvda_aicompute: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_nvda_capex: { statusLabel: "待补证据", statusVariant: "warning" },
+  tr_nvda_packaging: { statusLabel: "AI 提议 · 待复核", statusVariant: "ai" },
+  tr_tsmc_aicompute: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_tsmc_power: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_tsmc_packaging: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_msft_aicompute: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_msft_capex: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_msft_power: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_avgo_aicompute: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_avgo_packaging: { statusLabel: "AI 提议 · 待复核", statusVariant: "ai" },
+  tr_cambricon_ai: { statusLabel: "已复核", statusVariant: "reviewed" },
+  tr_foxconn_ai: { statusLabel: "已复核", statusVariant: "reviewed" },
+};
+
+const COMPANY_REPORT_PERIOD: Record<string, { period: string; note: string }> = {
+  "co-nvda": { period: "FY2026 Q1", note: "2025-05-28 可用" },
+  "co-tsmc": { period: "2026-05", note: "2026-05-10 可用" },
+  "co-msft": { period: "FY2025 Q3", note: "2025-04-30 可用" },
+  "co-avgo": { period: "FY2025 Q2", note: "2025-06-12 可用" },
+  "co-cambricon": { period: "2026-03-31", note: "2026-04-22 可用" },
+  "co-foxconn": { period: "2026-03-31", note: "2026-04-22 可用" },
+};
+
+const COMPANY_LISTING: Record<string, { market: string; listedLabel: string }> = {
+  "co-nvda": { market: "NASDAQ", listedLabel: "已上市" },
+  "co-tsmc": { market: "NYSE", listedLabel: "已上市" },
+  "co-msft": { market: "NASDAQ", listedLabel: "已上市" },
+  "co-avgo": { market: "NASDAQ", listedLabel: "已上市" },
+  "co-cambricon": { market: "上交所", listedLabel: "已上市" },
+  "co-foxconn": { market: "上交所", listedLabel: "已上市" },
+};
+
+function decorateTopicView(view: TopicView): TopicView {
+  return {
+    ...view,
+    cases: view.cases.map((c) => {
+      const deco = CASE_CARD_DECORATION[c.caseId];
+      if (!deco) return c;
+      return {
+        ...c,
+        summary: deco.summary,
+        rebuttalBullet: deco.rebuttalBullet,
+        nextEventBullet: deco.nextEventBullet,
+        statusLabel: deco.statusLabel,
+        statusVariant: deco.statusVariant,
+      };
+    }),
+    companyRoles: view.companyRoles.map((r) => {
+      const deco = COMPANY_ROLE_DECORATION[r.role + ":" + r.caseId]
+        ?? COMPANY_ROLE_DECORATION[
+            `${r.companyId.replace("co-", "")}_${(
+              r.caseId ?? ""
+            ).replace("RC-", "").toLowerCase()}`
+          ];
+      if (!deco) return r;
+      return {
+        ...r,
+        transmission: deco.transmission,
+        statusLabel: deco.statusLabel,
+        statusVariant: deco.statusVariant,
+        applicableScope: deco.applicableScope,
+      };
+    }),
+  };
+}
+
+function decorateCompanyDossier(dossier: CompanyDossierView): CompanyDossierView {
+  const report = COMPANY_REPORT_PERIOD[dossier.company.id];
+  const listing = COMPANY_LISTING[dossier.company.id];
+  return {
+    ...dossier,
+    themeRoles: dossier.themeRoles.map((r) => {
+      const deco = COMPANY_ROLE_LABEL_DECORATION[r.id];
+      if (!deco) return r;
+      return {
+        ...r,
+        statusLabel: deco.statusLabel,
+        statusVariant: deco.statusVariant,
+        transmission: COMPANY_ROLE_DECORATION[r.id]?.transmission,
+      };
+    }),
+    company: {
+      ...dossier.company,
+      ...(listing
+        ? { market: listing.market, listedLabel: listing.listedLabel }
+        : {}),
+      ...(report
+        ? { reportPeriod: report.period, reportNote: report.note }
+        : {}),
+    },
+  };
+}
+
 /** cutoff 过滤与后端读模型语义一致：角色适用窗口、估值 as_of、披露
  * published_at、assessment/review 的创建时间均按 cutoff 截断。 */
 function applyCompanyCutoff(
@@ -3241,7 +3469,8 @@ export class MockResearchAdapter implements ResearchClient {
     if (opts?.cutoff) base = applyCompanyCutoff(base, opts.cutoff);
     // 派生 5 节点关系路径 + 右栏检查器固定命题（设计图 10 视觉）
     const derived = deriveCompanyPathNodes(base);
-    return simulateLatency({ ...base, ...derived });
+    // 装饰公司元信息（市场 / 上市 / 最近披露期）+ 主题角色状态（设计图 10 视觉）
+    return simulateLatency(decorateCompanyDossier({ ...base, ...derived }));
   }
 
   // ── 主题研究（/topics · 横切主题）───────────────────────────────────────
@@ -3266,7 +3495,8 @@ export class MockResearchAdapter implements ResearchClient {
     if (opts?.cutoff) base = applyTopicCutoff(base, opts.cutoff);
     // 派生 5 节点关系路径 + 右栏检查器固定命题（设计图 9 视觉）
     const derived = deriveTopicPathNodes(base);
-    return simulateLatency({ ...base, ...derived });
+    // 装饰案例卡片 / 角色行的设计图文案（设计图 9/10 视觉）
+    return simulateLatency(decorateTopicView({ ...base, ...derived }));
   }
 }
 

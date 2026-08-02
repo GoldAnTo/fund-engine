@@ -1106,6 +1106,13 @@ export interface CompanyThemeRoleView {
   statementText: string | null;
   spanId: string | null;
   documentVersionId: string | null;
+  // 设计图 10 主题角色卡片的"传导描述"（如"资本开支向设备交付的传导"）
+  transmission?: string;
+  // 设计图 10 关联命题表的"来源案例"行（如"RC-CAPEX-2025-02"）
+  sourceCaseId?: string;
+  // 状态文案（"已复核" / "待补证据" / "AI 提议·待复核"）
+  statusLabel?: string;
+  statusVariant?: "reviewed" | "warning" | "ai" | "support" | "contradict" | "draft";
 }
 
 export interface CompanyThesisJudgment {
@@ -1156,6 +1163,11 @@ export interface CompanyDossierView {
     name: string;
     type: string;
     createdAt: string | null;
+    // 设计图 10 公司身份卡：市场 / 上市标签 / 最近披露期
+    market?: string;
+    listedLabel?: string;
+    reportPeriod?: string;
+    reportNote?: string;
   };
   stocks: CompanyStockView[];
   themeRoles: CompanyThemeRoleView[];
@@ -1201,6 +1213,13 @@ export interface TopicCaseView {
   caseTitle: string;
   thesisCounts: Record<string, number>;
   theses: TopicThesisView[];
+  // 设计图 9 的"ResearchCase 卡片"内容：2-3 句结论 + 主要反证/下一事件 bullet
+  summary?: string;
+  rebuttalBullet?: string;
+  nextEventBullet?: string;
+  // 案例级状态徽章文案（设计图 9 卡片标题正下方）
+  statusLabel?: string;
+  statusVariant?: "support" | "contradict" | "warning" | "ai" | "draft";
 }
 
 export interface TopicCompanyRoleView {
@@ -1214,6 +1233,13 @@ export interface TopicCompanyRoleView {
   applicableFrom: string | null;
   applicableTo: string | null;
   statementId: string | null;
+  // 设计图 9/10 表格"关联命题"列的传导描述（如"资本开支→设备交付"）
+  transmission?: string;
+  // 表格"证据状态"列文案（"已复核支持" / "待补证据" / "AI 提议·待复核"）
+  statusLabel?: string;
+  statusVariant?: "reviewed" | "warning" | "ai" | "support" | "contradict" | "draft";
+  // 表格"适用范围"列（如"2025H1·全球云商" / "CoWoS·2025-2026"）
+  applicableScope?: string;
 }
 
 export interface TopicExposurePosition {
