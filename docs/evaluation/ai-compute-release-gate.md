@@ -255,10 +255,22 @@ evidence the coarse tokenizer's whole-CJK-run tokens made BM25-invisible).
 Multi-case replay (2026-08-02, all three gold cases seeded; candidates are
 all cutoff-visible statements **across cases**, so cross-industry material
 acts as ranking noise — a harder, more honest evaluation): overall
-recall@20 **0.375 → 0.6875** (bm25 → hybrid), recall@10 0.25 → 0.5625;
+recall@20 **0.375 → 0.6875** (bm25 → hybrid), recall@10 0.25 → 0.5833;
 15 gold statements recovered, **0 lost**.  Per case: AI 算力链 0.6 → 0.7333,
 锂电储能链 0.3333 → 0.6, 半导体设备国产化 0.2222 → 0.7222.  The largest
 gains are again on CJK-dense theses the baseline renders BM25-invisible
-(半导体 T2/T3: 0.0 → 1.0 / 0.6667).  Known residual: the 碳酸锂 thesis
-dips at recall@10 under hybrid (0.5 → 0.25) while recovering at recall@20;
-the aggregate regression guard tracks totals, not per-thesis k-slices.
+(半导体 T2/T3: 0.0 → 1.0 / 0.6667).
+
+**Per-thesis no-dip invariant (added 2026-08-02).** The original
+`_RRF_K = 60` (literature default) flattened the top of each leg enough
+that a dense-leg tail hit could out-vote a sparse-leg top hit, dipping
+the 碳酸锂 thesis (锂电 T2) at recall@10 from 0.5 to 0.25.  Grid search
+over `(ngram in {(2,), (3,), (2,3)}, rrf_k in {30, 60, 100}, lex_w in
+{1.0, 1.5, 2.0})` via `backend/tune_recall_params.py` picks **`rrf_k=30`**
+as the only setting with **0 per-thesis dips** across the three frozen
+cases (ngram and lex_w tied at 0.5833/0.6875 under rrf_k=30, so neither
+needs to move).  Production's `_RRF_K` is now 30; the 碳酸锂 thesis is
+back to `bm25=0.5 hybrid=0.5` at @10 with no new dips introduced
+elsewhere.  A unit test (`tests/test_recall.py::test_recall_no_per_thesis_dip_vs_bm25`)
+asserts the per-thesis invariant at the test layer so a future tuning
+round is caught before the eval script even runs.

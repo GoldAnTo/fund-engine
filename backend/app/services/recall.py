@@ -51,7 +51,16 @@ DEFAULT_TOP_K = 20
 DEFAULT_MODE = "hybrid"
 _BM25_K1 = 1.5
 _BM25_B = 0.75
-_RRF_K = 60  # standard RRF smoothing constant
+# RRF smoothing constant.  The literature default is 60, but with our
+# shortlist=40 that flattens the top of each leg too much: a dense-leg
+# tail hit can out-vote a sparse-leg top hit, which produced a per-thesis
+# recall dip on 锂电储能链 T2 (碳酸锂 thesis: 0.5 → 0.25 at @10).  Grid
+# search across (ngram in {(2,), (3,), (2,3)}, rrf_k in {30, 60, 100},
+# lex_w in {1.0, 1.5, 2.0}) via tune_recall_params.py picks rrf_k=30 as
+# the only setting with 0 per-thesis dips across the three frozen cases;
+# overall@10 climbs 0.5625 → 0.5833, @20 unchanged.  See the eval report
+# in docs/evaluation/reports/ for the per-thesis breakdown.
+_RRF_K = 30
 
 _TOKEN_RE = re.compile(r"[一-鿿]{2,}|[a-zA-Z0-9]{2,}")  # CJK: 一-鿿
 _CJK_RUN_RE = re.compile(r"[一-鿿]+|[a-zA-Z0-9]+")

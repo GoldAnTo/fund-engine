@@ -221,6 +221,67 @@ def test_recall_invalid_mode_rejected(session, thesis):
         )
 
 
+def test_recall_no_per_thesis_dip_vs_bm25():
+    """Grid-search-tuned invariant: across all seeded cases, hybrid recall
+    must match or beat the BM25 baseline at every (thesis, k) pair.
+
+    Pinned after the 锂电储能链 T2 (碳酸锂 thesis) regression at rrf_k=60,
+    which dipped hybrid@10 from 0.5 to 0.25.  rrf_k=30 (see
+    ``app.services.recall._RRF_K``) is the only setting that satisfies this
+    invariant across the three frozen cases; if a future tuning round
+    regresses it, this test fails before ``eval_recall_ab.py`` even runs.
+    """
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.ledger import Base, EvidenceLink, ResearchCase, Thesis
+    from app.scripts.seed_ai_compute_case import CUTOFF
+    from app.scripts.seed_ai_compute_case import seed as seed_ai_compute
+    from app.scripts.seed_semiconductor_case import seed as seed_semiconductor
+    from app.scripts.seed_storage_chain_case import seed as seed_storage_chain
+
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    sm = sessionmaker(bind=engine, future=True)
+    session = sm()
+    for fn in (seed_ai_compute, seed_storage_chain, seed_semiconductor):
+        fn(session)
+    session.commit()
+
+    service = RecallService(session)
+    cases = list(session.scalars(select(ResearchCase)))
+
+    for case in cases:
+        theses = list(
+            session.scalars(select(Thesis).where(Thesis.research_case_id == case.id))
+        )
+        for thesis in theses:
+            gold = set(
+                session.scalars(
+                    select(EvidenceLink.source_statement_id).where(
+                        EvidenceLink.thesis_id == thesis.id
+                    )
+                )
+            )
+            if not gold:
+                continue
+            base = service.for_thesis(
+                thesis, cutoff=CUTOFF, top_k=20, mode="bm25", exclude_linked=False
+            )
+            hybrid = service.for_thesis(
+                thesis, cutoff=CUTOFF, top_k=20, mode="hybrid", exclude_linked=False
+            )
+            base_ids = [s.id for s in base]
+            hybrid_ids = [s.id for s in hybrid]
+            for k in (10, 20):
+                b_hits = len(gold & set(base_ids[:k])) / len(gold)
+                h_hits = len(gold & set(hybrid_ids[:k])) / len(gold)
+                assert h_hits >= b_hits - 1e-9, (
+                    f"hybrid recall@{k} regressed for {case.title} / "
+                    f"{thesis.statement!r}: bm25={b_hits:.4f} hybrid={h_hits:.4f}"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Proposer integration
 # ---------------------------------------------------------------------------
