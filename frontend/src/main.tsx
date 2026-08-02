@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import {
   BrowserRouter,
+  Navigate,
   Route,
   Routes,
 } from "react-router-dom";
@@ -55,20 +56,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           {/* 兼容旧版研究案例工作台 */}
           <Route path="cases" element={<CaseWorkbenchScreen />} />
           <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
-        </Route>
-
-        {/* Legacy app shell — keeps old entry points working for transitional traffic. */}
-        <Route element={<AppShell />}>
-          <Route
-            path="legacy/dossier/:caseId"
-            element={<LegacyDossierRoute />}
-          />
-          <Route
-            path="legacy/graph/:caseId"
-            element={<LegacyGraphRoute />}
-          />
-          <Route path="legacy/documents" element={<DocumentLibraryPage />} />
-          <Route path="legacy/review" element={<ReviewWorkbenchPage />} />
+          {/* 二级研究对象入口（建设中） */}
           <Route
             path="companies"
             element={
@@ -87,6 +75,24 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               />
             }
           />
+          {/* 未匹配路由兜底：旧链接/书签（如 /cases/:id/graph）不再渲染
+              空白页，回到主题入口。React Router 按特异性排序，* 优先级
+              最低，不会吞掉下方 legacy 路由。 */}
+          <Route path="*" element={<Navigate to="/themes" replace />} />
+        </Route>
+
+        {/* Legacy app shell — keeps old entry points working for transitional traffic. */}
+        <Route element={<AppShell />}>
+          <Route
+            path="legacy/dossier/:caseId"
+            element={<LegacyDossierRoute />}
+          />
+          <Route
+            path="legacy/graph/:caseId"
+            element={<LegacyGraphRoute />}
+          />
+          <Route path="legacy/documents" element={<DocumentLibraryPage />} />
+          <Route path="legacy/review" element={<ReviewWorkbenchPage />} />
           <Route
             path="macro"
             element={

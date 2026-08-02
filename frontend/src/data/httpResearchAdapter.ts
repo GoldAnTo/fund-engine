@@ -1626,15 +1626,20 @@ export class HttpResearchAdapter implements ResearchClient {
     }
 
     const dateLabel = (v: string | null) => (v ? v.slice(0, 10) : "—");
+    const DOC_KIND_LABEL: Record<string, string> = {
+      research_report: "研报",
+      announcement: "公告",
+    };
     const toDocument = (
       d: Schemas["DocumentSummaryDTO"],
     ): LibraryView["documents"][number] => ({
       id: d.id,
-      title: d.source_url,
-      sourceName: d.source_url,
+      // Prefer ingest-time locator metadata (research report title, issuer
+      // org, document kind); fall back to the raw source URL when absent.
+      title: d.title ?? d.source_url,
+      sourceName: d.org ?? d.source_url,
       sourceVersion: d.parser_version,
-      // Documents carry no type/entity metadata in v1; render honestly.
-      documentType: "未分类",
+      documentType: (d.doc_kind && DOC_KIND_LABEL[d.doc_kind]) ?? "未分类",
       entity: "—",
       reuseCount: d.statement_count,
       reviewState: d.parse_state === "parsed" ? "reviewed" : "pending_review",

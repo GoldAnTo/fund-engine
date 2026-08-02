@@ -1,7 +1,9 @@
 """Document library v1 wire DTOs.
 
-Honest for the current schema: no title, publisher, document type, MIME type,
-blob URL or parse failure stage is fabricated (delivery 2 adds those fields).
+Honest for the current schema: no publisher, MIME type, blob URL or parse
+failure stage is fabricated.  ``title`` / ``org`` / ``doc_kind`` are derived
+from the first SourceSpan locator that carries them (ingest-time metadata),
+never invented; they stay ``None`` when no locator provides them.
 """
 
 from typing import Any, Literal
@@ -21,6 +23,10 @@ class DocumentSummaryDTO(V1Model):
     span_count: int
     statement_count: int
     parse_state: Literal["parsed", "unparsed"]
+    # Derived from span locator metadata when available (else None).
+    title: str | None = None
+    org: str | None = None
+    doc_kind: str | None = None
 
 
 class SourceSpanDTO(V1Model):

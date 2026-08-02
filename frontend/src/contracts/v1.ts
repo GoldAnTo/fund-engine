@@ -841,6 +841,12 @@ export interface components {
              * @enum {string}
              */
             parse_state: "parsed" | "unparsed";
+            /** Title */
+            title?: string | null;
+            /** Org */
+            org?: string | null;
+            /** Doc Kind */
+            doc_kind?: string | null;
         };
         /** DocumentVersionAddedDTO */
         DocumentVersionAddedDTO: {

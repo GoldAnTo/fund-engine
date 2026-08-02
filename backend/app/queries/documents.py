@@ -88,7 +88,11 @@ class DocumentReadQueries:
             statements = self._research.statements_for_span_ids(
                 [s.id for s in spans]
             )
-            items.append(self._summary(version, len(spans), len(statements)))
+            items.append(
+                self._summary(
+                    version, len(spans), len(statements), spans=spans
+                )
+            )
         return DocumentListResponse(
             basis=basis.to_dto(),
             items=items,
@@ -148,16 +152,46 @@ class DocumentReadQueries:
             )
 
         return DocumentDetailResponse(
-            document=self._summary(version, len(spans), len(statements)),
+            document=self._summary(
+                version, len(spans), len(statements), spans=spans
+            ),
             spans=span_dtos,
         )
+
+    @staticmethod
+    def _locator_metadata(spans: list) -> dict:
+        """Pick display metadata (title/org/kind) from span locators.
+
+        Prefers the first locator that actually carries a ``title``; falls
+        back to the first locator with any of the known keys.  Never invents
+        values — missing keys stay absent so the DTO fields remain ``None``.
+        """
+        candidates = [s.locator for s in spans if isinstance(s.locator, dict)]
+        for loc in candidates:
+            if loc.get("title"):
+                return {
+                    "title": loc.get("title") or None,
+                    "org": loc.get("org") or None,
+                    "doc_kind": loc.get("kind") or None,
+                }
+        for loc in candidates:
+            if loc.get("kind") or loc.get("org"):
+                return {
+                    "title": loc.get("title") or None,
+                    "org": loc.get("org") or None,
+                    "doc_kind": loc.get("kind") or None,
+                }
+        return {"title": None, "org": None, "doc_kind": None}
 
     def _summary(
         self,
         version: DocumentVersion,
         span_count: int,
         statement_count: int,
+        *,
+        spans: list | None = None,
     ) -> DocumentSummaryDTO:
+        meta = self._locator_metadata(spans or [])
         return DocumentSummaryDTO(
             id=str(version.id),
             content_sha256=version.content_sha256,
@@ -172,4 +206,7 @@ class DocumentReadQueries:
             span_count=span_count,
             statement_count=statement_count,
             parse_state="parsed" if span_count >= 1 else "unparsed",
+            title=meta["title"],
+            org=meta["org"],
+            doc_kind=meta["doc_kind"],
         )
