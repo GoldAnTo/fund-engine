@@ -270,10 +270,16 @@ def phase3_extract(max_docs: int = 8) -> dict:
                        params={"limit": 100})
     assert status == 200, body
     items = body.get("items") or []
-    # Skip versions that already carry statements: re-running the extract
-    # endpoint appends duplicates (documented API behavior), so batch
-    # resumability relies on this skip.
-    pending = [i for i in items if (i.get("statement_count") or 0) == 0]
+    # Extraction watermark (defect-3 fix): only attempt versions that were
+    # never extracted or whose last run failed.  "extracted_empty" versions
+    # (successful run, zero statements) used to be indistinguishable from
+    # pending ones and were re-extracted every round — 5 docs × 5 rounds =
+    # 25 wasted LLM calls in the original walkthrough.
+    pending = [
+        i
+        for i in items
+        if i.get("extraction_state") in ("not_attempted", "failed")
+    ]
     batch = pending[:max_docs]
     totals = {"documents_total": len(items), "pending_before": len(pending),
               "extracted_this_run": 0, "statements": 0, "per_document": []}

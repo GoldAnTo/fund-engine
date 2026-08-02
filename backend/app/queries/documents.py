@@ -13,8 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import DocumentVersion, Stock
+from app.models.ledger import AIRun, DocumentVersion, Stock
 from app.queries.basis import HistoricalBasis
+from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.common import CursorPage
@@ -84,6 +85,8 @@ class DocumentReadQueries:
         if has_more and page_items:
             last = page_items[-1]
             next_cursor = _encode_cursor(last.available_at, last.id)
+        # One batched lookup for the extraction watermark (no N+1).
+        run_map = latest_extract_runs(self._session, [v.id for v in page_items])
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
             spans = self._docs.spans_for_version(version.id)
@@ -92,7 +95,11 @@ class DocumentReadQueries:
             )
             items.append(
                 self._summary(
-                    version, len(spans), len(statements), spans=spans
+                    version,
+                    len(spans),
+                    len(statements),
+                    spans=spans,
+                    latest_run=run_map.get(version.id),
                 )
             )
         return DocumentListResponse(
@@ -155,7 +162,13 @@ class DocumentReadQueries:
 
         return DocumentDetailResponse(
             document=self._summary(
-                version, len(spans), len(statements), spans=spans
+                version,
+                len(spans),
+                len(statements),
+                spans=spans,
+                latest_run=latest_extract_runs(self._session, [version_id]).get(
+                    version_id
+                ),
             ),
             spans=span_dtos,
         )
@@ -240,6 +253,7 @@ class DocumentReadQueries:
         statement_count: int,
         *,
         spans: list | None = None,
+        latest_run: AIRun | None = None,
     ) -> DocumentSummaryDTO:
         meta = self._locator_metadata(spans or [])
         return DocumentSummaryDTO(
@@ -256,6 +270,14 @@ class DocumentReadQueries:
             span_count=span_count,
             statement_count=statement_count,
             parse_state="parsed" if span_count >= 1 else "unparsed",
+            extraction_state=extraction_state(
+                statement_count=statement_count, latest_run=latest_run
+            ),
+            last_extracted_at=(
+                _iso(latest_run.finished_at or latest_run.started_at)
+                if latest_run is not None
+                else None
+            ),
             title=meta["title"],
             org=meta["org"],
             doc_kind=meta["doc_kind"],

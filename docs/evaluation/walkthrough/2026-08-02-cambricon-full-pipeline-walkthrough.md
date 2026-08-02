@@ -71,9 +71,18 @@ ThemeRole、CausalStep/CausalEdge、Fund/HoldingDisclosure、Company/Stock 管�
 
 因果链校验落在 `ResearchService`（`app/services/research.py`），路由 `app/api/v1/commands/causal.py`（tag `causal-commands-v1`）；公司/股票复用 instrument 模块。测试：`tests/test_causal_commands_api.py` 14 条 + instrument 测试新增 7 条，全量 260 passed，发布门禁保持 PASS。走查脚本 phase9 的五类对象（ThemeRole/Fund/HoldingDisclosure/CausalStep/CausalEdge）已全部改走正式 API，数据库会话仅用于存在性查询与幂等守卫。
 
-### ⚠️ 缺陷 3（P1）：无抽取/解析运行水位，零产出文档永久 pending
+### ✅ 缺陷 3（P1，已于 2026-08-02 修复）：AIRun 派生抽取水位，零产出文档不再反复重抽
 
-`_pending_versions` 语义是"有 span 无陈述"，抽取返回 0 条的文档与从未抽取的文档不可区分，批处理会反复重抽（走查中 5 篇文档被重复抽取 5 轮共 25 次 LLM 调用）。需要 ExtractRun/ParseRun 水位或"已抽取·零产出"标记。
+`_pending_versions` 语义曾是"有 span 无陈述"，抽取返回 0 条的文档与从未抽取的文档不可区分，批处理会反复重抽（走查中 5 篇文档被重复抽取 5 轮共 25 次 LLM 调用）。
+
+**修复（2026-08-02）**：不建新表，直接从既有 AIRun 审计记录派生水位（每次 extract 调用本就落一条含 `input_ref.document_version_id` 与 status 的 AIRun）：
+
+- 新增 `app/queries/extraction_runs.py`：`latest_extract_runs`（按 started_at 取每版本最近一次抽取运行）、`successful_extract_version_ids`（水位高线）、`extraction_state` 四态分类——`extracted`（有陈述）/ `extracted_empty`（成功但零产出，**不再重抽**）/ `failed`（可重试）/ `not_attempted`；
+- 文档库列表与详情的 `DocumentSummaryDTO` 新增 `extraction_state` + `last_extracted_at`（列表页一次批量查询，无 N+1）；
+- `run_ai_engine._pending_versions` 排除已有成功抽取运行的版本（失败运行不排除，保持可重试）；
+- 走查脚本 phase3 批处理改按 `extraction_state ∈ {not_attempted, failed}` 选取，消除 25 次重复 LLM 调用的路径。
+
+测试 `tests/test_document_read_api_v1.py` 新增 8 条（四态、latest-run-wins、详情透出、pending 排除成功/保留失败），全量 287 passed，发布门禁 PASS。注：extract 端点本身仍为 append-only（文档化行为），未加服务端重抽守卫——该文件当时处于并行改动中，批处理侧水位已消除浪费路径。
 
 ### ⚠️ 缺陷 4（P1）：采集无内容质量校验
 

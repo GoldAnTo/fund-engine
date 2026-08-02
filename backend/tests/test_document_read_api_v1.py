@@ -192,3 +192,147 @@ def test_documents_malformed_cursor_returns_422(api_client, document):
     payload = response.json()
     assert payload["schema_version"] == "v1"
     assert payload["error"]["code"] == "validation_failed"
+
+
+# ---------------------------------------------------------------------------
+# Extraction watermark (defect-3 fix): AIRun-derived extraction_state
+# ---------------------------------------------------------------------------
+
+
+def _add_extract_run(session, version_id, *, status="success", started_at):
+    from app.models.ledger import AIRun
+
+    run = AIRun(
+        kind="extract",
+        model_version="test-model",
+        prompt_version="v1",
+        input_ref={"document_version_id": str(version_id)},
+        output_summary=(
+            "llm returned 0 statements" if status == "success" else ""
+        ),
+        status=status,
+        error=None if status == "success" else "boom",
+        started_at=started_at,
+        finished_at=started_at,
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
+def _list_state(api_client, document) -> dict:
+    response = api_client.get("/api/v1/documents")
+    assert response.status_code == 200
+    (item,) = [i for i in response.json()["items"] if i["id"] == str(document.id)]
+    return item
+
+
+def test_extraction_state_not_attempted_without_runs(api_client, document, span):
+    item = _list_state(api_client, document)
+    assert item["extraction_state"] == "not_attempted"
+    assert item["last_extracted_at"] is None
+
+
+def test_extraction_state_extracted_empty_after_zero_output_run(
+    api_client, session, document, span
+):
+    run = _add_extract_run(
+        session, document.id, started_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+    item = _list_state(api_client, document)
+    assert item["extraction_state"] == "extracted_empty"
+    assert item["last_extracted_at"] == run.finished_at.isoformat()
+
+
+def test_extraction_state_failed_after_failed_run(
+    api_client, session, document, span
+):
+    _add_extract_run(
+        session,
+        document.id,
+        status="failed",
+        started_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    item = _list_state(api_client, document)
+    assert item["extraction_state"] == "failed"
+
+
+def test_extraction_state_latest_run_wins(
+    api_client, session, document, span
+):
+    _add_extract_run(
+        session, document.id, started_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+    _add_extract_run(
+        session,
+        document.id,
+        status="failed",
+        started_at=datetime(2026, 7, 2, tzinfo=UTC),
+    )
+    item = _list_state(api_client, document)
+    assert item["extraction_state"] == "failed"
+
+
+def test_extraction_state_extracted_when_statements_exist(
+    api_client, session, document, statement
+):
+    # A statement exists even though no run is recorded (e.g. seeded data):
+    # output trumps the audit trail.
+    item = _list_state(api_client, document)
+    assert item["statement_count"] >= 1
+    assert item["extraction_state"] == "extracted"
+
+
+def test_document_detail_carries_extraction_state(
+    api_client, session, document, span
+):
+    _add_extract_run(
+        session, document.id, started_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+    response = api_client.get(f"/api/v1/documents/{document.id}")
+    assert response.status_code == 200
+    assert response.json()["document"]["extraction_state"] == "extracted_empty"
+
+
+def test_pending_versions_skip_successfully_extracted(
+    session, document_service, research_service
+):
+    """_pending_versions must exclude zero-output-but-attempted versions."""
+    from app.scripts.run_ai_engine import _pending_versions
+
+    version = document_service.freeze(
+        raw=b"degenerate content", source_url="https://example.test/deg"
+    )
+    span = document_service.add_span(
+        document_version_id=version.id,
+        locator={"page": 1},
+        verbatim_text="相关研究",
+    )
+    assert version in _pending_versions(session)
+
+    _add_extract_run(
+        session, version.id, started_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+    assert version not in _pending_versions(session)
+
+
+def test_pending_versions_keep_failed_versions_retryable(
+    session, document_service
+):
+    from app.scripts.run_ai_engine import _pending_versions
+
+    version = document_service.freeze(
+        raw=b"retry me", source_url="https://example.test/retry"
+    )
+    document_service.add_span(
+        document_version_id=version.id,
+        locator={"page": 1},
+        verbatim_text="text",
+    )
+    _add_extract_run(
+        session,
+        version.id,
+        status="failed",
+        started_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    assert version in _pending_versions(session)

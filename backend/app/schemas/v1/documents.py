@@ -23,6 +23,13 @@ class DocumentSummaryDTO(V1Model):
     span_count: int
     statement_count: int
     parse_state: Literal["parsed", "unparsed"]
+    # Extraction watermark derived from AIRun audit records (defect-3 fix):
+    # "extracted_empty" distinguishes a successful zero-output run from a
+    # never-attempted version so batch extraction stops re-running it.
+    extraction_state: Literal[
+        "extracted", "extracted_empty", "failed", "not_attempted"
+    ]
+    last_extracted_at: str | None = None
     # Derived from span locator metadata when available (else None).
     title: str | None = None
     org: str | None = None

@@ -40,12 +40,18 @@ from app.services.compliance import ComplianceRefusedError
 
 
 def _pending_versions(session: Session) -> list[DocumentVersion]:
-    """Versions that have source spans but no extracted statements yet.
+    """Versions that have source spans but no extracted statements yet AND no
+    successful extract run on record.
 
-    Pending, not parser-labelled: ingestion may attach any parser_version,
-    and a seeded version that already carries statements must be skipped so
-    repeated runs stay idempotent.
+    The AIRun-derived watermark (app/queries/extraction_runs.py) is the
+    defect-3 fix: a version whose extraction succeeded with zero statements
+    used to look identical to a never-attempted one, so every batch re-ran
+    the LLM over it.  Failed runs do not mark a version — it stays
+    retryable.  A seeded version that already carries statements is still
+    skipped so repeated runs stay idempotent.
     """
+    from app.queries.extraction_runs import successful_extract_version_ids
+
     has_span = exists().where(SourceSpan.document_version_id == DocumentVersion.id)
     has_statement = (
         select(SourceStatement.id)
@@ -53,9 +59,11 @@ def _pending_versions(session: Session) -> list[DocumentVersion]:
         .where(SourceSpan.document_version_id == DocumentVersion.id)
         .exists()
     )
-    return list(
-        session.scalars(select(DocumentVersion).where(has_span, ~has_statement))
+    candidates = session.scalars(
+        select(DocumentVersion).where(has_span, ~has_statement)
     )
+    extracted = successful_extract_version_ids(session)
+    return [v for v in candidates if v.id not in extracted]
 
 
 def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False) -> None:
