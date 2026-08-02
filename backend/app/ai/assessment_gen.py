@@ -169,6 +169,68 @@ class AssessmentGenerator:
         the rewritten text is re-evaluated through the same gate and any
         residual hit refuses the whole run.  A malformed rewrite response
         (wrong shape or length) refuses with the original decision.
+
+        Implementation: tries the LangGraph-based compliance graph first
+        (see :mod:`app.ai.compliance_graph`); when ``langgraph`` is not
+        installed, falls back to the original hand-written loop.  Both
+        paths produce identical outcomes for the same inputs — the
+        legacy method is preserved verbatim under
+        :meth:`_ensure_compliant_legacy` so the contract is bit-for-bit
+        stable.
+        """
+        from app.ai.compliance_graph import build_compliance_graph
+
+        try:
+            graph = build_compliance_graph(self._client)
+        except Exception:  # pragma: no cover — ImportError, etc.
+            graph = None
+        if graph is not None:
+            return self._ensure_compliant_via_graph(rationale, gaps, graph)
+        return self._ensure_compliant_legacy(rationale, gaps)
+
+    def _ensure_compliant_via_graph(
+        self, rationale: str, gaps: list, graph
+    ) -> tuple[str, list, bool]:
+        """LangGraph path: invoke the compiled graph and extract results.
+
+        The graph is built with one bounded rewrite attempt (``max_attempts=1``)
+        so the contract is the same as :meth:`_ensure_compliant_legacy`.  The
+        client is held in state (not serialised); this method is therefore
+        only safe to call in-process — operators who need persistent
+        checkpoints should refactor the client to be injected via
+        ``RunnableConfig`` rather than state.
+        """
+        from app.ai.compliance_graph import ComplianceState
+
+        texts = [rationale, *[str(g) for g in gaps]]
+        initial_state: ComplianceState = {
+            "texts": texts,
+            "rewritten": texts,
+            "attempt": 0,
+            "max_attempts": 1,
+            "status": "",
+            "client": self._client,
+        }
+        final_state = graph.invoke(initial_state)
+        rewritten = final_state.get("rewritten", texts)
+        was_rewritten = final_state.get("attempt", 0) > 0
+        if not rewritten:
+            # Defensive: should never happen (the graph raises on
+            # failure) but a typed-state hole is one missing key away
+            # from a real bug, so keep the contract explicit.
+            return rationale, gaps, False
+        return rewritten[0], rewritten[1:], was_rewritten
+
+    def _ensure_compliant_legacy(
+        self, rationale: str, gaps: list
+    ) -> tuple[str, list, bool]:
+        """Original hand-written loop, preserved as the fallback path.
+
+        Behaviour is identical to the pre-T4 ``_ensure_compliant``; the
+        graph path in :meth:`_ensure_compliant_via_graph` is the only
+        change.  Kept verbatim so existing tests in
+        ``test_ai_engine.py`` / ``test_compliance.py`` remain green
+        when ``langgraph`` is missing.
         """
         texts = [rationale, *[str(g) for g in gaps]]
         decisions = [evaluate_compliance(t) for t in texts]

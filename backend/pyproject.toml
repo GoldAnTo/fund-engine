@@ -23,6 +23,15 @@ dev = [
     # one-off PDF fixture generation + text-less-PDF test construction
     "reportlab>=4.0",
 ]
+# Optional Docling PDF parser — DoclingAdapter lazy-imports it; the
+# ledger falls back to PypdfAdapter when the package is missing.
+docling = ["docling>=2.115,<3.0"]
+# Optional AKShare adapter — see T3 in
+# docs/research/2026-08-02-open-source-borrowing-implementation.md.
+akshare = ["akshare>=1.18"]
+# Optional LangGraph compliance rewrite loop — see T4 in
+# docs/research/2026-08-02-open-source-borrowing-implementation.md.
+langgraph = ["langgraph>=1.2.6"]
 
 [build-system]
 requires = ["hatchling"]
