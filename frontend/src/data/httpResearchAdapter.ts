@@ -25,6 +25,7 @@ import type {
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
+  CaseSummaryItem,
   CaseWorkbenchFactorRow,
   CaseWorkbenchFormalJudgment,
   CaseWorkbenchSourceRow,
@@ -1167,6 +1168,16 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
+  async listCaseSummaries(): Promise<CaseSummaryItem[]> {
+    const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
+    return cases.items.map((c) => ({
+      id: c.id,
+      title: c.title,
+      topic: c.topic,
+      updatedAt: c.updated_at,
+    }));
+  }
+
   async getResearchPlanView(): Promise<ResearchPlanView> {
     const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
     const first = cases.items[0];
@@ -1594,9 +1605,13 @@ export class HttpResearchAdapter implements ResearchClient {
     if (documents.items.length === 0) {
       throw new PageStateError("parse_failed", "no documents exist yet");
     }
-    const [detail, knowledge, queue] = await Promise.all([
-      this.get<Schemas["DocumentDetailResponse"]>(
-        `/documents/${documents.items[0].id}`,
+    const [details, knowledge, queue] = await Promise.all([
+      // Fetch every document's spans so the reading pane excerpt/exact-span
+      // follows the selected document instead of sticking to the first one.
+      Promise.all(
+        documents.items.map((d) =>
+          this.get<Schemas["DocumentDetailResponse"]>(`/documents/${d.id}`),
+        ),
       ),
       this.get<Schemas["KnowledgeResponse"]>(
         `/knowledge${this.buildQuery({ review_state: "reviewed", limit: "1" })}`,
@@ -1605,6 +1620,16 @@ export class HttpResearchAdapter implements ResearchClient {
         `/review-queue${this.buildQuery({ limit: "1" })}`,
       ),
     ]);
+    const firstSpanByDoc = new Map(
+      details.map((det) => [det.document.id, det.spans[0]]),
+    );
+    const EXCERPT_LIMIT = 800;
+    const excerptOf = (text: string | undefined): string => {
+      if (!text) return "（暂无原文区段）";
+      return text.length > EXCERPT_LIMIT
+        ? `${text.slice(0, EXCERPT_LIMIT)}…`
+        : text;
+    };
     // Thesis titles are not part of the knowledge payload; resolve them from
     // the first case's dossier when available (best effort).
     const thesisTitles = new Map<string, string>();
@@ -1632,34 +1657,32 @@ export class HttpResearchAdapter implements ResearchClient {
     };
     const toDocument = (
       d: Schemas["DocumentSummaryDTO"],
-    ): LibraryView["documents"][number] => ({
-      id: d.id,
-      // Prefer ingest-time locator metadata (research report title, issuer
-      // org, document kind); fall back to the raw source URL when absent.
-      title: d.title ?? d.source_url,
-      sourceName: d.org ?? d.source_url,
-      sourceVersion: d.parser_version,
-      documentType: (d.doc_kind && DOC_KIND_LABEL[d.doc_kind]) ?? "未分类",
-      entity: d.entity ?? "—",
-      reuseCount: d.statement_count,
-      reviewState: d.parse_state === "parsed" ? "reviewed" : "pending_review",
-      publishedLabel: dateLabel(d.published_at),
-      availableLabel: dateLabel(d.available_at),
-      acquiredLabel: dateLabel(d.acquired_at),
-      previousVersion: d.supersedes_id ?? "—",
-      linkedCaseIds: [],
-      reuseHistory: [],
-      sourceExcerpt: "",
-      exactSpan: "",
-    });
+    ): LibraryView["documents"][number] => {
+      const span = firstSpanByDoc.get(d.id);
+      return {
+        id: d.id,
+        // Prefer ingest-time locator metadata (research report title, issuer
+        // org, document kind); fall back to the raw source URL when absent.
+        title: d.title ?? d.source_url,
+        sourceName: d.org ?? d.source_url,
+        sourceVersion: d.parser_version,
+        documentType: (d.doc_kind && DOC_KIND_LABEL[d.doc_kind]) ?? "未分类",
+        entity: d.entity ?? "—",
+        reuseCount: d.statement_count,
+        reviewState: d.parse_state === "parsed" ? "reviewed" : "pending_review",
+        publishedLabel: dateLabel(d.published_at),
+        availableLabel: dateLabel(d.available_at),
+        acquiredLabel: dateLabel(d.acquired_at),
+        previousVersion: d.supersedes_id ?? "—",
+        linkedCaseIds: [],
+        reuseHistory: [],
+        sourceExcerpt: excerptOf(span?.verbatim_text),
+        exactSpan: span ? JSON.stringify(span.locator) : "—",
+      };
+    };
     const docs = documents.items.map(toDocument);
 
-    const firstSpan = detail.spans[0];
-    const selected: LibraryView["selected"] = {
-      ...docs[0],
-      sourceExcerpt: firstSpan?.verbatim_text ?? "（暂无原文区段）",
-      exactSpan: firstSpan ? JSON.stringify(firstSpan.locator) : "—",
-    };
+    const selected: LibraryView["selected"] = docs[0];
 
     const ROLE_LABEL: Record<string, string> = {
       supports: "支持",
