@@ -6,10 +6,12 @@ from copy into a mechanism: every piece of LLM-generated text is evaluated
 before it reaches the ledger.
 
 Ported and adapted from the Verifiable-Company-Research-Agent
-``compliance/rules.py`` (MIT).  Unlike VCRA we have no LLM rewrite stage, so
-``REWRITE`` hits are treated as refused at call sites for now; the
-three-action model is kept so a rewrite path can be added without changing
-the contract.
+``compliance/rules.py`` (MIT).  The three-action model is live: the
+assessment path (``app/ai/assessment_gen.py``) gives REWRITE-category hits
+(target price / return promise) exactly one LLM rewrite attempt and
+re-evaluates the result through this same gate; REFUSE-category hits are
+refused immediately everywhere.  ``assert_compliant`` remains the
+refuse-loudly primitive for paths without a rewrite stage.
 
 Engineering details kept from the source: base64 data-URIs are stripped
 before scanning (random strings spuriously match "buy"/"sell"), ASCII
@@ -161,7 +163,9 @@ def evaluate_compliance(text: str | None) -> ComplianceDecision:
 def assert_compliant(*texts: str | None) -> None:
     """Refuse loudly if any of ``texts`` crosses the boundary.
 
-    ``REWRITE`` is treated as refused until a rewrite stage exists.
+    Used on paths without a rewrite stage; the assessment path instead
+    gives REWRITE-category hits one bounded repair attempt first (see
+    ``app/ai/assessment_gen.py``).
     """
     for text in texts:
         decision = evaluate_compliance(text)

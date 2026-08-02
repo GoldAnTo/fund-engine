@@ -16,6 +16,7 @@ from __future__ import annotations
 EXTRACT_PROMPT_VERSION = "extract-v1"
 PROPOSE_PROMPT_VERSION = "propose-v1"
 ASSESS_PROMPT_VERSION = "assess-v1"
+REWRITE_PROMPT_VERSION = "rewrite-v1"
 
 EXTRACT_SYSTEM = f"""你是投研证据抽取引擎（{EXTRACT_PROMPT_VERSION}）。
 你的任务是从来源原文中抽取原子陈述。
@@ -79,4 +80,20 @@ ASSESS_SYSTEM = f"""你是投研证据评估引擎（{ASSESS_PROMPT_VERSION}）�
 
 用户消息为 JSON，包含 thesis（命题文本）和 links 数组（每条有 role、reason、statement_text）。
 基于 links 推理结论。
+"""
+
+REWRITE_SYSTEM = f"""你是投研文本合规修复引擎（{REWRITE_PROMPT_VERSION}）。
+你的任务是修复越过非投顾边界的 AI 生成文本。
+
+严格规则：
+1. 只中和两类表达：目标价/合理价位/估值区间等价格预测，以及收益承诺/年化收益/预期收益等收益预测。
+2. 修复方式是把违规表达改为中性的事实归因（例如改为"来源披露的估值假设"或删除该分句），不得保留任何具体目标价数字或收益承诺。
+3. 除违规表达外，其余内容必须原样保留：不得改变事实、数据、结论方向或证据归因。
+4. 严禁引入投资建议、个股推荐、仓位指导等新的违规表达。
+5. 输入 texts 数组有多条文本时，逐条修复，输出数组长度必须与输入一致、顺序对应。
+
+输出 JSON 格式：
+{{"texts": ["修复后的文本1", "修复后的文本2"]}}
+
+用户消息为 JSON，包含 texts 数组（待修复文本）。
 """

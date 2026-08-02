@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -121,7 +122,27 @@ def _mock_response(messages: list[dict], schema_hint: str) -> dict:
         return _mock_propose(data)
     if schema_hint == "assess":
         return _mock_assess(data)
+    if schema_hint == "rewrite":
+        return _mock_rewrite(data)
     return {}
+
+
+def _mock_rewrite(data: dict) -> dict:
+    """Deterministic offline compliance rewrite.
+
+    Drops clauses that the compliance gate flags (in mock mode every hit
+    reaching this stage is a REWRITE-category expression, since REFUSE
+    categories never enter the rewrite loop).  A text reduced to nothing is
+    replaced by a compliant placeholder.
+    """
+    from app.services.compliance import evaluate_compliance
+
+    cleaned: list[str] = []
+    for text in data.get("texts", []):
+        clauses = [c for c in re.split(r"(?<=[。；;!?！？])", str(text)) if c.strip()]
+        kept = [c for c in clauses if not evaluate_compliance(c).is_hit]
+        cleaned.append("".join(kept) if kept else "该表述已按合规要求省略")
+    return {"texts": cleaned}
 
 
 def _mock_extract(data: dict) -> dict:

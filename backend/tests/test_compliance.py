@@ -155,3 +155,163 @@ def test_development_without_api_key_uses_mock(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     client = LLMClient.from_env()
     assert client.model_version.startswith("mock-")
+
+
+# ---------------------------------------------------------------------------
+# Bounded rewrite loop (assessment path)
+# ---------------------------------------------------------------------------
+
+
+def _assess_then_rewrite(client, assess_payload, rewrite_payload=None):
+    """Patch chat_json: assess calls get ``assess_payload``; rewrite calls get
+    ``rewrite_payload`` (or the real mock rewrite when None)."""
+    from unittest.mock import patch
+
+    real_mock = client._mock
+
+    def fake(messages, schema_hint=""):
+        if schema_hint == "assess":
+            return assess_payload
+        if rewrite_payload is not None and schema_hint == "rewrite":
+            return rewrite_payload
+        # delegate to the real mock implementation
+        from app.ai.client import _mock_response
+
+        return _mock_response(messages, schema_hint)
+
+    return patch.object(client, "chat_json", new=fake)
+
+
+def test_rewriteable_violation_repaired_and_admitted(
+    session, research_service, thesis, statement
+):
+    """A target-price expression (REWRITE category) gets one rewrite attempt;
+    the cleaned rationale reaches the ledger and the AIRun records the repair."""
+    research_service.link_evidence(
+        thesis.id, statement.id,
+        role="supports", reason="orders rose", scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    payload = {
+        "conclusion": "supported",
+        "rationale": "证据一致支持命题。对应目标价85元。",
+        "gaps": [],
+    }
+    with _assess_then_rewrite(client, payload):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert "目标价" not in assessment.rationale
+    assert "证据一致支持命题" in assessment.rationale
+    assert assessment.displayed_as_provisional is True
+
+    run = session.scalars(select(AIRun).where(AIRun.kind == "assess")).one()
+    assert run.status == "success"
+    assert "rewritten_for_compliance" in run.output_summary
+
+
+def test_rewrite_still_violating_refuses_without_writing(
+    session, research_service, thesis, statement
+):
+    """A rewrite that comes back still violating refuses the whole run;
+    nothing is persisted except the failed AIRun."""
+    from app.models.ledger import AIAssessment
+
+    research_service.link_evidence(
+        thesis.id, statement.id,
+        role="supports", reason="orders rose", scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    payload = {
+        "conclusion": "supported",
+        "rationale": "证据支持命题。对应目标价85元。",
+        "gaps": [],
+    }
+    bad_rewrite = {"texts": ["修复后仍建议买入"]}
+    with _assess_then_rewrite(client, payload, rewrite_payload=bad_rewrite):
+        with pytest.raises(ComplianceRefusedError):
+            AssessmentGenerator(client).generate(
+                thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+            )
+
+    assert session.scalars(select(AIAssessment)).all() == []
+    run = session.scalars(select(AIRun).where(AIRun.kind == "assess")).one()
+    assert run.status == "failed"
+    assert "compliance refused" in run.error
+
+
+def test_refuse_category_never_reaches_rewrite(
+    session, research_service, thesis, statement
+):
+    """REFUSE-category hits are refused immediately — the rewrite stage is
+    never invoked (chat_json sees exactly one assess call)."""
+    research_service.link_evidence(
+        thesis.id, statement.id,
+        role="supports", reason="orders rose", scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    payload = {
+        "conclusion": "supported",
+        "rationale": "证据支持，建议买入相关标的",
+        "gaps": [],
+    }
+    calls: list[str] = []
+
+    def fake(messages, schema_hint=""):
+        calls.append(schema_hint)
+        return payload
+
+    from unittest.mock import patch
+
+    with patch.object(client, "chat_json", new=fake):
+        with pytest.raises(ComplianceRefusedError):
+            AssessmentGenerator(client).generate(
+                thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+            )
+    assert calls == ["assess"]
+
+
+def test_malformed_rewrite_response_refuses_with_original_decision(
+    session, research_service, thesis, statement
+):
+    """A rewrite response of the wrong shape/length refuses with the original
+    violation rather than admitting garbage."""
+    research_service.link_evidence(
+        thesis.id, statement.id,
+        role="supports", reason="orders rose", scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    payload = {
+        "conclusion": "supported",
+        "rationale": "证据支持命题。对应目标价85元。",
+        "gaps": ["缺少分部数据"],
+    }
+    with _assess_then_rewrite(client, payload, rewrite_payload={"texts": ["only one"]}):
+        with pytest.raises(ComplianceRefusedError) as exc_info:
+            AssessmentGenerator(client).generate(
+                thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+            )
+    assert any(
+        h.category is ViolationCategory.TARGET_PRICE
+        for h in exc_info.value.decision.hits
+    )
+
+
+def test_rewrite_applies_to_gaps_too(session, research_service, thesis, statement):
+    """Violations in gaps are repaired the same way as the rationale."""
+    research_service.link_evidence(
+        thesis.id, statement.id,
+        role="supports", reason="orders rose", scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    payload = {
+        "conclusion": "insufficient_evidence",
+        "rationale": "证据方向不一，仍需验证。",
+        "gaps": ["缺少分部数据", "需关注预期收益口径"],
+    }
+    with _assess_then_rewrite(client, payload):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+    assert all("预期收益" not in str(g) for g in assessment.gaps)
