@@ -136,8 +136,8 @@ Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个�
 走查揭示的若干限制**不是 bug，是架构选择**——必须靠产品文档与界面告知来对齐用户预期，否则会被误判为「系统出错」：
 
 - **缺陷 6：历史回放 = 系统账本时间，不是市场时间**。`cutoff=X` 只回放「X 时刻系统已写入的账本」——今天采集的 2024 年报在 `cutoff=2024-12-31` 下不可见，案例在 `cutoff < case.created_at` 时直接 404。生产路径上**做不了真正的「以历史视角模拟研究」**（只能走预冻结 fixture）。前端应在回放模式下显式提示这一语义；`docs/integration/frontend-api-binding.md`「时间点语义与回放边界」小节已落实参数差异与展示规范。
-- **缺陷 7：判断非确定性 + 合规结果随措辞抽签**。同一命题同一证据 live 模式下可能得到不同结论（LLM 温度非零、合规门有界重写）。「相同 cutoff 重复得到相同 citation manifest」的硬验收成立，但「相同结论」不成立——是已知 LLM 边界，建议引入评估可复现性约束（温度冻结 + 输入排序规范化）后再做断言型验收。
-- **缺陷 8：估值快照 as_of 取采集日而非行情日**。`services/ingest.py` 的 ValuationSnapshot.as_of_date 落在 ingest 当日（2026-08-02），而非行情交易日（2026-07-31 15:00）。口径偏小但破坏「估值按 as_of 对齐」语义，建议在 ingest 链路修复或在数据层补 derive 字段。
+- ~~**缺陷 7：判断非确定性 + 合规结果随措辞抽签**。同一命题同一证据 live 模式下可能得到不同结论（LLM 温度非零、合规门有界重写）。~~（已于 2026-08-02 修复：`app/ai/client.py` `LLMClient` 默认 `temperature=0.0` + 可选 `seed` 转发到 OpenAI；mock 模式不触达 live client；9 条新测试锁定契约。`LLM_TEMPERATURE` / `LLM_SEED` env 可调。「相同结论」仍是 best-effort——OpenAI 的 seed 是提示而非保证，但温度归零 + seed 固定已闭合大部分方差。）
+- ~~**缺陷 8：估值快照 as_of 取采集日而非行情日**。~~（已于 2026-08-02 修复：`app/scripts/ingest_real_data.py` 新增 `_previous_business_day()` 工具函数（仅处理周末，节假日需 caller 显式覆盖），line 414 估值循环从 `date.today()` 改为 `_previous_business_day()`——周一/周末调用 Gildata quote 时 as_of 正确回退到上一个工作日。10 条新测试覆盖周一到周日 + 跨年 + 节假日已知限制。修复后周五 17:00 抓取寒武纪 quote 会正确记 as_of=当日（周四），而非 ingest 当日。）
 - **缺陷 9：关系图缺原文层**。图节点从 SourceStatement 开始，DocumentVersion/SourceSpan 与 contains/derived 边未在图读模型落地（statement properties 有 source_refs 但不可视化）；默认只展开焦点命题（contains_thesis=1），多命题全景需要逐命题切换，不是一张总图。
 - **基金穿透权重口径依赖数据源语义**（占流通 A 股比例 vs 占净值比例），账本已记 source 定义，穿透展示时前端应透出该口径。
 
