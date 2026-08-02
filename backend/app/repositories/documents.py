@@ -54,6 +54,10 @@ class DocumentRepository:
         parser_version: str,
         supersedes_id: uuid.UUID | None,
         natural_key: str | None = None,
+        title: str | None = None,
+        byte_size: int | None = None,
+        language: str | None = None,
+        parse_state: str = "success",
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
@@ -64,6 +68,10 @@ class DocumentRepository:
             acquired_at=acquired_at,
             parser_version=parser_version,
             supersedes_id=supersedes_id,
+            title=title,
+            byte_size=byte_size,
+            language=language,
+            parse_state=parse_state,
         )
         self._session.add(version)
         self._session.flush()
@@ -75,11 +83,17 @@ class DocumentRepository:
         document_version_id: uuid.UUID,
         locator: dict,
         verbatim_text: str,
+        text_sha256: str | None = None,
+        context_hash: str | None = None,
+        locator_v1: dict | None = None,
     ) -> SourceSpan:
         span = SourceSpan(
             document_version_id=document_version_id,
             locator=locator,
             verbatim_text=verbatim_text,
+            text_sha256=text_sha256,
+            context_hash=context_hash,
+            locator_v1=locator_v1,
         )
         self._session.add(span)
         self._session.flush()

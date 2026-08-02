@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, JSON, Numeric, String, Text, Uuid, event
+from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -140,6 +140,22 @@ class DocumentVersion(Base):
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("document_versions.id"), nullable=True
     )
+    # Display + provenance fields (S4 of the Docling + locator-v1 spec,
+    # docs/research/2026-08-02-docling-and-source-locator-v1-spec.md §3.5):
+    # - title: source-side document title (separate from source_url; can be
+    #   the broker's "报告标题" or a PDF's own metadata).
+    # - byte_size: size of the original payload, used by the workbench to
+    #   decide whether to fetch the whole blob or render a preview.
+    # - language: ISO-639-1 hint (zh / en / mixed) used by the parser
+    #   router in S5 to pick an OCR model when text layer is missing.
+    # - parse_state: "success" / "partial" / "failed" / "pending" — written
+    #   by the parser adapter so the workbench can warn on degraded reads.
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    parse_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="success"
+    )
 
 
 class SourceSpan(Base):
@@ -151,6 +167,18 @@ class SourceSpan(Base):
     )
     locator: Mapped[dict] = mapped_column(JSON, nullable=False)
     verbatim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Round-trip + context hashes (S4):
+    # - text_sha256: hash of normalised verbatim_text, used by the
+    #   round-trip validator and by callers that need to know whether
+    #   a re-extracted span is byte-identical to the stored one.
+    # - context_hash: short hash of (page, prev_text, next_text) so
+    #   neighbouring stability survives a non-breaking parser upgrade.
+    # - locator_v1: the new v1 form of the locator (spec §3.1 / §3.5);
+    #   coexists with the legacy ``locator`` JSON because the ledger is
+    #   append-only.  S5 will switch read paths to prefer this column.
+    text_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    locator_v1: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class ResearchCase(Base):

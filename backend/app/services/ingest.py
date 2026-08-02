@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from app.models.ledger import DocumentVersion, SourceSpan
 from app.repositories.documents import DocumentRepository
 
+# 留作 docling 默认值的占位（spec §3.2）。实际 PDF 解析走
+# app.datasources.docling.PARSER_VERSION_PYPDF；docling-v1 字符串作为
+# 未来切换时的目标。S3 接入真实 DoclingAdapter 后可以无缝替换。
 PARSER_VERSION = "docling-v1"
 
 _WS_RE = re.compile(r"\s+")
@@ -69,6 +72,9 @@ class DocumentService:
         parser_version: str | None = None,
         title: str | None = None,
         natural_key: str | None = None,
+        byte_size: int | None = None,
+        language: str | None = None,
+        parse_state: str = "success",
     ) -> DocumentVersion:
         """Freeze bytes into a DocumentVersion, deduping on two levels:
 
@@ -81,6 +87,12 @@ class DocumentService:
         Callers wanting to distinguish new vs. duplicate ingest should read
         ``natural_key`` on the returned version and compare; otherwise this
         returns the same DocumentVersion either way (back-compat).
+
+        S4 additions: ``title`` is now persisted (was only on span locator),
+        and ``byte_size`` / ``language`` / ``parse_state`` let the workbench
+        decide whether to fetch the full blob and whether to warn on a
+        degraded parse.  All are optional and default to ``None`` / "success"
+        for legacy callers.
         """
         version, _created = self._freeze(
             raw=raw,
@@ -89,6 +101,9 @@ class DocumentService:
             parser_version=parser_version,
             title=title,
             natural_key=natural_key,
+            byte_size=byte_size,
+            language=language,
+            parse_state=parse_state,
         )
         return version
 
@@ -101,6 +116,9 @@ class DocumentService:
         parser_version: str | None,
         title: str | None,
         natural_key: str | None,
+        byte_size: int | None = None,
+        language: str | None = None,
+        parse_state: str = "success",
     ) -> tuple[DocumentVersion, bool]:
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
@@ -133,6 +151,10 @@ class DocumentService:
             acquired_at=now,
             parser_version=parser_version or PARSER_VERSION,
             supersedes_id=supersedes_id,
+            title=title,
+            byte_size=byte_size if byte_size is not None else len(raw),
+            language=language,
+            parse_state=parse_state,
         )
         return version, True
 
@@ -141,9 +163,24 @@ class DocumentService:
         document_version_id: uuid.UUID,
         locator: dict,
         verbatim_text: str,
+        *,
+        text_sha256: str | None = None,
+        context_hash: str | None = None,
+        locator_v1: dict | None = None,
     ) -> SourceSpan:
+        """Append one SourceSpan to a DocumentVersion.
+
+        S4 additions: ``text_sha256`` / ``context_hash`` / ``locator_v1``
+        are optional; legacy callers that still pass a ``{page, paragraph,
+        parser}`` dict continue to work.  New code should compute the
+        hashes via ``app.documents.locators.compute_text_sha256`` and pass
+        a v1 locator produced by ``coerce_locator_v1``.
+        """
         return self._repo.insert_span(
             document_version_id=document_version_id,
             locator=locator,
             verbatim_text=verbatim_text,
+            text_sha256=text_sha256,
+            context_hash=context_hash,
+            locator_v1=locator_v1,
         )
