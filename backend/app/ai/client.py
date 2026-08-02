@@ -17,9 +17,27 @@ from typing import Any
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
+# Default temperature=0.0: every live call freezes sampling so the citation
+# manifest + assessment conclusion are reproducible for the same input under
+# the same model.  OpenAI's seed is a best-effort hint, not a guarantee
+# (versions/regions may still drift), but combined with temperature=0 it
+# closes the bulk of the variance.  See walkthrough defect 7.
+DEFAULT_TEMPERATURE = 0.0
+
 
 class LLMClient:
-    """Thin wrapper around the OpenAI SDK with a deterministic mock fallback."""
+    """Thin wrapper around the OpenAI SDK with a deterministic mock fallback.
+
+    Reproducibility contract (defect-7 fix, 2026-08-02):
+    - ``temperature`` defaults to 0.0; pass a higher value only when you have
+      a reason (eval harness sweep, exploratory research).
+    - ``seed`` is forwarded to OpenAI's ``chat.completions.create`` as the
+      ``seed`` field when set; unset (None) means "do not pin" — callers that
+      need identical manifests across reruns should set this.
+    - Mock mode is already deterministic by construction (keyword heuristics
+      in ``_mock_response``); the same temperature/seed plumbing still
+      exercises the code path so production config matches test config.
+    """
 
     def __init__(
         self,
@@ -27,16 +45,26 @@ class LLMClient:
         model_version: str,
         client: Any | None = None,
         mock: bool = False,
+        temperature: float = DEFAULT_TEMPERATURE,
+        seed: int | None = None,
     ) -> None:
         self.model_version = model_version
         self._client = client
         self._mock = mock
+        self._temperature = temperature
+        self._seed = seed
 
     # ------------------------------------------------------------------ factory
 
     @classmethod
     def from_env(cls) -> "LLMClient":
         """Build a client from ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``.
+
+        Reproducibility knobs read from env:
+        - ``LLM_TEMPERATURE`` (default 0.0): passed straight to the OpenAI
+          call.  Zero freezes sampling so reruns land on the same token.
+        - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
+          as ``seed``.  Empty/0 means "do not pin".
 
         Without ``LLM_API_KEY`` the client runs in mock mode for development
         and tests.  In production (``APP_ENV=production``) a missing key is a
@@ -47,6 +75,9 @@ class LLMClient:
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
+        temperature = float(os.getenv("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
+        raw_seed = os.getenv("LLM_SEED", "").strip()
+        seed: int | None = int(raw_seed) if raw_seed else None
 
         if not api_key:
             app_env = os.getenv("APP_ENV", "development").strip().lower()
@@ -55,12 +86,23 @@ class LLMClient:
                     "LLM_API_KEY is required when APP_ENV=production; "
                     "mock mode is restricted to development and tests"
                 )
-            return cls(model_version=f"mock-{model}", mock=True)
+            return cls(
+                model_version=f"mock-{model}",
+                mock=True,
+                temperature=temperature,
+                seed=seed,
+            )
 
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key, base_url=base_url)
-        return cls(model_version=model, client=client, mock=False)
+        return cls(
+            model_version=model,
+            client=client,
+            mock=False,
+            temperature=temperature,
+            seed=seed,
+        )
 
     # ------------------------------------------------------------------ core
 
@@ -74,11 +116,15 @@ class LLMClient:
             return _mock_response(messages, schema_hint)
 
         assert self._client is not None  # noqa: S101
-        response = self._client.chat.completions.create(
-            model=self.model_version,
-            messages=messages,
-            response_format={"type": "json_object"},
-        )
+        create_kwargs: dict[str, Any] = {
+            "model": self.model_version,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "temperature": self._temperature,
+        }
+        if self._seed is not None:
+            create_kwargs["seed"] = self._seed
+        response = self._client.chat.completions.create(**create_kwargs)
         content = response.choices[0].message.content
         # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
         if "</think>" in content:
