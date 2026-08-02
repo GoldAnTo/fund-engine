@@ -8,6 +8,15 @@ import {
 } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { PrototypeShell } from "./components/PrototypeShell";
+import { setResearchClient } from "./data/researchClient";
+import { MockResearchAdapter } from "./data/mockResearchAdapter";
+
+// 测试钩子：?client=mock 强制使用内存 mock 适配器。
+// 写入路径的 e2e 用例借此保证任何人工决策都不会落到真实后端；
+// 正常访问不带该参数时行为不变。
+if (new URLSearchParams(window.location.search).get("client") === "mock") {
+  setResearchClient(new MockResearchAdapter());
+}
 import { ResearchCaseDossierPage } from "./pages/ResearchCaseDossierPage";
 import { RelationshipCanvasPage } from "./pages/RelationshipCanvasPage";
 import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
