@@ -1,9 +1,9 @@
 # Evidence-Pack Release Gate
 
 The release gate (`backend/scripts/verify_ai_compute_slice.py`) runs ten
-explicit checks against the seeded evidence ledger — **two frozen cases**
-(AI 算力链 + 锂电储能链) — to verify that the vertical slices are auditable
-end-to-end before a release is cut.
+explicit checks against the seeded evidence ledger — **three frozen cases**
+(AI 算力链 + 锂电储能链 + 半导体设备国产化) — to verify that the vertical
+slices are auditable end-to-end before a release is cut.
 
 The gate is part of the evidence pack under `docs/evaluation/`:
 

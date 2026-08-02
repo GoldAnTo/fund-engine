@@ -80,6 +80,8 @@ Four hardening rounds landed on top of the MVP (commits `5963ffb`, `631b9c2`, `9
 
 **Research-ops KPIs (P3).** `GET /api/v1/research-ops/kpis?case_id=&as_of=` derives management metrics from the ledger only: review throughput (with pending queue via effective review state), human-AI agreement (assessment- and link-level; null when no data), and judgment latency (evidence→assessment, assessment→first-review, in days). Supports point-in-time replay via `as_of`.
 
+**Third gold case (P4).** New frozen case 半导体设备国产化 (`seed_semiconductor_case.py`): 5 text fixtures (order announcement, annual/quarterly excerpts, broker research, industry tracker), 23 spans, 18 statements, 18 links, 3 theses with human reviews, fund penetration, human causal chain. It deliberately covers assessment shapes the first two cases lack: T2 is "demand proven but margin repair unproven" (insufficient_evidence), and T3 is a policy-constraint falsification (contradicted: litho localization <5% + export-control delivery disruption vs. sector valuation support). The dataset manifest now lists three cases; the release gate seeds all three and stays green.
+
 **Quality posture:** 218 backend tests (+24 across the four rounds), release gate 10 checks green via `docs/evaluation/reproduce.sh`, frontend contract regenerated after the KPI endpoint.
 
 **Verification stack + CI (2026-08-02, commits `2b07cda`–`9992940`).** Both tiers are now enforced by GitHub Actions on every push/PR touching the relevant tree:

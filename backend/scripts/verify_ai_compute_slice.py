@@ -74,6 +74,7 @@ from app.models.ledger import (
 from app.models.ledger import Base
 from app.repositories.instruments import InstrumentRepository
 from app.scripts.seed_ai_compute_case import seed as seed_ai_compute
+from app.scripts.seed_semiconductor_case import seed as seed_semiconductor
 from app.scripts.seed_storage_chain_case import seed as seed_storage_chain
 from app.services.exposure import ExposureService
 from app.services.workbench import WorkbenchService
@@ -769,6 +770,7 @@ def main() -> None:
     with session_local() as session:
         seed_ai_compute(session)
         seed_storage_chain(session)
+        seed_semiconductor(session)
         session.commit()
         projector = None
         if os.getenv("NEO4J_URL"):

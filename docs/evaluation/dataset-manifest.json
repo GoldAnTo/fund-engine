@@ -14,18 +14,65 @@
       "snapshot_cutoff": "2026-12-31T23:59:59+00:00",
       "historical_cutoff": "2026-04-01",
       "theses": [
-        {"key": "T1", "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张", "assessment": "supported"},
-        {"key": "T2", "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现", "assessment": "insufficient_evidence"},
-        {"key": "T3", "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值", "assessment": "contradicted"}
+        {
+          "key": "T1",
+          "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+          "assessment": "supported"
+        },
+        {
+          "key": "T2",
+          "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+          "assessment": "insufficient_evidence"
+        },
+        {
+          "key": "T3",
+          "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+          "assessment": "contradicted"
+        }
       ],
       "documents": [
-        {"file": "backend/tests/fixtures/ai_compute/01_cambricon_private_placement_announcement.txt", "type": "公告", "published_at": "2026-03-15", "content_sha256": "090ff982b25f8d229c1ee0f9d1dac4979d44792d8243176e28965376fbfc9085"},
-        {"file": "backend/tests/fixtures/ai_compute/02_fii_annual_report_disclosure.txt", "type": "年报披露", "published_at": "2026-03-28", "content_sha256": "83fb7a2b36dd924ec20260c74d99cab29007d694379bc1e4cdf22ea02f45b3e7"},
-        {"file": "backend/tests/fixtures/ai_compute/03_sk_hynix_quarterly_report.txt", "type": "财报（季报）", "published_at": "2026-04-30", "content_sha256": "05b380015ea9676cd0c98532b46507fc3e6b894bf0a7f1620ab026cb31887db5"},
-        {"file": "backend/tests/fixtures/ai_compute/04_cambricon_annual_report.txt", "type": "财报（年报）", "published_at": "2026-04-25", "content_sha256": "fd3a58ceb4f80758d6cecd1c598cce6a3ac85d87c02e03a2c6d8fe7862df71dd"},
-        {"file": "backend/tests/fixtures/ai_compute/05_citic_research_report.txt", "type": "研报", "published_at": "2026-06-10", "content_sha256": "0d6896517a2992e80245690055f72ab3c744a67811dfe19652d3c6c87c7261fd"},
-        {"file": "backend/tests/fixtures/ai_compute/06_guosen_research_report.txt", "type": "研报", "published_at": "2026-06-18", "content_sha256": "4bf9216183340ea08539da8ef199dab7ea864555a557ef9b19fe391583aff564"},
-        {"file": "backend/tests/fixtures/ai_compute/07_cloud_vendor_capex_note.txt", "type": "公告（云厂商CapEx指引）", "published_at": "2026-05-20", "content_sha256": "d78649bdad8b8d650f3461ca9aa52b36d0d9b406ff1a388c8499bbf0cf218947"}
+        {
+          "file": "backend/tests/fixtures/ai_compute/01_cambricon_private_placement_announcement.txt",
+          "type": "公告",
+          "published_at": "2026-03-15",
+          "content_sha256": "090ff982b25f8d229c1ee0f9d1dac4979d44792d8243176e28965376fbfc9085"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/02_fii_annual_report_disclosure.txt",
+          "type": "年报披露",
+          "published_at": "2026-03-28",
+          "content_sha256": "83fb7a2b36dd924ec20260c74d99cab29007d694379bc1e4cdf22ea02f45b3e7"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/03_sk_hynix_quarterly_report.txt",
+          "type": "财报（季报）",
+          "published_at": "2026-04-30",
+          "content_sha256": "05b380015ea9676cd0c98532b46507fc3e6b894bf0a7f1620ab026cb31887db5"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/04_cambricon_annual_report.txt",
+          "type": "财报（年报）",
+          "published_at": "2026-04-25",
+          "content_sha256": "fd3a58ceb4f80758d6cecd1c598cce6a3ac85d87c02e03a2c6d8fe7862df71dd"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/05_citic_research_report.txt",
+          "type": "研报",
+          "published_at": "2026-06-10",
+          "content_sha256": "0d6896517a2992e80245690055f72ab3c744a67811dfe19652d3c6c87c7261fd"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/06_guosen_research_report.txt",
+          "type": "研报",
+          "published_at": "2026-06-18",
+          "content_sha256": "4bf9216183340ea08539da8ef199dab7ea864555a557ef9b19fe391583aff564"
+        },
+        {
+          "file": "backend/tests/fixtures/ai_compute/07_cloud_vendor_capex_note.txt",
+          "type": "公告（云厂商CapEx指引）",
+          "published_at": "2026-05-20",
+          "content_sha256": "d78649bdad8b8d650f3461ca9aa52b36d0d9b406ff1a388c8499bbf0cf218947"
+        }
       ]
     },
     {
@@ -38,17 +85,118 @@
       "snapshot_cutoff": "2026-12-31T23:59:59+00:00",
       "historical_cutoff": "2026-04-01",
       "theses": [
-        {"key": "T1", "statement": "2026年全球储能装机高增长将驱动锂电池需求持续扩张", "assessment": "supported"},
-        {"key": "T2", "statement": "碳酸锂价格回升将在2026年修复锂电中游材料环节盈利", "assessment": "insufficient_evidence"},
-        {"key": "T3", "statement": "宁德时代储能业务高增长将支撑其当前估值溢价持续", "assessment": "contradicted"}
+        {
+          "key": "T1",
+          "statement": "2026年全球储能装机高增长将驱动锂电池需求持续扩张",
+          "assessment": "supported"
+        },
+        {
+          "key": "T2",
+          "statement": "碳酸锂价格回升将在2026年修复锂电中游材料环节盈利",
+          "assessment": "insufficient_evidence"
+        },
+        {
+          "key": "T3",
+          "statement": "宁德时代储能业务高增长将支撑其当前估值溢价持续",
+          "assessment": "contradicted"
+        }
       ],
       "documents": [
-        {"file": "backend/tests/fixtures/storage_chain/01_eve_capacity_announcement.txt", "type": "公告（产能扩建）", "published_at": "2026-02-10", "content_sha256": "073853cdf37db707b1de6e3cfbcd7dcffe1575d04484c9fdc46dd494ee26b915"},
-        {"file": "backend/tests/fixtures/storage_chain/02_catl_annual_report.txt", "type": "财报（年报）", "published_at": "2026-03-20", "content_sha256": "8eedcd070fb337551122c4080266ba5714b50cd3b6615fc9e61cc8f752dc0f7d"},
-        {"file": "backend/tests/fixtures/storage_chain/03_sungrow_quarterly_report.txt", "type": "财报（季报）", "published_at": "2026-04-28", "content_sha256": "b5b7994bc1790fc975487e174ddf12f7c9a399423927e232042016b36d19fab8"},
-        {"file": "backend/tests/fixtures/storage_chain/04_citic_storage_research.txt", "type": "研报", "published_at": "2026-06-05", "content_sha256": "ed12b1e03786f766b4008ee6ae7e8376d1ddeae0de819567957b77beae22e145"},
-        {"file": "backend/tests/fixtures/storage_chain/05_lithium_price_tracker.txt", "type": "数据简报（碳酸锂价格）", "published_at": "2026-05-15", "content_sha256": "4d99beeb6a76eac86bc4596e99abad191486cc68650d1118f5dd8e3553a101a4"},
-        {"file": "backend/tests/fixtures/storage_chain/06_sungrow_annual_summary.pdf", "type": "财报摘要（真实PDF，pypdf解析）", "published_at": "2026-03-25", "content_sha256": "36bd078218edc404cad4a5080f69ab58adb85bf45e984fd5ba48da734d39f3b6"}
+        {
+          "file": "backend/tests/fixtures/storage_chain/01_eve_capacity_announcement.txt",
+          "type": "公告（产能扩建）",
+          "published_at": "2026-02-10",
+          "content_sha256": "073853cdf37db707b1de6e3cfbcd7dcffe1575d04484c9fdc46dd494ee26b915"
+        },
+        {
+          "file": "backend/tests/fixtures/storage_chain/02_catl_annual_report.txt",
+          "type": "财报（年报）",
+          "published_at": "2026-03-20",
+          "content_sha256": "8eedcd070fb337551122c4080266ba5714b50cd3b6615fc9e61cc8f752dc0f7d"
+        },
+        {
+          "file": "backend/tests/fixtures/storage_chain/03_sungrow_quarterly_report.txt",
+          "type": "财报（季报）",
+          "published_at": "2026-04-28",
+          "content_sha256": "b5b7994bc1790fc975487e174ddf12f7c9a399423927e232042016b36d19fab8"
+        },
+        {
+          "file": "backend/tests/fixtures/storage_chain/04_citic_storage_research.txt",
+          "type": "研报",
+          "published_at": "2026-06-05",
+          "content_sha256": "ed12b1e03786f766b4008ee6ae7e8376d1ddeae0de819567957b77beae22e145"
+        },
+        {
+          "file": "backend/tests/fixtures/storage_chain/05_lithium_price_tracker.txt",
+          "type": "数据简报（碳酸锂价格）",
+          "published_at": "2026-05-15",
+          "content_sha256": "4d99beeb6a76eac86bc4596e99abad191486cc68650d1118f5dd8e3553a101a4"
+        },
+        {
+          "file": "backend/tests/fixtures/storage_chain/06_sungrow_annual_summary.pdf",
+          "type": "财报摘要（真实PDF，pypdf解析）",
+          "published_at": "2026-03-25",
+          "content_sha256": "36bd078218edc404cad4a5080f69ab58adb85bf45e984fd5ba48da734d39f3b6"
+        }
+      ]
+    },
+    {
+      "id": "semiconductor-equipment",
+      "title": "半导体设备国产化",
+      "industry_topic": "semiconductor_equipment",
+      "seed_script": "backend/app/scripts/seed_semiconductor_case.py",
+      "replay": "cd backend && .venv/bin/python -m app.scripts.seed_semiconductor_case --reset-test-db",
+      "source_url_prefix": "https://example.test/semiconductor/",
+      "snapshot_cutoff": "2026-12-31T23:59:59+00:00",
+      "historical_cutoff": "2026-04-01",
+      "theses": [
+        {
+          "key": "T1",
+          "statement": "2026年国内晶圆厂扩产将驱动国产半导体设备订单持续高增长",
+          "assessment": "supported"
+        },
+        {
+          "key": "T2",
+          "statement": "先进封装扩产将显著修复国产测试设备环节盈利",
+          "assessment": "insufficient_evidence"
+        },
+        {
+          "key": "T3",
+          "statement": "光刻环节受限不改国产半导体设备板块整体估值支撑",
+          "assessment": "contradicted"
+        }
+      ],
+      "documents": [
+        {
+          "file": "backend/tests/fixtures/semiconductor/01_naura_order_announcement.txt",
+          "type": "公告（重大合同）",
+          "published_at": "2026-03-12",
+          "content_sha256": "6864756290ef23c9e82648477038626f6d1d8e81d7e517951e0e05e80a0b4bbb"
+        },
+        {
+          "file": "backend/tests/fixtures/semiconductor/02_amec_annual_report.txt",
+          "type": "年报节选",
+          "published_at": "2026-03-28",
+          "content_sha256": "edcb16aadf5cf63b990847d39bb6d8312f60f5a0fcd3debd783f20efd9762648"
+        },
+        {
+          "file": "backend/tests/fixtures/semiconductor/03_htsc_equipment_research.txt",
+          "type": "券商研报",
+          "published_at": "2026-06-10",
+          "content_sha256": "8e7afbddc0dd098c95fd0e6676fecac1feb32ac8ba5cb0226e794026a1d3efff"
+        },
+        {
+          "file": "backend/tests/fixtures/semiconductor/04_changchuan_quarterly_report.txt",
+          "type": "季报节选",
+          "published_at": "2026-04-25",
+          "content_sha256": "4e67c81e997b450b5a25123224411c839ecf5a3ed00169dbc19bf536c2b13ca3"
+        },
+        {
+          "file": "backend/tests/fixtures/semiconductor/05_semi_capex_tracker.txt",
+          "type": "行业数据跟踪",
+          "published_at": "2026-05-20",
+          "content_sha256": "feeacd78a9bf8de73eff925a59d09ba9d4fbefe32da57ec1b51014dc24600b4b"
+        }
       ]
     }
   ],
@@ -66,6 +214,7 @@
     "AI 算力链源材料为手工准备的纯文本样例（模拟公告/财报/研报），不是真实披露文件，不构成任何投资依据。",
     "锂电储能链案例中 06_sungrow_annual_summary.pdf 为程序生成的真实二进制 PDF（reportlab），用于验证 PDF 解析路径；其内容仍为模拟数据，不构成任何投资依据。",
     "标签先于门禁执行冻结，失败案例（future 泄漏 / 口径误用 / 研报矛盾）保留在 failure-cases 文档中，不被删除。",
-    "人工审核样例（每 Thesis 一条 ReviewDecision，outcome=confirmed）随 seed 落库；门禁要求金标切片中每条 AIAssessment 都有人工复核，但不校验审核结论本身的正确性。"
+    "人工审核样例（每 Thesis 一条 ReviewDecision，outcome=confirmed）随 seed 落库；门禁要求金标切片中每条 AIAssessment 都有人工复核，但不校验审核结论本身的正确性。",
+    "半导体设备国产化案例源材料为手工准备的纯文本样例（模拟公告/财报/研报/行业跟踪），不是真实披露文件，不构成任何投资依据。"
   ]
 }
