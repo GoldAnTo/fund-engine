@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   ReviewOutcome,
 } from "../../domain/types";
 import type {
   CaseWorkbenchRebuttal,
+  CaseSummaryItem,
   NewResearchView,
   ReviewQueueViewItem,
 } from "../../domain/prototypeTypes";
@@ -29,7 +31,10 @@ interface PendingItem {
   rationale: string;
   documentId: string;
   statementId: string;
+  caseId: string;
   role: PrototypeRole;
+  thesisStatement: string;
+  thesisId: string;
 }
 
 function mapQueueItem(item: ReviewQueueViewItem): PendingItem {
@@ -52,7 +57,10 @@ function mapQueueItem(item: ReviewQueueViewItem): PendingItem {
     rationale: item.aiReason,
     documentId: item.documentVersionId,
     statementId: item.statementId,
+    caseId: item.caseId,
     role,
+    thesisStatement: item.thesisStatement,
+    thesisId: item.thesisId,
   };
 }
 
@@ -60,6 +68,8 @@ export function ReviewWorkbenchScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<NewResearchView | null>(null);
   const [queueItems, setQueueItems] = useState<ReviewQueueViewItem[]>([]);
+  const [cases, setCases] = useState<CaseSummaryItem[]>([]);
+  const [caseFilter, setCaseFilter] = useState<string>("");
   const [selectedId, setSelectedId] = useState<string>("");
   const [decision, setDecision] = useState<ReviewOutcome>("confirmed");
   const [relationChoice, setRelationChoice] = useState<"支持" | "反驳" | "背景" | "证据缺口">(
@@ -76,21 +86,33 @@ export function ReviewWorkbenchScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submittedCount, setSubmittedCount] = useState(0);
 
-  const loadQueue = useCallback(() => {
-    return researchClient.getReviewQueueView().then((q) => {
-      setQueueItems(q.items);
-      setSelectedId((prev) =>
-        q.items.some((i) => i.linkId === prev) ? prev : (q.items[0]?.linkId ?? ""),
-      );
-    });
-  }, []);
+  const loadQueue = useCallback(
+    (filterCaseId?: string) => {
+      return researchClient
+        .getReviewQueueView(filterCaseId || caseFilter || undefined)
+        .then((q) => {
+          setQueueItems(q.items);
+          setSelectedId((prev) =>
+            q.items.some((i) => i.linkId === prev)
+              ? prev
+              : (q.items[0]?.linkId ?? ""),
+          );
+        });
+    },
+    [caseFilter],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([researchClient.getNewResearchView(), loadQueue()])
-      .then(([v]) => {
+    Promise.all([
+      researchClient.getNewResearchView(),
+      researchClient.listCaseSummaries().catch(() => []),
+      loadQueue(""),
+    ])
+      .then(([newView, list]) => {
         if (!cancelled) {
-          setView(v);
+          setView(newView);
+          setCases(list);
           setState({ kind: "ready" });
         }
       })
@@ -136,27 +158,40 @@ export function ReviewWorkbenchScreen() {
       .finally(() => setSubmitting(false));
   };
 
+  const onCaseFilterChange = (next: string) => {
+    setCaseFilter(next);
+    loadQueue(next);
+  };
+
   const pending: PendingItem[] = useMemo(
     () => queueItems.map(mapQueueItem),
     [queueItems],
   );
 
   const selected = pending.find((p) => p.id === selectedId) ?? pending[0];
-  const rebuttalStub: CaseWorkbenchRebuttal = {
-    id: "EL-004",
-    statement:
-      "AI 基础设施需求高于可供容量，资本投入需待产能上线后支持收入。",
-    documentId: "DOC-MSFT-FY25Q3-CALL",
-    documentTitle: "Microsoft FY2025 Q3 业绩说明会记录",
-    sourceVersion: "issuer-call-2025-04-30-v1",
-    publishedDate: "2025-04-30",
-    sourceSpan: "prepared remarks, pp. 4-5, capacity constraints and revenue timing",
-    reviewLabel: "已人工复核 · 林岚",
-    reviewState: "reviewed",
-    relation: "contradict",
-    snapshotMembership: "RS-2025-06-30-v3",
-    frozenEligibility: "reviewed",
-  };
+
+  // 「不变记录」对照列：取当前队列项所属案例的已确认反驳证据（真实数据，
+  // 与案例工作台右栏同源），不再使用组件内示例。
+  const selectedCaseId = selected?.caseId ?? "";
+  const [rebuttal, setRebuttal] = useState<CaseWorkbenchRebuttal | null>(null);
+  useEffect(() => {
+    if (!selectedCaseId) {
+      setRebuttal(null);
+      return;
+    }
+    let cancelled = false;
+    researchClient
+      .getCaseWorkbenchView(selectedCaseId)
+      .then((v) => {
+        if (!cancelled) setRebuttal(v.rebuttal);
+      })
+      .catch(() => {
+        if (!cancelled) setRebuttal(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCaseId]);
 
   if (state.kind === "loading") {
     return (
@@ -183,6 +218,11 @@ export function ReviewWorkbenchScreen() {
         </header>
         <p className="lede" data-testid="review-empty">
           审核队列已清空{submittedCount > 0 ? `，本次会话已写入 ${submittedCount} 项人工决策` : ""}。
+          {submittedCount > 0 ? (
+            <>
+              {" "}<Link to="/versions">去查看快照版本 →</Link>
+            </>
+          ) : null}
         </p>
       </div>
     );
@@ -198,9 +238,38 @@ export function ReviewWorkbenchScreen() {
           {submittedCount > 0 ? (
             <>
               {" "}· 本次会话已写入 <code>{submittedCount}</code> 项人工决策
+              {" "}· <Link to="/versions">去查看快照版本 →</Link>
             </>
           ) : null}
         </p>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            marginTop: 8,
+            fontSize: 12,
+          }}
+        >
+          <label htmlFor="review-case-filter">案例：</label>
+          <select
+            id="review-case-filter"
+            value={caseFilter}
+            onChange={(e) => onCaseFilterChange(e.target.value)}
+          >
+            <option value="">全部案例</option>
+            {cases.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title} · {c.topic}
+              </option>
+            ))}
+          </select>
+          {caseFilter ? (
+            <span style={{ color: "var(--ink-muted)" }}>
+              已过滤当前案例的待审关系
+            </span>
+          ) : null}
+        </div>
       </header>
 
       <div className="prototype-review-workbench">
@@ -240,6 +309,20 @@ export function ReviewWorkbenchScreen() {
                       <span className="ai-boundary">AI 提议</span>
                     )}
                   </div>
+                  {p.thesisStatement ? (
+                    <p
+                      style={{
+                        fontSize: 11,
+                        margin: "0 0 4px 0",
+                        color: "var(--ink-muted)",
+                        fontStyle: "italic",
+                      }}
+                      title="所属命题"
+                    >
+                      命题：{p.thesisStatement.slice(0, 40)}
+                      {p.thesisStatement.length > 40 ? "…" : ""}
+                    </p>
+                  ) : null}
                   <strong>{p.title}</strong>
                   <dl>
                     <div>
@@ -320,36 +403,40 @@ export function ReviewWorkbenchScreen() {
 
           <div className="prototype-immutable-record">
             <strong>当前冻结的不变记录</strong>
-            <p style={{ fontSize: 12 }}>
-              已确认的反面证据（示例数据，待案例工作台接口接入）：
-            </p>
-            <blockquote>"{rebuttalStub.statement}"</blockquote>
-            <dl className="source-metadata">
-              <div>
-                <dt>文档</dt>
-                <dd>{rebuttalStub.documentTitle}</dd>
-              </div>
-              <div>
-                <dt>版本</dt>
-                <dd>{rebuttalStub.sourceVersion}</dd>
-              </div>
-              <div>
-                <dt>出处</dt>
-                <dd>{rebuttalStub.sourceSpan}</dd>
-              </div>
-              <div>
-                <dt>关系</dt>
-                <dd>反驳</dd>
-              </div>
-              <div>
-                <dt>审核</dt>
-                <dd>{rebuttalStub.reviewLabel}</dd>
-              </div>
-              <div>
-                <dt>快照</dt>
-                <dd>{rebuttalStub.snapshotMembership}</dd>
-              </div>
-            </dl>
+            {rebuttal && rebuttal.id !== "-" ? (
+              <>
+                <p style={{ fontSize: 12 }}>已确认的反面证据：</p>
+                <blockquote>"{rebuttal.statement}"</blockquote>
+                <dl className="source-metadata">
+                  <div>
+                    <dt>文档</dt>
+                    <dd>{rebuttal.documentTitle}</dd>
+                  </div>
+                  <div>
+                    <dt>版本</dt>
+                    <dd>{rebuttal.sourceVersion}</dd>
+                  </div>
+                  <div>
+                    <dt>出处</dt>
+                    <dd>{rebuttal.sourceSpan}</dd>
+                  </div>
+                  <div>
+                    <dt>关系</dt>
+                    <dd>反驳</dd>
+                  </div>
+                  <div>
+                    <dt>审核</dt>
+                    <dd>{rebuttal.reviewLabel}</dd>
+                  </div>
+                  <div>
+                    <dt>快照</dt>
+                    <dd>{rebuttal.snapshotMembership}</dd>
+                  </div>
+                </dl>
+              </>
+            ) : (
+              <p style={{ fontSize: 12 }}>该案例暂无已确认的反面证据。</p>
+            )}
           </div>
         </section>
 

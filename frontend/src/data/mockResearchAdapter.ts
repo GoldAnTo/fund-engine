@@ -1374,7 +1374,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(result);
   }
 
-  async getResearchPlanView(): Promise<ResearchPlanView> {
+  async getResearchPlanView(_caseId?: string): Promise<ResearchPlanView> {
     return simulateLatency(buildResearchPlanView());
   }
 
@@ -1487,7 +1487,10 @@ export class MockResearchAdapter implements ResearchClient {
     };
   }
 
-  async getRelationshipGraphView(caseId: string): Promise<RelationshipGraphView> {
+  async getRelationshipGraphView(
+    caseId: string,
+    _thesisId?: string,
+  ): Promise<RelationshipGraphView> {
     const record = this.createdCases.get(caseId);
     if (!record) return simulateLatency(buildRelationshipGraphView());
     const { input, result } = record;
@@ -1556,7 +1559,7 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
-  async getVersionsView(): Promise<VersionsView> {
+  async getVersionsView(_caseId?: string): Promise<VersionsView> {
     return simulateLatency(buildVersionsView());
   }
 
@@ -1578,34 +1581,39 @@ export class MockResearchAdapter implements ResearchClient {
     return [...this.linkReviews];
   }
 
-  async getReviewQueueView(): Promise<ReviewQueueView> {
+  async getReviewQueueView(caseId?: string): Promise<ReviewQueueView> {
     this.throwIfOffline();
     const reviewed = new Set(this.linkReviews.map((r) => r.linkId));
     const items: ReviewQueueViewItem[] = PROTOTYPE_REVIEW_QUEUE.filter(
       (item) => !reviewed.has(item.id),
-    ).map((item) => {
-      const st = PROTOTYPE_STATEMENTS.find((s) => s.id === item.targetId);
-      const link = PROTOTYPE_EVIDENCE_LINKS.find(
-        (l) => l.statementId === item.targetId,
-      );
-      return {
-        linkId: item.id,
-        thesisId: link?.thesisId ?? "",
-        caseId: "RC-AIC-2025-01",
-        thesisStatement: "",
-        aiRole: link?.role ?? "gap",
-        aiReason: link?.rationale ?? item.task,
-        aiScope: {},
-        statementId: st?.id ?? item.targetId,
-        statementText: st?.text ?? item.task,
-        statementKind: "disclosed_fact",
-        verbatimText: link?.sourceSpan ?? item.sourceSpan,
-        documentVersionId: link?.sourceVersion ?? item.sourceVersion,
-        documentSourceUrl: st?.documentId ?? "",
-        documentPublishedAt: st?.publishedAt ?? item.publishedAt,
-        availableAt: item.availableAt,
-      };
-    });
+    )
+      .filter((item) => {
+        if (!caseId || caseId === "RC-AIC-2025-01") return true;
+        return false; // 离线原型只有 AI 算力案例一份数据
+      })
+      .map((item) => {
+        const st = PROTOTYPE_STATEMENTS.find((s) => s.id === item.targetId);
+        const link = PROTOTYPE_EVIDENCE_LINKS.find(
+          (l) => l.statementId === item.targetId,
+        );
+        return {
+          linkId: item.id,
+          thesisId: link?.thesisId ?? "",
+          caseId: caseId ?? "RC-AIC-2025-01",
+          thesisStatement: "",
+          aiRole: link?.role ?? "gap",
+          aiReason: link?.rationale ?? item.task,
+          aiScope: {},
+          statementId: st?.id ?? item.targetId,
+          statementText: st?.text ?? item.task,
+          statementKind: "disclosed_fact",
+          verbatimText: link?.sourceSpan ?? item.sourceSpan,
+          documentVersionId: link?.sourceVersion ?? item.sourceVersion,
+          documentSourceUrl: st?.documentId ?? "",
+          documentPublishedAt: st?.publishedAt ?? item.publishedAt,
+          availableAt: item.availableAt,
+        };
+      });
     return simulateLatency({ items });
   }
 
@@ -1666,6 +1674,7 @@ export class MockResearchAdapter implements ResearchClient {
       researchReports: 0,
       announcements: 0,
       news: 0,
+      macroSeries: 0,
       spans: 0,
       valuationsWritten: 0,
       valuationsSkipped: 0,
@@ -1682,6 +1691,7 @@ export class MockResearchAdapter implements ResearchClient {
       documentVersionId,
       mode: "mock",
       statementCount: 0,
+      reason: "离线原型未运行 LLM 抽取",
     });
   }
 }

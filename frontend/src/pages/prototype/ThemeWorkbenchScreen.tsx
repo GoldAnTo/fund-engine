@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import { PageHeader } from "../../components/prototype/PageHeader";
 import { StatusBadge } from "../../components/prototype/StatusBadge";
@@ -110,6 +110,19 @@ export function ThemeWorkbenchScreen() {
         title={view.name}
         eyebrow={`${view.industry} · 主题驱动`}
         lede={`认知假设：${view.hypothesis}`}
+        actions={
+          <>
+            <Link className="prototype-button" to="/plan">
+              研究计划 →
+            </Link>
+            <Link
+              className="prototype-button"
+              to={`/relationships/${themeId}`}
+            >
+              证据图谱 →
+            </Link>
+          </>
+        }
         meta={
           <dl className="theme-meta-grid">
             <MetaCell label="证据截止" value={view.cutoff} />
@@ -352,9 +365,6 @@ function ClaimRow({
         {claim.isAiProposed && (
           <StatusBadge variant="ai">AI 提议</StatusBadge>
         )}
-        <button type="button" className="link-button">
-          ↗ 溯源
-        </button>
       </div>
       <blockquote className="claim-row__snippet">
         “{claim.snippet}”

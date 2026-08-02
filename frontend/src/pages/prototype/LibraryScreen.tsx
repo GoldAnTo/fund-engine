@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type { LibraryView } from "../../domain/prototypeTypes";
 
@@ -16,17 +17,27 @@ export function LibraryScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<LibraryView | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [entityFilter, setEntityFilter] = useState("");
+  const [reviewFilter, setReviewFilter] = useState("");
+  const [reuseFilter, setReuseFilter] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [extractNotice, setExtractNotice] = useState<string | null>(null);
+
+  const loadView = useCallback(() => {
+    return researchClient.getLibraryView().then((v) => {
+      setView(v);
+      setSelectedId((prev) =>
+        v.documents.some((d) => d.id === prev) ? prev : v.selected.id,
+      );
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    researchClient
-      .getLibraryView()
-      .then((v) => {
-        if (!cancelled) {
-          setView(v);
-          setSelectedId(v.selected.id);
-          setState({ kind: "ready" });
-        }
+    loadView()
+      .then(() => {
+        if (!cancelled) setState({ kind: "ready" });
       })
       .catch((err: Error) => {
         if (!cancelled) setState({ kind: "error", message: err.message });
@@ -34,7 +45,57 @@ export function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadView]);
+
+  // 触发引擎 extract 步骤：对"有片段、无陈述"的待抽取版本运行 LLM 抽取
+  // （append-only），完成后刷新视图以更新复用计数与待抽取标记。
+  const runExtract = () => {
+    const doc = view?.documents.find((d) => d.id === selectedId);
+    if (!doc || extracting) return;
+    setExtracting(true);
+    setExtractNotice(null);
+    researchClient
+      .extractStatements(doc.id)
+      .then((r) => {
+        setExtractNotice(
+          r.statementCount > 0
+            ? `抽取完成：新增 ${r.statementCount} 条来源陈述。`
+            : `抽取完成：未产生新陈述。${
+                r.reason ? `原因：${r.reason}` : ""
+              }`,
+        );
+        return loadView();
+      })
+      .catch((err: Error) => {
+        setExtractNotice(`陈述抽取未完成：${err.message || "未知错误"}`);
+      })
+      .finally(() => setExtracting(false));
+  };
+
+  // 筛选器基于当前视图数据客户端过滤；选项从数据本身派生，避免写死。
+  const typeOptions = useMemo(
+    () => [...new Set((view?.documents ?? []).map((d) => d.documentType))],
+    [view],
+  );
+  const entityOptions = useMemo(
+    () => [...new Set((view?.documents ?? []).map((d) => d.entity))],
+    [view],
+  );
+  const filteredDocs = useMemo(() => {
+    const docs = view?.documents ?? [];
+    return docs.filter(
+      (d) =>
+        (!typeFilter || d.documentType === typeFilter) &&
+        (!entityFilter || d.entity === entityFilter) &&
+        (!reviewFilter || d.reviewState === reviewFilter) &&
+        (!reuseFilter ||
+          (reuseFilter === "gte3"
+            ? d.reuseCount >= 3
+            : reuseFilter === "gte1"
+              ? d.reuseCount >= 1
+              : d.reuseCount === 0)),
+    );
+  }, [view, typeFilter, entityFilter, reviewFilter, reuseFilter]);
 
   if (state.kind === "loading") {
     return (
@@ -69,39 +130,53 @@ export function LibraryScreen() {
       <section className="prototype-library-filters" aria-label="筛选">
         <label>
           来源类型
-          <select defaultValue="">
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+          >
             <option value="">全部</option>
-            <option>监管披露</option>
-            <option>业绩说明会</option>
-            <option>月度经营数据</option>
-            <option>业绩公告</option>
+            {typeOptions.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
           </select>
         </label>
         <label>
           主体
-          <select defaultValue="">
+          <select
+            value={entityFilter}
+            onChange={(e) => setEntityFilter(e.target.value)}
+          >
             <option value="">全部</option>
-            <option>Microsoft</option>
-            <option>NVIDIA</option>
-            <option>TSMC</option>
-            <option>Broadcom</option>
+            {entityOptions.map((en) => (
+              <option key={en} value={en}>
+                {en}
+              </option>
+            ))}
           </select>
         </label>
         <label>
           审核状态
-          <select defaultValue="">
+          <select
+            value={reviewFilter}
+            onChange={(e) => setReviewFilter(e.target.value)}
+          >
             <option value="">全部</option>
-            <option>已人工复核</option>
-            <option>待人工审核</option>
+            <option value="reviewed">已人工复核</option>
+            <option value="pending_review">待人工审核</option>
           </select>
         </label>
         <label>
           复用次数
-          <select defaultValue="">
+          <select
+            value={reuseFilter}
+            onChange={(e) => setReuseFilter(e.target.value)}
+          >
             <option value="">全部</option>
-            <option>≥ 3</option>
-            <option>≥ 1</option>
-            <option>0</option>
+            <option value="gte3">≥ 3</option>
+            <option value="gte1">≥ 1</option>
+            <option value="eq0">0</option>
           </select>
         </label>
       </section>
@@ -111,13 +186,13 @@ export function LibraryScreen() {
           <div className="prototype-section-header">
             <div>
               <p className="section-kicker">资料列表</p>
-              <h2>{view.documents.length} 份冻结资料</h2>
+              <h2>{filteredDocs.length} 份冻结资料</h2>
             </div>
             <span className="state-badge reviewed">DocumentVersion · SourceSpan</span>
           </div>
           <div className="prototype-library-source-list">
-            {[...new Set(view.documents.map((d) => d.documentType))].map((group) => {
-              const docs = view.documents.filter((d) => d.documentType === group);
+            {[...new Set(filteredDocs.map((d) => d.documentType))].map((group) => {
+              const docs = filteredDocs.filter((d) => d.documentType === group);
               if (docs.length === 0) return null;
               return (
                 <section key={group} className="library-source-group">
@@ -180,6 +255,27 @@ export function LibraryScreen() {
                 {REVIEW_LABEL[selected.reviewState]}
               </span>
             </div>
+            {selected.pendingExtraction ? (
+              <div style={{ marginBottom: 8 }}>
+                <button
+                  type="button"
+                  className="prototype-button primary"
+                  disabled={extracting}
+                  onClick={runExtract}
+                  data-testid="extract-button"
+                >
+                  {extracting ? "抽取中…" : "⚗ 抽取陈述"}
+                </button>
+                <small style={{ marginLeft: 8, color: "var(--ink-muted)" }}>
+                  该版本已有原文片段、尚无来源陈述
+                </small>
+              </div>
+            ) : null}
+            {extractNotice ? (
+              <p style={{ fontSize: 12 }} role="status">
+                {extractNotice}
+              </p>
+            ) : null}
             <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
               {selected.sourceName} · <code>{selected.sourceVersion}</code>
               （前序版本：<code>{selected.previousVersion}</code>）
@@ -292,7 +388,8 @@ export function LibraryScreen() {
               </div>
               <p>{view.proposal.statement.text}</p>
               <small>
-                关系 ID {view.proposal.link?.id ?? "—"} · 进入审核队列
+                关系 ID {view.proposal.link?.id ?? "—"} ·{" "}
+                <Link to="/review">进入审核队列 →</Link>
               </small>
             </div>
           )}

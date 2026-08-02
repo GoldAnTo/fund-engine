@@ -27,25 +27,33 @@ export function RelationshipCanvasScreen() {
   const [view, setView] = useState<RelationshipGraphView | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
   const [zoom, setZoom] = useState<number>(100);
+  // 同案例多命题共享一个图谱；让用户选择聚焦哪一条命题的证据层
+  // （无后端 thesis_id 时退化到后端默认最新命题）
+  const [thesisId, setThesisId] = useState<string>("");
+
+  const loadGraph = (id: string, t: string) => {
+    setState({ kind: "loading" });
+    return researchClient
+      .getRelationshipGraphView(id, t || undefined)
+      .then((v) => {
+        setView(v);
+        setSelectedId(v.selectedNodeId);
+        setState({ kind: "ready" });
+      })
+      .catch((err: Error) =>
+        setState({ kind: "error", message: err.message }),
+      );
+  };
 
   useEffect(() => {
     let cancelled = false;
-    researchClient
-      .getRelationshipGraphView(caseId)
-      .then((v) => {
-        if (!cancelled) {
-          setView(v);
-          setSelectedId(v.selectedNodeId);
-          setState({ kind: "ready" });
-        }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setState({ kind: "error", message: err.message });
-      });
+    loadGraph(caseId, thesisId).then(() => {
+      void cancelled; // 结果在 loadGraph 内处理
+    });
     return () => {
       cancelled = true;
     };
-  }, [caseId]);
+  }, [caseId, thesisId]);
 
   const selected = useMemo(() => {
     if (!view) return null;
@@ -76,6 +84,33 @@ export function RelationshipCanvasScreen() {
           <div className="eyebrow">行业研究 · 证据图谱</div>
           <h1>{view.case.title}</h1>
           <p className="lede">{view.case.question}</p>
+          {view.theses && view.theses.length > 1 ? (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginTop: 8,
+                fontSize: 12,
+              }}
+            >
+              <label htmlFor="thesis-picker">聚焦命题：</label>
+              <select
+                id="thesis-picker"
+                value={thesisId}
+                onChange={(e) => setThesisId(e.target.value)}
+              >
+                <option value="">— 自动选择（最新命题）—</option>
+                {view.theses.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.statement.length > 50
+                      ? `${t.statement.slice(0, 50)}…`
+                      : t.statement}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </div>
         <div className="relationship-header__meta">
           <MetaCell label="证据截止" value={view.case.cutoff} />
@@ -96,12 +131,17 @@ export function RelationshipCanvasScreen() {
             </span>
           </div>
 
-          <svg
-            className="prototype-graph-svg"
-            viewBox="0 0 800 220"
-            role="img"
-            aria-label="五层关系连线示意"
-          >
+          <div style={{ overflow: "hidden" }}>
+            <svg
+              className="prototype-graph-svg"
+              viewBox="0 0 800 220"
+              role="img"
+              aria-label="五层关系连线示意"
+              style={{
+                transform: `scale(${zoom / 100})`,
+                transformOrigin: "top left",
+              }}
+            >
             {/* Cross-layer curves */}
             {view.layers.flatMap((layer, li) =>
               layer.nodes.flatMap((node, ni) =>
@@ -170,6 +210,7 @@ export function RelationshipCanvasScreen() {
               }),
             )}
           </svg>
+          </div>
 
           <div className="canvas-layers">
             {view.layers.map((layer) => (

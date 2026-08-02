@@ -1001,6 +1001,8 @@ export interface components {
             mode: string;
             /** Statement Count */
             statement_count: number;
+            /** Reason */
+            reason?: string | null;
             /** Statements */
             statements: components["schemas"]["ExtractStatementDTO"][];
         };
@@ -1212,6 +1214,8 @@ export interface components {
             quote_query?: string | null;
             /** Quote Stock Code */
             quote_stock_code?: string | null;
+            /** Macro Queries */
+            macro_queries?: string[] | null;
         };
         /**
          * IngestResponse
@@ -1228,6 +1232,8 @@ export interface components {
             announcements: number;
             /** News */
             news: number;
+            /** Macro Series */
+            macro_series?: number;
             /** Spans */
             spans: number;
             /** Valuations Written */

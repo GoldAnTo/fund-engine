@@ -25,6 +25,8 @@ import type {
 import { PageStateError } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
+  AssessmentReviewPayload,
+  AssessmentReviewResult,
   CaseSummaryItem,
   CaseWorkbenchFactorRow,
   CaseWorkbenchFormalJudgment,
@@ -1181,12 +1183,13 @@ export class HttpResearchAdapter implements ResearchClient {
     }));
   }
 
-  async getResearchPlanView(): Promise<ResearchPlanView> {
+  async getResearchPlanView(caseId?: string): Promise<ResearchPlanView> {
     const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
-    const first = cases.items[0];
-    if (!first) {
+    if (cases.items.length === 0) {
       throw new PageStateError("parse_failed", "no research case exists yet");
     }
+    const first =
+      (caseId && cases.items.find((c) => c.id === caseId)) || cases.items[0];
     const [gapsDto, documents, queue, runs] = await Promise.all([
       this.get<Schemas["CaseGapsResponse"]>(
         `/research-cases/${first.id}/gaps`,
@@ -1409,6 +1412,7 @@ export class HttpResearchAdapter implements ResearchClient {
           reviewState: assessment.review ? "reviewed" : "pending",
           snapshotId: "—",
           reviewedAt: assessment.review?.reviewed_at ?? "",
+          assessmentId: assessment.id,
         }
       : dto.assess_failure
         ? {
@@ -1498,11 +1502,13 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getRelationshipGraphView(
     caseId: string,
+    thesisId?: string,
   ): Promise<RelationshipGraphView> {
     const resolvedCaseId = await this.resolveCaseId(caseId);
     const dto = await this.get<Schemas["GraphResponse"]>(
       `/research-cases/${resolvedCaseId}/graph${this.buildQuery({
         research_mode: "true",
+        ...(thesisId ? { thesis_id: thesisId } : {}),
       })}`,
     );
     const caseDto = await this.get<Schemas["CaseListResponse"]>(
@@ -1579,6 +1585,11 @@ export class HttpResearchAdapter implements ResearchClient {
       "fund",
     ];
     const nodes = dto.nodes.filter((n) => n.kind !== "case").map(toNodeView);
+    // 提取图谱里出现的所有命题节点，供"命题切换器"使用——同一案例的多条
+    // 命题共享一个图谱，需要用户主动选择聚焦哪一条的证据层。
+    const theses = dto.nodes
+      .filter((n) => n.kind === "thesis")
+      .map((n) => ({ id: n.id, title: n.label, statement: n.label }));
     const layers: GraphLayer[] = layerKeys.map((key) => ({
       key,
       label: LAYER_LABEL[key],
@@ -1598,6 +1609,7 @@ export class HttpResearchAdapter implements ResearchClient {
       layers,
       nodes,
       selectedNodeId: nodes[0]?.id ?? "",
+      theses,
     };
   }
 
@@ -1874,12 +1886,14 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async getVersionsView(): Promise<VersionsView> {
+  async getVersionsView(caseId?: string): Promise<VersionsView> {
     const cases = await this.get<Schemas["CaseListResponse"]>(`/research-cases`);
-    const firstCase = cases.items[0];
-    if (!firstCase) {
+    if (cases.items.length === 0) {
       throw new PageStateError("parse_failed", "no research case exists yet");
     }
+    const targetCase =
+      (caseId && cases.items.find((c) => c.id === caseId)) || cases.items[0];
+    const firstCase = targetCase;
     const snapshotsDto = await this.get<Schemas["CaseSnapshotsResponse"]>(
       `/research-cases/${firstCase.id}/snapshots`,
     );
@@ -2024,15 +2038,22 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async ingestDocuments(caseId?: string): Promise<IngestRunResult> {
+  async ingestDocuments(
+    caseId?: string,
+    extra?: { macroQueries?: string[] },
+  ): Promise<IngestRunResult> {
     const dto = await this.post<Schemas["IngestResponse"]>(
       `/documents/ingest`,
-      { case_id: caseId ?? null },
+      {
+        case_id: caseId ?? null,
+        macro_queries: extra?.macroQueries ?? null,
+      },
     );
     return {
       researchReports: dto.research_reports,
       announcements: dto.announcements,
       news: dto.news,
+      macroSeries: dto.macro_series ?? 0,
       spans: dto.spans,
       valuationsWritten: dto.valuations_written,
       valuationsSkipped: dto.valuations_skipped,
@@ -2051,6 +2072,28 @@ export class HttpResearchAdapter implements ResearchClient {
       documentVersionId: dto.document_version_id,
       mode: dto.mode,
       statementCount: dto.statement_count,
+      reason: dto.reason ?? null,
+    };
+  }
+
+  async reviewAssessment(
+    assessmentId: string,
+    payload: AssessmentReviewPayload,
+  ): Promise<AssessmentReviewResult> {
+    const dto = await this.post<Schemas["AssessmentReviewResponse"]>(
+      `/assessments/${assessmentId}/reviews`,
+      {
+        outcome: payload.outcome,
+        conclusion: payload.conclusion ?? null,
+        reason: payload.reason,
+        reviewer: payload.reviewer,
+      },
+    );
+    return {
+      id: dto.id,
+      outcome: dto.outcome,
+      reviewer: dto.reviewer,
+      createdAt: dto.created_at,
     };
   }
 
@@ -2078,8 +2121,11 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async getReviewQueueView(): Promise<ReviewQueueView> {
-    const dto = await this.get<Schemas["ReviewQueueResponse"]>(`/review-queue`);
+  async getReviewQueueView(caseId?: string): Promise<ReviewQueueView> {
+    const query = caseId ? this.buildQuery({ case_id: caseId }) : "";
+    const dto = await this.get<Schemas["ReviewQueueResponse"]>(
+      `/review-queue${query}`,
+    );
     return { items: dto.items.map((i) => this.mapReviewQueueItem(i)) };
   }
 

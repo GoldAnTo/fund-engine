@@ -362,6 +362,8 @@ export interface CaseWorkbenchFormalJudgment {
   reviewState: string;
   snapshotId: string;
   reviewedAt: string;
+  /** 对应的 AIAssessment id；仅 HTTP 模式可用，用于评估复核写入。 */
+  assessmentId?: string;
 }
 
 export interface CaseWorkbenchThesisRow {
@@ -484,6 +486,7 @@ export interface RelationshipGraphView {
   layers: GraphLayer[];
   nodes: GraphNodeView[];
   selectedNodeId: string;
+  theses?: { id: string; title: string; statement: string }[];
 }
 
 // ── Library view ─────────────────────────────────────────────────────────
@@ -840,12 +843,15 @@ export interface PrototypeClient {
   getNewResearchView(): Promise<NewResearchView>;
   createCase(input: CreateCaseInput): Promise<CreateCaseResult>;
   listCaseSummaries(): Promise<CaseSummaryItem[]>;
-  getResearchPlanView(): Promise<ResearchPlanView>;
+  getResearchPlanView(caseId?: string): Promise<ResearchPlanView>;
   getCaseWorkbenchView(caseId: string): Promise<CaseWorkbenchView>;
-  getRelationshipGraphView(caseId: string): Promise<RelationshipGraphView>;
+  getRelationshipGraphView(
+    caseId: string,
+    thesisId?: string,
+  ): Promise<RelationshipGraphView>;
   getLibraryView(): Promise<LibraryView>;
   getDataCenterView(): Promise<DataCenterView>;
-  getVersionsView(): Promise<VersionsView>;
+  getVersionsView(caseId?: string): Promise<VersionsView>;
   getThemeIndexView(): Promise<ThemeIndexView>;
   getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
 }
@@ -893,8 +899,27 @@ export interface LinkReviewPayload {
 }
 
 export interface ReviewQueueClient {
-  getReviewQueueView(): Promise<ReviewQueueView>;
+  getReviewQueueView(caseId?: string): Promise<ReviewQueueView>;
   submitLinkReview(linkId: string, payload: LinkReviewPayload): Promise<void>;
+  reviewAssessment(
+    assessmentId: string,
+    payload: AssessmentReviewPayload,
+  ): Promise<AssessmentReviewResult>;
+}
+
+/** Payload for POST /assessments/{id}/reviews (评估复核 · 人工决策). */
+export interface AssessmentReviewPayload {
+  outcome: "confirmed" | "modified" | "rejected";
+  conclusion?: "supported" | "contradicted" | "insufficient_evidence";
+  reason: string;
+  reviewer: string;
+}
+
+export interface AssessmentReviewResult {
+  id: string;
+  outcome: string;
+  reviewer: string;
+  createdAt: string;
 }
 
 // ── Versions (screen 9 · live API slice) ─────────────────────────────────
@@ -926,7 +951,10 @@ export interface ProposeEvidenceResult {
 
 export interface EngineClient {
   proposeEvidence(thesisId: string): Promise<ProposeEvidenceResult>;
-  ingestDocuments(caseId?: string): Promise<IngestRunResult>;
+  ingestDocuments(
+    caseId?: string,
+    extra?: { macroQueries?: string[] },
+  ): Promise<IngestRunResult>;
   extractStatements(documentVersionId: string): Promise<ExtractStatementsResult>;
 }
 
@@ -935,6 +963,8 @@ export interface ExtractStatementsResult {
   documentVersionId: string;
   mode: string;
   statementCount: number;
+  /** 抽取为 0 时的如实原因（无片段 / LLM 未返回 / 合规受限等）。 */
+  reason: string | null;
 }
 
 /** Result of POST /documents/ingest (数据接入 · Gildata). */
@@ -942,6 +972,7 @@ export interface IngestRunResult {
   researchReports: number;
   announcements: number;
   news: number;
+  macroSeries: number;
   spans: number;
   valuationsWritten: number;
   valuationsSkipped: number;

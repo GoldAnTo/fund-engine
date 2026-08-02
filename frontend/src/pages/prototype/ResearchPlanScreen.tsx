@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
-import type { ResearchPlanView } from "../../domain/prototypeTypes";
+import type {
+  CaseSummaryItem,
+  ResearchPlanView,
+} from "../../domain/prototypeTypes";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -17,13 +21,24 @@ const TYPE_LABEL: Record<string, string> = {
 export function ResearchPlanScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<ResearchPlanView | null>(null);
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestNotice, setIngestNotice] = useState<string | null>(null);
+  const [ingestSucceeded, setIngestSucceeded] = useState(false);
+  const [cases, setCases] = useState<CaseSummaryItem[]>([]);
+  const [caseId, setCaseId] = useState<string>("");
+  // 宏观时序查询输入（每行一条 MacroIndustryData 查询），不填则只跑原有
+  // 默认研报/公告/新闻/行情。"碳酸锂价格走势"等缺口可在 UI 一键补齐。
+  const [macroQueriesText, setMacroQueriesText] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    researchClient
-      .getResearchPlanView()
-      .then((v) => {
+    Promise.all([
+      researchClient.listCaseSummaries().catch(() => []),
+      researchClient.getResearchPlanView(caseId || undefined),
+    ])
+      .then(([list, v]) => {
         if (!cancelled) {
+          setCases(list);
           setView(v);
           setState({ kind: "ready" });
         }
@@ -34,7 +49,36 @@ export function ResearchPlanScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [caseId]);
+
+  // 触发引擎 ingest 步骤：从 Gildata 拉取研报/公告/新闻/行情/宏观时序
+  // 并写入台账（幂等：内容哈希 + 自然键双层去重）。
+  const runIngest = () => {
+    if (!view || ingesting) return;
+    setIngesting(true);
+    setIngestNotice(null);
+    setIngestSucceeded(false);
+    const macroQueries = macroQueriesText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    researchClient
+      .ingestDocuments(view.case.id, { macroQueries })
+      .then((r) => {
+        const total =
+          r.researchReports + r.announcements + r.news + r.macroSeries;
+        setIngestNotice(
+          total > 0
+            ? `接入完成：研报 ${r.researchReports} · 公告 ${r.announcements} · 新闻 ${r.news} · 宏观时序 ${r.macroSeries} · 片段 ${r.spans} · 估值写入 ${r.valuationsWritten}（跳过重复 ${r.valuationsSkipped}）。`
+            : "接入完成：没有新文档（全部去重跳过，或离线模式未接数据源）。",
+        );
+        setIngestSucceeded(total > 0);
+      })
+      .catch((err: Error) => {
+        setIngestNotice(`数据接入未完成：${err.message || "未知错误"}`);
+      })
+      .finally(() => setIngesting(false));
+  };
 
   if (state.kind === "loading") {
     return (
@@ -63,11 +107,53 @@ export function ResearchPlanScreen() {
             同一案例内复用、扩展、获取、审核与接口；
             所有操作仅改变本页类型所反映的状态。
           </p>
+          {cases.length > 1 ? (
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginTop: 8,
+                fontSize: 12,
+              }}
+            >
+              <label htmlFor="plan-case">切换案例：</label>
+              <select
+                id="plan-case"
+                value={caseId}
+                onChange={(e) => setCaseId(e.target.value)}
+              >
+                {cases.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title} · {c.topic}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </div>
-        <button type="button" className="prototype-button primary">
-          ⌬ 计划草案
-          <small>导入上文</small>
-        </button>
+        <div>
+          <button
+            type="button"
+            className="prototype-button primary"
+            disabled={ingesting}
+            onClick={runIngest}
+            data-testid="ingest-button"
+          >
+            {ingesting ? "接入中…" : "⇪ 接入数据"}
+          </button>
+          {ingestNotice ? (
+            <p style={{ fontSize: 12, marginTop: 6, maxWidth: 360 }} role="status">
+              {ingestNotice}
+              {ingestSucceeded ? (
+                <>
+                  {" "}
+                  <Link to="/library">去资料库查看 →</Link>
+                </>
+              ) : null}
+            </p>
+          ) : null}
+        </div>
       </header>
 
       <section className="plan-meta-grid" aria-label="计划元数据">
@@ -330,9 +416,6 @@ export function ResearchPlanScreen() {
                 </div>
               ))
             )}
-            <button type="button" className="prototype-button quiet" style={{ marginTop: 8 }}>
-              上传材料
-            </button>
           </article>
           <article className="prototype-plan-region">
             <span className="section-kicker">人工补录</span>
@@ -348,9 +431,6 @@ export function ResearchPlanScreen() {
                 </div>
               ))
             )}
-            <button type="button" className="prototype-button quiet" style={{ marginTop: 8 }}>
-              重试
-            </button>
           </article>
         </div>
       </section>

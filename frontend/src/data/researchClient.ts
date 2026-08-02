@@ -39,19 +39,26 @@ export const researchClient: ResearchClient = {
   getWorkspaceOverviewScreen: () => _client.getWorkspaceOverviewScreen(),
   getNewResearchView: () => _client.getNewResearchView(),
   createCase: (input) => _client.createCase(input),
-  getResearchPlanView: () => _client.getResearchPlanView(),
+  listCaseSummaries: () => _client.listCaseSummaries(),
+  getResearchPlanView: (caseId) => _client.getResearchPlanView(caseId),
   getCaseWorkbenchView: (id) => _client.getCaseWorkbenchView(id),
-  getRelationshipGraphView: (id) => _client.getRelationshipGraphView(id),
+  getRelationshipGraphView: (id, thesisId) =>
+    _client.getRelationshipGraphView(id, thesisId),
   getLibraryView: () => _client.getLibraryView(),
   getDataCenterView: () => _client.getDataCenterView(),
-  getVersionsView: () => _client.getVersionsView(),
+  getVersionsView: (caseId) => _client.getVersionsView(caseId),
   getThemeIndexView: () => _client.getThemeIndexView(),
   getThemeWorkbenchView: (themeId: string) =>
     _client.getThemeWorkbenchView(themeId),
-  getReviewQueueView: () => _client.getReviewQueueView(),
+  getReviewQueueView: (caseId) => _client.getReviewQueueView(caseId),
   submitLinkReview: (linkId, payload) =>
     _client.submitLinkReview(linkId, payload),
+  reviewAssessment: (assessmentId, payload) =>
+    _client.reviewAssessment(assessmentId, payload),
   rerunThesis: (thesisId) => _client.rerunThesis(thesisId),
+  proposeEvidence: (thesisId) => _client.proposeEvidence(thesisId),
+  ingestDocuments: (caseId, extra) => _client.ingestDocuments(caseId, extra),
+  extractStatements: (versionId) => _client.extractStatements(versionId),
   getDataCenterMetric: (stockId, metricName) =>
     _client.getDataCenterMetric(stockId, metricName),
 };

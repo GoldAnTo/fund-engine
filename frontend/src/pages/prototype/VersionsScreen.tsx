@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
-import type { VersionColumnContent, VersionsView } from "../../domain/prototypeTypes";
+import type {
+  CaseSummaryItem,
+  VersionColumnContent,
+  VersionsView,
+} from "../../domain/prototypeTypes";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -69,16 +74,26 @@ export function VersionsScreen() {
   const [view, setView] = useState<VersionsView | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [rerunNotice, setRerunNotice] = useState<string | null>(null);
+  const [rerunSucceeded, setRerunSucceeded] = useState(false);
+  const [cases, setCases] = useState<CaseSummaryItem[]>([]);
+  const [caseId, setCaseId] = useState<string>("");
 
-  const loadView = useCallback(() => {
-    return researchClient.getVersionsView().then((v) => setView(v));
-  }, []);
+  const loadView = useCallback(
+    (id?: string) => researchClient.getVersionsView(id).then((v) => setView(v)),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
-    loadView()
-      .then(() => {
-        if (!cancelled) setState({ kind: "ready" });
+    Promise.all([
+      researchClient.listCaseSummaries().catch(() => []),
+      loadView(caseId || undefined),
+    ])
+      .then(([list]) => {
+        if (!cancelled) {
+          setCases(list);
+          setState({ kind: "ready" });
+        }
       })
       .catch((err: Error) => {
         if (!cancelled) setState({ kind: "error", message: err.message });
@@ -86,18 +101,20 @@ export function VersionsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [loadView]);
+  }, [loadView, caseId]);
 
   const runRerun = () => {
     if (!view?.focusThesisId || rerunning) return;
     setRerunning(true);
     setRerunNotice(null);
+    setRerunSucceeded(false);
     researchClient
       .rerunThesis(view.focusThesisId)
       .then((result) => {
         setRerunNotice(
           `已冻结新快照 ${result.snapshotId.slice(0, 8)}，结论：${result.conclusion}（临时评估，未经人工复核）`,
         );
+        setRerunSucceeded(true);
         return loadView();
       })
       .catch((err: Error) => {
@@ -130,8 +147,36 @@ export function VersionsScreen() {
         <div className="eyebrow">监测与更新 · Versions</div>
         <h1>快照版本比较</h1>
         <p className="lede">
-          案例 <code>{view.case.id}</code> · {view.case.title}
+          案例{" "}
+          <Link to={`/cases/${view.case.id}`}>
+            <code>{view.case.id}</code>
+          </Link>{" "}
+          · {view.case.title}
         </p>
+        {cases.length > 1 ? (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              marginTop: 8,
+              fontSize: 12,
+            }}
+          >
+            <label htmlFor="versions-case">切换案例：</label>
+            <select
+              id="versions-case"
+              value={caseId}
+              onChange={(e) => setCaseId(e.target.value)}
+            >
+              {cases.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title} · {c.topic}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </header>
 
       <section>
@@ -211,6 +256,14 @@ export function VersionsScreen() {
               {rerunNotice ? (
                 <p style={{ fontSize: 11, marginTop: 6 }} role="status">
                   {rerunNotice}
+                  {rerunSucceeded ? (
+                    <>
+                      {" "}
+                      <Link to={`/cases/${view.case.id}`}>
+                        回案例工作台查看 →
+                      </Link>
+                    </>
+                  ) : null}
                 </p>
               ) : null}
             </div>

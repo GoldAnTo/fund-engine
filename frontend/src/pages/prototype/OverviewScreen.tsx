@@ -127,13 +127,6 @@ export function OverviewScreen() {
             </span>
           </>
         }
-        actions={
-          <>
-            <button type="button" className="prototype-button">↗ 分享</button>
-            <button type="button" className="prototype-button quiet">···</button>
-            <button type="button" className="prototype-button quiet">☆</button>
-          </>
-        }
       />
 
       <nav className="workspace-overview__tabs" aria-label="研究总览分类">
@@ -159,9 +152,6 @@ export function OverviewScreen() {
                 <p className="section-kicker">核心结论</p>
                 <h2>关键判断</h2>
               </div>
-              <button type="button" className="link-button">
-                展开全部 ▾
-              </button>
             </div>
             <ul className="workspace-bullets">
               {view.bullets.map((b, i) => (
@@ -225,7 +215,6 @@ export function OverviewScreen() {
                 <p className="section-kicker">任务队列（示例 · 非目标范围）</p>
                 <h2>边研究 · 边处理</h2>
               </div>
-              <button type="button" className="link-button">＋ 新建任务</button>
             </div>
             {(["待审核", "进行中", "等待中", "主要阻塞"] as const).map(
               (cat) =>
@@ -256,9 +245,6 @@ export function OverviewScreen() {
                   </section>
                 ) : null,
             )}
-            <button type="button" className="link-button">
-              查看全部任务 →
-            </button>
           </article>
 
           <article className="prototype-paper workspace-block">
@@ -267,7 +253,6 @@ export function OverviewScreen() {
                 <p className="section-kicker">证据变化（示例 · 非目标范围）</p>
                 <h2>{view.evidenceChanges.length} 条</h2>
               </div>
-              <button type="button" className="link-button">全部 ▾</button>
             </div>
             {Object.entries(evidenceBuckets).map(([bucket, items]) => (
               <section key={bucket} className="workspace-evidence-bucket">
@@ -292,18 +277,13 @@ export function OverviewScreen() {
                 </ul>
               </section>
             ))}
-            <button type="button" className="link-button">
-              查看全部变化 →
-            </button>
           </article>
-
           <article className="prototype-paper workspace-block">
             <div className="prototype-section-header">
               <div>
                 <p className="section-kicker">活动（示例 · 非目标范围）</p>
                 <h2>研究日志</h2>
               </div>
-              <button type="button" className="link-button">全部 ▾</button>
             </div>
             {Object.entries(activityGroups).map(([group, items]) => (
               <section key={group} className="workspace-activity-group">
@@ -329,9 +309,6 @@ export function OverviewScreen() {
                 </ul>
               </section>
             ))}
-            <button type="button" className="link-button">
-              查看全部活动 →
-            </button>
           </article>
         </div>
       </section>

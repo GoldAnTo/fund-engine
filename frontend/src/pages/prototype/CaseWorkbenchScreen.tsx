@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
-import type { CaseWorkbenchView } from "../../domain/prototypeTypes";
+import type {
+  AssessmentReviewPayload,
+  CaseSummaryItem,
+  CaseWorkbenchView,
+} from "../../domain/prototypeTypes";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -30,16 +34,44 @@ export function CaseWorkbenchScreen() {
   const [view, setView] = useState<CaseWorkbenchView | null>(null);
   const [tab, setTab] = useState(0);
   const [selectedCaseId, setSelectedCaseId] = useState<string>(caseId);
+  const [cases, setCases] = useState<CaseSummaryItem[]>([]);
+  const [proposing, setProposing] = useState(false);
+  const [proposeNotice, setProposeNotice] = useState<string | null>(null);
+  const [proposeSucceeded, setProposeSucceeded] = useState(false);
+  const [reviewer, setReviewer] = useState("");
+  const [reviewReason, setReviewReason] = useState("");
+  const [modifiedConclusion, setModifiedConclusion] =
+    useState<NonNullable<AssessmentReviewPayload["conclusion"]>>("supported");
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [caseQuery, setCaseQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     researchClient
+      .listCaseSummaries()
+      .then((list) => {
+        if (!cancelled) setCases(list);
+      })
+      .catch(() => {
+        /* 列表加载失败时仅隐藏侧栏内容，主视图不受影响 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadCaseView = useCallback(() => {
+    return researchClient
       .getCaseWorkbenchView(selectedCaseId)
-      .then((v) => {
-        if (!cancelled) {
-          setView(v);
-          setState({ kind: "ready" });
-        }
+      .then((v) => setView(v));
+  }, [selectedCaseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCaseView()
+      .then(() => {
+        if (!cancelled) setState({ kind: "ready" });
       })
       .catch((err: Error) => {
         if (!cancelled) setState({ kind: "error", message: err.message });
@@ -47,19 +79,79 @@ export function CaseWorkbenchScreen() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCaseId]);
+  }, [loadCaseView]);
 
-  const caseList = useMemo(() => {
+  const caseList = useMemo<CaseSummaryItem[]>(() => {
+    // 通过 URL 直达的案例可能不在列表里（如 mock 新建后刷新），补在首位。
+    if (cases.some((c) => c.id === selectedCaseId)) return cases;
     return [
-      { id: selectedCaseId, title: view?.case.title ?? "城市 NOA 商业化落地路径" },
-      { id: "RC-ALT-2024-12", title: "L4 Robotaxi 本体架构拆解" },
-      { id: "RC-ALT-2024-11", title: "高算力芯片供应链高频演变" },
-      { id: "RC-ALT-2024-10", title: "激光雷达车规级测算" },
-      { id: "RC-ALT-2024-09", title: "L3 法规模地对车业影响" },
-      { id: "RC-ALT-2024-08", title: "智能驾驶数据闭环价值分析" },
-      { id: "RC-ALT-2024-07", title: "高精地图商业化进展" },
+      {
+        id: selectedCaseId,
+        title: view?.case.title ?? selectedCaseId,
+        topic: view?.case.researchObject ?? "",
+        updatedAt: "",
+      },
+      ...cases,
     ];
-  }, [view, selectedCaseId]);
+  }, [cases, view, selectedCaseId]);
+
+  // 触发引擎 propose 步骤：AI 针对焦点命题提议证据关系，全部进入审核
+  // 队列（无任何自动确认），随后引导用户去复核中心。
+  const runPropose = () => {
+    const thesisId =
+      view?.nextValidation.thesisId || view?.thesisRows[0]?.id || "";
+    if (!thesisId || proposing) return;
+    setProposing(true);
+    setProposeNotice(null);
+    setProposeSucceeded(false);
+    researchClient
+      .proposeEvidence(thesisId)
+      .then((r) => {
+        setProposeNotice(
+          r.linkCount > 0
+            ? `AI 提议了 ${r.linkCount} 条证据关系，已进入审核队列。`
+            : "AI 未提出新的证据关系（离线模式或无可提议证据）。",
+        );
+        setProposeSucceeded(r.linkCount > 0);
+      })
+      .catch((err: Error) => {
+        setProposeNotice(`AI 提议未完成：${err.message || "未知错误"}`);
+      })
+      .finally(() => setProposing(false));
+  };
+
+  // 评估复核：对 provisional AI 评估写入人工决策（确认/修改/驳回），
+  // 与复核中心的关系审核互补；写入后刷新案例视图。
+  const submitAssessmentReview = (outcome: AssessmentReviewPayload["outcome"]) => {
+    const assessmentId = view?.formalJudgment.assessmentId;
+    if (!assessmentId || reviewing) return;
+    setReviewing(true);
+    setReviewNotice(null);
+    researchClient
+      .reviewAssessment(assessmentId, {
+        outcome,
+        conclusion: outcome === "modified" ? modifiedConclusion : undefined,
+        reason: reviewReason || "（无补充理由）",
+        reviewer: reviewer || "审核人",
+      })
+      .then(() => {
+        setReviewNotice("评估复核已写入。");
+        setReviewReason("");
+        return loadCaseView();
+      })
+      .catch((err: Error) => {
+        setReviewNotice(`评估复核未完成：${err.message || "未知错误"}`);
+      })
+      .finally(() => setReviewing(false));
+  };
+
+  const filteredCases = useMemo(() => {
+    const q = caseQuery.trim();
+    if (!q) return cases;
+    return cases.filter(
+      (c) => c.title.includes(q) || c.topic.includes(q),
+    );
+  }, [cases, caseQuery]);
 
   if (state.kind === "loading") {
     return (
@@ -84,20 +176,24 @@ export function CaseWorkbenchScreen() {
         <aside className="case-list" aria-label="行业案例列表">
           <div className="case-list__head">
             <span>行业案例</span>
-            <button type="button" className="link-button">＋</button>
+            <Link to="/new-research" className="link-button" aria-label="新建研究">
+              ＋
+            </Link>
           </div>
           <input
             type="search"
             placeholder="搜索案例标题或关键词"
             className="case-list__search"
+            value={caseQuery}
+            onChange={(e) => setCaseQuery(e.target.value)}
           />
           <div className="case-list__filters">
-            <button type="button" className="filter-pill is-active">全部 32</button>
-            <button type="button" className="filter-pill">我创建的 8</button>
-            <button type="button" className="filter-pill">已草稿 5</button>
+            <button type="button" className="filter-pill is-active">
+              全部 {caseList.length}
+            </button>
           </div>
           <ul className="case-list__items">
-            {caseList.map((c) => (
+            {filteredCases.map((c) => (
               <li
                 key={c.id}
                 className={`case-list__item${c.id === selectedCaseId ? " is-active" : ""}`}
@@ -107,10 +203,8 @@ export function CaseWorkbenchScreen() {
               >
                 <strong>{c.title}</strong>
                 <small>
-                  智能驾驶 ·{" "}
-                  {c.id === selectedCaseId
-                    ? "2024-05-20"
-                    : "2024-04-15"}
+                  {c.topic || "研究案例"}
+                  {c.updatedAt ? ` · ${c.updatedAt.slice(0, 10)}` : ""}
                 </small>
               </li>
             ))}
@@ -140,11 +234,39 @@ export function CaseWorkbenchScreen() {
               </div>
             </div>
             <div className="case-main__actions">
-              <button type="button" className="prototype-button">↩ 返回</button>
-              <button type="button" className="prototype-button">☆ 收藏</button>
-              <button type="button" className="prototype-button">↗ 导出</button>
-              <button type="button" className="prototype-button primary">↓ 分享</button>
+              <button
+                type="button"
+                className="prototype-button primary"
+                disabled={proposing}
+                onClick={runPropose}
+                data-testid="ai-propose-button"
+              >
+                {proposing ? "AI 提议中…" : "✦ AI 提议证据"}
+              </button>
+              <Link
+                className="prototype-button"
+                to={`/relationships/${selectedCaseId}`}
+              >
+                证据图谱 →
+              </Link>
+              <Link className="prototype-button" to="/review">
+                复核中心 →
+              </Link>
+              <Link className="prototype-button" to="/versions">
+                版本对比 →
+              </Link>
             </div>
+            {proposeNotice ? (
+              <p style={{ fontSize: 12, marginTop: 6 }} role="status">
+                {proposeNotice}
+                {proposeSucceeded ? (
+                  <>
+                    {" "}
+                    <Link to="/review">去复核 →</Link>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
           </header>
 
           <nav className="prototype-stepper" aria-label="案例档案选项卡">
@@ -206,6 +328,85 @@ export function CaseWorkbenchScreen() {
                 )}
               </div>
             </details>
+            {view.formalJudgment.reviewState !== "reviewed" &&
+            view.formalJudgment.assessmentId ? (
+              <div
+                className="assessment-review-bar"
+                style={{
+                  marginTop: 12,
+                  paddingTop: 10,
+                  borderTop: "1px dashed var(--rule)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  alignItems: "center",
+                  fontSize: 12,
+                }}
+              >
+                <strong>评估复核</strong>
+                <input
+                  type="text"
+                  placeholder="署名"
+                  aria-label="复核署名"
+                  value={reviewer}
+                  onChange={(e) => setReviewer(e.target.value)}
+                  style={{ width: 90 }}
+                />
+                <input
+                  type="text"
+                  placeholder="复核理由（可选）"
+                  aria-label="复核理由"
+                  value={reviewReason}
+                  onChange={(e) => setReviewReason(e.target.value)}
+                  style={{ flex: 1, minWidth: 160 }}
+                />
+                <select
+                  aria-label="修改后的结论"
+                  value={modifiedConclusion}
+                  onChange={(e) =>
+                    setModifiedConclusion(
+                      e.target.value as NonNullable<
+                        AssessmentReviewPayload["conclusion"]
+                      >,
+                    )
+                  }
+                >
+                  <option value="supported">改为：支持（成立）</option>
+                  <option value="contradicted">改为：反驳（不成立）</option>
+                  <option value="insufficient_evidence">改为：证据不足</option>
+                </select>
+                <button
+                  type="button"
+                  className="prototype-button primary"
+                  disabled={reviewing}
+                  onClick={() => submitAssessmentReview("confirmed")}
+                  data-testid="assessment-review-confirm"
+                >
+                  确认
+                </button>
+                <button
+                  type="button"
+                  className="prototype-button"
+                  disabled={reviewing}
+                  onClick={() => submitAssessmentReview("modified")}
+                >
+                  按修改确认
+                </button>
+                <button
+                  type="button"
+                  className="prototype-button danger"
+                  disabled={reviewing}
+                  onClick={() => submitAssessmentReview("rejected")}
+                >
+                  驳回
+                </button>
+              </div>
+            ) : null}
+            {reviewNotice ? (
+              <p style={{ fontSize: 12, marginTop: 6 }} role="status">
+                {reviewNotice}
+              </p>
+            ) : null}
           </section>
 
           <section>
