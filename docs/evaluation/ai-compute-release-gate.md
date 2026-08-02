@@ -248,6 +248,17 @@ writes `docs/evaluation/reports/recall_ab_<timestamp>.json`, and exits 1 if
 the hybrid recalls fewer gold statements than the baseline at recall@10 or
 recall@20 (regression guard).
 
-First run (2026-08-02): overall recall@20 improved from **0.7333 → 1.0000**
+First run (2026-08-02, single-case replay): overall recall@20 improved from **0.7333 → 1.0000**
 (4 gold statements recovered, 0 lost; 3 of them on the 寒武纪 thesis, whose
 evidence the coarse tokenizer's whole-CJK-run tokens made BM25-invisible).
+
+Multi-case replay (2026-08-02, all three gold cases seeded; candidates are
+all cutoff-visible statements **across cases**, so cross-industry material
+acts as ranking noise — a harder, more honest evaluation): overall
+recall@20 **0.375 → 0.6875** (bm25 → hybrid), recall@10 0.25 → 0.5625;
+15 gold statements recovered, **0 lost**.  Per case: AI 算力链 0.6 → 0.7333,
+锂电储能链 0.3333 → 0.6, 半导体设备国产化 0.2222 → 0.7222.  The largest
+gains are again on CJK-dense theses the baseline renders BM25-invisible
+(半导体 T2/T3: 0.0 → 1.0 / 0.6667).  Known residual: the 碳酸锂 thesis
+dips at recall@10 under hybrid (0.5 → 0.25) while recovering at recall@20;
+the aggregate regression guard tracks totals, not per-thesis k-slices.
