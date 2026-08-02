@@ -80,6 +80,8 @@ const VALID_NODE_KINDS: readonly NodeKind[] = [
   "case",
   "thesis",
   "statement",
+  "span",
+  "document",
   "step",
   "company",
   "stock",
@@ -92,8 +94,10 @@ const VALID_EDGE_KINDS: readonly EdgeKind[] = [
   "theme_role",
   "holding",
   "contains_thesis",
-  "company_stock",
   "contains_step",
+  "contains",
+  "derived",
+  "company_stock",
   "valuation",
 ];
 const VALID_STATEMENT_KINDS: readonly StatementKind[] = [
@@ -1544,6 +1548,8 @@ export class HttpResearchAdapter implements ResearchClient {
       valuation: "估值",
     };
     const LAYER_OF: Record<string, GraphLayer["key"]> = {
+      document: "evidence",
+      span: "evidence",
       statement: "evidence",
       thesis: "thesis",
       step: "causal",
@@ -1607,6 +1613,8 @@ export class HttpResearchAdapter implements ResearchClient {
       causal: "因果",
       contains_step: "因果步骤",
       contains_thesis: "包含命题",
+      contains: "原文",
+      derived: "衍生",
       company_stock: "上市证券",
       holding: "持仓",
       valuation: "估值",
@@ -2072,6 +2080,28 @@ export class HttpResearchAdapter implements ResearchClient {
         removedLinks: t.removed_links?.length ?? 0,
       })),
       availableCutoffs: cutoffs.filter((c) => c !== "1970-01-01T00:00:00Z"),
+      // Snapshot timeline: one entry per distinct cutoff with the total
+      // link_count for that point. The dataset has multiple rows per cutoff
+      // (one per thesis); we sum link_count so the timeline reflects the
+      // case-wide relationship growth.
+      snapshotPoints: (() => {
+        const byCutoff = new Map<string, { id: string; cutoff: string; linkCount: number }>();
+        for (const s of snapshotsDto.snapshots) {
+          const existing = byCutoff.get(s.cutoff);
+          if (existing) {
+            existing.linkCount += s.link_count;
+            // Use the most recent snapshot_id at this cutoff.
+            existing.id = s.snapshot_id.slice(0, 8);
+          } else {
+            byCutoff.set(s.cutoff, {
+              id: s.snapshot_id.slice(0, 8),
+              cutoff: s.cutoff,
+              linkCount: s.link_count,
+            });
+          }
+        }
+        return Array.from(byCutoff.values()).sort((a, b) => a.cutoff.localeCompare(b.cutoff));
+      })(),
     };
   }
 

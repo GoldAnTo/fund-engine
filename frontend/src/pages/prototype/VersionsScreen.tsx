@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   CaseSummaryItem,
+  SnapshotPoint,
   VersionColumnContent,
   VersionsView,
 } from "../../domain/prototypeTypes";
@@ -10,6 +11,114 @@ import type {
 interface PageState {
   kind: "loading" | "error" | "ready";
   message?: string;
+}
+
+/** Render a horizontal snapshot timeline. Node radius scales with link_count;
+ *  orange = current compareCutoff, blue = current baseCutoff, white = others.
+ *  Clicking a node sets compareCutoff. Shift-click sets baseCutoff. */
+function SnapshotTimeline({
+  points,
+  baseCutoff,
+  compareCutoff,
+  onPickCompare,
+  onPickBase,
+}: {
+  points: SnapshotPoint[];
+  baseCutoff: string;
+  compareCutoff: string;
+  onPickCompare: (cutoff: string) => void;
+  onPickBase: (cutoff: string) => void;
+}) {
+  if (points.length === 0) {
+    return <p>（该案例暂无快照记录）</p>;
+  }
+  const maxLinks = Math.max(1, ...points.map((p) => p.linkCount));
+  const minSize = 14;
+  const maxSize = 32;
+
+  return (
+    <div
+      data-testid="snapshot-timeline"
+      style={{
+        width: "100%",
+        overflowX: "auto",
+        background: "var(--surface-subtle, #fafafa)",
+        padding: 12,
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{ display: "flex", alignItems: "flex-end", gap: 12, minWidth: 0 }}
+      >
+        {points.map((p) => {
+          const size =
+            minSize + (p.linkCount / maxLinks) * (maxSize - minSize);
+          const isBase = p.cutoff === baseCutoff;
+          const isCompare = p.cutoff === compareCutoff;
+          const bg = isCompare
+            ? "var(--accent, #f59e0b)"
+            : isBase
+              ? "var(--info, #3b82f6)"
+              : "var(--surface, #ffffff)";
+          const border = isCompare
+            ? "var(--accent-strong, #b45309)"
+            : isBase
+              ? "var(--info-strong, #1d4ed8)"
+              : "var(--ink-muted, #999)";
+          const fg =
+            isCompare || isBase
+              ? "var(--surface, #fff)"
+              : "var(--ink, #222)";
+          return (
+            <button
+              key={p.cutoff}
+              type="button"
+              data-testid="snapshot-timeline-node"
+              onClick={(e) => {
+                if (e.shiftKey) onPickBase(p.cutoff);
+                else onPickCompare(p.cutoff);
+              }}
+              title={`${p.cutoff} · ${p.linkCount} 关系 · 短 ID ${p.id}\n点击 = 设为 compare；Shift+点击 = 设为 base`}
+              style={{
+                background: bg,
+                color: fg,
+                border: `2px solid ${border}`,
+                borderRadius: 999,
+                width: size * 2.2,
+                height: size * 2.2,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                padding: 0,
+                fontSize: 11,
+                fontWeight: 600,
+                flex: "0 0 auto",
+              }}
+            >
+              <span>{p.linkCount}</span>
+              <span style={{ fontSize: 9, opacity: 0.85 }}>
+                {p.cutoff.slice(5, 16).replace("T", " ")}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p
+        style={{
+          fontSize: 11,
+          color: "var(--ink-muted)",
+          marginTop: 8,
+          marginBottom: 0,
+        }}
+      >
+        节点大小 ∝ 关系数（已审核 + AI 提议合计）。橙色 = compareCutoff，
+        蓝色 = baseCutoff，白色 = 其他。点击节点切换 compare，Shift+点击
+        切换 base。
+      </p>
+    </div>
+  );
 }
 
 const CONCLUSION_LABELS: Record<string, string> = {
@@ -263,6 +372,35 @@ export function VersionsScreen() {
           </div>
         ) : null}
       </header>
+
+      {view.snapshotPoints.length > 0 ? (
+        <section data-testid="snapshot-timeline" style={{ marginBottom: 24 }}>
+          <div className="prototype-section-header">
+            <div>
+              <p className="section-kicker">快照时间轴</p>
+              <h2>本案例的全部证据关系增长轨迹</h2>
+              <p style={{ fontSize: 12, color: "var(--ink-muted)" }}>
+                节点大小 ∝ 该快照点处的证据关系数（已审核 + AI 提议合计）。
+                点击节点可切换「当前快照」；橙色填充 = 当前 compareCutoff；
+                蓝色填充 = 当前 baseCutoff；白色填充 = 其他快照。
+              </p>
+            </div>
+          </div>
+          <SnapshotTimeline
+            points={view.snapshotPoints}
+            baseCutoff={baseCutoff}
+            compareCutoff={compareCutoff}
+            onPickCompare={(c) => {
+              setCompareCutoff(c);
+              loadView(caseId || undefined, { base: baseCutoff, compare: c });
+            }}
+            onPickBase={(c) => {
+              setBaseCutoff(c);
+              loadView(caseId || undefined, { base: c, compare: compareCutoff });
+            }}
+          />
+        </section>
+      ) : null}
 
       <section>
         <div className="prototype-section-header">

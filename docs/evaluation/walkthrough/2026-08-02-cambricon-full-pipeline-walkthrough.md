@@ -115,7 +115,20 @@ Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个�
 
 2026-07-31 15:00 的行情被记为 `as_of_date = 2026-08-02`（ingest 日）。口径偏小但破坏"估值按 as_of 对齐"的语义，应取行情的 交易时间。
 
-### ⚠️ 缺陷 9（P2）：关系图缺原文层
+### ✅ 缺陷 9（P2，已于 2026-08-02 修复）：关系图加原文层（DocumentVersion + SourceSpan → SourceStatement 连续路径）
+
+图节点从 SourceStatement 开始，DocumentVersion/SourceSpan 与 contains/derived 边未在图读模型落地（statement properties 有 source_refs 但不可视化）；默认只展开焦点命题（contains_thesis=1），多命题全景需要逐命题切换，不是一张总图。
+
+**修复（2026-08-02）**：
+
+- 后端 `app/queries/graph.py` 在 statement 节点添加时，链向上游：缓存 (`span_id, document_id` 维度) 添加 `document` + `span` 节点，附 `contains`（document→span）和 `derived`（span→statement）边。document 节点按 `available_at ≤ cutoff` 过滤（防后见之明，与 design 10 一致），不满足时整条 document→span→statement 链路全部消失。DocumentVersion 没有 `title` 字段，节点标签用 `source_url` 末段 + `published_at` + `parser_version` 拼接（"冻结口径"提示）。
+- 前端 `VALID_NODE_KINDS` 加 `document` / `span`，`VALID_EDGE_KINDS` 加 `contains` / `derived`，`LAYER_OF` 把两者归到 `evidence` 列（5 列布局不变），`EDGE_LABEL` 加 "原文" / "衍生" 标签。`GraphNodeView.kind` 已是 string 类型无破坏。
+- 修复上一轮未提交代码的 `VersionsScreen` 重复 `SnapshotTimeline` 函数定义（line 19 + 173 双重实现 → 保留 SVG 版本）。
+- 新增测试：
+  - `tests/test_graph_read_api_v1.py` +3（document/span 节点 + contains/derived 边正确性 + cutoff 之后整链路消失 + 边 ID 唯一性）
+  - `src/tests/HttpResearchAdapter.test.ts` +1（白名单接受 document/span/contains/derived）
+  - `e2e/case-relationship-library.spec.ts` +1（mock 模式 evidence 列渲染 document 卡片）
+- 验证：pytest 336 passed；vitest 78 passed（77 → 78）；Playwright 45 passed（44 → 45）；OpenAPI 契约 + `src/contracts/v1.ts` 重新生成。
 
 图节点从 SourceStatement 开始，无 DocumentVersion/SourceSpan 节点与 contains/derived 边，设计 §5.5 的"DocumentVersion→SourceSpan→SourceStatement"连续路径未在图读模型落地（statement properties 内有 source_refs 但不可视化）。另外默认只展开焦点命题（contains_thesis 边=1），多命题全景需要逐命题切换。
 
@@ -138,7 +151,7 @@ Gildata 返回的退化内容（4 字"相关研究"、孤立表头 `| % | 1个�
 - **缺陷 6：历史回放 = 系统账本时间，不是市场时间**。`cutoff=X` 只回放「X 时刻系统已写入的账本」——今天采集的 2024 年报在 `cutoff=2024-12-31` 下不可见，案例在 `cutoff < case.created_at` 时直接 404。生产路径上**做不了真正的「以历史视角模拟研究」**（只能走预冻结 fixture）。前端应在回放模式下显式提示这一语义；`docs/integration/frontend-api-binding.md`「时间点语义与回放边界」小节已落实参数差异与展示规范。
 - ~~**缺陷 7：判断非确定性 + 合规结果随措辞抽签**。同一命题同一证据 live 模式下可能得到不同结论（LLM 温度非零、合规门有界重写）。~~（已于 2026-08-02 修复：`app/ai/client.py` `LLMClient` 默认 `temperature=0.0` + 可选 `seed` 转发到 OpenAI；mock 模式不触达 live client；9 条新测试锁定契约。`LLM_TEMPERATURE` / `LLM_SEED` env 可调。「相同结论」仍是 best-effort——OpenAI 的 seed 是提示而非保证，但温度归零 + seed 固定已闭合大部分方差。）
 - ~~**缺陷 8：估值快照 as_of 取采集日而非行情日**。~~（已于 2026-08-02 修复：`app/scripts/ingest_real_data.py` 新增 `_previous_business_day()` 工具函数（仅处理周末，节假日需 caller 显式覆盖），line 414 估值循环从 `date.today()` 改为 `_previous_business_day()`——周一/周末调用 Gildata quote 时 as_of 正确回退到上一个工作日。10 条新测试覆盖周一到周日 + 跨年 + 节假日已知限制。修复后周五 17:00 抓取寒武纪 quote 会正确记 as_of=当日（周四），而非 ingest 当日。）
-- **缺陷 9：关系图缺原文层**。图节点从 SourceStatement 开始，DocumentVersion/SourceSpan 与 contains/derived 边未在图读模型落地（statement properties 有 source_refs 但不可视化）；默认只展开焦点命题（contains_thesis=1），多命题全景需要逐命题切换，不是一张总图。
+- **缺陷 9：关系图缺原文层**~~。图节点从 SourceStatement 开始，DocumentVersion/SourceSpan 与 contains/derived 边未在图读模型落地（statement properties 有 source_refs 但不可视化）；默认只展开焦点命题（contains_thesis=1），多命题全景需要逐命题切换，不是一张总图。**已于 2026-08-02 修复**：document/span 节点 + contains/derived 边按 cutoff 链路上游溯源，详见缺陷 9 修复段~~。
 - **基金穿透权重口径依赖数据源语义**（占流通 A 股比例 vs 占净值比例），账本已记 source 定义，穿透展示时前端应透出该口径。
 
 这些边界是**已知架构选择**，靠产品告知闭环，避免用户期望管理失败。配套前端契约见 `docs/integration/frontend-api-binding.md`「时间点语义与回放边界」小节与「合规拒绝的透出设计」段。

@@ -7,9 +7,13 @@ from app.models.ledger import (
     CausalEdge,
     CausalStep,
     Company,
+    DocumentVersion,
+    EvidenceLink,
     Fund,
     HoldingDisclosure,
     ResearchCase,
+    SourceSpan,
+    SourceStatement,
     Stock,
     ThemeRole,
     Thesis,
@@ -449,3 +453,207 @@ def test_graph_dedups_edges_by_id(api_client, session):
     # no edge id appears more than once
     edge_ids = [e["id"] for e in payload["edges"]]
     assert len(edge_ids) == len(set(edge_ids))
+
+
+def test_graph_includes_document_and_span_nodes_with_contains_derived_edges(
+    api_client, workbench_case
+):
+    # P2 缺陷 9 修复：图谱读模型必须把 statement 链向上游的
+    # DocumentVersion / SourceSpan，附 contains（document→span）和
+    # derived（span→statement）边。
+    response = api_client.get(
+        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
+        params={
+            "thesis_id": str(workbench_case.thesis.id),
+            "cutoff": "2026-12-31T00:00:00Z",
+            "research_mode": "true",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    node_kinds = {n["kind"] for n in payload["nodes"]}
+    assert "document" in node_kinds
+    assert "span" in node_kinds
+    # statement 节点必须回链到 span_id + document_id
+    statement_node = next(
+        n for n in payload["nodes"] if n["kind"] == "statement"
+    )
+    assert statement_node["properties"].get("span_id")
+    assert statement_node["properties"].get("document_id")
+    span_id = statement_node["properties"]["span_id"]
+    document_id = statement_node["properties"]["document_id"]
+    # contains 边：document → span（id 唯一）
+    contains_edges = [
+        e
+        for e in payload["edges"]
+        if e["semantic_kind"] == "contains"
+        and e["source"] == document_id
+        and e["target"] == span_id
+    ]
+    assert len(contains_edges) == 1
+    # derived 边：span → statement
+    derived_edges = [
+        e
+        for e in payload["edges"]
+        if e["semantic_kind"] == "derived"
+        and e["source"] == span_id
+        and e["target"] == statement_node["id"]
+    ]
+    assert len(derived_edges) == 1
+    # 原文层节点不重复：单 span / 单 document 对应单 statement
+    span_nodes = [n for n in payload["nodes"] if n["kind"] == "span"]
+    document_nodes = [n for n in payload["nodes"] if n["kind"] == "document"]
+    assert len(span_nodes) == 1
+    assert len(document_nodes) == 1
+
+
+def test_graph_excludes_post_cutoff_document_layer(api_client, session):
+    # P2 缺陷 9 + design 10：document available_at > cutoff 时，
+    # 该 document 及其下的 span / statement 都应从图谱消失，避免
+    # 走查缺陷 6 暴露给用户「以历史视角看到尚未公开的资料」。
+    past = datetime(2025, 1, 1, tzinfo=UTC)
+    cutoff = datetime(2026, 6, 1, tzinfo=UTC)
+    future = datetime(2026, 12, 31, tzinfo=UTC)
+    case = ResearchCase(
+        title="c", industry_topic="ai_compute", created_by="t", created_at=past
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="T",
+        created_by="t",
+        created_at=past,
+    )
+    session.add(thesis)
+    session.flush()
+    # 旧 document 在 cutoff 前 available → 节点应保留
+    old_version = DocumentVersion(
+        content_sha256="a" * 64,
+        source_url="https://example.test/old",
+        published_at=past,
+        available_at=past,
+        acquired_at=past,
+        parser_version="pypdf-v1",
+    )
+    session.add(old_version)
+    session.flush()
+    old_span = SourceSpan(
+        document_version_id=old_version.id,
+        locator={"page": 1},
+        verbatim_text="旧证据",
+    )
+    session.add(old_span)
+    session.flush()
+    old_statement = SourceStatement(
+        source_span_id=old_span.id,
+        kind="disclosed_fact",
+        normalized_text="旧陈述",
+        created_at=past,
+    )
+    session.add(old_statement)
+    session.flush()
+    old_link = EvidenceLink(
+        thesis_id=thesis.id,
+        source_statement_id=old_statement.id,
+        role="supports",
+        reason="",
+        scope={},
+        review_state="reviewed",
+        available_at=past,
+        created_at=past,
+    )
+    session.add(old_link)
+    # 新 document 在 cutoff 后才 available → 整链路应消失
+    new_version = DocumentVersion(
+        content_sha256="b" * 64,
+        source_url="https://example.test/new",
+        published_at=future,
+        available_at=future,
+        acquired_at=future,
+        parser_version="pypdf-v1",
+    )
+    session.add(new_version)
+    session.flush()
+    new_span = SourceSpan(
+        document_version_id=new_version.id,
+        locator={"page": 1},
+        verbatim_text="未来证据",
+    )
+    session.add(new_span)
+    session.flush()
+    new_statement = SourceStatement(
+        source_span_id=new_span.id,
+        kind="disclosed_fact",
+        normalized_text="未来陈述",
+        created_at=past,
+    )
+    session.add(new_statement)
+    session.flush()
+    new_link = EvidenceLink(
+        thesis_id=thesis.id,
+        source_statement_id=new_statement.id,
+        role="supports",
+        reason="",
+        scope={},
+        review_state="reviewed",
+        available_at=future,
+        created_at=past,
+    )
+    session.add(new_link)
+    session.flush()
+
+    response = api_client.get(
+        f"/api/v1/research-cases/{case.id}/graph",
+        params={"thesis_id": str(thesis.id), "cutoff": cutoff.isoformat()},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    node_kinds = {n["kind"] for n in payload["nodes"]}
+    # 未来 document 及其下所有节点不出现
+    assert "document" in node_kinds  # 旧 document 出现
+    assert "span" in node_kinds
+    assert "statement" in node_kinds
+    assert str(new_version.id) not in {n["id"] for n in payload["nodes"]}
+    assert str(new_span.id) not in {n["id"] for n in payload["nodes"]}
+    assert str(new_statement.id) not in {n["id"] for n in payload["nodes"]}
+    # 旧链路完整
+    assert str(old_version.id) in {n["id"] for n in payload["nodes"]}
+    assert str(old_span.id) in {n["id"] for n in payload["nodes"]}
+    assert str(old_statement.id) in {n["id"] for n in payload["nodes"]}
+    # 旧链路 contains + derived 边都存在
+    pairs = {
+        (e["semantic_kind"], e["source"], e["target"])
+        for e in payload["edges"]
+    }
+    assert ("contains", str(old_version.id), str(old_span.id)) in pairs
+    assert ("derived", str(old_span.id), str(old_statement.id)) in pairs
+    # 未来 document 没有任何 contains 边（即使它的链接在账本里）
+    future_contains = [
+        e
+        for e in payload["edges"]
+        if e["semantic_kind"] == "contains" and e["source"] == str(new_version.id)
+    ]
+    assert future_contains == []
+
+
+def test_graph_dedups_contains_and_derived_edges_for_shared_source(
+    api_client, workbench_case
+):
+    # 同一 span 衍生多个 statement（多命题共享同一原文片段）时，
+    # 衍生边按 (span, statement) 唯一，不会因共享 span 而重复。
+    response = api_client.get(
+        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
+        params={
+            "thesis_id": str(workbench_case.thesis.id),
+            "cutoff": "2026-12-31T00:00:00Z",
+            "research_mode": "true",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    contains_edges = [e for e in payload["edges"] if e["semantic_kind"] == "contains"]
+    derived_edges = [e for e in payload["edges"] if e["semantic_kind"] == "derived"]
+    # 单 span / 单 document fixture 下，每条边只出现一次
+    assert len(contains_edges) == len({e["id"] for e in contains_edges})
+    assert len(derived_edges) == len({e["id"] for e in derived_edges})

@@ -1981,7 +1981,13 @@ export function buildVersionsView(): VersionsView {
         removedLinks: 0,
       },
     ],
-    availableCutoffs: ["2025-03-31", "2025-06-30"],
+    availableCutoffs: ["2025-03-31", "2025-04-15", "2025-05-15", "2025-06-30"],
+    snapshotPoints: [
+      { id: "RS-2025-03-31-v2", cutoff: "2025-03-31", linkCount: 4 },
+      { id: "RS-2025-04-15-v2", cutoff: "2025-04-15", linkCount: 9 },
+      { id: "RS-2025-05-15-v3", cutoff: "2025-05-15", linkCount: 17 },
+      { id: "RS-2025-06-30-v4", cutoff: "2025-06-30", linkCount: 28 },
+    ],
   };
 }
 

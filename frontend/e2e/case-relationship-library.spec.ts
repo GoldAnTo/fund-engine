@@ -76,6 +76,26 @@ test.describe("Wiki relationship graph (mock client)", () => {
     ).toBeVisible();
   });
 
+  test("source layer renders document cards linking to the library", async ({
+    page,
+  }) => {
+    // P2 缺陷 9 修复：图谱最左的「证据」列必须包含原文层（document
+    // 卡片），让"回溯到冻结原文"在画布层也成立。fixture evidence 层
+    // 至少包含 NVIDIA Form 10-Q 一张原文卡。
+    await page.goto("/relationships?client=mock");
+    const graph = page.getByTestId("wiki-graph");
+    await expect(graph).toBeVisible();
+    const evidenceCol = graph.locator(
+      ".wiki-graph__colhead:has(.wiki-graph__colhead-label:text('证据'))",
+    );
+    await expect(evidenceCol).toBeVisible();
+    // 卡片节点数 > 1（至少包含 document + statement）
+    const evidenceCards = graph.locator(
+      ".wiki-node.tone-fact, .wiki-node.tone-contradict, .wiki-node.tone-ai",
+    );
+    expect(await evidenceCards.count()).toBeGreaterThanOrEqual(1);
+  });
+
   test("clicking a card focuses its chain and clicking again clears", async ({
     page,
   }) => {

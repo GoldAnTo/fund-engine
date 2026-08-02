@@ -236,6 +236,91 @@ describe("HttpResearchAdapter", () => {
     });
   });
 
+  it("maps document/span nodes and contains/derived edges (P2 缺陷 9)", async () => {
+    // P2 缺陷 9 修复：原文层 (DocumentVersion / SourceSpan) 必须出现在图
+    // 谱读模型，附 contains（document→span）和 derived（span→statement）
+    // 边，前端按白名单契约接受。
+    const graph = {
+      schema_version: "graph/v1",
+      basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
+      nodes: [
+        { id: "case-1", kind: "case", label: "case", properties: {} },
+        { id: "th-1", kind: "thesis", label: "th", properties: {} },
+        { id: "doc-1", kind: "document", label: "doc", properties: {} },
+        { id: "span-1", kind: "span", label: "span", properties: {} },
+        {
+          id: "stmt-1",
+          kind: "statement",
+          label: "stmt",
+          properties: { document_id: "doc-1", span_id: "span-1" },
+        },
+      ],
+      edges: [
+        {
+          id: "ct",
+          semantic_kind: "contains_thesis",
+          source: "case-1",
+          target: "th-1",
+          review_state: null,
+          available_at: null,
+          valid_interval: null,
+          source_refs: [],
+          properties: {},
+        },
+        {
+          id: "c1",
+          semantic_kind: "contains",
+          source: "doc-1",
+          target: "span-1",
+          review_state: null,
+          available_at: null,
+          valid_interval: null,
+          source_refs: [],
+          properties: {},
+        },
+        {
+          id: "d1",
+          semantic_kind: "derived",
+          source: "span-1",
+          target: "stmt-1",
+          review_state: null,
+          available_at: null,
+          valid_interval: null,
+          source_refs: [],
+          properties: {},
+        },
+        {
+          id: "ev1",
+          semantic_kind: "evidence",
+          source: "th-1",
+          target: "stmt-1",
+          review_state: "reviewed",
+          available_at: null,
+          valid_interval: null,
+          source_refs: [],
+          properties: { role: "supports" },
+        },
+      ],
+      paths: [],
+      page: { has_more: false },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(graph)),
+    );
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const view = await adapter.getRelationshipGraph("c-1");
+    // document / span 节点进入图谱节点集合，白名单不抛错
+    const nodeKinds = new Set(view.nodes.map((n) => n.kind));
+    expect(nodeKinds.has("document")).toBe(true);
+    expect(nodeKinds.has("span")).toBe(true);
+    expect(nodeKinds.has("statement")).toBe(true);
+    // 原文层边类型进入图谱白名单
+    const edgeKinds = new Set(view.edges.map((e) => e.kind));
+    expect(edgeKinds.has("contains")).toBe(true);
+    expect(edgeKinds.has("derived")).toBe(true);
+  });
+
   it("maps the stable error envelope to PageStateError", async () => {
     const errorEnvelope = {
       error: {

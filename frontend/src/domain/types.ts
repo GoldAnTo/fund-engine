@@ -13,14 +13,18 @@ export type EdgeKind =
   | "theme_role"
   | "holding"
   | "contains_thesis"
-  | "company_stock"
   | "contains_step"
+  | "contains"
+  | "derived"
+  | "company_stock"
   | "valuation";
 
 export type NodeKind =
   | "case"
   | "thesis"
   | "statement"
+  | "span"
+  | "document"
   | "step"
   | "company"
   | "stock"

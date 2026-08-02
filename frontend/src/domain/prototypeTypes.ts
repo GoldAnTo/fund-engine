@@ -703,6 +703,9 @@ export interface VersionsView {
   perThesisChanges: ThesisVersionChange[];
   /** 案例可用的全部快照 cutoff（按时间升序），供 base/compare 下拉使用。 */
   availableCutoffs: string[];
+  /** 案例的完整快照元数据（按时间升序），供时间轴渲染使用。
+   *  linkCount 是该快照点处已建立的证据关系数，节点大小可据此变化。 */
+  snapshotPoints: SnapshotPoint[];
   aiProposal: {
     runId: string;
     observedAt: string;
@@ -721,6 +724,15 @@ export interface ThesisVersionChange {
   gapsAfterCount: number;
   addedLinks: number;
   removedLinks: number;
+}
+
+export interface SnapshotPoint {
+  /** 快照 ID（短） */
+  id: string;
+  /** ISO 时间戳；与 VersionsView.before/afterSnapshot.cutoff 一致 */
+  cutoff: string;
+  /** 该快照点处该案例下所有证据关系（已审核 + AI 提议）的合计。 */
+  linkCount: number;
 }
 
 // ── Theme (主题) ─ 一等公民 ───────────────────────────────────────────
