@@ -64,6 +64,7 @@ def ingest_documents(
             case_id=case_id,
             research_queries=payload.research_queries,
             announcement_query=payload.announcement_query,
+            news_query=payload.news_query,
             quote_query=payload.quote_query,
             quote_stock_code=payload.quote_stock_code,
         )

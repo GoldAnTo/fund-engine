@@ -91,6 +91,25 @@ _REPORT_FIELD_ALIASES: dict[str, str] = {
     "原文": "content",
 }
 
+# News/舆情 key/value field names -> canonical keys.  The live NewsDataQuery
+# payload is a ``字段：值`` block (报告标题/撰写时间/新闻舆情来源/原文).
+_NEWS_FIELD_ALIASES: dict[str, str] = {
+    "报告标题": "title",
+    "标题": "title",
+    "新闻标题": "title",
+    "撰写时间": "publish_date",
+    "发布时间": "publish_date",
+    "发布日期": "publish_date",
+    "新闻舆情来源": "source",
+    "来源": "source",
+    "媒体": "source",
+    "证券简称": "sec_name",
+    "证券代码": "sec_code",
+    "原文": "content",
+    "内容": "content",
+    "正文": "content",
+}
+
 
 # ---------------------------------------------------------------------------
 # Low-level markdown / text parsing
@@ -278,6 +297,31 @@ def fetch_announcement(client, query: str) -> list[dict]:
                 }
             )
     return announcements
+
+
+def fetch_news(client, query: str) -> list[dict]:
+    """Pull news/舆情 items and return ``[{title, publish_date, source, sec_name, content}]``.
+
+    Calls ``NewsDataQuery``; each result's ``table_markdown`` is a ``字段：值``
+    block (报告标题/撰写时间/新闻舆情来源/原文).  Note the 原文 may simply
+    repeat the title for short items — the caller stores what is returned,
+    verbatim, without padding.
+    """
+    text = client.call_tool("NewsDataQuery", {"query": query})
+    news: list[dict] = []
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
+            normalized = _normalize(row, _NEWS_FIELD_ALIASES)
+            news.append(
+                {
+                    "title": normalized.get("title", ""),
+                    "publish_date": normalized.get("publish_date", ""),
+                    "source": normalized.get("source", ""),
+                    "sec_name": normalized.get("sec_name", ""),
+                    "content": normalized.get("content", ""),
+                }
+            )
+    return news
 
 
 def fetch_quote(client, query: str) -> list[dict]:

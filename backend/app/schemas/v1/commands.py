@@ -252,6 +252,7 @@ class IngestRequest(V1Model):
     case_id: str | None = None
     research_queries: list[str] | None = None
     announcement_query: str | None = None
+    news_query: str | None = None
     quote_query: str | None = None
     quote_stock_code: str | None = None
 
@@ -266,6 +267,7 @@ class IngestResponse(V1Model):
 
     research_reports: int
     announcements: int
+    news: int
     spans: int
     valuations_written: int
     valuations_skipped: int

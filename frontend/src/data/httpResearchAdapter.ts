@@ -43,6 +43,7 @@ import type {
   LinkReviewPayload,
   NewResearchView,
   PlanAsset,
+  ProposeEvidenceResult,
   RelationshipGraphView,
   ResearchPlanView,
   ReviewQueueView,
@@ -1654,6 +1655,7 @@ export class HttpResearchAdapter implements ResearchClient {
     const DOC_KIND_LABEL: Record<string, string> = {
       research_report: "研报",
       announcement: "公告",
+      news: "资讯",
     };
     const toDocument = (
       d: Schemas["DocumentSummaryDTO"],
@@ -1962,6 +1964,18 @@ export class HttpResearchAdapter implements ResearchClient {
       rationale: dto.assessment.rationale,
       gaps: dto.assessment.gaps,
       createdAt: dto.assessment.created_at,
+    };
+  }
+
+  async proposeEvidence(thesisId: string): Promise<ProposeEvidenceResult> {
+    const dto = await this.post<Schemas["ProposeResponse"]>(
+      `/theses/${thesisId}/propose`,
+      {},
+    );
+    return {
+      thesisId: dto.thesis_id,
+      mode: dto.mode,
+      linkCount: dto.link_count,
     };
   }
 

@@ -44,6 +44,7 @@ from app.services.ingest import DocumentService
 SOURCE_GILDATA = "gildata"
 RESEARCH_SOURCE_URL = "gildata://research_report"
 ANNOUNCEMENT_SOURCE_URL = "gildata://announcement"
+NEWS_SOURCE_URL = "gildata://news"
 PARSER_VERSION = "gildata-mcp-1"
 
 # Fixed queries verified against the Gildata MCP tools.
@@ -52,6 +53,7 @@ RESEARCH_QUERIES = [
     "工业富联AI服务器收入研报",
 ]
 ANNOUNCEMENT_QUERY = "寒武纪近期公告"
+NEWS_QUERY = "寒武纪 AI算力芯片 最新消息"
 QUOTE_QUERY = "寒武纪最新股价行情"
 QUOTE_STOCK_CODE = "688256"
 
@@ -186,6 +188,7 @@ def ingest(
     case_id: uuid.UUID | None = None,
     research_queries: list[str] | None = None,
     announcement_query: str | None = None,
+    news_query: str | None = None,
     quote_query: str | None = None,
     quote_stock_code: str | None = None,
 ) -> dict:
@@ -198,6 +201,7 @@ def ingest(
     """
     research_queries = research_queries or RESEARCH_QUERIES
     announcement_query = announcement_query or ANNOUNCEMENT_QUERY
+    news_query = news_query or NEWS_QUERY
     quote_query = quote_query or QUOTE_QUERY
     quote_stock_code = quote_stock_code or QUOTE_STOCK_CODE
 
@@ -208,6 +212,7 @@ def ingest(
     summary = {
         "research_reports": 0,
         "announcements": 0,
+        "news": 0,
         "spans": 0,
         "valuations_written": 0,
         "valuations_skipped": 0,
@@ -276,6 +281,34 @@ def ingest(
         summary["announcements"] += 1
         summary["spans"] += 1
 
+    # 2b. News/舆情 -> DocumentVersion + SourceSpan.
+    news_items = adapters.fetch_news(client, news_query)
+    for news in news_items[:3]:
+        content = news.get("content", "") or news.get("title", "")
+        if not content:
+            continue
+        published_at = _parse_datetime(news.get("publish_date", ""))
+        version = document_service.freeze(
+            raw=content.encode("utf-8"),
+            source_url=NEWS_SOURCE_URL,
+            published_at=published_at,
+            parser_version=PARSER_VERSION,
+        )
+        document_service.add_span(
+            document_version_id=version.id,
+            locator={
+                "kind": "news",
+                "title": news.get("title", ""),
+                "source": news.get("source", ""),
+                "sec_name": news.get("sec_name", ""),
+                "publish_date": news.get("publish_date", ""),
+                **span_locator_extra,
+            },
+            verbatim_text=content,
+        )
+        summary["news"] += 1
+        summary["spans"] += 1
+
     # 3. Market quote -> ValuationSnapshot rows for the resolved stock.
     quotes = adapters.fetch_quote(client, quote_query)
     if quotes:
@@ -340,7 +373,8 @@ def main() -> None:
     print("gildata ingest summary:", summary)
     print(
         f"  frozen documents: {summary['research_reports']} research + "
-        f"{summary['announcements']} announcements ({summary['spans']} spans)"
+        f"{summary['announcements']} announcements + "
+        f"{summary['news']} news ({summary['spans']} spans)"
     )
     print(
         f"  valuation snapshots: {summary['valuations_written']} written, "

@@ -37,11 +37,13 @@ def _mock_transport(handler) -> httpx.MockTransport:
 class _FakeClient:
     """Fake client returning canned ``call_tool`` text strings, no network."""
 
-    def __init__(self, research_results, announcement_results, quote_results):
+    def __init__(self, research_results, announcement_results, quote_results,
+                 news_results=()):
         # research_results: queue of result-lists (one per FinancialResearchReport call)
         self._research = list(research_results)
         self._announcement = announcement_results
         self._quote = quote_results
+        self._news = list(news_results)
         self.calls: list[tuple[str, dict]] = []
 
     def call_tool(self, name, arguments, timeout=60):
@@ -51,6 +53,8 @@ class _FakeClient:
             return json.dumps({"code": "0", "results": results}, ensure_ascii=False)
         if name == "AnnouncementData":
             return json.dumps({"code": "0", "results": self._announcement}, ensure_ascii=False)
+        if name == "NewsDataQuery":
+            return json.dumps({"code": "0", "results": self._news}, ensure_ascii=False)
         if name == "FinQuery":
             return json.dumps({"code": "0", "results": self._quote}, ensure_ascii=False)
         raise AssertionError(f"unexpected tool {name!r}")
@@ -75,6 +79,13 @@ ANNOUNCEMENT_MD = (
     "|公告标题|公告日期|股票代码|公告内容|\n"
     "|---|---|---|---|\n"
     "|寒武纪定增预案|2026-03-15|688256|本次定增募资49.8亿元投向算力芯片项目。|"
+)
+
+NEWS_MD = (
+    "报告标题：寒武纪获得发明专利授权；\n"
+    "撰写时间：2026-08-01 03:40:45；\n"
+    "新闻舆情来源：证券之星；\n"
+    "原文：寒武纪获得发明专利授权，涉及卷积运算处理电路。"
 )
 
 
@@ -250,9 +261,11 @@ def _make_client():
         )
     }
     announcement = {"table_markdown": ANNOUNCEMENT_MD}
+    news = {"table_markdown": NEWS_MD}
     quote = {"table_markdown": QUOTE_MD}
     # Two research queries -> one report list each.
-    return _FakeClient([[report1], [report2]], [announcement], [quote])
+    return _FakeClient([[report1], [report2]], [announcement], [quote],
+                       news_results=[news])
 
 
 def test_ingest_freezes_documents_and_valuations(session):
@@ -262,7 +275,8 @@ def test_ingest_freezes_documents_and_valuations(session):
 
     assert summary["research_reports"] == 2
     assert summary["announcements"] == 1
-    assert summary["spans"] == 3
+    assert summary["news"] == 1
+    assert summary["spans"] == 4
     assert summary["valuations_written"] == 3  # PE(TTM), PB, 总市值
     assert summary["valuations_skipped"] == 0
     assert summary["stock_id"] is not None

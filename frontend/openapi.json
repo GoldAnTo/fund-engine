@@ -3697,6 +3697,17 @@
             ],
             "title": "Announcement Query"
           },
+          "news_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "News Query"
+          },
           "quote_query": {
             "anyOf": [
               {
@@ -3734,6 +3745,10 @@
           "announcements": {
             "type": "integer",
             "title": "Announcements"
+          },
+          "news": {
+            "type": "integer",
+            "title": "News"
           },
           "spans": {
             "type": "integer",
@@ -3775,6 +3790,7 @@
         "required": [
           "research_reports",
           "announcements",
+          "news",
           "spans",
           "valuations_written",
           "valuations_skipped",

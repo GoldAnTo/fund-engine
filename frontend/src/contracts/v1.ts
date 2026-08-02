@@ -1206,6 +1206,8 @@ export interface components {
             research_queries?: string[] | null;
             /** Announcement Query */
             announcement_query?: string | null;
+            /** News Query */
+            news_query?: string | null;
             /** Quote Query */
             quote_query?: string | null;
             /** Quote Stock Code */
@@ -1224,6 +1226,8 @@ export interface components {
             research_reports: number;
             /** Announcements */
             announcements: number;
+            /** News */
+            news: number;
             /** Spans */
             spans: number;
             /** Valuations Written */

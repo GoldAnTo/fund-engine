@@ -42,7 +42,8 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
     body = resp.json()
     assert body["research_reports"] == 2
     assert body["announcements"] == 1
-    assert body["spans"] == 3
+    assert body["news"] == 1
+    assert body["spans"] == 4
     assert body["valuations_written"] == 3
     assert body["valuations_skipped"] == 0
     assert body["stock_id"] is not None
