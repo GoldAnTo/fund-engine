@@ -233,7 +233,10 @@ def test_coerce_legacy_pypdf_minimal():
     assert out.page == 3
     assert out.parser_item_ref == "#/legacy-paragraph/4"
     assert out.extra["__upgraded"] == "paragraph-only"
-    # display keys survive in extra
+    # Legacy ``paragraph`` key is preserved in extra so callers that still
+    # read ``locator["paragraph"]`` directly (e.g. seed_storage_chain_case)
+    # keep working until they migrate to v1.
+    assert out.extra["paragraph"] == 4
     assert out.extra["parser"] == "pypdf-v1"
 
 
@@ -325,6 +328,21 @@ def test_coerce_legacy_page_only_degrades_gracefully():
     assert out.page == 4
     assert out.parser_item_ref == "#/legacy-page/4"
     assert out.extra["__upgraded"] == "page-only"
+    # Original page value survives in extra for legacy callers.
+    assert out.extra["page"] == 4
+
+
+def test_coerce_legacy_to_storage_dict_preserves_paragraph():
+    """The to_storage_dict() output must keep the legacy ``paragraph`` key at
+    the top level so the seed scripts and other pre-S4 callers can read
+    ``locator["paragraph"]`` directly.  This is the compat bridge that
+    lets S2 land before S4 (which will thread the v1 column through)."""
+    legacy = {"page": 2, "paragraph": 3, "parser": "pypdf-v1"}
+    out = coerce_locator_v1(legacy, document_sha256=_SHA, parser_version="pypdf-v1")
+    d = out.to_storage_dict()
+    assert d["paragraph"] == 3
+    assert d["page"] == 2
+    assert d["parser_item_ref"] == "#/legacy-paragraph/3"
 
 
 def test_coerce_legacy_rejects_non_dict():
