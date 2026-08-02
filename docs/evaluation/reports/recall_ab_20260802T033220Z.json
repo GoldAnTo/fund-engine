@@ -1,0 +1,77 @@
+{
+  "generated_at": "2026-08-02T03:32:20.243181+00:00",
+  "cutoff": "2026-12-31T00:00:00+00:00",
+  "tracked_ks": [
+    10,
+    20
+  ],
+  "overall": {
+    "bm25": {
+      "recall_at_10": 0.6667,
+      "recall_at_20": 0.7333
+    },
+    "hybrid": {
+      "recall_at_10": 0.7333,
+      "recall_at_20": 1.0
+    }
+  },
+  "per_thesis": [
+    {
+      "thesis_id": "e91bf512-7b2d-4aca-9cb0-c1f169fb94db",
+      "thesis": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+      "gold_count": 5,
+      "modes": {
+        "bm25": {
+          "recall_at_10": 0.6,
+          "recall_at_20": 0.8
+        },
+        "hybrid": {
+          "recall_at_10": 0.8,
+          "recall_at_20": 1.0
+        }
+      },
+      "recovered_by_hybrid": [
+        "f8a8a7ab-1dd1-4216-bf31-04000a73bae8"
+      ],
+      "lost_by_hybrid": []
+    },
+    {
+      "thesis_id": "49222e2c-773b-4e97-989a-ac9b5bd8109f",
+      "thesis": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+      "gold_count": 5,
+      "modes": {
+        "bm25": {
+          "recall_at_10": 1.0,
+          "recall_at_20": 1.0
+        },
+        "hybrid": {
+          "recall_at_10": 1.0,
+          "recall_at_20": 1.0
+        }
+      },
+      "recovered_by_hybrid": [],
+      "lost_by_hybrid": []
+    },
+    {
+      "thesis_id": "766991ea-2d43-444d-8dd1-5a5666c7f3af",
+      "thesis": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+      "gold_count": 5,
+      "modes": {
+        "bm25": {
+          "recall_at_10": 0.4,
+          "recall_at_20": 0.4
+        },
+        "hybrid": {
+          "recall_at_10": 0.4,
+          "recall_at_20": 1.0
+        }
+      },
+      "recovered_by_hybrid": [
+        "36311713-29d1-46b5-bb0e-1fac4a438605",
+        "28cbb954-4c92-4d1a-8d42-e7d56cb19334",
+        "9cf05113-a3ed-4e62-b1e2-570a39a1f10a"
+      ],
+      "lost_by_hybrid": []
+    }
+  ]
+}

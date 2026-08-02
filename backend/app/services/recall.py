@@ -9,12 +9,22 @@ information into the proposal context.  This module recalls candidate
    ``created_at`` not later than the cutoff — no hindsight leakage), and
 2. *relevant* to the thesis being assessed.
 
-Ranking is BM25 shortlist followed by a lexical-overlap rerank, ported from
-the Verifiable-Company-Research-Agent hybrid pipeline
-(``services/rag/hybrid_retrieval.py`` / ``reranker.py``).  Reciprocal rank
-fusion and a dense/vector path are intentionally deferred until an embedding
-backend is introduced; scores are used only for ranking inside this module
-and are never persisted as evidence strength.
+Ranking is a hybrid of two legs fused with reciprocal rank fusion (RRF),
+followed by a lexical-overlap rerank, ported from the
+Verifiable-Company-Research-Agent hybrid pipeline
+(``services/rag/hybrid_retrieval.py`` / ``reranker.py``):
+
+1. *Sparse leg* — BM25 (Okapi) over coarse tokens.
+2. *Dense leg* — TF-IDF cosine over character n-grams.  The coarse tokenizer
+   treats a whole run of CJK characters as one token, so "资本开支" and
+   "云厂商资本开支高增长" share no token and BM25 scores them 0; character
+   bigrams recover exactly these sub-word/synonym-adjacent matches.  This
+   leg is fully local and deterministic — no embedding service required —
+   and can later be swapped for a real embedding backend behind the same
+   ``tfidf_rank`` contract without touching the fusion logic.
+
+Scores are used only for ranking inside this module and are never persisted
+as evidence strength.
 """
 from __future__ import annotations
 
@@ -38,10 +48,13 @@ from app.models.ledger import (
 
 DEFAULT_SHORTLIST = 40
 DEFAULT_TOP_K = 20
+DEFAULT_MODE = "hybrid"
 _BM25_K1 = 1.5
 _BM25_B = 0.75
+_RRF_K = 60  # standard RRF smoothing constant
 
 _TOKEN_RE = re.compile(r"[一-鿿]{2,}|[a-zA-Z0-9]{2,}")  # CJK: 一-鿿
+_CJK_RUN_RE = re.compile(r"[一-鿿]+|[a-zA-Z0-9]+")
 
 
 def tokenize(text: str) -> list[str]:
@@ -96,6 +109,88 @@ def bm25_rank(
     return [doc_ids[i] for i in ranked[:top_k] if scores[i] > 0]
 
 
+def char_ngrams(text: str, n: int = 2) -> list[str]:
+    """Tokenize into character n-grams for the dense leg.
+
+    Runs of CJK characters are decomposed into overlapping n-grams (a run
+    shorter than ``n`` keeps the whole run); alphanumeric runs stay whole
+    tokens.  This recovers sub-word matches the coarse ``tokenize`` misses
+    (e.g. query "资本开支" vs document "云厂商资本开支高增长").
+    """
+    grams: list[str] = []
+    for run in _CJK_RUN_RE.findall((text or "").lower()):
+        if re.fullmatch(r"[a-z0-9]+", run):
+            grams.append(run)
+        elif len(run) <= n:
+            grams.append(run)
+        else:
+            grams.extend(run[i : i + n] for i in range(len(run) - n + 1))
+    return grams
+
+
+def tfidf_rank(
+    doc_ids: list[uuid.UUID],
+    doc_texts: list[str],
+    query: str,
+    top_k: int,
+) -> list[uuid.UUID]:
+    """Rank ``doc_ids`` by TF-IDF cosine similarity against ``query``.
+
+    The dense leg of the hybrid pipeline.  IDF is computed over the candidate
+    corpus (same convention as ``bm25_rank``); documents with zero similarity
+    are excluded.  Deterministic and fully local — a future embedding backend
+    can replace this function behind the same contract.
+    """
+    if top_k <= 0 or not doc_ids:
+        return []
+    query_grams = Counter(char_ngrams(query))
+    if not query_grams:
+        return []
+
+    corpus = [Counter(char_ngrams(text)) for text in doc_texts]
+    doc_count = len(corpus)
+
+    def idf(term: str) -> float:
+        df = sum(1 for doc in corpus if doc.get(term, 0) > 0)
+        if df == 0:
+            return 0.0
+        return math.log(1 + doc_count / df)
+
+    q_weights = {t: tf * idf(t) for t, tf in query_grams.items()}
+    q_norm = math.sqrt(sum(w * w for w in q_weights.values()))
+    if q_norm == 0:
+        return []
+
+    scores: list[float] = []
+    for doc in corpus:
+        dot = sum(doc.get(t, 0) * w for t, w in q_weights.items())
+        if dot == 0:
+            scores.append(0.0)
+            continue
+        d_norm = math.sqrt(
+            sum((tf * idf(t)) ** 2 for t, tf in doc.items() if idf(t) > 0)
+        )
+        scores.append(dot / (d_norm * q_norm) if d_norm > 0 else 0.0)
+
+    ranked = sorted(range(doc_count), key=lambda i: scores[i], reverse=True)
+    return [doc_ids[i] for i in ranked[:top_k] if scores[i] > 0]
+
+
+def rrf_fuse(*ranked_lists: list[uuid.UUID], k: int = _RRF_K) -> list[uuid.UUID]:
+    """Fuse ranked id lists with reciprocal rank fusion.
+
+    Each list contributes ``1 / (k + rank)`` per document; ids absent from a
+    list contribute nothing.  Union semantics: a document surfaced by only
+    one leg still enters the fused ranking — this is what lets the dense leg
+    recover candidates the sparse leg scored 0.
+    """
+    scores: dict[uuid.UUID, float] = {}
+    for ranked in ranked_lists:
+        for rank, doc_id in enumerate(ranked, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return sorted(scores, key=lambda doc_id: scores[doc_id], reverse=True)
+
+
 def lexical_rerank(
     query: str, texts: list[str], top_k: int
 ) -> list[tuple[int, float]]:
@@ -137,40 +232,25 @@ class RecallService:
         cutoff: datetime,
         top_k: int = DEFAULT_TOP_K,
         shortlist: int = DEFAULT_SHORTLIST,
+        mode: str = DEFAULT_MODE,
+        exclude_linked: bool = True,
     ) -> list[SourceStatement]:
         """Return ranked candidate statements for proposing evidence links.
 
         Candidates already linked to this thesis are excluded so re-running
         the proposer does not pile duplicate links onto the same evidence.
+        ``mode="bm25"`` keeps the legacy sparse-only pipeline (used by the
+        recall A/B evaluation as the baseline); ``mode="hybrid"`` fuses the
+        BM25 leg with the char-n-gram dense leg via RRF before reranking.
+        ``exclude_linked=False`` is reserved for evaluation runs that must
+        score recall against already-linked gold statements.
         """
+        if mode not in ("hybrid", "bm25"):
+            raise ValueError(f"unknown recall mode: {mode!r}")
         cutoff = _ensure_aware(cutoff)
-        rows = self._session.execute(
-            select(SourceStatement, DocumentVersion)
-            .join(SourceSpan, SourceStatement.source_span_id == SourceSpan.id)
-            .join(
-                DocumentVersion,
-                SourceSpan.document_version_id == DocumentVersion.id,
-            )
-        ).all()
-
-        linked_statement_ids = set(
-            self._session.scalars(
-                select(EvidenceLink.source_statement_id).where(
-                    EvidenceLink.thesis_id == thesis.id
-                )
-            )
+        candidates = self._visible_candidates(
+            thesis, cutoff, exclude_linked=exclude_linked
         )
-
-        candidates: list[SourceStatement] = []
-        for statement, version in rows:
-            if statement.id in linked_statement_ids:
-                continue
-            if _ensure_aware(statement.created_at) > cutoff:
-                continue
-            if _ensure_aware(version.available_at) > cutoff:
-                continue
-            candidates.append(statement)
-
         if not candidates:
             return []
 
@@ -182,11 +262,62 @@ class RecallService:
         candidate_ids = [s.id for s in candidates]
         candidate_texts = [s.normalized_text for s in candidates]
 
-        shortlisted_ids = bm25_rank(candidate_ids, candidate_texts, query, shortlist)
+        bm25_leg = bm25_rank(candidate_ids, candidate_texts, query, shortlist)
+        if mode == "hybrid":
+            dense_leg = tfidf_rank(candidate_ids, candidate_texts, query, shortlist)
+            shortlisted_ids = rrf_fuse(bm25_leg, dense_leg)[:shortlist]
+        else:
+            shortlisted_ids = bm25_leg
         if not shortlisted_ids:
             return []
 
         by_id = {s.id: s for s in candidates}
         shortlist_texts = [by_id[sid].normalized_text for sid in shortlisted_ids]
-        reranked = lexical_rerank(query, shortlist_texts, top_k)
-        return [by_id[shortlisted_ids[idx]] for idx, _ in reranked]
+        reranked = lexical_rerank(query, shortlist_texts, len(shortlisted_ids))
+        lexical_order = [shortlisted_ids[idx] for idx, _ in reranked]
+        if mode == "hybrid":
+            # Fuse the lexical signal in as a third leg instead of letting it
+            # truncate: a dense-only paraphrase with zero token overlap must
+            # not be dropped at the final stage.
+            final_ids = rrf_fuse(shortlisted_ids, lexical_order)[:top_k]
+        else:
+            final_ids = lexical_order[:top_k]
+        return [by_id[sid] for sid in final_ids]
+
+    def _visible_candidates(
+        self,
+        thesis: Thesis,
+        cutoff: datetime,
+        *,
+        exclude_linked: bool,
+    ) -> list[SourceStatement]:
+        """Statements visible at ``cutoff`` (no hindsight leakage)."""
+        rows = self._session.execute(
+            select(SourceStatement, DocumentVersion)
+            .join(SourceSpan, SourceStatement.source_span_id == SourceSpan.id)
+            .join(
+                DocumentVersion,
+                SourceSpan.document_version_id == DocumentVersion.id,
+            )
+        ).all()
+
+        linked_statement_ids: set = set()
+        if exclude_linked:
+            linked_statement_ids = set(
+                self._session.scalars(
+                    select(EvidenceLink.source_statement_id).where(
+                        EvidenceLink.thesis_id == thesis.id
+                    )
+                )
+            )
+
+        candidates: list[SourceStatement] = []
+        for statement, version in rows:
+            if statement.id in linked_statement_ids:
+                continue
+            if _ensure_aware(statement.created_at) > cutoff:
+                continue
+            if _ensure_aware(version.available_at) > cutoff:
+                continue
+            candidates.append(statement)
+        return candidates

@@ -17,7 +17,15 @@ from app.ai.client import LLMClient
 from app.ai.proposal import EvidenceProposer
 from app.models.ledger import EvidenceLink
 from app.repositories.documents import DocumentRepository
-from app.services.recall import RecallService, bm25_rank, lexical_rerank, tokenize
+from app.services.recall import (
+    RecallService,
+    bm25_rank,
+    char_ngrams,
+    lexical_rerank,
+    rrf_fuse,
+    tfidf_rank,
+    tokenize,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +68,45 @@ def test_lexical_rerank_orders_by_overlap():
 def test_lexical_rerank_empty_query_returns_prefix():
     ranked = lexical_rerank("", ["a", "b"], top_k=1)
     assert ranked == [(0, 0.0)]
+
+
+# ---------------------------------------------------------------------------
+# Dense leg + fusion primitives
+# ---------------------------------------------------------------------------
+
+
+def test_char_ngrams_decompose_cjk_runs():
+    grams = char_ngrams("资本开支")
+    assert grams == ["资本", "本开", "开支"]
+    # short CJK run kept whole; alnum run kept whole
+    assert char_ngrams("AI 需求") == ["ai", "需求"]
+    assert char_ngrams("") == []
+
+
+def test_tfidf_rank_recovers_subword_match_bm25_misses():
+    ids = [uuid.uuid4(), uuid.uuid4()]
+    texts = ["云厂商资本开支高增长指引上调", "白酒消费疲软库存高企"]
+    query = "资本开支"
+    # coarse tokenizer sees "资本开支" as one token absent from both docs
+    assert bm25_rank(ids, texts, query, top_k=2) == []
+    # char bigrams recover the sub-word match
+    ranked = tfidf_rank(ids, texts, query, top_k=2)
+    assert ranked[0] == ids[0]
+
+
+def test_tfidf_rank_empty_inputs():
+    assert tfidf_rank([], [], "query", 5) == []
+    assert tfidf_rank([uuid.uuid4()], ["text"], "", 5) == []
+    assert tfidf_rank([uuid.uuid4()], ["text"], "query", 0) == []
+
+
+def test_rrf_fuse_union_semantics():
+    a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    fused = rrf_fuse([a, b], [c, a])
+    # union of both legs; ``a`` ranks first (present in both lists)
+    assert set(fused) == {a, b, c}
+    assert fused[0] == a
+    assert rrf_fuse([], []) == []
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +186,39 @@ def test_recall_excludes_already_linked_statements(
         thesis, cutoff=datetime.now(UTC)
     )
     assert statement.id not in {s.id for s in recalled}
+
+
+def test_recall_hybrid_recovers_dense_only_candidate(
+    session, document_service, research_service, document
+):
+    """A statement with only sub-word overlap is BM25-invisible (the coarse
+    tokenizer keeps each CJK run whole) but recoverable via the dense leg."""
+    case = research_service.add_case(
+        title="capex cycle", industry_topic="capex", created_by="tester"
+    )
+    zh_thesis = research_service.add_thesis(
+        case.id, statement="云厂商资本开支高增长将驱动算力需求", created_by="tester"
+    )
+    dense_only = _add_statement_with_text(
+        document_service,
+        research_service,
+        document,
+        "主要厂商上调年度资本开支指引",
+    )
+    now = datetime.now(UTC)
+    baseline = RecallService(session).for_thesis(zh_thesis, cutoff=now, mode="bm25")
+    hybrid = RecallService(session).for_thesis(zh_thesis, cutoff=now, mode="hybrid")
+    assert dense_only.id not in {s.id for s in baseline}
+    assert dense_only.id in {s.id for s in hybrid}
+
+
+def test_recall_invalid_mode_rejected(session, thesis):
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown recall mode"):
+        RecallService(session).for_thesis(
+            thesis, cutoff=datetime.now(UTC), mode="dense"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -204,3 +204,18 @@ Full detail (`docs/evaluation/raw/<timestamp>.json`, gitignored) additionally
 carries each check's `evidence` payload and human-readable `failures` list.
 `failures` at the top level is a list of check **names** that failed
 (excluding skipped checks).
+
+## Recall A/B evaluation
+
+`backend/scripts/eval_recall_ab.py` measures whether the human-curated gold
+EvidenceLink statements are recalled per thesis, comparing the legacy
+sparse-only pipeline (`mode="bm25"`) against the hybrid pipeline
+(`mode="hybrid"`: BM25 leg + char-n-gram TF-IDF dense leg fused with RRF,
+lexical signal fused as a third leg).  It replays the frozen slice offline,
+writes `docs/evaluation/reports/recall_ab_<timestamp>.json`, and exits 1 if
+the hybrid recalls fewer gold statements than the baseline at recall@10 or
+recall@20 (regression guard).
+
+First run (2026-08-02): overall recall@20 improved from **0.7333 → 1.0000**
+(4 gold statements recovered, 0 lost; 3 of them on the 寒武纪 thesis, whose
+evidence the coarse tokenizer's whole-CJK-run tokens made BM25-invisible).
