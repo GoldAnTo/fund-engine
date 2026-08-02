@@ -10,5 +10,8 @@ export default defineConfig({
   },
   use: {
     baseURL: "http://localhost:5173",
+    // macOS 12 等旧系统无法运行 Playwright 捆绑的 Chromium，
+    // 可用 PW_BROWSER_CHANNEL=chrome 回退到系统 Chrome。
+    channel: (process.env.PW_BROWSER_CHANNEL as "chrome" | undefined) ?? undefined,
   },
 });
