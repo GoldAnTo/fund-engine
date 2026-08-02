@@ -27,6 +27,9 @@ class DocumentSummaryDTO(V1Model):
     title: str | None = None
     org: str | None = None
     doc_kind: str | None = None
+    # Resolved from locator sec_code/stock_code; "寒武纪 (688256.SH)" when the
+    # code matches a known Stock, the raw code otherwise, None when absent.
+    entity: str | None = None
 
 
 class SourceSpanDTO(V1Model):

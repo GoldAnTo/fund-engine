@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import DocumentVersion
+from app.models.ledger import DocumentVersion, Stock
 from app.queries.basis import HistoricalBasis
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
@@ -160,28 +162,63 @@ class DocumentReadQueries:
 
     @staticmethod
     def _locator_metadata(spans: list) -> dict:
-        """Pick display metadata (title/org/kind) from span locators.
+        """Pick display metadata (title/org/kind/code) from span locators.
 
         Prefers the first locator that actually carries a ``title``; falls
         back to the first locator with any of the known keys.  Never invents
         values — missing keys stay absent so the DTO fields remain ``None``.
         """
         candidates = [s.locator for s in spans if isinstance(s.locator, dict)]
+
+        def _pick(loc: dict) -> dict:
+            return {
+                "title": loc.get("title") or None,
+                "org": loc.get("org") or None,
+                "doc_kind": loc.get("kind") or None,
+                "sec_code": (loc.get("sec_code") or loc.get("stock_code"))
+                or None,
+            }
+
         for loc in candidates:
             if loc.get("title"):
-                return {
-                    "title": loc.get("title") or None,
-                    "org": loc.get("org") or None,
-                    "doc_kind": loc.get("kind") or None,
-                }
+                return _pick(loc)
         for loc in candidates:
             if loc.get("kind") or loc.get("org"):
-                return {
-                    "title": loc.get("title") or None,
-                    "org": loc.get("org") or None,
-                    "doc_kind": loc.get("kind") or None,
-                }
-        return {"title": None, "org": None, "doc_kind": None}
+                return _pick(loc)
+        return {"title": None, "org": None, "doc_kind": None, "sec_code": None}
+
+    def _resolve_entity(
+        self, sec_code: str | None, title: str | None = None
+    ) -> str | None:
+        """Resolve the document's subject entity to ``name (code)`` via Stock.
+
+        Primary key is the locator security code (bare or suffixed).  When no
+        code is present (e.g. announcement payloads that omit it), fall back
+        to the company-name prefix of the locator title ("寒武纪:…" or
+        "工业富联(601138)…" → "寒武纪" / "工业富联") matched against
+        ``Stock.name``.  Falls back to the raw code when no Stock row
+        matches; ``None`` when neither code nor title yields anything.
+        """
+        base = (sec_code or "").split(".")[0].strip()
+        if base:
+            candidates = {
+                sec_code, base, f"{base}.SH", f"{base}.SZ", f"{base}.BJ"
+            }
+            stock = self._session.scalar(
+                select(Stock).where(Stock.code.in_(candidates)).limit(1)
+            )
+            if stock is not None:
+                return f"{stock.name} ({stock.code})"
+            return sec_code
+        if title:
+            name = re.split(r"[:：（(]", title, maxsplit=1)[0].strip()
+            if name:
+                stock = self._session.scalar(
+                    select(Stock).where(Stock.name == name).limit(1)
+                )
+                if stock is not None:
+                    return f"{stock.name} ({stock.code})"
+        return None
 
     def _summary(
         self,
@@ -209,4 +246,5 @@ class DocumentReadQueries:
             title=meta["title"],
             org=meta["org"],
             doc_kind=meta["doc_kind"],
+            entity=self._resolve_entity(meta["sec_code"], meta["title"]),
         )

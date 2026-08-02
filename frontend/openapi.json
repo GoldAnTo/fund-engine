@@ -2675,6 +2675,17 @@
               }
             ],
             "title": "Doc Kind"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
           }
         },
         "additionalProperties": false,

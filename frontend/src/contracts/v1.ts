@@ -847,6 +847,8 @@ export interface components {
             org?: string | null;
             /** Doc Kind */
             doc_kind?: string | null;
+            /** Entity */
+            entity?: string | null;
         };
         /** DocumentVersionAddedDTO */
         DocumentVersionAddedDTO: {

@@ -1640,7 +1640,7 @@ export class HttpResearchAdapter implements ResearchClient {
       sourceName: d.org ?? d.source_url,
       sourceVersion: d.parser_version,
       documentType: (d.doc_kind && DOC_KIND_LABEL[d.doc_kind]) ?? "未分类",
-      entity: "—",
+      entity: d.entity ?? "—",
       reuseCount: d.statement_count,
       reviewState: d.parse_state === "parsed" ? "reviewed" : "pending_review",
       publishedLabel: dateLabel(d.published_at),
