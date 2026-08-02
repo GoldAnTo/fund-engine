@@ -62,6 +62,7 @@ _ANNOUNCEMENT_ALIASES: dict[str, str] = {
     "公告名称": "title",
     "公告日期": "publish_date",
     "发布日期": "publish_date",
+    "发布时间": "publish_date",
     "公告时间": "publish_date",
     "日期": "publish_date",
     "股票代码": "stock_code",
@@ -72,6 +73,7 @@ _ANNOUNCEMENT_ALIASES: dict[str, str] = {
     "公告内容": "content",
     "正文": "content",
     "内容": "content",
+    "原文": "content",
 }
 
 # Research-report key/value field names -> canonical keys.
@@ -255,10 +257,11 @@ def fetch_research_report(client, query: str) -> list[dict]:
 
 
 def fetch_announcement(client, query: str) -> list[dict]:
-    """Pull announcements and return ``[{title, publish_date, stock_code, content}]``.
+    """Pull announcements and return ``[{title, publish_date, stock_code, sec_name, content}]``.
 
     Calls ``AnnouncementData``; ``table_markdown`` is parsed as a table first,
-    falling back to a ``字段：值`` block.
+    falling back to a ``字段：值`` block.  The live payload is a key/value
+    block using 公告标题/发布时间/证券简称/原文, all covered by the aliases.
     """
     text = client.call_tool("AnnouncementData", {"query": query})
     announcements: list[dict] = []
@@ -270,6 +273,7 @@ def fetch_announcement(client, query: str) -> list[dict]:
                     "title": normalized.get("title", ""),
                     "publish_date": normalized.get("publish_date", ""),
                     "stock_code": normalized.get("stock_code", ""),
+                    "sec_name": normalized.get("sec_name", ""),
                     "content": normalized.get("content", ""),
                 }
             )

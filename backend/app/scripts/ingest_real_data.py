@@ -267,6 +267,7 @@ def ingest(
                 "kind": "announcement",
                 "title": ann.get("title", ""),
                 "stock_code": ann.get("stock_code", ""),
+                "sec_name": ann.get("sec_name", ""),
                 "publish_date": ann.get("publish_date", ""),
                 **span_locator_extra,
             },

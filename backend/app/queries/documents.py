@@ -177,6 +177,7 @@ class DocumentReadQueries:
                 "doc_kind": loc.get("kind") or None,
                 "sec_code": (loc.get("sec_code") or loc.get("stock_code"))
                 or None,
+                "sec_name": loc.get("sec_name") or None,
             }
 
         for loc in candidates:
@@ -185,19 +186,28 @@ class DocumentReadQueries:
         for loc in candidates:
             if loc.get("kind") or loc.get("org"):
                 return _pick(loc)
-        return {"title": None, "org": None, "doc_kind": None, "sec_code": None}
+        return {
+            "title": None,
+            "org": None,
+            "doc_kind": None,
+            "sec_code": None,
+            "sec_name": None,
+        }
 
     def _resolve_entity(
-        self, sec_code: str | None, title: str | None = None
+        self,
+        sec_code: str | None,
+        title: str | None = None,
+        sec_name: str | None = None,
     ) -> str | None:
         """Resolve the document's subject entity to ``name (code)`` via Stock.
 
         Primary key is the locator security code (bare or suffixed).  When no
         code is present (e.g. announcement payloads that omit it), fall back
-        to the company-name prefix of the locator title ("寒武纪:…" or
-        "工业富联(601138)…" → "寒武纪" / "工业富联") matched against
-        ``Stock.name``.  Falls back to the raw code when no Stock row
-        matches; ``None`` when neither code nor title yields anything.
+        to the locator ``sec_name`` (证券简称) matched against ``Stock.name``,
+        then to the company-name prefix of the locator title ("寒武纪:…" or
+        "工业富联(601138)…" → "寒武纪" / "工业富联").  Falls back to the raw
+        code when no Stock row matches; ``None`` when nothing resolves.
         """
         base = (sec_code or "").split(".")[0].strip()
         if base:
@@ -210,14 +220,17 @@ class DocumentReadQueries:
             if stock is not None:
                 return f"{stock.name} ({stock.code})"
             return sec_code
-        if title:
-            name = re.split(r"[:：（(]", title, maxsplit=1)[0].strip()
-            if name:
-                stock = self._session.scalar(
-                    select(Stock).where(Stock.name == name).limit(1)
-                )
-                if stock is not None:
-                    return f"{stock.name} ({stock.code})"
+        for name in (
+            (sec_name or "").strip(),
+            re.split(r"[:：（(]", title or "", maxsplit=1)[0].strip(),
+        ):
+            if not name:
+                continue
+            stock = self._session.scalar(
+                select(Stock).where(Stock.name == name).limit(1)
+            )
+            if stock is not None:
+                return f"{stock.name} ({stock.code})"
         return None
 
     def _summary(
@@ -246,5 +259,7 @@ class DocumentReadQueries:
             title=meta["title"],
             org=meta["org"],
             doc_kind=meta["doc_kind"],
-            entity=self._resolve_entity(meta["sec_code"], meta["title"]),
+            entity=self._resolve_entity(
+                meta["sec_code"], meta["title"], meta["sec_name"]
+            ),
         )
