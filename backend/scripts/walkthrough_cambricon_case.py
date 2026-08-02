@@ -502,29 +502,26 @@ def phase8_assessment_reviews(assessments: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# P9 — instrument / fund enrichment (repository-only: no API exists)
+# P9 — instrument / fund enrichment (API-first since 2026-08-02)
 # ---------------------------------------------------------------------------
 
 def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
-    """Write ThemeRole / CausalEdge / Fund / HoldingDisclosure through the
-    repository layer.  There is NO v1 command API for these four objects —
-    that absence is itself a recorded finding (see report).  Fund holding
-    data is only written when the P0 probe returned an explicit weight; no
-    weights are fabricated.
+    """Write ThemeRole / Fund / HoldingDisclosure through the v1 instrument
+    command API (added 2026-08-02); CausalStep/CausalEdge still have no API
+    and remain repository writes.  Fund holding data is only written when the
+    P0 probe returned an explicit weight; no weights are fabricated.
     """
     from decimal import Decimal
 
     from sqlalchemy import select
 
     from app.db import SessionLocal
-    from app.models.ledger import Company, Stock
-    from app.repositories.instruments import InstrumentRepository
+    from app.models.ledger import Company, Fund, Stock
     from app.repositories.research import ResearchRepository
 
     out: dict = {"theme_roles": 0, "causal_steps": 0, "causal_edges": 0,
                  "funds": 0, "holding_disclosures": 0, "notes": []}
     with SessionLocal() as session:
-        instruments = InstrumentRepository(session)
         research = ResearchRepository(session)
 
         # Idempotency guard: enrichment writes have no dedupe key, so a
@@ -552,24 +549,37 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
             summary["phases"]["P9_enrichment"] = out
             return out
 
-        # Theme roles (human, reviewed by construction in this walkthrough).
-        instruments.add_theme_role(
-            company_id=cambricon.id,
-            research_case_id=uuid.UUID(case_id),
-            role="国产AI算力芯片核心设计商（云端训练/推理芯片）",
-            scope={"segment": "云端AI芯片", "chain_position": "上游设计"},
-            applicable_from=date(2024, 1, 1),
+        # Theme roles via the v1 instrument command API (human, reviewed by
+        # construction in this walkthrough).
+        status, _ = api(
+            "POST", f"/api/v1/companies/{cambricon.id}/theme-roles",
+            "P9", "theme_role_cambricon",
+            json={
+                "research_case_id": case_id,
+                "role": "国产AI算力芯片核心设计商（云端训练/推理芯片）",
+                "scope": {"segment": "云端AI芯片", "chain_position": "上游设计"},
+                "applicable_from": "2024-01-01",
+            },
         )
-        out["theme_roles"] += 1
-        if foxconn is not None:
-            instruments.add_theme_role(
-                company_id=foxconn.id,
-                research_case_id=uuid.UUID(case_id),
-                role="AI服务器制造与系统集成（算力基础设施下游兑现方）",
-                scope={"segment": "AI服务器", "chain_position": "下游制造"},
-                applicable_from=date(2024, 1, 1),
-            )
+        if status == 201:
             out["theme_roles"] += 1
+        else:
+            issue("theme_role_api_failed", f"寒武纪 theme-role HTTP {status}")
+        if foxconn is not None:
+            status, _ = api(
+                "POST", f"/api/v1/companies/{foxconn.id}/theme-roles",
+                "P9", "theme_role_foxconn",
+                json={
+                    "research_case_id": case_id,
+                    "role": "AI服务器制造与系统集成（算力基础设施下游兑现方）",
+                    "scope": {"segment": "AI服务器", "chain_position": "下游制造"},
+                    "applicable_from": "2024-01-01",
+                },
+            )
+            if status == 201:
+                out["theme_roles"] += 1
+            else:
+                issue("theme_role_api_failed", f"工业富联 theme-role HTTP {status}")
 
         # Human-authored causal chain for T2 (mirrors the storage-chain seed).
         chain = [
@@ -631,19 +641,41 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
                    9: date(period.year, 10, 31)}.get(
                 period.month, date(period.year + 1, 4, 30)
             )
-            fund = instruments.add_fund(
-                code=code, name=name, fund_type="指数基金/公募基金",
+            status, body = api(
+                "POST", "/api/v1/funds",
+                "P9", f"fund_{code}",
+                json={"code": code, "name": name, "fund_type": "指数基金/公募基金"},
             )
+            if status == 201:
+                fund_id = body["id"]
+            elif status == 422:
+                # Duplicate code (e.g. created by an earlier partial run):
+                # reuse the existing fund rather than fail the stage.
+                fund = session.scalar(select(Fund).where(Fund.code == code))
+                if fund is None:
+                    issue("fund_api_failed", f"基金 {code} 422 但账本查无此行")
+                    continue
+                fund_id = str(fund.id)
+            else:
+                issue("fund_api_failed", f"基金 {code} 创建 HTTP {status}")
+                continue
             out["funds"] += 1
-            instruments.add_holding_disclosure(
-                fund_id=fund.id,
-                stock_id=cambricon_stock.id,
-                weight=weight,
-                report_period=period,
-                published_at=datetime(pub.year, pub.month, pub.day,
-                                      tzinfo=timezone.utc),
-                source="gildata-probe:top10-holder:占流通A股比例%",
+            status, _ = api(
+                "POST", f"/api/v1/funds/{fund_id}/holding-disclosures",
+                "P9", f"holding_{code}",
+                json={
+                    "stock_id": str(cambricon_stock.id),
+                    "weight": str(weight),
+                    "report_period": period.isoformat(),
+                    "published_at": datetime(
+                        pub.year, pub.month, pub.day, tzinfo=timezone.utc
+                    ).isoformat(),
+                    "source": "gildata-probe:top10-holder:占流通A股比例%",
+                },
             )
+            if status != 201:
+                issue("holding_api_failed", f"基金 {code} 持仓披露 HTTP {status}")
+                continue
             written += 1
             out["holding_disclosures"] += 1
         if written == 0:

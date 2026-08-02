@@ -7,6 +7,7 @@ from app.api.v1.commands.cases import router as case_commands_router
 from app.api.v1.commands.engine import documents_router as engine_doc_commands_router
 from app.api.v1.commands.engine import router as engine_commands_router
 from app.api.v1.commands.ingest import router as ingest_commands_router
+from app.api.v1.commands.instruments import router as instrument_commands_router
 from app.api.v1.commands.reviews import router as review_commands_router
 from app.api.v1.compare import router as compare_router
 from app.api.v1.documents import router as documents_router
@@ -48,3 +49,4 @@ router.include_router(review_commands_router)
 router.include_router(engine_commands_router)
 router.include_router(engine_doc_commands_router)
 router.include_router(ingest_commands_router)
+router.include_router(instrument_commands_router)

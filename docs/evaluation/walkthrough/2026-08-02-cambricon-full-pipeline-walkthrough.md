@@ -50,9 +50,19 @@ AI 判断质量（MiniMax-M3 live）：rationale 引用具体证据（"阿里云
 
 **修复（2026-08-02）**：evidence 分支把 `effective_state.OUTCOME_TO_STATE` 派生下推到 SQL（cutoff 约束的最新审核子查询 + CASE），保持 `limit+1`/`has_more` 契约精确；hit 的 `review_state` 返回派生后的有效状态。回归测试 `tests/test_search_read_api_v1.py` 新增 2 条：审核后默认搜索可见（API 驱动）、cutoff 前审核不存在/rejected 永不返回（时点语义）。修复后走查库实证：默认搜索 `q=寒武纪` evidence 命中 10 条且 `review_state=reviewed`。
 
-### ⚠️ 缺陷 2（P1 能力缺口）：四类核心对象无 API，全流程无法纯产品化走通
+### 🔧 缺陷 2（P1 能力缺口，部分修复 2026-08-02）：核心对象写路径 API 分批补齐中
 
-ThemeRole、CausalStep/CausalEdge、Fund/HoldingDisclosure、Company/Stock 管理只有 repository 层（仅种子脚本使用）。走查的"证券映射/基金穿透"环节必须绕过 API 直写账本。设计文档阶段 4 已规划，走查证实这是当前全流程断点。
+ThemeRole、CausalStep/CausalEdge、Fund/HoldingDisclosure、Company/Stock 管理原先只有 repository 层（仅种子脚本使用）。走查的"证券映射/基金穿透"环节必须绕过 API 直写账本。设计文档阶段 4 已规划，走查证实这是当时全流程断点。
+
+**第一批修复（2026-08-02）**：新增 instrument 命令 API（tag `instrument-commands-v1`），覆盖基金/持仓披露/主题角色三类写路径，走查断点中"基金穿透"环节可纯 API 走通：
+
+- `POST /api/v1/funds`：建基金（code 重复、空字段、未知管理公司 → 422；可选管理公司/规模/成立日期）；
+- `POST /api/v1/funds/{fund_id}/holding-disclosures`：录持仓披露（fund/stock 不存在 → 404；weight∉(0,100]、published_at 早于报告期、同基金+股票+报告期+来源重复 → 422；naive published_at 归一化为 UTC）；
+- `POST /api/v1/companies/{company_id}/theme-roles`：标主题角色（company/case/statement 不存在 → 404；role 空、适用区间倒置 → 422）。
+
+实现：`app/api/v1/commands/instruments.py`（路由，404 存在性检查与 reviews.py 一致）+ `app/services/instruments.py`（域校验，抛 ledger.ValidationError → 422）+ `app/schemas/v1/instrument_commands.py`（V1Model DTO）。weight 语义如实记录为数据源口径（占流通 A 股 vs 占净值并存，不强行统一）。测试 `tests/test_instrument_commands_api.py` 19 条全绿（cmd_* 私有引擎 fixture），发布门禁保持 PASS。
+
+**仍缺**：CausalStep/CausalEdge 命令 API、Company/Stock 管理 API（目前仍靠种子脚本直写），走查的"证券映射"环节暂仍需脚本。
 
 ### ⚠️ 缺陷 3（P1）：无抽取/解析运行水位，零产出文档永久 pending
 
