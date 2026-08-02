@@ -158,6 +158,13 @@ class DocumentReadQueries:
                     locator=span.locator,
                     verbatim_text=span.verbatim_text,
                     citations=citations,
+                    # Prefer the upgraded v1 locator when the S4 backfill
+                    # or a v1 write path filled it in.  Legacy spans
+                    # carry ``locator_v1=None`` and the workbench falls
+                    # back to the free-form ``locator`` dict; this is
+                    # the documented S5 transition (spec §3.5).
+                    locator_v1=span.locator_v1,
+                    text_sha256=span.text_sha256,
                 )
             )
 
@@ -284,7 +291,9 @@ class DocumentReadQueries:
             ),
             content_quality=quality,
             quality_reasons=quality_reasons,
-            title=meta["title"],
+            # S4: prefer the source-side title written at freeze time,
+            # fall back to whatever the legacy span-locator derived.
+            title=version.title or meta["title"],
             org=meta["org"],
             doc_kind=meta["doc_kind"],
             entity=self._resolve_entity(

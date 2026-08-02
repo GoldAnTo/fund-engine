@@ -52,6 +52,15 @@ class SourceSpanDTO(V1Model):
     locator: dict[str, Any]
     verbatim_text: str
     citations: list[dict[str, Any]]
+    # S4 / S5 of the Docling + locator-v1 spec:
+    # ``locator_v1`` is the versioned v1 form when the span has been
+    # upgraded (S4 backfill or a v1 write path); ``text_sha256`` is the
+    # normalised verbatim hash used by the round-trip validator and by
+    # callers that need to know whether a re-extracted span is
+    # byte-identical to the stored one.  Both stay None for spans
+    # written by legacy code paths.
+    locator_v1: dict[str, Any] | None = None
+    text_sha256: str | None = None
 
 
 class DocumentListResponse(V1Model):
