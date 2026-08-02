@@ -71,11 +71,17 @@ class ResearchRepository:
         research_case_id: uuid.UUID,
         tag: str,
         op: str,
+        proposed_by: str = "human",
+        status: str = "confirmed",
+        proposal_id: uuid.UUID | None = None,
     ) -> CaseThemeTagEvent:
         event = CaseThemeTagEvent(
             research_case_id=research_case_id,
             tag=tag,
             op=op,
+            proposed_by=proposed_by,
+            status=status,
+            proposal_id=proposal_id,
             created_at=_utcnow(),
         )
         self._session.add(event)
@@ -92,6 +98,119 @@ class ResearchRepository:
                 CaseThemeTagEvent.research_case_id == research_case_id
             )
         return list(self._session.scalars(query))
+
+    def pending_proposals_for_case(
+        self, research_case_id: uuid.UUID
+    ) -> list[CaseThemeTagEvent]:
+        """All currently-pending AI proposal events for one case, in creation order.
+
+        Pending events for one proposal share ``proposal_id`` and a single
+        proposal's events are appended contiguously in one AI PATCH call.
+        """
+        return list(
+            self._session.scalars(
+                select(CaseThemeTagEvent)
+                .where(CaseThemeTagEvent.research_case_id == research_case_id)
+                .where(CaseThemeTagEvent.status == "pending")
+                .where(CaseThemeTagEvent.proposed_by == "ai")
+                .order_by(CaseThemeTagEvent.created_at)
+            )
+        )
+
+    def promote_pending_proposal(
+        self, *, research_case_id: uuid.UUID, proposal_id: uuid.UUID
+    ) -> int:
+        """Promote a pending AI proposal to confirmed; return the row count.
+
+        The ``case_theme_tag_events`` table is append-only (see
+        ``IMMUTABLE_TABLES``), so this method *appends* a confirmed twin
+        for every pending event and leaves the originals untouched. The
+        originals stay ``status='pending'`` (visible in the audit trail
+        as the AI's proposal) but never count toward the effective tag
+        set, because :func:`effective_tags` folds only confirmed events.
+        The newly-appended confirmed rows are what change the effective
+        set — same shape, same ``proposal_id``, attributable to the
+        human who confirmed.
+        """
+        pending = list(
+            self._session.scalars(
+                select(CaseThemeTagEvent)
+                .where(CaseThemeTagEvent.research_case_id == research_case_id)
+                .where(CaseThemeTagEvent.proposal_id == proposal_id)
+                .where(CaseThemeTagEvent.status == "pending")
+                .order_by(CaseThemeTagEvent.created_at)
+            )
+        )
+        if not pending:
+            return 0
+        for event in pending:
+            self._session.add(
+                CaseThemeTagEvent(
+                    research_case_id=event.research_case_id,
+                    tag=event.tag,
+                    op=event.op,
+                    proposed_by="human",
+                    status="confirmed",
+                    proposal_id=event.proposal_id,
+                    created_at=_utcnow(),
+                )
+            )
+        self._session.flush()
+        return len(pending)
+
+    def promote_matching_pending_proposal(
+        self, *, research_case_id: uuid.UUID, desired_target: set[str]
+    ) -> uuid.UUID | None:
+        """Promote the first pending AI proposal whose effective set equals *desired_target*.
+
+        "Effective set" is the set that would result if every pending
+        event in the proposal were treated as confirmed, folded on top of
+        the *already-confirmed* events. Returns the promoted proposal_id,
+        or None if no match exists (in which case the caller should
+        append fresh confirmed events directly).
+
+        Only one proposal can match a given target set: two pending
+        proposals on the same case would only coexist if the first was
+        already misaligned with operator intent, so we promote the
+        earliest unmatched one and let later proposals be resolved by
+        later PATCHes.
+        """
+        # Pre-compute the current confirmed effective set once.
+        confirmed_events = list(
+            self._session.scalars(
+                select(CaseThemeTagEvent)
+                .where(CaseThemeTagEvent.research_case_id == research_case_id)
+                .where(CaseThemeTagEvent.status == "confirmed")
+                .order_by(CaseThemeTagEvent.created_at)
+            )
+        )
+        current = set()
+        for event in confirmed_events:
+            if event.op == "add":
+                current.add(event.tag)
+            elif event.op == "remove":
+                current.discard(event.tag)
+
+        # Group pending events by proposal_id, preserving order.
+        pending = self.pending_proposals_for_case(research_case_id)
+        grouped: dict[uuid.UUID, list[CaseThemeTagEvent]] = {}
+        for event in pending:
+            assert event.proposal_id is not None
+            grouped.setdefault(event.proposal_id, []).append(event)
+
+        for proposal_id, events in grouped.items():
+            projected = set(current)
+            for event in events:
+                if event.op == "add":
+                    projected.add(event.tag)
+                elif event.op == "remove":
+                    projected.discard(event.tag)
+            if projected == desired_target:
+                self.promote_pending_proposal(
+                    research_case_id=research_case_id, proposal_id=proposal_id
+                )
+                return proposal_id
+        return None
 
     def add_thesis(
         self,

@@ -72,7 +72,7 @@ def test_create_company_persists_ledger_row(cmd_client, cmd_session):
     assert str(row.id) == body["id"]
 
 
-def test_create_company_duplicate_code_is_422(cmd_client, cmd_session):
+def test_create_company_duplicate_code_is_409(cmd_client, cmd_session):
     from app.models.ledger import Company
 
     _seed_company(cmd_session, code="688256.SH")
@@ -81,8 +81,8 @@ def test_create_company_duplicate_code_is_422(cmd_client, cmd_session):
         "/api/v1/companies",
         json={"code": "688256.SH", "name": "另一家", "type": "listed"},
     )
-    assert response.status_code == 422
-    assert _error_code(response) == "validation_failed"
+    assert response.status_code == 409
+    assert _error_code(response) == "conflict"
 
     count = cmd_session.scalar(
         select(func.count()).select_from(Company).where(Company.code == "688256.SH")
@@ -125,7 +125,7 @@ def test_create_stock_missing_company_is_404(cmd_client):
     assert _error_code(response) == "not_found"
 
 
-def test_create_stock_duplicate_code_is_422(cmd_client, cmd_session):
+def test_create_stock_duplicate_code_is_409(cmd_client, cmd_session):
     company = _seed_company(cmd_session)
     _seed_stock(cmd_session, company)
 
@@ -133,8 +133,8 @@ def test_create_stock_duplicate_code_is_422(cmd_client, cmd_session):
         f"/api/v1/companies/{company.id}/stocks",
         json={"code": "688256.SH", "name": "重复", "market": "SSE"},
     )
-    assert response.status_code == 422
-    assert _error_code(response) == "validation_failed"
+    assert response.status_code == 409
+    assert _error_code(response) == "conflict"
 
 
 # ---------------------------------------------------------------------------
@@ -156,15 +156,15 @@ def test_create_fund_persists_ledger_row(cmd_client, cmd_session):
     assert str(fund.id) == body["id"]
 
 
-def test_create_fund_duplicate_code_is_422(cmd_client, cmd_session):
+def test_create_fund_duplicate_code_is_409(cmd_client, cmd_session):
     _create_fund(cmd_client, code="110022")
 
     response = cmd_client.post(
         "/api/v1/funds",
         json={"code": "110022", "name": "另一只基金", "fund_type": "股票型"},
     )
-    assert response.status_code == 422
-    assert _error_code(response) == "validation_failed"
+    assert response.status_code == 409
+    assert _error_code(response) == "conflict"
     from app.models.ledger import Fund
 
     count = cmd_session.scalar(
@@ -311,7 +311,7 @@ def test_holding_disclosure_published_before_period_is_422(cmd_client, cmd_sessi
     assert _error_code(response) == "validation_failed"
 
 
-def test_holding_disclosure_duplicate_is_422(cmd_client, cmd_session):
+def test_holding_disclosure_duplicate_is_409(cmd_client, cmd_session):
     company = _seed_company(cmd_session)
     stock = _seed_stock(cmd_session, company)
     fund_id = _create_fund(cmd_client)["id"]
@@ -326,8 +326,8 @@ def test_holding_disclosure_duplicate_is_422(cmd_client, cmd_session):
         f"/api/v1/funds/{fund_id}/holding-disclosures",
         json=_disclosure_payload(stock.id),
     )
-    assert second.status_code == 422
-    assert _error_code(second) == "validation_failed"
+    assert second.status_code == 409
+    assert _error_code(second) == "conflict"
 
     from app.models.ledger import HoldingDisclosure
 
@@ -498,7 +498,7 @@ def test_valuation_snapshot_nan_value_is_422(cmd_client, cmd_session):
     assert response.status_code == 422
 
 
-def test_valuation_snapshot_duplicate_is_422(cmd_client, cmd_session):
+def test_valuation_snapshot_duplicate_is_409(cmd_client, cmd_session):
     from app.models.ledger import ValuationSnapshot
 
     company = _seed_company(cmd_session)
@@ -514,8 +514,132 @@ def test_valuation_snapshot_duplicate_is_422(cmd_client, cmd_session):
         f"/api/v1/stocks/{stock.id}/valuation-snapshots",
         json=_valuation_payload(),
     )
-    assert second.status_code == 422
-    assert _error_code(second) == "validation_failed"
+    assert second.status_code == 409
+    assert _error_code(second) == "conflict"
 
     count = cmd_session.scalar(select(func.count()).select_from(ValuationSnapshot))
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# 409 envelope shape + audit log + timepoint consistency
+# ---------------------------------------------------------------------------
+
+
+def test_409_envelope_carries_existing_code_in_message(cmd_client, cmd_session):
+    """The 409 body must call out the colliding code so a client can recover."""
+    from app.models.ledger import Company
+
+    _seed_company(cmd_session, code="688256.SH")
+
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "另一家", "type": "listed"},
+    )
+    assert response.status_code == 409
+    envelope = response.json()
+    assert envelope["error"]["code"] == "conflict"
+    assert "688256.SH" in envelope["error"]["message"]
+    assert envelope["error"]["request_id"]
+
+
+def test_422_unchanged_for_malformed_payload(cmd_client):
+    """Validation errors (malformed payload) must remain 422, not 409.
+
+    Conflict is reserved for *well-formed* writes that collide with
+    existing state. The two error classes are not interchangeable from
+    the client's perspective (422 → fix request body, 409 → try a
+    different identifier or fetch the existing record).
+    """
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "寒武纪", "type": ""},
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
+def test_valuation_future_as_of_date_is_422(cmd_client, cmd_session):
+    """A future-dated valuation snapshot is malformed, not a conflict.
+
+    422 is correct because no client can construct a valid write with a
+    future as_of_date — it cannot be sourced honestly. The check runs
+    before the uniqueness check, so a fresh future-dated write is a 422
+    (not a 409 on an empty slot).
+    """
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+
+    payload = _valuation_payload()
+    payload["as_of_date"] = "2099-12-31"
+    response = cmd_client.post(
+        f"/api/v1/stocks/{stock.id}/valuation-snapshots", json=payload
+    )
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+    assert "as_of_date" in response.json()["error"]["message"]
+
+
+def test_audit_log_records_successful_create_company(cmd_client, cmd_session):
+    """Every successful command appends an audit row keyed by the actor header."""
+    import uuid as _uuid
+
+    from app.models.ledger import AuditLog
+
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "寒武纪", "type": "listed"},
+        headers={"X-Actor": "human:alice"},
+    )
+    assert response.status_code == 201, response.text
+    company_id = _uuid.UUID(response.json()["id"])
+
+    row = cmd_session.scalar(
+        select(AuditLog)
+        .where(AuditLog.action == "create_company")
+        .where(AuditLog.entity_id == company_id)
+    )
+    assert row is not None
+    assert row.actor == "human:alice"
+    assert row.result == "success"
+    assert row.error_message is None
+    assert row.payload["code"] == "688256.SH"
+    assert row.request_id
+
+
+def test_audit_log_records_failed_duplicate_company(cmd_client, cmd_session):
+    """Failed writes also append an audit row, with result='failed'."""
+    from app.models.ledger import AuditLog
+
+    _seed_company(cmd_session, code="688256.SH")
+    response = cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "另一家", "type": "listed"},
+        headers={"X-Actor": "human:bob"},
+    )
+    assert response.status_code == 409
+
+    failed = cmd_session.scalar(
+        select(AuditLog)
+        .where(AuditLog.action == "create_company")
+        .where(AuditLog.result == "failed")
+    )
+    assert failed is not None
+    assert failed.actor == "human:bob"
+    assert "688256.SH" in (failed.error_message or "")
+    assert failed.entity_id is None
+
+
+def test_audit_log_default_actor_when_header_missing(cmd_client, cmd_session):
+    """No X-Actor header → ``human:anonymous``, never a blank string."""
+    from app.models.ledger import AuditLog
+
+    cmd_client.post(
+        "/api/v1/companies",
+        json={"code": "688256.SH", "name": "寒武纪", "type": "listed"},
+    )
+    row = cmd_session.scalar(
+        select(AuditLog).order_by(AuditLog.created_at.desc())
+    )
+    assert row is not None
+    assert row.actor == "human:anonymous"

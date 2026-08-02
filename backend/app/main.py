@@ -12,7 +12,12 @@ from fastapi.responses import JSONResponse
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.env import load_local_env
-from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
+from app.errors import (
+    ConflictError,
+    NotFoundError,
+    UpstreamUnavailableError,
+    ValidationFailedError,
+)
 from app.schemas.v1.common import ErrorEnvelope
 
 load_local_env()  # backend/.env (gitignored) -> os.environ, env vars win
@@ -98,6 +103,17 @@ async def validation_failed_error_handler(request: Request, exc: ValidationFaile
         str(exc) or "validation failed",
         request_id,
         status_code=422,
+    )
+
+
+@app.exception_handler(ConflictError)
+async def conflict_error_handler(request: Request, exc: ConflictError):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "conflict",
+        str(exc) or "resource already exists",
+        request_id,
+        status_code=409,
     )
 
 

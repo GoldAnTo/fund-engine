@@ -882,6 +882,36 @@ export interface components {
             created_at: string;
             /** Link Count */
             link_count: number;
+            event_summary?: components["schemas"]["CaseSnapshotEventSummary"] | null;
+        };
+        /**
+         * CaseSnapshotEventSummary
+         * @description Incremental summary of what changed at this snapshot vs. the
+         *     case-wide previous distinct cutoff (prototype 回放模式).
+         *
+         *     - link_delta: number of new evidence links the previous cutoff did not have
+         *     - removed_link_delta: number of evidence links that disappeared
+         *     - conclusion_flips: thesis_id -> {from, to, statement}; one entry per
+         *       conclusion that changed value between cutoffs
+         *     - gaps_delta: {thesis_id: int} where positive = gaps grew, negative =
+         *       gaps shrank (signals the case is converging)
+         *     - reviewed_delta: number of new AssessmentReview records at this cutoff
+         */
+        CaseSnapshotEventSummary: {
+            /** Link Delta */
+            link_delta: number;
+            /** Removed Link Delta */
+            removed_link_delta: number;
+            /** Conclusion Flips */
+            conclusion_flips: {
+                [key: string]: string;
+            }[];
+            /** Gaps Delta */
+            gaps_delta: {
+                [key: string]: number;
+            };
+            /** Reviewed Delta */
+            reviewed_delta: number;
         };
         /** CaseSnapshotsResponse */
         CaseSnapshotsResponse: {
@@ -2580,6 +2610,15 @@ export interface components {
             tags: string[];
             /** Events Appended */
             events_appended: number;
+            /**
+             * Proposed By
+             * @enum {string}
+             */
+            proposed_by: "human" | "ai";
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Promoted Proposal Id */
+            promoted_proposal_id?: string | null;
         };
         /** ThemeViewResponse */
         ThemeViewResponse: {
@@ -2688,6 +2727,12 @@ export interface components {
         UpdateThemeTagsRequest: {
             /** Tags */
             tags: string[];
+            /**
+             * Proposed By
+             * @default human
+             * @enum {string}
+             */
+            proposed_by: "human" | "ai";
         };
         /** ValidationError */
         ValidationError: {

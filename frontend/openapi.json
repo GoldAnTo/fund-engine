@@ -279,7 +279,7 @@
           "research-cases-v1"
         ],
         "summary": "Gaps",
-        "description": "证据缺口聚合 (prototype 研究计划): open gaps across latest assessments.",
+        "description": "\u8bc1\u636e\u7f3a\u53e3\u805a\u5408 (prototype \u7814\u7a76\u8ba1\u5212): open gaps across latest assessments.",
         "operationId": "gaps_api_v1_research_cases__case_id__gaps_get",
         "parameters": [
           {
@@ -359,10 +359,10 @@
             "schema": {
               "type": "string",
               "format": "date-time",
-              "description": "基准截止（较早）",
+              "description": "\u57fa\u51c6\u622a\u6b62\uff08\u8f83\u65e9\uff09",
               "title": "Base"
             },
-            "description": "基准截止（较早）"
+            "description": "\u57fa\u51c6\u622a\u6b62\uff08\u8f83\u65e9\uff09"
           },
           {
             "name": "compare",
@@ -371,10 +371,10 @@
             "schema": {
               "type": "string",
               "format": "date-time",
-              "description": "对比截止（较晚）",
+              "description": "\u5bf9\u6bd4\u622a\u6b62\uff08\u8f83\u665a\uff09",
               "title": "Compare"
             },
-            "description": "对比截止（较晚）"
+            "description": "\u5bf9\u6bd4\u622a\u6b62\uff08\u8f83\u665a\uff09"
           }
         ],
         "responses": {
@@ -407,7 +407,7 @@
           "snapshot-compare-v1"
         ],
         "summary": "Case Snapshots",
-        "description": "快照列表 (prototype 版本比较 left rail), newest first.",
+        "description": "\u5feb\u7167\u5217\u8868 (prototype \u7248\u672c\u6bd4\u8f83 left rail), newest first.",
         "operationId": "case_snapshots_api_v1_research_cases__case_id__snapshots_get",
         "parameters": [
           {
@@ -1440,7 +1440,7 @@
           "research-ops-v1"
         ],
         "summary": "Research Ops Kpis",
-        "description": "研究效能 KPI 快照：审核吞吐、人机一致率、判断时滞。\n\n``as_of`` 缺省为当前时间；传入历史时点则按时点回放语义统计（之后\n创建的记录不参与）。",
+        "description": "\u7814\u7a76\u6548\u80fd KPI \u5feb\u7167\uff1a\u5ba1\u6838\u541e\u5410\u3001\u4eba\u673a\u4e00\u81f4\u7387\u3001\u5224\u65ad\u65f6\u6ede\u3002\n\n``as_of`` \u7f3a\u7701\u4e3a\u5f53\u524d\u65f6\u95f4\uff1b\u4f20\u5165\u5386\u53f2\u65f6\u70b9\u5219\u6309\u65f6\u70b9\u56de\u653e\u8bed\u4e49\u7edf\u8ba1\uff08\u4e4b\u540e\n\u521b\u5efa\u7684\u8bb0\u5f55\u4e0d\u53c2\u4e0e\uff09\u3002",
         "operationId": "research_ops_kpis_api_v1_research_ops_kpis_get",
         "parameters": [
           {
@@ -1851,7 +1851,7 @@
           "engine-commands-v1"
         ],
         "summary": "Propose Evidence",
-        "description": "Run the propose step for one thesis.\n\nRecall is cutoff-safe (only statements visible before this run started),\nand every proposed link enters the review queue as machine_generated —\nnothing is auto-confirmed.",
+        "description": "Run the propose step for one thesis.\n\nRecall is cutoff-safe (only statements visible before this run started),\nand every proposed link enters the review queue as machine_generated \u2014\nnothing is auto-confirmed.",
         "operationId": "propose_evidence_api_v1_theses__thesis_id__propose_post",
         "parameters": [
           {
@@ -2434,7 +2434,7 @@
           "failed_at"
         ],
         "title": "AssessFailureDTO",
-        "description": "Latest failed assess attempt for the focus thesis.\n\nSurfaced only when the failure is NEWER than the latest successful\nassessment (or no assessment exists) — e.g. a compliance refusal on\nthe last rerun.  The refused text itself never reached the ledger;\nthis is the audit-trail view of it."
+        "description": "Latest failed assess attempt for the focus thesis.\n\nSurfaced only when the failure is NEWER than the latest successful\nassessment (or no assessment exists) \u2014 e.g. a compliance refusal on\nthe last rerun.  The refused text itself never reached the ledger;\nthis is the audit-trail view of it."
       },
       "AssessmentDTO": {
         "properties": {
@@ -2668,7 +2668,7 @@
           "theses"
         ],
         "title": "CaseCompareResponse",
-        "description": "冻结快照比较: what changed between two point-in-time views."
+        "description": "\u51bb\u7ed3\u5feb\u7167\u6bd4\u8f83: what changed between two point-in-time views."
       },
       "CaseGapDTO": {
         "properties": {
@@ -2731,7 +2731,7 @@
           "gaps"
         ],
         "title": "CaseGapsResponse",
-        "description": "证据缺口聚合: every open gap across the case's latest assessments."
+        "description": "\u8bc1\u636e\u7f3a\u53e3\u805a\u5408: every open gap across the case's latest assessments."
       },
       "CaseListResponse": {
         "properties": {
@@ -2785,6 +2785,16 @@
           "link_count": {
             "type": "integer",
             "title": "Link Count"
+          },
+          "event_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaseSnapshotEventSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -2798,7 +2808,51 @@
           "link_count"
         ],
         "title": "CaseSnapshotDTO",
-        "description": "One frozen snapshot row (prototype 版本比较 · 快照列表)."
+        "description": "One frozen snapshot row (prototype \u7248\u672c\u6bd4\u8f83 \u00b7 \u5feb\u7167\u5217\u8868)."
+      },
+      "CaseSnapshotEventSummary": {
+        "properties": {
+          "link_delta": {
+            "type": "integer",
+            "title": "Link Delta"
+          },
+          "removed_link_delta": {
+            "type": "integer",
+            "title": "Removed Link Delta"
+          },
+          "conclusion_flips": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Conclusion Flips"
+          },
+          "gaps_delta": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Gaps Delta"
+          },
+          "reviewed_delta": {
+            "type": "integer",
+            "title": "Reviewed Delta"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_delta",
+          "removed_link_delta",
+          "conclusion_flips",
+          "gaps_delta",
+          "reviewed_delta"
+        ],
+        "title": "CaseSnapshotEventSummary",
+        "description": "Incremental summary of what changed at this snapshot vs. the\ncase-wide previous distinct cutoff (prototype \u56de\u653e\u6a21\u5f0f).\n\n- link_delta: number of new evidence links the previous cutoff did not have\n- removed_link_delta: number of evidence links that disappeared\n- conclusion_flips: thesis_id -> {from, to, statement}; one entry per\n  conclusion that changed value between cutoffs\n- gaps_delta: {thesis_id: int} where positive = gaps grew, negative =\n  gaps shrank (signals the case is converging)\n- reviewed_delta: number of new AssessmentReview records at this cutoff"
       },
       "CaseSnapshotsResponse": {
         "properties": {
@@ -3713,7 +3767,7 @@
           "created_by"
         ],
         "title": "CreateThesisRequest",
-        "description": "Add one proposition to an existing case (AI 协助拆分 or human)."
+        "description": "Add one proposition to an existing case (AI \u534f\u52a9\u62c6\u5206 or human)."
       },
       "CreateThesisResponse": {
         "properties": {
@@ -4600,7 +4654,7 @@
           "statements"
         ],
         "title": "ExtractResponse",
-        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (无片段 / 表格无可提\n事实 / LLM 拒答)."
+        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (\u65e0\u7247\u6bb5 / \u8868\u683c\u65e0\u53ef\u63d0\n\u4e8b\u5b9e / LLM \u62d2\u7b54)."
       },
       "ExtractStatementDTO": {
         "properties": {
@@ -4675,7 +4729,7 @@
           "positions"
         ],
         "title": "FundCompositionResponse",
-        "description": "反向穿透: 这只基金「真正装了什么」——持仓 + 命中的主题."
+        "description": "\u53cd\u5411\u7a7f\u900f: \u8fd9\u53ea\u57fa\u91d1\u300c\u771f\u6b63\u88c5\u4e86\u4ec0\u4e48\u300d\u2014\u2014\u6301\u4ed3 + \u547d\u4e2d\u7684\u4e3b\u9898."
       },
       "FundDTO": {
         "properties": {
@@ -4813,7 +4867,7 @@
           "funds"
         ],
         "title": "FundExposureResponse",
-        "description": "正向穿透: 主题/案件 → 命中基金（按主题暴露度排序）."
+        "description": "\u6b63\u5411\u7a7f\u900f: \u4e3b\u9898/\u6848\u4ef6 \u2192 \u547d\u4e2d\u57fa\u91d1\uff08\u6309\u4e3b\u9898\u66b4\u9732\u5ea6\u6392\u5e8f\uff09."
       },
       "FundHolderDTO": {
         "properties": {
@@ -5290,7 +5344,7 @@
           "link_modified"
         ],
         "title": "HumanAiAgreementDTO",
-        "description": "人机一致率: agreement between AI drafts and human decisions.\n\nAssessment level: a ``confirmed`` ReviewDecision is agreement; a\n``modified``/``rejected`` one is not; ``conclusion_changed`` counts\nreviews whose conclusion differs from the original AI conclusion.\n\nLink level: a ``confirmed`` EvidenceReview whose ``relation`` equals the\nlink's AI-proposed ``role`` is agreement; confirmed with a different\nrelation is a modification (counted separately); ``rejected`` and\n``needs_more_evidence`` are disagreement / deferral."
+        "description": "\u4eba\u673a\u4e00\u81f4\u7387: agreement between AI drafts and human decisions.\n\nAssessment level: a ``confirmed`` ReviewDecision is agreement; a\n``modified``/``rejected`` one is not; ``conclusion_changed`` counts\nreviews whose conclusion differs from the original AI conclusion.\n\nLink level: a ``confirmed`` EvidenceReview whose ``relation`` equals the\nlink's AI-proposed ``role`` is agreement; confirmed with a different\nrelation is a modification (counted separately); ``rejected`` and\n``needs_more_evidence`` are disagreement / deferral."
       },
       "IngestRequest": {
         "properties": {
@@ -5508,7 +5562,7 @@
           "assessment_to_review_max_days"
         ],
         "title": "JudgmentLatencyDTO",
-        "description": "判断时滞 (days): evidence -> AI judgment, and AI judgment -> human review."
+        "description": "\u5224\u65ad\u65f6\u6ede (days): evidence -> AI judgment, and AI judgment -> human review."
       },
       "KeyChangeDTO": {
         "properties": {
@@ -5519,10 +5573,10 @@
           "tag": {
             "type": "string",
             "enum": [
-              "新增",
-              "更新",
-              "风险",
-              "缺口"
+              "\u65b0\u589e",
+              "\u66f4\u65b0",
+              "\u98ce\u9669",
+              "\u7f3a\u53e3"
             ],
             "title": "Tag"
           },
@@ -5620,7 +5674,7 @@
           "links"
         ],
         "title": "KnowledgeItemDTO",
-        "description": "已复核知识层一行: 规范化陈述 + 它的证据链接与人工审核。"
+        "description": "\u5df2\u590d\u6838\u77e5\u8bc6\u5c42\u4e00\u884c: \u89c4\u8303\u5316\u9648\u8ff0 + \u5b83\u7684\u8bc1\u636e\u94fe\u63a5\u4e0e\u4eba\u5de5\u5ba1\u6838\u3002"
       },
       "KnowledgeLinkDTO": {
         "properties": {
@@ -5791,7 +5845,7 @@
           "reviewer"
         ],
         "title": "LinkReviewRequest",
-        "description": "四要素关系级审核: 关系选择/因素角色/适用边界/审核理由 + 动作."
+        "description": "\u56db\u8981\u7d20\u5173\u7cfb\u7ea7\u5ba1\u6838: \u5173\u7cfb\u9009\u62e9/\u56e0\u7d20\u89d2\u8272/\u9002\u7528\u8fb9\u754c/\u5ba1\u6838\u7406\u7531 + \u52a8\u4f5c."
       },
       "LinkReviewResponse": {
         "properties": {
@@ -5942,7 +5996,7 @@
           "points"
         ],
         "title": "MetricSeriesResponse",
-        "description": "冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断)."
+        "description": "\u51bb\u7ed3\u65f6\u70b9\u5e8f\u5217: every frozen value, oldest first (\u53ef\u7528\u6027\u7531 as_of \u5224\u65ad)."
       },
       "OverviewResponse": {
         "properties": {
@@ -6205,7 +6259,7 @@
           "finished_at"
         ],
         "title": "ProviderRunDTO",
-        "description": "One AI/provider invocation audit record.\n\n成功 = 保留来源版本；失败 = 本次没有新数据；错误信息原样带出，\n不掩饰、不推测（prototype Provider 运行记录的失败含义约定）。"
+        "description": "One AI/provider invocation audit record.\n\n\u6210\u529f = \u4fdd\u7559\u6765\u6e90\u7248\u672c\uff1b\u5931\u8d25 = \u672c\u6b21\u6ca1\u6709\u65b0\u6570\u636e\uff1b\u9519\u8bef\u4fe1\u606f\u539f\u6837\u5e26\u51fa\uff0c\n\u4e0d\u63a9\u9970\u3001\u4e0d\u63a8\u6d4b\uff08prototype Provider \u8fd0\u884c\u8bb0\u5f55\u7684\u5931\u8d25\u542b\u4e49\u7ea6\u5b9a\uff09\u3002"
       },
       "ProviderRunsResponse": {
         "properties": {
@@ -6355,7 +6409,7 @@
           "assessment"
         ],
         "title": "RerunResponse",
-        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
+        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only \u2014 production fails closed per provider discipline)."
       },
       "ResearchOpsResponse": {
         "properties": {
@@ -6394,7 +6448,7 @@
           "latency"
         ],
         "title": "ResearchOpsResponse",
-        "description": "研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。"
+        "description": "\u7814\u7a76\u6548\u80fd KPI \u5feb\u7167. ``as_of`` \u4e3a\u65f6\u70b9\u56de\u653e\u8fb9\u754c\uff1a\u4e4b\u540e\u521b\u5efa\u7684\u8bb0\u5f55\u4e0d\u53c2\u4e0e\u7edf\u8ba1\u3002"
       },
       "ReviewDecisionDTO": {
         "properties": {
@@ -6609,7 +6663,7 @@
           "pending_assessment_reviews"
         ],
         "title": "ReviewThroughputDTO",
-        "description": "审核吞吐: review output vs the pending machine-generated queue."
+        "description": "\u5ba1\u6838\u541e\u5410: review output vs the pending machine-generated queue."
       },
       "RoleReviewDTO": {
         "properties": {
@@ -7451,6 +7505,38 @@
           "events_appended": {
             "type": "integer",
             "title": "Events Appended"
+          },
+          "proposed_by": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Proposed By"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id"
+          },
+          "promoted_proposal_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promoted Proposal Id"
           }
         },
         "additionalProperties": false,
@@ -7458,7 +7544,8 @@
         "required": [
           "case_id",
           "tags",
-          "events_appended"
+          "events_appended",
+          "proposed_by"
         ],
         "title": "ThemeTagsResponse"
       },
@@ -7709,7 +7796,7 @@
           "statement"
         ],
         "title": "ThesisInput",
-        "description": "One initial proposition in the 新建研究 flow (prototype step 2)."
+        "description": "One initial proposition in the \u65b0\u5efa\u7814\u7a76 flow (prototype step 2)."
       },
       "ThesisSummaryDTO": {
         "properties": {
@@ -7824,6 +7911,15 @@
             },
             "type": "array",
             "title": "Tags"
+          },
+          "proposed_by": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Proposed By",
+            "default": "human"
           }
         },
         "additionalProperties": false,

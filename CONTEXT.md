@@ -103,3 +103,25 @@ Four hardening rounds landed on top of the MVP (commits `5963ffb`, `631b9c2`, `9
 - 前端 `VALID_NODE_KINDS` 加 `document` / `span`，`VALID_EDGE_KINDS` 加 `contains` / `derived`，`LAYER_OF` 把两者归到 `evidence` 列（5 列布局不变），`EDGE_LABEL` 加「原文 / 衍生」标签。修复上一轮未提交代码的 `VersionsScreen` 重复 `SnapshotTimeline` 函数定义（line 19 + 173 双重实现，保留 SVG 版本）。
 - 新增测试：后端 `tests/test_graph_read_api_v1.py` +3（document/span 节点 + contains/derived 边正确性 + cutoff 之后整链路消失 + 边 ID 唯一性）；前端 `src/tests/HttpResearchAdapter.test.ts` +1（白名单接受 document/span/contains/derived）；e2e `case-relationship-library.spec.ts` +1（mock 模式 evidence 列渲染 document 卡片）。
 - 验证：pytest 336 passed（314 → 336）；vitest 78 passed（77 → 78）；Playwright 45 passed（43 → 45）；OpenAPI 契约 + `src/contracts/v1.ts` 重新生成。走查报告 9 项 P2 缺陷中缺陷 9 已标绿，剩缺陷 5/7/8。
+
+**后端硬化收尾（2026-08-02，commit 待 push）— 走查 P2 缺陷 8 复核 + 实体写规范化 + 两阶段主题标签 + audit_log + 时点一致性**。Spec 7 验收落地之外剩下的几条「项目规范与流程控制」要求一次性补齐：
+
+- **走查 P2 缺陷 8 复核**。走查报告记录的 "估值 as_of 偏小一档" 在 49ed5cc `fix: 估值快照 as_of 取上一个工作日而非 ingest 当日` 已修，本轮检查 `_previous_business_day()` 实现 + `fetch_quote` 返回 `trade_date` 字段链路一致。`InstrumentService._today_utc()` 提供给 service 层做时点校验使用，保留 ingest 当日 UTC 基准。
+
+- **实体写路径 status code 规范化**。重复 code（Company / Stock / Fund / HoldingDisclosure / ValuationSnapshot）从 422 升为 409 Conflict：domain 层 `app.models.ledger.ConflictError` 与 HTTP 层 `app.errors.ConflictError` 分离；`translate_validation` 统一把两个 domain error 翻译成对应 HTTP envelope；`main.py` 加 `conflict_error_handler` 注入 `409 conflict` envelope（结构与 `validation_failed` / `not_found` / `upstream_unavailable` 一致：都带 `request_id`）。这条对前端契约的实质变化是：**422 现在只表示「请求体本身畸形」，409 表示「请求合法但与账本已有记录冲突」**，区分让客户端可以分别给出「修 body」和「fetch 已有 record」的两种处理路径。422 的语义边界由 `as_of_date > 今天`、`report_period > 今天`、`metric_value 非有限` 等「无法合法构造」守住，409 守住「well-formed 但撞已有」。
+
+- **PATCH theme-tags 两阶段**。`case_theme_tag_events` 加 `proposed_by` / `status` / `proposal_id` 三列（PG 迁移 0008 + 同步 trigger），`effective_tags()` 只折叠 `status='confirmed'` 事件——pending 事件留在账本里作为「AI 提议的证据」但不影响有效标签集。流程：
+  - AI 调 `PATCH /research-cases/{id}/theme-tags {tags, proposed_by: "ai"}`：服务生成 `proposal_id` UUID，所有 diff 事件以 `proposed_by="ai", status="pending", proposal_id=...` 入账，**有效集不变**，响应体回传 `proposal_id`。
+  - 人工调同一接口 `{tags, proposed_by: "human"}`：服务计算当前 pending 提案的「假如确认后的有效集」，若与本次 desired **完全相等**则把 pending 事件对应的 confirmed 双胞胎 append 到账本（账本不可变，不能直接 UPDATE 原始事件），响应回 `promoted_proposal_id`；否则按差异 append `proposed_by="human", status="confirmed"` 事件（直接落账）。
+  - 这意味着：human PATCH 与 AI 提议**desired 一致**才会「确认」；不一致就是「我自己的主张」，pending 提案保留待办。匹配规则是集合精确相等，不是 token-level diff——避免「悄悄 auto-promote 不同集合」破坏两阶段语义。
+  - 旧 default 行为（`proposed_by="human"`, append `status="confirmed"` 事件）保留：所有 11 条 theme_tags 测试更新，新加 5 条（human 走 default / ai 走 pending / 端到端 promote / human 不同集合不 promote / 无提案 human 直接写）+ 1 条校验非法 `proposed_by="robot"` 仍 422。
+
+- **audit_log 表 + 写路径接入**。新建 `audit_logs` 表（PG 迁移 0008，append-only）：`id / actor / action / entity_type / entity_id / payload(json) / result(success|failed) / error_message / request_id / created_at`。命令侧 `audit_command(db, request, *, action, entity_type, payload, fn, args, kwargs)` 装饰 `translate_validation` 的 service 调用：成功 → `result="success"` + 从返回值 `.id` 抓 `entity_id`；失败（捕获全部异常包括 422/404/409）→ `result="failed"` + `error_message` + `entity_id=None`（写一半尚未拿到），审计行不阻塞原 HTTP 响应。actor 从 `X-Actor` 请求头读（生产环境接 auth；现默认 `human:anonymous`）。`audit_log` 失败本身用 best-effort 兜底：审计写入失败时 `db.rollback()` 静默吞掉，**绝不掩盖原响应错误**——监控可以靠「成功响应但缺 audit row」发现审计缺漏。所有 7 条命令端点（companies / stocks / funds / holding-disclosures / valuation-snapshots / theme-roles / theme-tags）已接入。`audit_logs` 同样进 `IMMUTABLE_TABLES` 走 PG 触发器，防御绕过 ORM 的 DELETE/UPDATE。
+
+- **时点一致性 services 层校验**。`InstrumentService` 加 `_today_utc()` 工具：
+  - `add_valuation_snapshot` 拒绝 `as_of_date > today`（422，畸形请求，因为未来行情无法诚实获取；这条先于 uniqueness check 跑，所以「新鲜的未来日期」也是 422 不是 409）。
+  - `add_holding_disclosure` 拒绝 `report_period > today`（422，未来季报未公布）。
+  - `add_valuation_snapshot` 的 existing 重复仍然 409（同一股票同一 metric 同一 as_of 同一 source 已有）。
+  切到历史 cutoff 时不允许写入未来数据这条已经由「今天」守住，case 级 evidence_cutoff 的更细粒度隔离在读路径 `cutoff` 过滤上由 `HistoricalBasis` 实现。
+
+- **测试与契约**。后端 +24（已有 336 → 347 = 347 passed / 2 skipped）；新加 6 条 409 envelope + audit_log + 时点 + 422 vs 409 区分测试，5 条两阶段主题标签测试。OpenAPI 契约与 `src/contracts/v1.ts` 需要随 409 envelope + 主题标签响应字段（`proposal_id` / `promoted_proposal_id`）重新生成，文档已就位。

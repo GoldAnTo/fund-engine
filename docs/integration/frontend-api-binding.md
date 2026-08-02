@@ -184,6 +184,55 @@
 - 主题标签：`PATCH /api/v1/research-cases/{case_id}/theme-tags`（受控词汇，不在表 → 422；diff 当前有效标签 → 追加 add/remove 事件）。
 - 公司/股票/估值：`POST /api/v1/companies` / `POST /api/v1/companies/{id}/stocks` / `POST /api/v1/stocks/{id}/valuation-snapshots`（沿用既有 `instrument-commands-v1` 模式）。
 
+### 写路径错误信封与状态码（2026-08-02 硬化）
+
+写端点统一走 `{schema_version: "v1", error: {code, message, request_id, details}}` 信封，状态码语义按「请求体合法性 × 与账本状态关系」二分：
+
+| 状态码 | 错误码 | 含义 | 前端处理 |
+|---|---|---|---|
+| 404 | `not_found` | URL 路径里的 entity 不存在（如 company_id / fund_id / case_id 找不到） | 刷新实体 / 检查路由 |
+| 422 | `validation_failed` | 请求体本身畸形（必填空、字段超长、`as_of_date > 今天`、`report_period > 今天`、`metric_value` 非有限、受控词汇不识别） | **修请求体**再发 |
+| 409 | `conflict` | 请求体合法但与已有账本状态冲突（公司/股票/基金 code 重复、valuation snapshot 同一 stock × metric × as_of × source 已存在、holding disclosure 同一 fund × stock × report_period × source 已存在） | **fetch 已有 record**或换 identifier |
+| 503 | `upstream_unavailable` | 上游数据源不可达或未配置 | 退避后重试 |
+
+**422 vs 409 的客户端语义边界很关键**：
+- 422 → 修 body。前端应展示「字段 X 不能为空」「as_of_date 不能晚于今天」等具体 message。
+- 409 → 修标识符或拉已有。message 里会带具体撞车的 code（如 `"公司代码 688256.SH 已存在"`），前端应解析 message 给出「该 code 已存在，是否查看？」之类的提示，不要把 409 当 422 处理成「修表单」。
+
+### 主题标签两阶段（2026-08-02）
+
+`PATCH /api/v1/research-cases/{case_id}/theme-tags` 增加 `proposed_by` 字段（`"human"` / `"ai"`，默认 `"human"`），实现 SPEC §"AI/人工边界"：
+
+```
+AI PATCH {tags, proposed_by: "ai"}
+  → 服务端 diff 当前有效集，把差量以 status="pending" / proposed_by="ai" / proposal_id=<uuid> 落账
+  → 有效集不变（pending 不参与折叠）
+  → 响应: {tags: <current effective>, events_appended, proposed_by: "ai", proposal_id: <uuid>, promoted_proposal_id: null}
+
+人工 PATCH {tags, proposed_by: "human"}
+  → 服务端找「若 confirm 哪个 pending 提案能让有效集 == 本次 desired」
+     找到 → append 与 pending 等量的 confirmed 双胞胎（账本不可变），返回 promoted_proposal_id
+     找不到 → 按 diff 直接 append status="confirmed" / proposed_by="human" 事件
+  → 响应: {tags: <new effective>, events_appended, proposed_by: "human", proposal_id: null, promoted_proposal_id: <uuid>|null}
+```
+
+**前端契约要点**：
+- AI 提议走完后，UI 应展示「AI 已提议 X / Y 标签，等你确认」并保留 `proposal_id` 用于追溯。
+- 人工 PATCH 同样的 desired set 是「确认」动作；不同的 desired set 是「我自己的主张」（AI 提案会留在账本里 status=pending 不动，等后续人工决定 confirm 还是 reject——reject 走「同 set 但 PATCH 一个不打算 long-term 保持的 set 后再 PATCH 回来」是当前可用的方案，未来加显式 reject 端点）。
+- 旧 default `proposed_by="human"` 行为不变（直接落 confirmed 事件）。
+- 响应体新增 `proposal_id` / `promoted_proposal_id` 字段；现有 PATCH 客户端的兼容读 tags/events_appended 即可，新字段缺失时回退默认。
+
+### 写路径审计 (2026-08-02)
+
+所有命令端点统一经 `audit_command` 装饰：
+- 成功 → `audit_logs` 表 append 一行（`actor` / `action` / `entity_type` / `entity_id` / `payload` / `result="success"` / `request_id` / `created_at`）。
+- 失败（任何异常：404/422/409/503） → `result="failed"` + `error_message` + `entity_id=null`（写一半未拿到时）。
+- `actor` 从 `X-Actor` 请求头取（生产环境接 auth；现默认 `"human:anonymous"`）。
+- 审计写入失败 best-effort：审计行落账失败时 `db.rollback()` 静默吞掉，**绝不掩盖原响应错误**。监控可对账「成功响应但缺 audit row」发现审计缺漏。
+- 审计表本身是 append-only 不可变账本（`IMMUTABLE_TABLES` 成员，PG trigger 兜底防绕过 ORM 的 DELETE/UPDATE）。
+
+前端目前**不需要**消费 audit 表，但调试 / 排查时可以通过 `SELECT * FROM audit_logs WHERE entity_id = ?` 看到一个 entity 的所有写历史。
+
 **Spec 与 plan 文档**：`docs/superpowers/specs/2026-08-02-theme-company-research.md` / `docs/superpowers/plans/2026-08-02-company-research-plan-a.md` / `docs/superpowers/plans/2026-08-02-theme-research-plan-b.md`。
 
 ---

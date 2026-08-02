@@ -61,6 +61,7 @@ IMMUTABLE_TABLES = frozenset(
         "theme_roles",
         "case_theme_tag_events",
         "ai_runs",
+        "audit_logs",
     }
 )
 
@@ -71,6 +72,18 @@ class ImmutableLedgerError(Exception):
 
 class ValidationError(Exception):
     """Raised when a service-layer validation fails."""
+
+
+class ConflictError(Exception):
+    """Raised when a service-layer write collides with existing ledger state.
+
+    Service layer raises this for uniqueness-style conflicts (duplicate
+    company/stock/fund code, etc.). The route layer translates it into the
+    HTTP-layer :class:`app.errors.ConflictError`, which is mapped to a 409
+    v1 error envelope. Distinguishing 409 from 422 keeps the client contract
+    clean: a 422 means the request body itself is malformed, a 409 means the
+    request was well-formed but already exists.
+    """
 
 
 class Base(DeclarativeBase):
@@ -469,6 +482,13 @@ class CaseThemeTagEvent(Base):
     ``created_at`` order: ``add`` inserts the tag, ``remove`` deletes it.
     Tags are classification metadata (横切主题), not research judgments, and
     never participate in effective-state derivation.
+
+    Two-stage review (see SPEC §AI/人工边界): AI-initiated tag changes land
+    as ``status='pending'`` events that do not change the effective tag set
+    until a human PATCH with the same desired set promotes them to
+    ``status='confirmed'``. All events from a single AI proposal share a
+    ``proposal_id`` so a confirmation or rejection can target the whole
+    batch atomically.
     """
 
     __tablename__ = "case_theme_tag_events"
@@ -479,6 +499,15 @@ class CaseThemeTagEvent(Base):
     )
     tag: Mapped[str] = mapped_column(String(64), nullable=False)
     op: Mapped[str] = mapped_column(String(8), nullable=False)  # add | remove
+    # 'human' | 'ai' — who initiated the change. Defaults to 'human' so
+    # legacy rows (pre-migration 0008) read as confirmed human edits.
+    proposed_by: Mapped[str] = mapped_column(String(16), nullable=False, default="human")
+    # 'pending' | 'confirmed' | 'rejected' — only 'confirmed' events count
+    # toward the effective tag set.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="confirmed")
+    # UUID shared by all events from one AI proposal (NULL for human-
+    # initiated events that didn't go through a proposal batch).
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -507,4 +536,36 @@ class AIRun(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class AuditLog(Base):
+    """Append-only who/when/what audit log for every write-path command.
+
+    One row is written per command endpoint invocation, capturing the
+    ``actor`` (e.g. ``"human:alice"`` or ``"ai:openai/gpt-4"``), the
+    ``action`` (e.g. ``create_company``), the ``entity_type`` /
+    ``entity_id`` targeted, the request ``payload`` (sanitized — secrets
+    stripped), the ``result`` (``success`` / ``failed`` / ``conflict``),
+    and any error message.
+
+    Distinct from :class:`AIRun` (which audits AI model invocations) and
+    from the per-entity ledger tables (which carry the data, not the
+    write history). AuditLog exists so the *whole* write surface is
+    reviewable from a single timeline.
+    """
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    result: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )

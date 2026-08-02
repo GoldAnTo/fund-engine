@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.api.v1.commands.common import commit_or_rollback, translate_validation
+from app.api.v1.commands.common import (
+    audit_command,
+    commit_or_rollback,
+    translate_validation,
+)
 from app.db import get_db
 from app.errors import NotFoundError
 from app.models.ledger import (
@@ -42,13 +46,23 @@ router = APIRouter(tags=["instrument-commands-v1"])
 
 @router.post("/companies", response_model=CompanyDTO, status_code=201)
 def create_company(
-    payload: CreateCompanyRequest, db: Session = Depends(get_db)
+    payload: CreateCompanyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> Company:
-    company = translate_validation(
-        InstrumentService(db).create_company,
-        code=payload.code,
-        name=payload.name,
-        type=payload.type,
+    company = audit_command(
+        db,
+        request,
+        action="create_company",
+        entity_type="Company",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).create_company,),
+        kwargs={
+            "code": payload.code,
+            "name": payload.name,
+            "type": payload.type,
+        },
     )
     commit_or_rollback(db)
     return company
@@ -62,33 +76,54 @@ def create_company(
 def create_stock(
     company_id: uuid.UUID,
     payload: CreateStockRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Stock:
     company = db.get(Company, company_id)
     if company is None:
         raise NotFoundError("Company", str(company_id))
 
-    stock = translate_validation(
-        InstrumentService(db).add_stock,
-        company=company,
-        code=payload.code,
-        name=payload.name,
-        market=payload.market,
+    stock = audit_command(
+        db,
+        request,
+        action="add_stock",
+        entity_type="Stock",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).add_stock,),
+        kwargs={
+            "company": company,
+            "code": payload.code,
+            "name": payload.name,
+            "market": payload.market,
+        },
     )
     commit_or_rollback(db)
     return stock
 
 
 @router.post("/funds", response_model=FundDTO, status_code=201)
-def create_fund(payload: CreateFundRequest, db: Session = Depends(get_db)) -> Fund:
-    fund = translate_validation(
-        InstrumentService(db).create_fund,
-        code=payload.code,
-        name=payload.name,
-        fund_type=payload.fund_type,
-        scale=payload.scale,
-        establish_date=payload.establish_date,
-        management_company_id=payload.management_company_id,
+def create_fund(
+    payload: CreateFundRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Fund:
+    fund = audit_command(
+        db,
+        request,
+        action="create_fund",
+        entity_type="Fund",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).create_fund,),
+        kwargs={
+            "code": payload.code,
+            "name": payload.name,
+            "fund_type": payload.fund_type,
+            "scale": payload.scale,
+            "establish_date": payload.establish_date,
+            "management_company_id": payload.management_company_id,
+        },
     )
     commit_or_rollback(db)
     return fund
@@ -102,6 +137,7 @@ def create_fund(payload: CreateFundRequest, db: Session = Depends(get_db)) -> Fu
 def create_holding_disclosure(
     fund_id: uuid.UUID,
     payload: CreateHoldingDisclosureRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> HoldingDisclosure:
     fund = db.get(Fund, fund_id)
@@ -111,14 +147,22 @@ def create_holding_disclosure(
     if stock is None:
         raise NotFoundError("Stock", str(payload.stock_id))
 
-    row = translate_validation(
-        InstrumentService(db).add_holding_disclosure,
-        fund=fund,
-        stock=stock,
-        weight=payload.weight,
-        report_period=payload.report_period,
-        published_at=payload.published_at,
-        source=payload.source,
+    row = audit_command(
+        db,
+        request,
+        action="add_holding_disclosure",
+        entity_type="HoldingDisclosure",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).add_holding_disclosure,),
+        kwargs={
+            "fund": fund,
+            "stock": stock,
+            "weight": payload.weight,
+            "report_period": payload.report_period,
+            "published_at": payload.published_at,
+            "source": payload.source,
+        },
     )
     commit_or_rollback(db)
     return row
@@ -132,20 +176,29 @@ def create_holding_disclosure(
 def create_valuation_snapshot(
     stock_id: uuid.UUID,
     payload: CreateValuationSnapshotRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> ValuationSnapshot:
     stock = db.get(Stock, stock_id)
     if stock is None:
         raise NotFoundError("Stock", str(stock_id))
 
-    snapshot = translate_validation(
-        InstrumentService(db).add_valuation_snapshot,
-        stock=stock,
-        as_of_date=payload.as_of_date,
-        metric_name=payload.metric_name,
-        metric_value=payload.metric_value,
-        source=payload.source,
-        definition=payload.definition,
+    snapshot = audit_command(
+        db,
+        request,
+        action="add_valuation_snapshot",
+        entity_type="ValuationSnapshot",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).add_valuation_snapshot,),
+        kwargs={
+            "stock": stock,
+            "as_of_date": payload.as_of_date,
+            "metric_name": payload.metric_name,
+            "metric_value": payload.metric_value,
+            "source": payload.source,
+            "definition": payload.definition,
+        },
     )
     commit_or_rollback(db)
     return snapshot
@@ -159,6 +212,7 @@ def create_valuation_snapshot(
 def create_theme_role(
     company_id: uuid.UUID,
     payload: CreateThemeRoleRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> ThemeRole:
     company = db.get(Company, company_id)
@@ -175,15 +229,23 @@ def create_theme_role(
         if source_statement is None:
             raise NotFoundError("Statement", str(payload.source_statement_id))
 
-    row = translate_validation(
-        InstrumentService(db).add_theme_role,
-        company=company,
-        role=payload.role,
-        research_case=research_case,
-        scope=payload.scope,
-        applicable_from=payload.applicable_from,
-        applicable_to=payload.applicable_to,
-        source_statement=source_statement,
+    row = audit_command(
+        db,
+        request,
+        action="add_theme_role",
+        entity_type="ThemeRole",
+        payload=payload.model_dump(mode="json"),
+        fn=translate_validation,
+        args=(InstrumentService(db).add_theme_role,),
+        kwargs={
+            "company": company,
+            "role": payload.role,
+            "research_case": research_case,
+            "scope": payload.scope,
+            "applicable_from": payload.applicable_from,
+            "applicable_to": payload.applicable_to,
+            "source_statement": source_statement,
+        },
     )
     commit_or_rollback(db)
     return row

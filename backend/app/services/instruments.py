@@ -3,13 +3,14 @@
 Owns domain validation; persistence delegates to ``InstrumentRepository``
 (which sets timestamps and flushes). HTTP existence checks stay in the
 command route layer. Raises ``app.models.ledger.ValidationError`` for domain
-violations, which the route layer translates to 422.
+violations (translated to 422) and ``app.models.ledger.ConflictError`` for
+uniqueness collisions (translated to 409).
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import (
     Company,
+    ConflictError,
     Fund,
     FundCompany,
     HoldingDisclosure,
@@ -40,6 +42,16 @@ def _require_non_empty(value: str, field: str, max_length: int) -> str:
     return cleaned
 
 
+def _today_utc() -> date:
+    """Server-clock today (UTC).
+
+    Valuation snapshots are factual market observations, so as-of dates in
+    the future cannot be sourced honestly. Anchoring to UTC keeps the cut-off
+    deterministic across timezones.
+    """
+    return datetime.now(timezone.utc).date()
+
+
 class InstrumentService:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -54,7 +66,7 @@ class InstrumentService:
             select(func.count()).select_from(Company).where(Company.code == code)
         )
         if existing:
-            raise ValidationError(f"公司代码 {code} 已存在")
+            raise ConflictError(f"公司代码 {code} 已存在")
 
         return self._instruments.add_company(code=code, name=name, type=type)
 
@@ -74,7 +86,7 @@ class InstrumentService:
             select(func.count()).select_from(Stock).where(Stock.code == code)
         )
         if existing:
-            raise ValidationError(f"股票代码 {code} 已存在")
+            raise ConflictError(f"股票代码 {code} 已存在")
 
         return self._instruments.add_stock(
             company_id=company.id, code=code, name=name, market=market
@@ -102,7 +114,7 @@ class InstrumentService:
             select(func.count()).select_from(Fund).where(Fund.code == code)
         )
         if existing:
-            raise ValidationError(f"基金代码 {code} 已存在")
+            raise ConflictError(f"基金代码 {code} 已存在")
 
         return self._instruments.add_fund(
             code=code,
@@ -127,6 +139,12 @@ class InstrumentService:
             raise ValidationError("weight 必须在 (0, 100] 区间内")
         if published_at.date() < report_period:
             raise ValidationError("published_at 不能早于 report_period")
+        if report_period > _today_utc():
+            # Future-dated quarterly reports are not yet filed; the
+            # 报告期 itself is the natural-key anchor of the disclosure,
+            # so a future report_period is a 422 (malformed request), not
+            # a 409. Keeping 422 here is intentional.
+            raise ValidationError("report_period 不能晚于今天")
         source = _require_non_empty(source, "source", 128)
 
         existing = self._session.scalar(
@@ -140,7 +158,7 @@ class InstrumentService:
             )
         )
         if existing:
-            raise ValidationError("该基金在该报告期对该股票的同一来源披露已存在")
+            raise ConflictError("该基金在该报告期对该股票的同一来源披露已存在")
 
         return self._instruments.add_holding_disclosure(
             fund_id=fund.id,
@@ -166,6 +184,11 @@ class InstrumentService:
         definition = _require_non_empty(definition, "definition", 255)
         if not metric_value.is_finite():
             raise ValidationError("metric_value 必须是有限数值")
+        # Timepoint consistency: a valuation snapshot is an observation tied
+        # to a trading day. A future-dated as_of cannot be sourced honestly,
+        # so reject before uniqueness check (422, malformed request).
+        if as_of_date > _today_utc():
+            raise ValidationError("as_of_date 不能晚于今天")
 
         existing = self._session.scalar(
             select(func.count())
@@ -178,7 +201,7 @@ class InstrumentService:
             )
         )
         if existing:
-            raise ValidationError("该股票在该日期该指标的同一来源估值快照已存在")
+            raise ConflictError("该股票在该日期该指标的同一来源估值快照已存在")
 
         return self._instruments.add_valuation_snapshot(
             stock_id=stock.id,

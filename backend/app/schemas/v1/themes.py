@@ -18,6 +18,11 @@ from app.schemas.v1.companies import AssessmentViewDTO, RoleReviewDTO
 
 class UpdateThemeTagsRequest(V1Model):
     tags: list[str]
+    # Who initiated the change. ``"human"`` (default) writes effective
+    # events directly; ``"ai"`` writes pending events that require a
+    # matching human PATCH to take effect. Two-stage review per SPEC
+    # §"AI/人工边界".
+    proposed_by: Literal["human", "ai"] = "human"
 
 
 class ThemeTagsResponse(V1Model):
@@ -25,6 +30,13 @@ class ThemeTagsResponse(V1Model):
     case_id: uuid.UUID
     tags: list[str]
     events_appended: int
+    proposed_by: Literal["human", "ai"]
+    # Set when an AI proposal was created. The client should hold on to
+    # this id so the proposal can be referenced (e.g. in operator notes)
+    # even though the current API auto-matches by desired set.
+    proposal_id: uuid.UUID | None = None
+    # Set when this human PATCH confirmed an open AI proposal.
+    promoted_proposal_id: uuid.UUID | None = None
 
 
 class ThemeListItemDTO(V1Model):
