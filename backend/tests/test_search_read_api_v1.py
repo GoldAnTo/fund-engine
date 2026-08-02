@@ -1,10 +1,12 @@
 """Grouped ledger search v1 read contract."""
 
+import uuid
 from datetime import UTC, datetime
 
 from app.models.ledger import (
     DocumentVersion,
     EvidenceLink,
+    EvidenceReview,
     ResearchCase,
     SourceSpan,
     SourceStatement,
@@ -193,3 +195,199 @@ def test_search_has_more_when_group_truncated(api_client, session):
     )
     assert len(thesis_group["hits"]) == 1
     assert payload["page"]["has_more"] is True
+
+
+# ---------------------------------------------------------------------------
+# P0 regression: search must derive effective review state (walkthrough 2026-08-02)
+# ---------------------------------------------------------------------------
+
+
+def _seed_link_for_review(session, *, link_created_at, review=None):
+    """Minimal document→statement→case→thesis→link chain plus an optional
+    (outcome, created_at) review, with fully explicit timestamps."""
+    case = ResearchCase(
+        title="c", industry_topic="t", created_by="u", created_at=link_created_at
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="CapEx thesis",
+        created_by="u",
+        created_at=link_created_at,
+    )
+    session.add(thesis)
+    session.flush()
+    version = DocumentVersion(
+        content_sha256=(uuid.uuid4().hex * 2)[:64],
+        source_url="u",
+        published_at=None,
+        available_at=link_created_at,
+        acquired_at=link_created_at,
+        parser_version="1",
+        supersedes_id=None,
+    )
+    session.add(version)
+    session.flush()
+    span = SourceSpan(
+        document_version_id=version.id, locator={"p": 1}, verbatim_text="v"
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="disclosed_fact",
+        normalized_text="CapEx grew strongly",
+        observed_period=None,
+        created_at=link_created_at,
+    )
+    session.add(statement)
+    session.flush()
+    link = EvidenceLink(
+        thesis_id=thesis.id,
+        source_statement_id=statement.id,
+        role="supports",
+        reason="r",
+        scope={"s": "d"},
+        available_at=link_created_at,
+        creator_type="ai",
+        review_state="machine_generated",
+        created_at=link_created_at,
+    )
+    session.add(link)
+    session.flush()
+    if review is not None:
+        outcome, review_created_at = review
+        session.add(
+            EvidenceReview(
+                evidence_link_id=link.id,
+                outcome=outcome,
+                relation="supports",
+                factor_role="f",
+                scope_boundary="s",
+                reason="r",
+                reviewer="tester",
+                created_at=review_created_at,
+            )
+        )
+        session.flush()
+    return link
+
+
+def _evidence_group(payload):
+    return next(
+        g for g in payload["groups"] if g["object_type"] == "evidence"
+    )
+
+
+def test_search_evidence_surfaces_after_human_review(cmd_client, cmd_session):
+    """P0 regression (walkthrough 2026-08-02): a human-confirmed link must
+    appear in default search even though the frozen
+    ``EvidenceLink.review_state`` stays ``machine_generated`` (append-only).
+    """
+    from app.repositories.documents import DocumentRepository
+    from app.repositories.research import ResearchRepository
+    from app.services.ingest import DocumentService
+    from app.services.research import ResearchService
+
+    documents = DocumentService(DocumentRepository(cmd_session))
+    research = ResearchService(ResearchRepository(cmd_session))
+    version = documents.freeze(raw=b"wb", source_url="https://example.test/r")
+    span = documents.add_span(
+        document_version_id=version.id,
+        locator={"page": 1},
+        verbatim_text="CapEx 同比增长 40%",
+    )
+    statement = research.add_statement(
+        span.id, "CapEx 同比增长 40%", kind="disclosed_fact"
+    )
+    case = research.add_case(title="t", industry_topic="t", created_by="tester")
+    thesis = research.add_thesis(case.id, statement="t", created_by="tester")
+    link = research.link_evidence(
+        thesis.id, statement.id, role="supports", reason="r", scope={"s": "d"}
+    )
+    cmd_session.commit()
+
+    before = cmd_client.get("/api/v1/search", params={"q": "CapEx"})
+    assert before.status_code == 200
+    assert _evidence_group(before.json())["hits"] == []
+
+    review = cmd_client.post(
+        f"/api/v1/evidence-links/{link.id}/reviews",
+        json={
+            "outcome": "confirmed",
+            "relation": "supports",
+            "factor_role": "证据因素",
+            "scope_boundary": "行业范围：AI 算力",
+            "reason": "人工复核确认",
+            "reviewer": "tester",
+        },
+    )
+    assert review.status_code == 201
+
+    after = cmd_client.get("/api/v1/search", params={"q": "CapEx"})
+    assert after.status_code == 200
+    hits = _evidence_group(after.json())["hits"]
+    assert [h["object_id"] for h in hits] == [str(link.id)]
+    assert hits[0]["review_state"] == "reviewed"
+
+
+def test_search_evidence_review_cutoff_and_rejected(api_client, session):
+    """Reviews created after the cutoff do not exist for historical replay;
+    a rejected link is never returned (default or research mode)."""
+    link_created = datetime(2025, 1, 1, tzinfo=UTC)
+    review_created = datetime(2025, 6, 1, tzinfo=UTC)
+    before_review = datetime(2025, 3, 1, tzinfo=UTC)
+    after_review = datetime(2026, 1, 1, tzinfo=UTC)
+
+    confirmed_link = _seed_link_for_review(
+        session,
+        link_created_at=link_created,
+        review=("confirmed", review_created),
+    )
+
+    # 1. Cutoff before the review: default mode still hides the link
+    #    (effective state at that time = pending machine_generated).
+    resp = api_client.get(
+        "/api/v1/search",
+        params={"q": "CapEx", "cutoff": before_review.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert _evidence_group(resp.json())["hits"] == []
+
+    # 2. Same cutoff under research mode: pending link is visible as
+    #    machine_generated (its state at that cutoff).
+    resp = api_client.get(
+        "/api/v1/search",
+        params={
+            "q": "CapEx",
+            "cutoff": before_review.isoformat(),
+            "research_mode": "true",
+        },
+    )
+    hits = _evidence_group(resp.json())["hits"]
+    assert [h["object_id"] for h in hits] == [str(confirmed_link.id)]
+    assert hits[0]["review_state"] == "machine_generated"
+
+    # 3. Cutoff after the review: default mode surfaces it as reviewed.
+    resp = api_client.get(
+        "/api/v1/search",
+        params={"q": "CapEx", "cutoff": after_review.isoformat()},
+    )
+    hits = _evidence_group(resp.json())["hits"]
+    assert [h["object_id"] for h in hits] == [str(confirmed_link.id)]
+    assert hits[0]["review_state"] == "reviewed"
+
+    # 4. A rejected link is excluded from both modes.
+    rejected_link = _seed_link_for_review(
+        session,
+        link_created_at=link_created,
+        review=("rejected", review_created),
+    )
+    for params in (
+        {"q": "CapEx", "cutoff": after_review.isoformat()},
+        {"q": "CapEx", "cutoff": after_review.isoformat(), "research_mode": "true"},
+    ):
+        resp = api_client.get("/api/v1/search", params=params)
+        hits = _evidence_group(resp.json())["hits"]
+        assert str(rejected_link.id) not in [h["object_id"] for h in hits]

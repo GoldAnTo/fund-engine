@@ -4,19 +4,27 @@ Case-insensitive SQL matching across the append-only ledger. Historical replay
 (design 10): every type is cutoff-filtered. AI/human boundary (design 9.2/9.3):
 machine-generated evidence hits are hidden by default and only revealed under
 an explicit research mode; rejected is never returned.
+
+Append-only review state: the frozen ``EvidenceLink.review_state`` column never
+changes after insert, so evidence visibility is derived from the latest
+``evidence_reviews`` row at/before the cutoff — the same effective-state
+derivation dossier/graph/knowledge/compare use
+(``app/queries/effective_state.py``), here pushed into SQL so the
+``limit + 1`` / ``has_more`` contract stays exact.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.errors import ValidationFailedError
 from app.models.ledger import (
     Company,
     EvidenceLink,
+    EvidenceReview,
     Fund,
     ResearchCase,
     SourceStatement,
@@ -134,25 +142,78 @@ class LedgerSearchQueries:
             ]
 
         if object_type == "evidence":
+            # Derive the effective review state from the latest
+            # evidence_reviews row at/before the cutoff; the frozen column
+            # alone would keep human-confirmed links machine_generated
+            # forever (append-only ledger).  Mirrors
+            # effective_state.OUTCOME_TO_STATE.
+            latest_ts = (
+                select(
+                    EvidenceReview.evidence_link_id.label("link_id"),
+                    func.max(EvidenceReview.created_at).label("latest_created_at"),
+                )
+                .where(EvidenceReview.created_at <= cutoff)
+                .group_by(EvidenceReview.evidence_link_id)
+                .subquery()
+            )
+            latest_review = (
+                select(
+                    EvidenceReview.evidence_link_id.label("link_id"),
+                    EvidenceReview.outcome.label("outcome"),
+                )
+                .join(
+                    latest_ts,
+                    (
+                        EvidenceReview.evidence_link_id
+                        == latest_ts.c.link_id
+                    )
+                    & (
+                        EvidenceReview.created_at
+                        == latest_ts.c.latest_created_at
+                    ),
+                )
+                .subquery()
+            )
+            effective_state = case(
+                (latest_review.c.outcome == "confirmed", "reviewed"),
+                (latest_review.c.outcome == "rejected", "rejected"),
+                (
+                    latest_review.c.outcome == "needs_more_evidence",
+                    "machine_generated",
+                ),
+                else_=EvidenceLink.review_state,
+            )
             rows = self._session.execute(
-                select(SourceStatement, EvidenceLink, Thesis)
+                select(
+                    SourceStatement,
+                    EvidenceLink,
+                    Thesis,
+                    effective_state.label("effective_state"),
+                )
                 .join(
                     EvidenceLink,
                     EvidenceLink.source_statement_id == SourceStatement.id,
                 )
                 .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
                 .join(ResearchCase, ResearchCase.id == Thesis.research_case_id)
+                .outerjoin(latest_review, latest_review.c.link_id == EvidenceLink.id)
                 .where(func.lower(SourceStatement.normalized_text).like(needle))
                 .where(EvidenceLink.available_at <= cutoff)
                 .where(EvidenceLink.created_at <= cutoff)
                 .where(SourceStatement.created_at <= cutoff)
                 .where(Thesis.created_at <= cutoff)
                 .where(ResearchCase.created_at <= cutoff)
-                .where(EvidenceLink.review_state.in_(list(allowed_states)))
+                .where(effective_state.in_(list(allowed_states)))
                 .limit(limit + 1)
             )
             hits: list[SearchHitDTO] = []
-            for statement, link, thesis in rows:
+            seen_link_ids: set = set()
+            for statement, link, thesis, state in rows:
+                # Defensive: two reviews sharing the same max created_at
+                # would join twice; report each link once.
+                if link.id in seen_link_ids:
+                    continue
+                seen_link_ids.add(link.id)
                 hits.append(
                     SearchHitDTO(
                         object_type="evidence",
@@ -160,7 +221,7 @@ class LedgerSearchQueries:
                         title=statement.normalized_text,
                         snippet=statement.normalized_text,
                         case_id=str(thesis.research_case_id),
-                        review_state=link.review_state,
+                        review_state=state,
                         available_at=_iso(link.available_at),
                         deep_link=f"/research-cases/{thesis.research_case_id}/dossier",
                     )
