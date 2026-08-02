@@ -27,7 +27,7 @@ import argparse
 import os
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import create_engine, select
@@ -71,6 +71,30 @@ _NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _previous_business_day(today: date | None = None) -> date:
+    """Return the most recent weekday strictly before ``today``.
+
+    Gildata's ``FinQuery`` 行情探针语义是「最新行情」——返回的行情不带
+    ``trade_date``/``as_of_date`` 字段，caller 必须从调用时刻推断 quote
+    数据反映的交易日。今天是周一 → 上周五（-3）；今天是周日 → 上周五
+    （-2）；今天是周六 → 上周五（-1）；今天是工作日 → 昨日。
+
+    注：仅处理周末。法定节假日（春节/国庆/中秋等）不在本函数范围内，
+    走查脚本的 caller 若逢长假末段应显式覆盖（见 ``quote_as_of`` 入口
+    参数；当前默认走推断，对周一/周末调用最准确）。
+
+    Defect-8 修复（2026-08-02）：原实现 ``as_of = date.today()`` 把
+    ingest 时刻当成行情交易日，会把「周六抓取周五收盘」错记为周六 as_of。
+    """
+    if today is None:
+        today = date.today()
+    one_day = timedelta(days=1)
+    candidate = today - one_day
+    while candidate.weekday() >= 5:  # 5=Sat, 6=Sun
+        candidate -= one_day
+    return candidate
 
 
 def _parse_date(value: str) -> date | None:
@@ -411,7 +435,7 @@ def ingest(
         )
         summary["stock_id"] = str(stock.id)
 
-        as_of = date.today()
+        as_of = _previous_business_day()
         for quote_key, (metric_name, definition) in METRIC_DEFINITIONS.items():
             value = _parse_decimal(quote.get(quote_key, ""))
             if value is None:
