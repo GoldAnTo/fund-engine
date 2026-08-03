@@ -24,6 +24,13 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/versions", label: "监测与更新", icon: "↻", group: "knowledge" },
 ];
 
+// 左侧导航分组标题（与设计原型 1/10/11 视觉一致）
+const NAV_GROUP_LABELS: Record<"primary" | "industry" | "knowledge", string> = {
+  primary: "行业研究",
+  industry: "资料与知识",
+  knowledge: "数据中心",
+};
+
 const SHELL_CONTEXT: Record<string, [string, string]> = {
   themes: ["主题驱动", "主题列表"],
   topics: ["主题研究", "横切主题"],
@@ -135,17 +142,22 @@ export function PrototypeShell(_props: PrototypeShellProps) {
           </div>
         </div>
         <nav className="nav-list" aria-label="主导航">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `nav-link${isActive || active.primary === item.to ? " is-active" : ""}${item.group !== "primary" ? " nav-link--nested" : ""}`
-              }
-            >
-              <span className="nav-icon" aria-hidden>{item.icon}</span>
-              <span>{item.label}</span>
-            </NavLink>
+          {(["primary", "industry", "knowledge"] as const).map((group) => (
+            <div key={group} className="nav-group" data-group={group}>
+              <div className="nav-group__title">{NAV_GROUP_LABELS[group]}</div>
+              {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `nav-link${isActive || active.primary === item.to ? " is-active" : ""}${item.group !== "primary" ? " nav-link--nested" : ""}`
+                  }
+                >
+                  <span className="nav-icon" aria-hidden>{item.icon}</span>
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>
@@ -213,17 +225,22 @@ export function PrototypeShell(_props: PrototypeShellProps) {
       <details className="mobile-nav">
         <summary>导航</summary>
         <nav className="mobile-nav-links" aria-label="移动端主导航">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `nav-link${isActive || active.primary === item.to ? " is-active" : ""}`
-              }
-            >
-              <span className="nav-icon" aria-hidden>{item.icon}</span>
-              <span>{item.label}</span>
-            </NavLink>
+          {(["primary", "industry", "knowledge"] as const).map((group) => (
+            <div key={group} className="nav-group">
+              <div className="nav-group__title">{NAV_GROUP_LABELS[group]}</div>
+              {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `nav-link${isActive || active.primary === item.to ? " is-active" : ""}`
+                  }
+                >
+                  <span className="nav-icon" aria-hidden>{item.icon}</span>
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </details>
