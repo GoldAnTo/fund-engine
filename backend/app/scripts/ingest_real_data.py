@@ -247,9 +247,25 @@ def ingest(
         "case_id": str(resolved_case_id) if resolved_case_id else None,
     }
 
-    span_locator_extra = (
-        {"case_id": str(resolved_case_id)} if resolved_case_id is not None else {}
-    )
+    # Spans written through this script come from a structured text
+    # payload (one ``content`` field per result), not a paginated PDF,
+    # so ``page`` / ``paragraph`` are best-effort placeholders.  The
+    # ``parser`` field carries the engine version so a future S4 backfill
+    # can recognise these and synthesise a ``#/legacy-paragraph/1`` v1
+    # ref instead of treating them as missing-page errors.  Without
+    # these keys, the v1 read-path returns ``locator_v1=None`` and the
+    # workbench cannot link a citation to any page — see the S5 read
+    # test in tests/test_s5_v1_read_path.py for the expected shape.
+    span_locator_extra = {
+        "page": 1,
+        "paragraph": 1,
+        "parser": PARSER_VERSION,
+        **(
+            {"case_id": str(resolved_case_id)}
+            if resolved_case_id is not None
+            else {}
+        ),
+    }
 
     # 1. Research reports -> DocumentVersion + SourceSpan.
     for query in research_queries:

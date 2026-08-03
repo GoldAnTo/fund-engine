@@ -33,6 +33,7 @@ from app.datasources.docling import (
     PARSER_VERSION_DOCLING_STUB,
     PARSER_VERSION_PYPDF,
     DoclingAdapter,
+    DoclingNotInstalled,
     ParsedSpan,
     PdfParseError,
     PypdfAdapter,
@@ -217,14 +218,29 @@ def test_pypdf_adapter_legacy_locator_dict_round_trip():
 # ---------------------------------------------------------------------------
 
 
-def test_docling_adapter_refuses_construction():
-    """S3 will implement the real DoclingAdapter; the S2 stub must reject
-    construction so callers cannot accidentally pick the broken path."""
-    with pytest.raises(NotImplementedError) as ei:
-        # Use kwargs to dodge "unused argument" lints in case the stub
-        # signature changes in S3.
-        DoclingAdapter(client=object(), model="anything")  # type: ignore[abstract]
-    assert "S3" in str(ei.value)
+def test_docling_adapter_construction_is_safe():
+    """DoclingAdapter construction is now two-mode:
+
+    - When the ``docling`` package is missing, ``__init__`` raises
+      :class:`DoclingNotInstalled` (an :class:`ImportError` subclass) so
+      callers can ``except ImportError`` to fall back to PypdfAdapter.
+    - When ``docling`` is installed, the real adapter constructs
+      without raising.
+
+    This test replaced the S2 stub-era ``test_docling_adapter_refuses_construction``
+    when the S3 commit replaced the stub with the real implementation.
+    """
+    import importlib
+
+    if importlib.util.find_spec("docling") is None:
+        # docling missing -> DoclingNotInstalled (fail-closed).
+        with pytest.raises(DoclingNotInstalled) as ei:
+            DoclingAdapter()
+        assert "docling" in str(ei.value).lower()
+    else:
+        # docling present -> real adapter constructs fine.
+        adapter = DoclingAdapter()
+        assert adapter.parser_version.startswith("docling-")
 
 
 def test_docling_adapter_parser_version_constant():
