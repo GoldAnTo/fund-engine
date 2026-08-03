@@ -9,10 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "cambricon_profitability_case"
@@ -25,6 +27,41 @@ _JY_PERIODS = {
 _QUARTERS_2025 = ("2025Q1", "2025Q2", "2025Q3", "2025Q4")
 _QUARTERS_2024 = ("2024Q1", "2024Q2", "2024Q3", "2024Q4")
 _DECIMAL_PATTERN = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}"
+_SOURCE_SHA256 = MappingProxyType(
+    {
+        "cninfo_2025_annual_report_page_10.txt": "d9c912fcf58ddf23f677248c17d5c30b51076cfa1fbcd3166527e7d526add96f",
+        "sse_2024_annual_report_page_11.txt": "af4c70658266f51f11cf264185d27890e1b38fa67aa0f004b1460e18c28e55f2",
+    }
+)
+_JUYUAN_RAW_RESPONSE_SHA256 = "bf9f166e16854f0838ab3bfeb11811a9acef6d32df73053576d5d3fdb17f5407"
+_JUYUAN_PROVENANCE = MappingProxyType(
+    {
+        "provider": "gildata-juyuan",
+        "tool": "FinQuery",
+        "fetched_at": "2026-08-03T15:21:55+08:00",
+        "query": "寒武纪688256 2025年各季度归母净利润、扣非归母净利润",
+    }
+)
+_OFFICIAL_PROVENANCE = MappingProxyType(
+    {
+        "cninfo_2025_annual_report_page_10.provenance.json": MappingProxyType(
+            {
+                "title": "中科寒武纪科技股份有限公司2025年年度报告",
+                "source_url": "https://dataclouds.cninfo.com.cn/shgonggao/hsomarket/2026/20260312/05ca784762a7401b9ed371d917e436dc.PDF",
+                "published_at": "2026-03-12T00:00:00+08:00",
+                "page": 10,
+            }
+        ),
+        "sse_2024_annual_report_page_11.provenance.json": MappingProxyType(
+            {
+                "title": "中科寒武纪科技股份有限公司2024年年度报告",
+                "source_url": "https://big5.sse.com.cn/site/cht/www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2025-04-19/688256_20250419_11FJ.pdf",
+                "published_at": "2025-04-19T00:00:00+08:00",
+                "page": 11,
+            }
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -34,7 +71,7 @@ class JuyuanObservation:
     fetched_at: str
     query: str
     raw_response: str
-    rounded_parent_profit_yi: dict[str, Decimal]
+    rounded_parent_profit_yi: Mapping[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -44,10 +81,10 @@ class AnnualReportObservation:
     published_at: str
     page: int
     verbatim_text: str
-    revenue: dict[str, Decimal]
-    parent_profit: dict[str, Decimal]
-    adjusted_profit: dict[str, Decimal]
-    operating_cash_flow: dict[str, Decimal]
+    revenue: Mapping[str, Decimal]
+    parent_profit: Mapping[str, Decimal]
+    adjusted_profit: Mapping[str, Decimal]
+    operating_cash_flow: Mapping[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -56,9 +93,9 @@ class CaseData:
     annual_report: AnnualReportObservation
     annual_report_2024: AnnualReportObservation
     parent_profit_2024_q4: Decimal
-    single_quarter_parent_profit: dict[str, Decimal]
-    single_quarter_adjusted_profit: dict[str, Decimal]
-    single_quarter_operating_cash_flow: dict[str, Decimal]
+    single_quarter_parent_profit: Mapping[str, Decimal]
+    single_quarter_adjusted_profit: Mapping[str, Decimal]
+    single_quarter_operating_cash_flow: Mapping[str, Decimal]
 
 
 def _decimal(value: object, *, field: str) -> Decimal:
@@ -81,6 +118,25 @@ def _read_json(name: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON fixture must be an object: {name}")
     return payload
+
+
+def _verify_sha256(data: bytes, *, expected: str, field: str) -> None:
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError(f"fixture integrity check failed for {field}")
+
+
+def _read_verified_text(name: str) -> str:
+    try:
+        expected = _SOURCE_SHA256[name]
+    except KeyError as exc:
+        raise ValueError(f"no fixture integrity pin for {name}") from exc
+    raw = (_FIXTURE_DIR / name).read_bytes()
+    _verify_sha256(raw, expected=expected, field=name)
+    return raw.decode("utf-8")
+
+
+def _immutable_mapping(values: Mapping[str, Decimal]) -> Mapping[str, Decimal]:
+    return MappingProxyType(dict(values))
 
 
 def _validate_aware_timestamp(value: object, *, field: str) -> str:
@@ -208,11 +264,10 @@ def _juyuan_observation(
     }
     if set(payload) != required:
         raise ValueError("Juyuan fixture has missing or unexpected schema fields")
-    if payload["provider"] != "gildata-juyuan" or payload["tool"] != "FinQuery":
-        raise ValueError("Juyuan fixture has invalid provider metadata")
+    for field, expected in _JUYUAN_PROVENANCE.items():
+        if payload[field] != expected:
+            raise ValueError(f"Juyuan fixture has invalid provenance field: {field}")
     query = payload["query"]
-    if query != "寒武纪688256 2025年各季度归母净利润、扣非归母净利润":
-        raise ValueError("Juyuan fixture has an unsupported supporting query")
     rounded_raw = payload["rounded_parent_profit_yi"]
     if not isinstance(rounded_raw, dict) or set(rounded_raw) != set(_JY_PERIODS):
         raise ValueError("Juyuan rounded observations have missing or extra periods")
@@ -220,8 +275,16 @@ def _juyuan_observation(
         period: _decimal(rounded_raw[period], field=f"Juyuan.rounded_parent_profit_yi.{period}")
         for period in _JY_PERIODS
     }
-    parsed = _parse_juyuan_parent_profit(payload["raw_response"])
-    parsed_adjusted = _validate_juyuan_adjusted_profit(payload["raw_response"])
+    raw_response = payload["raw_response"]
+    if not isinstance(raw_response, str):
+        raise ValueError("Juyuan raw_response must be text")
+    _verify_sha256(
+        raw_response.encode("utf-8"),
+        expected=_JUYUAN_RAW_RESPONSE_SHA256,
+        field="Juyuan raw_response",
+    )
+    parsed = _parse_juyuan_parent_profit(raw_response)
+    parsed_adjusted = _validate_juyuan_adjusted_profit(raw_response)
     if rounded != parsed:
         raise ValueError("Juyuan normalized rounded observations differ from raw response")
     if parsed_adjusted != official_adjusted_cumulative:
@@ -231,22 +294,16 @@ def _juyuan_observation(
         tool=payload["tool"],
         fetched_at=_validate_aware_timestamp(payload["fetched_at"], field="Juyuan fetched_at"),
         query=query,
-        raw_response=payload["raw_response"],
-        rounded_parent_profit_yi=rounded,
+        raw_response=raw_response,
+        rounded_parent_profit_yi=_immutable_mapping(rounded),
     )
 
 
-def _load_provenance(name: str, *, host: str, page: int) -> dict[str, Any]:
+def _load_provenance(name: str) -> dict[str, Any]:
     payload = _read_json(name)
-    if set(payload) != {"title", "source_url", "published_at", "page"}:
-        raise ValueError(f"official provenance has invalid schema: {name}")
-    if not isinstance(payload["title"], str) or not payload["title"].strip():
-        raise ValueError(f"official provenance has invalid title: {name}")
-    if not isinstance(payload["source_url"], str) or not payload["source_url"].startswith(host):
-        raise ValueError(f"official provenance has invalid source URL: {name}")
-    if payload["page"] != page:
-        raise ValueError(f"official provenance has invalid page: {name}")
-    _validate_aware_timestamp(payload["published_at"], field=f"official provenance published_at {name}")
+    expected = _OFFICIAL_PROVENANCE.get(name)
+    if expected is None or payload != dict(expected):
+        raise ValueError(f"official provenance differs from pinned fields: {name}")
     return payload
 
 
@@ -260,11 +317,11 @@ def _extract_four_values(text: str, pattern: str, *, field: str) -> list[Decimal
     return [_decimal(value, field=f"official report.{field}") for value in values]
 
 
-def _as_quarters(periods: tuple[str, ...], values: list[Decimal]) -> dict[str, Decimal]:
-    return dict(zip(periods, values, strict=True))
+def _as_quarters(periods: tuple[str, ...], values: list[Decimal]) -> Mapping[str, Decimal]:
+    return _immutable_mapping(dict(zip(periods, values, strict=True)))
 
 
-def _cumulative_2025(quarters: dict[str, Decimal]) -> dict[str, Decimal]:
+def _cumulative_2025(quarters: Mapping[str, Decimal]) -> dict[str, Decimal]:
     return {
         "2025Q1": quarters["2025Q1"],
         "2025H1": quarters["2025Q1"] + quarters["2025Q2"],
@@ -273,19 +330,27 @@ def _cumulative_2025(quarters: dict[str, Decimal]) -> dict[str, Decimal]:
     }
 
 
-def _parse_2025_annual_report() -> AnnualReportObservation:
-    provenance = _load_provenance(
-        "cninfo_2025_annual_report_page_10.provenance.json",
-        host="https://dataclouds.cninfo.com.cn/",
-        page=10,
+def _require_quarter_table_context(verbatim_text: str, *, year: int) -> str:
+    heading = f"八、{year}年分季度主要财务数据"
+    if year not in {2024, 2025} or verbatim_text.count(heading) != 1:
+        raise ValueError(f"official {year} report has invalid quarterly table context")
+    quarterly_table = verbatim_text.split(heading, maxsplit=1)[1]
+    expected_header = re.compile(
+        r"单位：元\s+币种：人民币\s+"
+        r"第一季度\s+第二季度\s+第三季度\s+第四季度\s+"
+        r"（1-3月份）\s+（4-6\s*月份）\s+（7-9月份）\s+（10-12月份）"
     )
-    verbatim_text = (_FIXTURE_DIR / "cninfo_2025_annual_report_page_10.txt").read_text("utf-8")
+    if expected_header.search(quarterly_table) is None:
+        raise ValueError(f"official {year} report has invalid quarterly table context")
+    return quarterly_table
+
+
+def _parse_2025_annual_report() -> AnnualReportObservation:
+    provenance = _load_provenance("cninfo_2025_annual_report_page_10.provenance.json")
+    verbatim_text = _read_verified_text("cninfo_2025_annual_report_page_10.txt")
     if "[ROW" in verbatim_text or not verbatim_text.startswith("                  中科寒武纪科技股份有限公司2025"):
         raise ValueError("official 2025 report must be a separate verbatim text fixture")
-    try:
-        quarterly_table = verbatim_text.split("八、2025年分季度主要财务数据", maxsplit=1)[1]
-    except IndexError as exc:
-        raise ValueError("official 2025 report has no quarterly-data table") from exc
+    quarterly_table = _require_quarter_table_context(verbatim_text, year=2025)
     revenue = _extract_four_values(
         quarterly_table,
         r"营业收入\s*(?P<values>.*?)\s*归属于上市\s*公司股东的",
@@ -320,17 +385,14 @@ def _parse_2025_annual_report() -> AnnualReportObservation:
 
 
 def _parse_2024_annual_report() -> AnnualReportObservation:
-    provenance = _load_provenance(
-        "sse_2024_annual_report_page_11.provenance.json",
-        host="https://big5.sse.com.cn/",
-        page=11,
-    )
-    verbatim_text = (_FIXTURE_DIR / "sse_2024_annual_report_page_11.txt").read_text("utf-8")
+    provenance = _load_provenance("sse_2024_annual_report_page_11.provenance.json")
+    verbatim_text = _read_verified_text("sse_2024_annual_report_page_11.txt")
     if "[ROW" in verbatim_text or not verbatim_text.startswith("                  中科寒武纪科技股份有限公司2024"):
         raise ValueError("official 2024 report must be a separate verbatim text fixture")
+    quarterly_table = _require_quarter_table_context(verbatim_text, year=2024)
     parent_profit = _extract_four_values(
-        verbatim_text,
-        r"八、2024年分季度主要财务数据.*?归属于上市公司\s*(?P<values>.*?)\s*股东的净利润",
+        quarterly_table,
+        r"归属于上市公司\s*(?P<values>.*?)\s*股东的净利润",
         field="2024 parent profit",
     )
     return AnnualReportObservation(
@@ -339,10 +401,10 @@ def _parse_2024_annual_report() -> AnnualReportObservation:
         published_at=provenance["published_at"],
         page=provenance["page"],
         verbatim_text=verbatim_text,
-        revenue={},
+        revenue=_immutable_mapping({}),
         parent_profit=_as_quarters(_QUARTERS_2024, parent_profit),
-        adjusted_profit={},
-        operating_cash_flow={},
+        adjusted_profit=_immutable_mapping({}),
+        operating_cash_flow=_immutable_mapping({}),
     )
 
 
