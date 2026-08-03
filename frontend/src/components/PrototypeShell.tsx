@@ -17,6 +17,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/new-research", label: "新建研究", icon: "⌬", group: "primary" },
   { to: "/relationships", label: "证据图谱", icon: "⧉", group: "primary" },
   { to: "/companies", label: "公司研究", icon: "◉", group: "primary" },
+  { to: "/conclusion", label: "结论与关键因素", icon: "✱", group: "primary" },
   { to: "/plan", label: "研究计划", icon: "▤", group: "industry" },
   { to: "/library", label: "资料与知识", icon: "▦", group: "industry" },
   { to: "/data", label: "数据中心", icon: "⌖", group: "knowledge" },

@@ -76,7 +76,23 @@ export function ConclusionScreen() {
   const load = useCallback(async () => {
     setState({ kind: "loading" });
     try {
-      const v = await researchClient.getConclusionView(caseId, { cutoff: cutoff ?? undefined });
+      let targetCaseId = caseId;
+      // 1) 若 caseId 缺失或不真实存在，自动选中第一个可访问的研究案例
+      if (!targetCaseId || targetCaseId === "ai-compute") {
+        try {
+          const list = await researchClient.listCaseSummaries();
+          if (list.length > 0) {
+            targetCaseId = list[0].id;
+            setCaseId(targetCaseId);
+          }
+        } catch {
+          // ignore — 仍尝试原 caseId
+        }
+      }
+      const v = await researchClient.getConclusionView(
+        targetCaseId,
+        { cutoff: cutoff ?? undefined },
+      );
       setView(v);
       const firstFactor = v.keyFactors[0]?.factorId ?? null;
       setSelectedFactorId(firstFactor);
