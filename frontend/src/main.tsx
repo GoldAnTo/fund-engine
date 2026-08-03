@@ -35,6 +35,7 @@ import { DataCenterScreen } from "./pages/prototype/DataCenterScreen";
 import { VersionsScreen } from "./pages/prototype/VersionsScreen";
 import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
 import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
+import { ConclusionScreen } from "./pages/prototype/ConclusionScreen";
 import { CompanyListPage } from "./pages/prototype/CompanyListPage";
 import { TopicListPage } from "./pages/prototype/TopicListPage";
 import "./styles.css";
@@ -57,10 +58,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             path="relationships"
             element={<RelationshipCanvasScreen />}
           />
-          <Route
-            path="relationships/:caseId"
-            element={<RelationshipCanvasScreen />}
-          />
+          <Route path="relationships/:caseId" element={<RelationshipCanvasScreen />} />
+          <Route path="conclusion" element={<ConclusionScreen />} />
+          <Route path="conclusion/:caseId" element={<ConclusionScreen />} />
           <Route path="review" element={<ReviewWorkbenchScreen />} />
           <Route path="library" element={<LibraryScreen />} />
           <Route path="data" element={<DataCenterScreen />} />

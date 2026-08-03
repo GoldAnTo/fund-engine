@@ -69,6 +69,7 @@ import type {
   TopicView,
   VersionsView,
   WorkspaceOverviewScreen,
+  ConclusionView,
 } from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
@@ -2459,6 +2460,194 @@ export class HttpResearchAdapter implements ResearchClient {
         thesisIds: dto.derived_from.thesis_ids,
         themeRoleIds: dto.derived_from.theme_role_ids,
         disclosureIds: dto.derived_from.disclosure_ids,
+      },
+    };
+  }
+
+  async getConclusionView(
+    caseId: string,
+    options?: { cutoff?: string },
+  ): Promise<ConclusionView> {
+    const qs = this.buildQuery({ cutoff: options?.cutoff });
+    const dto = await this.get<{
+      schema_version: string;
+      basis: {
+        cutoff: string;
+        is_historical: boolean;
+        ledger_high_watermark?: string | null;
+        projection_built_at?: string | null;
+        projection_schema_version?: string | null;
+      };
+      header: {
+        research_case_id: string;
+        case_title: string;
+        industry_topic: string;
+        evidence_cutoff: string;
+        conclusion_text: string;
+        conclusion_status: "supported" | "contradicted" | "insufficient_evidence" | null;
+        rationale: string;
+        review_state: string;
+        reviewer: string | null;
+        reviewed_at: string | null;
+        snapshot_id: string | null;
+        ai_provisional: boolean;
+      };
+      key_factors: Array<{
+        factor_id: string;
+        thesis_id: string;
+        thesis_title: string;
+        thesis_statement: string;
+        status_label: string;
+        role_label: string;
+        factor_label: string;
+        time_order: string;
+        mechanism: string;
+        direct_evidence: string;
+        alternatives: string;
+        difference_explanation: string;
+        scope_warning: string | null;
+        falsifier: string;
+        impact_object: string;
+      }>;
+      comparison: {
+        columns: string[];
+        rows: Array<{
+          factor_id: string;
+          factor_label: string;
+          cells: Array<{
+            factor_id: string;
+            factor_label: string;
+            column_id: string;
+            column_label: string;
+            text: string;
+          }>;
+        }>;
+      };
+      source_groups: Array<{
+        section_label: string;
+        relations: Array<{
+          label: string;
+          relation: "supports" | "contradicts" | "contextualizes";
+          document_title: string;
+          publisher: string | null;
+          citation: string;
+          locator: string;
+        }>;
+      }>;
+      reproduction_manifest: {
+        current_selection_label: string;
+        current_selection_state: string;
+        formal_judgment: string;
+        research_snapshot: string;
+        document_version: string;
+        publisher_record: string;
+        available_at: string;
+        reproducer: string;
+        factor_compare_version: string;
+        recheck_manifest: string;
+      };
+      causal_path: Array<{ sequence: number; description: string }>;
+      gap_explanation: {
+        factor_id: string;
+        factor_label: string;
+        why: string;
+        applicable_scope: string;
+        category: string;
+        data_pattern: string;
+        category_alt: string;
+        rationale: string;
+      };
+    }>(`/research-cases/${encodeURIComponent(caseId)}/conclusion${qs}`);
+
+    return {
+      basis: {
+        cutoff: dto.basis.cutoff,
+        isHistorical: dto.basis.is_historical,
+        ledgerHighWatermark: dto.basis.ledger_high_watermark ?? null,
+        projectionBuiltAt: dto.basis.projection_built_at ?? null,
+        projectionSchemaVersion: dto.basis.projection_schema_version ?? null,
+      },
+      header: {
+        researchCaseId: dto.header.research_case_id,
+        caseTitle: dto.header.case_title,
+        industryTopic: dto.header.industry_topic,
+        evidenceCutoff: dto.header.evidence_cutoff,
+        conclusionText: dto.header.conclusion_text,
+        conclusionStatus: dto.header.conclusion_status,
+        rationale: dto.header.rationale,
+        reviewState: dto.header.review_state,
+        reviewer: dto.header.reviewer,
+        reviewedAt: dto.header.reviewed_at,
+        snapshotId: dto.header.snapshot_id,
+        aiProvisional: dto.header.ai_provisional,
+      },
+      keyFactors: dto.key_factors.map((f) => ({
+        factorId: f.factor_id,
+        thesisId: f.thesis_id,
+        thesisTitle: f.thesis_title,
+        thesisStatement: f.thesis_statement,
+        statusLabel: f.status_label,
+        roleLabel: f.role_label,
+        factorLabel: f.factor_label,
+        timeOrder: f.time_order,
+        mechanism: f.mechanism,
+        directEvidence: f.direct_evidence,
+        alternatives: f.alternatives,
+        differenceExplanation: f.difference_explanation,
+        scopeWarning: f.scope_warning,
+        falsifier: f.falsifier,
+        impactObject: f.impact_object,
+      })),
+      comparison: {
+        columns: dto.comparison.columns,
+        rows: dto.comparison.rows.map((r) => ({
+          factorId: r.factor_id,
+          factorLabel: r.factor_label,
+          cells: r.cells.map((c) => ({
+            factorId: c.factor_id,
+            factorLabel: c.factor_label,
+            columnId: c.column_id,
+            columnLabel: c.column_label,
+            text: c.text,
+          })),
+        })),
+      },
+      sourceGroups: dto.source_groups.map((g) => ({
+        sectionLabel: g.section_label,
+        relations: g.relations.map((r) => ({
+          label: r.label,
+          relation: r.relation,
+          documentTitle: r.document_title,
+          publisher: r.publisher,
+          citation: r.citation,
+          locator: r.locator,
+        })),
+      })),
+      reproductionManifest: {
+        currentSelectionLabel: dto.reproduction_manifest.current_selection_label,
+        currentSelectionState: dto.reproduction_manifest.current_selection_state,
+        formalJudgment: dto.reproduction_manifest.formal_judgment,
+        researchSnapshot: dto.reproduction_manifest.research_snapshot,
+        documentVersion: dto.reproduction_manifest.document_version,
+        publisherRecord: dto.reproduction_manifest.publisher_record,
+        availableAt: dto.reproduction_manifest.available_at,
+        reproducer: dto.reproduction_manifest.reproducer,
+        factorCompareVersion: dto.reproduction_manifest.factor_compare_version,
+        recheckManifest: dto.reproduction_manifest.recheck_manifest,
+      },
+      causalPath: dto.causal_path.map((s) => ({
+        sequence: s.sequence,
+        description: s.description,
+      })),
+      gapExplanation: {
+        factorId: dto.gap_explanation.factor_id,
+        factorLabel: dto.gap_explanation.factor_label,
+        why: dto.gap_explanation.why,
+        applicableScope: dto.gap_explanation.applicable_scope,
+        category: dto.gap_explanation.category,
+        dataPattern: dto.gap_explanation.data_pattern,
+        categoryAlt: dto.gap_explanation.category_alt,
+        rationale: dto.gap_explanation.rationale,
       },
     };
   }

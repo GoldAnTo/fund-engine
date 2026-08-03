@@ -677,6 +677,22 @@ class ResearchRepository:
             select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
         )
 
+    def document_for_statement(
+        self, statement_id: uuid.UUID
+    ) -> DocumentVersion | None:
+        """按 statement 追溯所属 DocumentVersion。用于结论页 / 图谱溯源。"""
+        statement = self.get_statement(statement_id)
+        if statement is None:
+            return None
+        span = self._session.scalar(
+            select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
+        )
+        if span is None:
+            return None
+        return self._session.scalar(
+            select(DocumentVersion).where(DocumentVersion.id == span.document_version_id)
+        )
+
     def statements_for_span_ids(
         self, span_ids: list[uuid.UUID]
     ) -> list[SourceStatement]:

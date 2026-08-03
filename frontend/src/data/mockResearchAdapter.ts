@@ -58,6 +58,7 @@ import type {
   VersionsView,
   WorkspaceOverviewScreen,
   WorkspaceOverviewView,
+  ConclusionView,
 } from "../domain/prototypeTypes";
 import {
   buildCaseWorkbenchView,
@@ -3498,6 +3499,207 @@ export class MockResearchAdapter implements ResearchClient {
     // 装饰案例卡片 / 角色行的设计图文案（设计图 9/10 视觉）
     return simulateLatency(decorateTopicView({ ...base, ...derived }));
   }
+
+  async getConclusionView(
+    caseId: string,
+    opts?: { cutoff?: string },
+  ): Promise<ConclusionView> {
+    this.throwIfOffline();
+    const base = buildConclusionView(caseId);
+    if (opts?.cutoff) return simulateLatency({ ...base, basis: { ...base.basis, cutoff: opts.cutoff, isHistorical: true } });
+    return simulateLatency(base);
+  }
+}
+
+// ── 结论页 mock 数据 ─────────────────────────────────────────────────
+function buildConclusionView(caseId: string): ConclusionView {
+  return {
+    basis: {
+      cutoff: "2025-06-30T22:40:00+08:00",
+      isHistorical: true,
+      ledgerHighWatermark: null,
+      projectionBuiltAt: null,
+      projectionSchemaVersion: null,
+    },
+    header: {
+      researchCaseId: caseId,
+      caseTitle: "AI 算力链",
+      industryTopic: "AI 算力链 · 深度研究",
+      evidenceCutoff: "2025-06-30",
+      conclusionText:
+        "结论优先，底图回到因素，因果边、支持与反驳，正反判断只由冻结输入与人工复核产生。",
+      conclusionStatus: "insufficient_evidence",
+      rationale: "证据不足，继续验证：订单与交付披露。",
+      reviewState: "reviewed",
+      reviewer: "已人工复核",
+      reviewedAt: "2025-06-30T22:40:00+08:00",
+      snapshotId: "JD-2025-06-30-v3",
+      aiProvisional: false,
+    },
+    keyFactors: [
+      {
+        factorId: "F-1-01",
+        thesisId: "th-1",
+        thesisTitle: "云厂商资本开支",
+        thesisStatement: "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+        statusLabel: "已复现",
+        roleLabel: "已复现",
+        factorLabel: "云厂商资本开支",
+        timeOrder:
+          "因素定义 (2025-06-30) → 因素依赖 (2025-05-28) → 结论判定 (2025-06-30)",
+        mechanism: "多源云厂商指引支撑需求扩张",
+        directEvidence: "Microsoft / NVIDIA / Blackwell 交付与同步披露",
+        alternatives: "无",
+        differenceExplanation: "无显著反证",
+        scopeWarning: null,
+        falsifier: "资本开支指引回落同向降至两位数以下",
+        impactObject: "云厂商CapEx",
+      },
+      {
+        factorId: "F-1-02",
+        thesisId: "th-2",
+        thesisTitle: "订单与交付",
+        thesisStatement: "云厂商算力采购将沿供应链向代工/ODM端传导",
+        statusLabel: "待人工",
+        roleLabel: "待人工",
+        factorLabel: "订单与交付",
+        timeOrder:
+          "因素定义 (2025-06-30) → 因素依赖 (2025-06-15) → 结论判定 (2025-06-30)",
+        mechanism: "代工厂财务披露与管理层访谈",
+        directEvidence: "富士康 AI 服务器订单能见度",
+        alternatives: "代工毛利率偏低、季度波动",
+        differenceExplanation: "（待人工补充）",
+        scopeWarning: null,
+        falsifier: "毛利率持续下降并带动交付延期",
+        impactObject: "代工ODM",
+      },
+      {
+        factorId: "F-1-03",
+        thesisId: "th-3",
+        thesisTitle: "数据中心电力与并网周期",
+        thesisStatement: "数据中心电力与并网周期约束AI算力扩张",
+        statusLabel: "待证据",
+        roleLabel: "待证据",
+        factorLabel: "数据中心电力与并网周期",
+        timeOrder:
+          "因素定义 (2025-06-30) → 因素依赖 (—) → 结论判定 (2025-06-30)",
+        mechanism: "暂无已审核来源直接连接并网与收入",
+        directEvidence: "（暂无直接证据）",
+        alternatives: "（暂无反证）",
+        differenceExplanation: "（暂无分歧）",
+        scopeWarning: null,
+        falsifier: "电力许可被否",
+        impactObject: "数据中心",
+      },
+    ],
+    comparison: {
+      columns: ["评审维度", "直接证据", "佐证证据", "范围警示", "替代解释", "影响对象", "评审角色", "限制因素"],
+      rows: [
+        {
+          factorId: "F-1-01",
+          factorLabel: "云厂商资本开支",
+          cells: [
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "factor_dimension", columnLabel: "评审维度", text: "云厂商CapEx" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "direct_evidence", columnLabel: "直接证据", text: "多家云厂商指引" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "backing_evidence", columnLabel: "佐证证据", text: "订单与交付披露" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "scope_warning", columnLabel: "范围警示", text: "—" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "alternative", columnLabel: "替代解释", text: "外部约束" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "impact_object", columnLabel: "影响对象", text: "云厂商CapEx" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "reviewer_role", columnLabel: "评审角色", text: "已复现" },
+            { factorId: "F-1-01", factorLabel: "云厂商资本开支", columnId: "gate_result", columnLabel: "限制因素", text: "—" },
+          ],
+        },
+        {
+          factorId: "F-1-02",
+          factorLabel: "订单与交付",
+          cells: [
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "factor_dimension", columnLabel: "评审维度", text: "代工ODM" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "direct_evidence", columnLabel: "直接证据", text: "投资项目材料不足" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "backing_evidence", columnLabel: "佐证证据", text: "管理层访谈" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "scope_warning", columnLabel: "范围警示", text: "—" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "alternative", columnLabel: "替代解释", text: "毛利率偏低" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "impact_object", columnLabel: "影响对象", text: "代工ODM" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "reviewer_role", columnLabel: "评审角色", text: "待人工" },
+            { factorId: "F-1-02", factorLabel: "订单与交付", columnId: "gate_result", columnLabel: "限制因素", text: "—" },
+          ],
+        },
+        {
+          factorId: "F-1-03",
+          factorLabel: "数据中心电力与并网周期",
+          cells: [
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "factor_dimension", columnLabel: "评审维度", text: "数据中心" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "direct_evidence", columnLabel: "直接证据", text: "并网披露项目" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "backing_evidence", columnLabel: "佐证证据", text: "电信数据" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "scope_warning", columnLabel: "范围警示", text: "—" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "alternative", columnLabel: "替代解释", text: "限电因素" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "impact_object", columnLabel: "影响对象", text: "数据中心" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "reviewer_role", columnLabel: "评审角色", text: "待证据" },
+            { factorId: "F-1-03", factorLabel: "数据中心电力与并网周期", columnId: "gate_result", columnLabel: "限制因素", text: "—" },
+          ],
+        },
+      ],
+    },
+    sourceGroups: [
+      {
+        sectionLabel: "支持 · 已复现",
+        relations: [
+          {
+            label: "支持 · 已复现",
+            relation: "supports",
+            documentTitle: "Blackwell 交付与同步披露",
+            publisher: "NVIDIA",
+            citation: "Blackwell 交付与同步披露",
+            locator: "P10-Q·P.38",
+          },
+        ],
+      },
+      {
+        sectionLabel: "支持 · 已传导",
+        relations: [
+          {
+            label: "支持 · 已传导",
+            relation: "supports",
+            documentTitle: "Microsoft FY2025 Q3 call",
+            publisher: "Microsoft",
+            citation: "需求高于可供给，收入与可见约束",
+            locator: "P4-5",
+          },
+        ],
+      },
+    ],
+    reproductionManifest: {
+      currentSelectionLabel: "F-1-01",
+      currentSelectionState: "F-1-01",
+      formalJudgment: "订单与交付实际安排",
+      researchSnapshot: "RS-2025-06-30-v3",
+      documentVersion: "sec-10q-2025-05-28-v1",
+      publisherRecord: "issuer-call-2025-04-30-v1",
+      availableAt: "2025-06-30",
+      reproducer: "林岚 · 2026-06-30 22:40 CST",
+      factorCompareVersion: "factor-compare-v2 · evidence-role-v1",
+      recheckManifest:
+        "snapshot: RS-2025-06-30-v3 | inputs: 4 documents / 2 series | citations: 6 sourceSpans | output_hash: 9c72a59e",
+    },
+    causalPath: [
+      { sequence: 1, description: "订单与交付披露" },
+      { sequence: 2, description: "因素 → 交付" },
+      { sequence: 3, description: "交付 → 收入" },
+      { sequence: 4, description: "证据判断与证据保存" },
+      { sequence: 5, description: "正式缺证据" },
+    ],
+    gapExplanation: {
+      factorId: "F-1-02",
+      factorLabel: "位于需求到收入的必要传导环节",
+      why:
+        "资本开支定义还需进入收入确认的必要传导环节，具有主要解释力。",
+      applicableScope: "同一主体 · 同一业务口径",
+      category: "适用边界",
+      dataPattern:
+        "订单与交付披露：2025-01-01 至 2027-12-31；云厂商、网络交换机、存储可构成口径均需拆分；任何一项拆分存在即不构成同口径对照。",
+      categoryAlt: "假设",
+      rationale: "收入与可信确认不予确认。",
+    },
+  };
 }
 
 export const mockExposures = {

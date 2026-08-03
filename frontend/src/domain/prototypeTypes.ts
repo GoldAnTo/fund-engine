@@ -901,6 +901,120 @@ export interface CaseSummaryItem {
   updatedAt: string;
 }
 
+// ── 「结论与关键因素」页面 (屏幕 11 · 设计原型11) ────────────────────
+
+export interface ConclusionHeader {
+  researchCaseId: string;
+  caseTitle: string;
+  industryTopic: string;
+  evidenceCutoff: string;
+  conclusionText: string;
+  conclusionStatus: "supported" | "contradicted" | "insufficient_evidence" | null;
+  rationale: string;
+  reviewState: string;
+  reviewer: string | null;
+  reviewedAt: string | null;
+  snapshotId: string | null;
+  aiProvisional: boolean;
+}
+
+export interface ConclusionKeyFactor {
+  factorId: string;
+  thesisId: string;
+  thesisTitle: string;
+  thesisStatement: string;
+  statusLabel: string;
+  roleLabel: string;
+  factorLabel: string;
+  timeOrder: string;
+  mechanism: string;
+  directEvidence: string;
+  alternatives: string;
+  differenceExplanation: string;
+  scopeWarning: string | null;
+  falsifier: string;
+  impactObject: string;
+}
+
+export interface ConclusionComparisonCell {
+  factorId: string;
+  factorLabel: string;
+  columnId: string;
+  columnLabel: string;
+  text: string;
+}
+
+export interface ConclusionComparisonRow {
+  factorId: string;
+  factorLabel: string;
+  cells: ConclusionComparisonCell[];
+}
+
+export interface ConclusionComparisonTable {
+  columns: string[];
+  rows: ConclusionComparisonRow[];
+}
+
+export interface ConclusionSourceCitation {
+  label: string;
+  relation: "supports" | "contradicts" | "contextualizes";
+  documentTitle: string;
+  publisher: string | null;
+  citation: string;
+  locator: string;
+}
+
+export interface ConclusionSourceGroup {
+  sectionLabel: string;
+  relations: ConclusionSourceCitation[];
+}
+
+export interface ConclusionManifest {
+  currentSelectionLabel: string;
+  currentSelectionState: string;
+  formalJudgment: string;
+  researchSnapshot: string;
+  documentVersion: string;
+  publisherRecord: string;
+  availableAt: string;
+  reproducer: string;
+  factorCompareVersion: string;
+  recheckManifest: string;
+}
+
+export interface ConclusionCausalStep {
+  sequence: number;
+  description: string;
+}
+
+export interface ConclusionGapExplanation {
+  factorId: string;
+  factorLabel: string;
+  why: string;
+  applicableScope: string;
+  category: string;
+  dataPattern: string;
+  categoryAlt: string;
+  rationale: string;
+}
+
+export interface ConclusionView {
+  basis: {
+    cutoff: string;
+    isHistorical: boolean;
+    ledgerHighWatermark: string | null;
+    projectionBuiltAt: string | null;
+    projectionSchemaVersion: string | null;
+  };
+  header: ConclusionHeader;
+  keyFactors: ConclusionKeyFactor[];
+  comparison: ConclusionComparisonTable;
+  sourceGroups: ConclusionSourceGroup[];
+  reproductionManifest: ConclusionManifest;
+  causalPath: ConclusionCausalStep[];
+  gapExplanation: ConclusionGapExplanation;
+}
+
 export interface PrototypeClient {
   getWorkspaceOverviewView(): Promise<WorkspaceOverviewView>;
   getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen>;
@@ -924,6 +1038,10 @@ export interface PrototypeClient {
   ): Promise<VersionsView>;
   getThemeIndexView(): Promise<ThemeIndexView>;
   getThemeWorkbenchView(themeId: string): Promise<ThemeWorkbenchView>;
+  getConclusionView(
+    caseId: string,
+    options?: { cutoff?: string },
+  ): Promise<ConclusionView>;
 }
 
 export type ResearchClient = BaseResearchClient &

@@ -7,7 +7,8 @@ export type StatusBadgeVariant =
   | "monitoring"
   | "validating"
   | "frozen"
-  | "draft";
+  | "draft"
+  | "default";
 
 export interface StatusBadgeProps {
   variant?: StatusBadgeVariant;
@@ -18,6 +19,6 @@ export interface StatusBadgeProps {
  * Consistent status pill used across the prototype shell — same vocabulary
  * as theme pills / claim sentiment pills / hypothesis badges.
  */
-export function StatusBadge({ variant = "ai", children }: StatusBadgeProps) {
+export function StatusBadge({ variant = "default", children }: StatusBadgeProps) {
   return <span className={`status-pill status-pill--${variant}`}>{children}</span>;
 }

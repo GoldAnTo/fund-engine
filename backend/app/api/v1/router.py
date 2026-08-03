@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.cases import router as cases_router
+from app.api.v1.conclusion import router as conclusion_router
 from app.api.v1.commands.cases import router as case_commands_router
 from app.api.v1.commands.causal import router as causal_commands_router
 from app.api.v1.commands.engine import documents_router as engine_doc_commands_router
@@ -37,6 +38,7 @@ def health_v1() -> HealthResponse:
 
 
 router.include_router(cases_router)
+router.include_router(conclusion_router)
 router.include_router(compare_router)
 router.include_router(graph_router)
 router.include_router(documents_router)

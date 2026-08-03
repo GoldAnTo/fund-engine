@@ -256,6 +256,13 @@ export function CaseWorkbenchScreen() {
               >
                 证据图谱 →
               </Link>
+              <Link
+                className="prototype-button"
+                to={`/conclusion/${selectedCaseId}`}
+                data-testid="link-conclusion"
+              >
+                结论与关键因素 →
+              </Link>
               <Link className="prototype-button" to="/review">
                 复核中心 →
               </Link>
