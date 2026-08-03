@@ -155,7 +155,7 @@ def _parse_juyuan_parent_profit(raw_response: object) -> dict[str, Decimal]:
     return observed
 
 
-def _validate_juyuan_adjusted_profit(raw_response: object) -> None:
+def _validate_juyuan_adjusted_profit(raw_response: object) -> dict[str, Decimal]:
     """Validate the second metric in the combined response without using its precision."""
     if not isinstance(raw_response, str):
         raise ValueError("Juyuan raw_response must be text")
@@ -180,6 +180,7 @@ def _validate_juyuan_adjusted_profit(raw_response: object) -> None:
             and row.get("核算方式") == "累计值"
             and row.get("展示单位") == "元"
         )
+    observed: dict[str, Decimal] = {}
     for period, (date, report_period) in _JY_PERIODS.items():
         matches = [
             row
@@ -188,10 +189,15 @@ def _validate_juyuan_adjusted_profit(raw_response: object) -> None:
         ]
         if len(matches) != 1:
             raise ValueError(f"Juyuan missing or ambiguous adjusted-profit row for {period}")
-        _decimal(matches[0].get("财务分析指标数额"), field=f"Juyuan.adjusted.{period}")
+        observed[period] = _decimal(
+            matches[0].get("财务分析指标数额"), field=f"Juyuan.adjusted.{period}"
+        )
+    return observed
 
 
-def _juyuan_observation(payload: dict[str, Any]) -> JuyuanObservation:
+def _juyuan_observation(
+    payload: dict[str, Any], *, official_adjusted_cumulative: dict[str, Decimal]
+) -> JuyuanObservation:
     required = {
         "provider",
         "tool",
@@ -215,9 +221,11 @@ def _juyuan_observation(payload: dict[str, Any]) -> JuyuanObservation:
         for period in _JY_PERIODS
     }
     parsed = _parse_juyuan_parent_profit(payload["raw_response"])
-    _validate_juyuan_adjusted_profit(payload["raw_response"])
+    parsed_adjusted = _validate_juyuan_adjusted_profit(payload["raw_response"])
     if rounded != parsed:
         raise ValueError("Juyuan normalized rounded observations differ from raw response")
+    if parsed_adjusted != official_adjusted_cumulative:
+        raise ValueError("Juyuan adjusted profit differs from official CNINFO cumulative values")
     return JuyuanObservation(
         provider=payload["provider"],
         tool=payload["tool"],
@@ -254,6 +262,15 @@ def _extract_four_values(text: str, pattern: str, *, field: str) -> list[Decimal
 
 def _as_quarters(periods: tuple[str, ...], values: list[Decimal]) -> dict[str, Decimal]:
     return dict(zip(periods, values, strict=True))
+
+
+def _cumulative_2025(quarters: dict[str, Decimal]) -> dict[str, Decimal]:
+    return {
+        "2025Q1": quarters["2025Q1"],
+        "2025H1": quarters["2025Q1"] + quarters["2025Q2"],
+        "2025Q1-Q3": quarters["2025Q1"] + quarters["2025Q2"] + quarters["2025Q3"],
+        "2025FY": sum(quarters.values()),
+    }
 
 
 def _parse_2025_annual_report() -> AnnualReportObservation:
@@ -331,16 +348,14 @@ def _parse_2024_annual_report() -> AnnualReportObservation:
 
 def load_case_data() -> CaseData:
     """Load and reconcile the official exact source with Juyuan's rounded check."""
-    juyuan = _juyuan_observation(_read_json("juyuan_finquery_2026-08-03.json"))
     annual_report = _parse_2025_annual_report()
     annual_report_2024 = _parse_2024_annual_report()
+    juyuan = _juyuan_observation(
+        _read_json("juyuan_finquery_2026-08-03.json"),
+        official_adjusted_cumulative=_cumulative_2025(annual_report.adjusted_profit),
+    )
     parent_quarters = annual_report.parent_profit
-    official_cumulative = {
-        "2025Q1": parent_quarters["2025Q1"],
-        "2025H1": parent_quarters["2025Q1"] + parent_quarters["2025Q2"],
-        "2025Q1-Q3": parent_quarters["2025Q1"] + parent_quarters["2025Q2"] + parent_quarters["2025Q3"],
-        "2025FY": sum(parent_quarters.values()),
-    }
+    official_cumulative = _cumulative_2025(parent_quarters)
     official_rounded = {
         period: (value / Decimal("100000000")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP

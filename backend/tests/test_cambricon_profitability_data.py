@@ -161,3 +161,28 @@ def test_loader_rejects_wrong_supporting_query_or_adjusted_metric(
 
     with pytest.raises(ValueError, match="Juyuan"):
         load_case_data()
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("275962803.95", "275962803.96"),
+        ("912566847.07", "912566847.08"),
+        ("1418887977.3", "1418887977.4"),
+        ("1769934157.68", "1769934157.69"),
+    ],
+)
+def test_loader_rejects_any_juyuan_adjusted_profit_value_mismatching_cninfo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old: str,
+    new: str,
+) -> None:
+    copied = _copy_fixture_dir(tmp_path, monkeypatch)
+    path = copied / "juyuan_finquery_2026-08-03.json"
+    payload = json.loads(path.read_text("utf-8"))
+    payload["raw_response"] = payload["raw_response"].replace(old, new, 1)
+    path.write_text(json.dumps(payload, ensure_ascii=False), "utf-8")
+
+    with pytest.raises(ValueError, match="Juyuan adjusted profit"):
+        load_case_data()
