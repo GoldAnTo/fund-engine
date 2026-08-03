@@ -7,7 +7,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import (
     AIAssessment,
@@ -24,6 +25,7 @@ from app.models.ledger import (
     Stock,
     ThemeRole,
     Thesis,
+    Base,
 )
 from app.repositories.research import ResearchRepository
 from app.scripts.cambricon_profitability_data import load_case_data
@@ -68,6 +70,40 @@ def _counts(session) -> dict[str, int]:
             CaseThemeTagEvent,
         )
     }
+
+
+def _clone_full_looking_legacy_case(source, target) -> None:
+    """Copy a complete seed without mutating its immutable source rows."""
+    models = (
+        DocumentVersion,
+        SourceSpan,
+        ResearchCase,
+        Thesis,
+        SourceStatement,
+        EvidenceLink,
+        EvidenceSnapshot,
+        AIAssessment,
+        Company,
+        Stock,
+        ThemeRole,
+        CaseThemeTagEvent,
+    )
+    for model in models:
+        for entity in source.scalars(select(model)):
+            values = {
+                column.name: getattr(entity, column.name)
+                for column in model.__table__.columns
+            }
+            if (
+                model is SourceStatement
+                and values["normalized_text"].startswith("2025Q1至Q4归母净利润")
+            ):
+                values["normalized_text"] = "2025年归母净利润为2,059,228,538.67元（由官方分季度数据加总）"
+            if model is ThemeRole:
+                values["role"] = "国产算力芯片公司"
+                values["scope"] = {"theme": "算力国产化", "boundary": "classification_only"}
+            target.add(model(**values))
+    target.flush()
 
 
 def test_seed_creates_one_complete_provisional_profitability_case(session):
@@ -251,6 +287,25 @@ def test_seed_fails_closed_for_same_title_partial_case_without_repair(session):
 
     assert session.get(ResearchCase, partial.id) is not None
     assert _counts(session) == before
+
+
+def test_seed_rejects_a_full_looking_legacy_graph_with_broken_manifest(session):
+    seed(session)
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    target = sessionmaker(bind=engine, future=True)()
+    try:
+        _clone_full_looking_legacy_case(session, target)
+        before = _counts(target)
+
+        with pytest.raises(RuntimeError, match="partial|incomplete|same-title"):
+            seed(target)
+
+        assert _counts(target) == before
+    finally:
+        target.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def test_seed_is_idempotent_after_legitimate_later_human_reviews(session):
