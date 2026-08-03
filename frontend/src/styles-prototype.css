@@ -422,6 +422,8 @@
   font-weight: 500;
   border: 1px solid currentColor;
   background: var(--paper);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .state-badge.warning { color: var(--warning); }
 .state-badge.reviewed { color: var(--reviewed); }
@@ -987,6 +989,9 @@ a.prototype-button { text-decoration: none; }
   text-decoration: none;
   color: var(--ink);
   background: var(--paper);
+  /* 让卡片在 320px 左栏里不被长字符串撑爆；保证子元素可被截断。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
   transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .prototype-library-source-list a:hover {
@@ -1004,7 +1009,16 @@ a.prototype-button { text-decoration: none; }
 }
 .prototype-library-source-list .library-row-top {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
+  min-width: 0;
+}
+.prototype-library-source-list .library-row-top > span:first-child {
+  /* 实体名占首位，可被截断但不撑爆；徽章保持完整。 */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .prototype-library-filters {
   display: grid;

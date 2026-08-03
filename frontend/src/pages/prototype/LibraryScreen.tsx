@@ -205,7 +205,6 @@ export function LibraryScreen() {
               <p className="section-kicker">资料列表</p>
               <h2>{filteredDocs.length} 份冻结资料</h2>
             </div>
-            <span className="state-badge reviewed">DocumentVersion · SourceSpan</span>
           </div>
           <div className="prototype-library-source-list">
             {[...new Set(filteredDocs.map((d) => d.documentType))].map((group) => {
@@ -226,13 +225,11 @@ export function LibraryScreen() {
                         e.preventDefault();
                         setSelectedId(d.id);
                       }}
+                      title={`来源版本: ${d.sourceVersion}`}
                     >
                       <div className="library-row-top">
                         <span>
                           <strong>{d.entity}</strong>
-                          <code style={{ marginLeft: 6, fontSize: 10 }}>
-                            {d.sourceVersion}
-                          </code>
                         </span>
                         <span
                           className="state-badge"
@@ -248,13 +245,7 @@ export function LibraryScreen() {
                       </div>
                       <strong>{d.title}</strong>
                       <small>
-                        发布 {d.publishedLabel} · 获取 {d.acquiredLabel}
-                      </small>
-                      <small>
-                        {/* 复用次数 = 这份资料被多少"证据关系"引用；
-                            复用历史详见右栏"知识复用"面板。链接案例数在同一
-                            复用历史里，已经能覆盖；这里不重复展示。 */}
-                        复用次数 ×{d.reuseCount}
+                        发布 {d.publishedLabel} · 复用 ×{d.reuseCount}
                       </small>
                     </a>
                   ))}
