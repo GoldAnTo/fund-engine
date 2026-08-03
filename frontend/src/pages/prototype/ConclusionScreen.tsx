@@ -71,7 +71,6 @@ export function ConclusionScreen() {
   const [cutoff, setCutoff] = useState<string | null>(
     searchParams.get("cutoff"),
   );
-  const [prototypeModalOpen, setPrototypeModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -146,10 +145,20 @@ export function ConclusionScreen() {
 
   const { header, comparison, sourceGroups, reproductionManifest, causalPath, gapExplanation } = view;
 
-  // 三段简短结论气泡（取每个 KeyFactor 的 status_label 作为结论片段）
-  const conclusionBullets = view.keyFactors.slice(0, 3).map((f) => ({
+  // 三段简短结论气泡（按 thesis 顺序截取 status_label + falsifier 摘要）
+  // 第一段使用 header.conclusionStatus 决定的正式判断标题（原图「正式反驳结论」）
+  const formalTitle = (() => {
+    if (header.conclusionStatus === "supported") return "正式支持结论";
+    if (header.conclusionStatus === "contradicted") return "正式反驳结论";
+    if (header.conclusionStatus === "insufficient_evidence")
+      return "正式待证据结论";
+    return "正式结论待定";
+  })();
+  const conclusionBullets = view.keyFactors.slice(0, 3).map((f, idx) => ({
     id: f.factorId,
-    text: f.statusLabel + " · " + (f.falsifier ?? "—"),
+    title: idx === 0 ? formalTitle : `${f.roleLabel} · ${f.thesisTitle}`,
+    subtitle: f.directEvidence.slice(0, 60),
+    snapshot: `数据快照 · ${f.factorLabel.slice(0, 30)}`,
   }));
 
   return (
@@ -168,37 +177,15 @@ export function ConclusionScreen() {
         lede="结论优先，底图回到因素，因果边、支持与反驳，正反判断只由冻结输入与人工复核产生。"
         actions={
           <div className="conclusion-actions">
-            <button
-              type="button"
-              className="prototype-button"
-              onClick={() => setPrototypeModalOpen(true)}
-              data-testid="open-prototype-button"
-              aria-haspopup="dialog"
-              aria-expanded={prototypeModalOpen}
-              title="查看对应设计原型11 视觉稿"
-            >
-              ⊟ 设计原型 11 ↗
-            </button>
-            <div className="conclusion-cutoff-control">
-              <label>
-                证据截止
-                <input
-                  type="date"
-                  value={(cutoff ?? header.evidenceCutoff).slice(0, 10)}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setCutoff(next ? `${next}T00:00:00+08:00` : null);
-                    if (next) searchParams.set("cutoff", next);
-                    else searchParams.delete("cutoff");
-                    setSearchParams(searchParams, { replace: true });
-                  }}
-                />
-              </label>
-              <span className="conclusion-cutoff-hint">
-                历史截止 {formatDate(header.evidenceCutoff)} ·{" "}
-                {header.reviewState === "reviewed" ? "已人工复核" : "AI 临时标记"}
-              </span>
-            </div>
+            <input
+              type="search"
+              placeholder="搜索结论、因素、证据..."
+              className="conclusion-search"
+              aria-label="搜索结论、因素、证据"
+            />
+            <span className="conclusion-cutoff-badge" data-testid="cutoff-badge">
+              ⌚ 历史截止点 {formatDate(header.evidenceCutoff)}
+            </span>
           </div>
         }
       />
@@ -231,21 +218,39 @@ export function ConclusionScreen() {
       >
         <p className="conclusion-summary">{header.conclusionText}</p>
         <div className="conclusion-bullets">
-          {conclusionBullets.map((b) => (
-            <PaperCard
-              key={b.id}
-              variant={
-                STATUS_LABEL_TO_VARIANT[
-                  b.text.split(" · ")[0] as keyof typeof STATUS_LABEL_TO_VARIANT
-                ] ?? "default"
-              }
-              padding="compact"
-              data-testid={`conclusion-bullet-${b.id}`}
-            >
-              <strong>{b.id}</strong>
-              <span>{b.text}</span>
-            </PaperCard>
-          ))}
+          {conclusionBullets.map((b, idx) => {
+            const variant =
+              idx === 0
+                ? header.conclusionStatus === "contradicted"
+                  ? "contradict"
+                  : header.conclusionStatus === "supported"
+                    ? "default"
+                    : "warning"
+                : (STATUS_LABEL_TO_VARIANT[b.title.split(" · ")[0]] ?? "default");
+            return (
+              <PaperCard
+                key={b.id}
+                variant={variant}
+                padding="compact"
+                data-testid={`conclusion-bullet-${b.id}`}
+                className={`conclusion-bullet${
+                  idx === 0 ? " conclusion-bullet--formal" : ""
+                }`}
+              >
+                <strong
+                  className={
+                    idx === 0 ? "conclusion-bullet__title" : undefined
+                  }
+                >
+                  {b.title}
+                </strong>
+                <span className="conclusion-bullet__subtitle">{b.subtitle}</span>
+                <span className="conclusion-bullet__snapshot muted">
+                  {b.snapshot}
+                </span>
+              </PaperCard>
+            );
+          })}
         </div>
       </PaperCard>
 
@@ -270,49 +275,71 @@ export function ConclusionScreen() {
                 data-testid={`key-factor-${f.factorId}`}
               >
                 <div className="key-factor__head">
-                  <strong className="key-factor__id">{f.factorId}</strong>
+                  <span className="key-factor__id">{f.factorId}</span>
                   <span className="key-factor__title">{f.factorLabel}</span>
                   <StatusBadge
                     variant={STATUS_LABEL_TO_VARIANT[f.statusLabel] ?? "default"}
                   >
                     {f.statusLabel}
                   </StatusBadge>
-                  <StatusBadge
-                    variant={ROLE_LABEL_TO_VARIANT[f.roleLabel] ?? "default"}
-                  >
-                    {f.roleLabel}
-                  </StatusBadge>
                 </div>
                 <div className="key-factor__body">
                   <p>
-                    <span className="muted">机制：</span>
+                    <span className="muted">形成为需求入口：</span>
                     {f.mechanism}
                   </p>
                   <p>
-                    <span className="muted">直接证据：</span>
+                    <span className="muted">数据快照：</span>
                     {f.directEvidence}
-                  </p>
-                  <p>
-                    <span className="muted">替代解释：</span>
-                    {f.alternatives}
-                  </p>
-                  <p>
-                    <span className="muted">时序：</span>
-                    <code className="conclusion-mono">{f.timeOrder}</code>
-                  </p>
-                  {f.scopeWarning && (
-                    <p className="key-factor__warning">
-                      ⚠ 范围警示：{f.scopeWarning}
-                    </p>
-                  )}
-                  <p className="key-factor__falsifier">
-                    证伪：{f.falsifier}
                   </p>
                 </div>
               </li>
             ))}
           </ul>
         </PaperCard>
+
+        {/* 左下：所选因素解释（与设计原型 11 一致） */}
+        {selectedFactor && (
+          <PaperCard
+            kicker="所选因素解释"
+            title={gapExplanation.factorLabel}
+            padding="compact"
+            data-testid="gap-card"
+          >
+            <dl className="gap-explain">
+              <div>
+                <dt>为什么</dt>
+                <dd>{gapExplanation.why}</dd>
+              </div>
+              <div>
+                <dt>适用边界</dt>
+                <dd>{gapExplanation.applicableScope}</dd>
+              </div>
+              <div>
+                <dt>数据模式</dt>
+                <dd>{gapExplanation.dataPattern}</dd>
+              </div>
+              <div>
+                <dt>假设</dt>
+                <dd>{gapExplanation.categoryAlt}：{gapExplanation.rationale}</dd>
+              </div>
+              <div>
+                <dt>正向判断</dt>
+                <dd>
+                  <StatusBadge
+                    variant={
+                      STATUS_LABEL_TO_VARIANT[
+                        selectedFactor.statusLabel as keyof typeof STATUS_LABEL_TO_VARIANT
+                      ] ?? "default"
+                    }
+                  >
+                    {selectedFactor.statusLabel}
+                  </StatusBadge>
+                </dd>
+              </div>
+            </dl>
+          </PaperCard>
+        )}
 
         {/* ── 中栏：竞争性因素比较 + 支持/反驳/缺口 + 结论形成路径 ── */}
         <div className="conclusion-center">
@@ -327,48 +354,71 @@ export function ConclusionScreen() {
                 <thead>
                   <tr>
                     <th>评审维度</th>
-                    {comparison.columns.slice(1).map((col) => (
-                      <th key={col}>{col}</th>
-                    ))}
+                    {/* 列：取每个 factor 作为一个列（按 thesis 顺序，去重） */}
+                    {Array.from(
+                      new Set(view.keyFactors.map((f) => f.factorId)),
+                    ).map((fid) => {
+                      const f = view.keyFactors.find(
+                        (kf) => kf.factorId === fid,
+                      );
+                      return (
+                        <th key={fid} title={fid}>
+                          {f?.factorLabel ?? fid}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {comparison.rows.map((row) => {
-                    const cellMap = Object.fromEntries(
-                      row.cells.map((c) => [c.columnId, c.text]),
-                    );
+                  {comparison.columns.slice(1).map((dimension) => {
                     return (
-                      <tr
-                        key={row.factorId}
-                        onClick={() => setSelectedFactorId(row.factorId)}
-                        className={
-                          row.factorId === selectedFactorId
-                            ? "comparison-row comparison-row--selected"
-                            : "comparison-row"
-                        }
-                      >
-                        <td>
-                          <strong>{row.factorLabel}</strong>
-                          <br />
-                          <code className="muted">{row.factorId}</code>
-                        </td>
-                        <td>{cellMap["direct_evidence"]}</td>
-                        <td>{cellMap["backing_evidence"]}</td>
-                        <td>{cellMap["scope_warning"]}</td>
-                        <td>{cellMap["alternative"]}</td>
-                        <td>{cellMap["impact_object"]}</td>
-                        <td>
-                          <StatusBadge
-                            variant={
-                              STATUS_LABEL_TO_VARIANT[
-                                cellMap["reviewer_role"] as keyof typeof STATUS_LABEL_TO_VARIANT
-                              ] ?? "default"
-                            }
-                          >
-                            {cellMap["reviewer_role"]}
-                          </StatusBadge>
-                        </td>
-                        <td>{cellMap["gate_result"]}</td>
+                      <tr key={dimension}>
+                        <th scope="row" className="comparison-table__dim">
+                          {dimension}
+                        </th>
+                        {Array.from(
+                          new Set(view.keyFactors.map((f) => f.factorId)),
+                        ).map((fid) => {
+                          const f = view.keyFactors.find(
+                            (kf) => kf.factorId === fid,
+                          );
+                          // 在 comparison.rows 中找到属于此 factor 且匹配此 dimension 的 cell
+                          const row = comparison.rows.find(
+                            (r) => r.factorId === fid,
+                          );
+                          const text = row
+                            ? row.cells.find((c) => c.columnLabel === dimension)
+                                ?.text ?? "—"
+                            : "—";
+                          if (dimension === "评审角色" && f) {
+                            return (
+                              <td key={fid}>
+                                <StatusBadge
+                                  variant={
+                                    STATUS_LABEL_TO_VARIANT[
+                                      f.roleLabel as keyof typeof STATUS_LABEL_TO_VARIANT
+                                    ] ?? "default"
+                                  }
+                                >
+                                  {f.roleLabel}
+                                </StatusBadge>
+                              </td>
+                            );
+                          }
+                          return (
+                            <td
+                              key={fid}
+                              onClick={() => setSelectedFactorId(fid)}
+                              className={
+                                fid === selectedFactorId
+                                  ? "comparison-cell--selected"
+                                  : undefined
+                              }
+                            >
+                              {text}
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
@@ -426,34 +476,8 @@ export function ConclusionScreen() {
           )}
         </div>
 
-        {/* ── 右栏：所选因素解释 + 解释与重现 + 复现清单 ── */}
+        {/* ── 右栏：解释与重现 + 复现清单 ── */}
         <div className="conclusion-right">
-          {selectedFactor && (
-            <PaperCard
-              kicker="所选因素解释"
-              title={gapExplanation.factorLabel}
-              padding="compact"
-              data-testid="gap-card"
-            >
-              <p>
-                <span className="muted">为什么：</span>
-                {gapExplanation.why}
-              </p>
-              <p>
-                <span className="muted">{gapExplanation.category}：</span>
-                {gapExplanation.applicableScope}
-              </p>
-              <p>
-                <span className="muted">数据模式：</span>
-                {gapExplanation.dataPattern}
-              </p>
-              <p>
-                <span className="muted">{gapExplanation.categoryAlt}：</span>
-                {gapExplanation.rationale}
-              </p>
-            </PaperCard>
-          )}
-
           <PaperCard
             kicker="解释与重现"
             title={reproductionManifest.currentSelectionLabel}
@@ -524,68 +548,21 @@ export function ConclusionScreen() {
             <code className="conclusion-mono-block">
               {reproductionManifest.recheckManifest}
             </code>
-            <p className="muted" style={{ marginTop: 12 }}>
-              使用冻结输入重新运算；AI 复跑只回填新草案，不能覆盖原结论。
-            </p>
           </PaperCard>
-        </div>
-      </div>
 
-      {/* 设计原型参考图 Modal（prototype/设计原型11-结论与关键因素.png） */}
-      {prototypeModalOpen && (
-        <div
-          className="prototype-modal-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-label="设计原型 11 · 结论与关键因素 视觉稿"
-          data-testid="prototype-modal"
-          onClick={(e) => {
-            // 点击遮罩关闭
-            if (e.target === e.currentTarget) setPrototypeModalOpen(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setPrototypeModalOpen(false);
-          }}
-        >
-          <div className="prototype-modal">
-            <header className="prototype-modal__head">
-              <div>
-                <strong>设计原型 11</strong>
-                <span className="muted"> · 结论与关键因素 · 视觉参考稿</span>
-              </div>
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => setPrototypeModalOpen(false)}
-                aria-label="关闭"
-                data-testid="close-prototype-button"
-              >
-                ✕
-              </button>
-            </header>
-            <div className="prototype-modal__body">
-              <img
-                src="/prototype/design-11-conclusion.png"
-                alt="设计原型 11 · 结论与关键因素"
-                className="prototype-modal__img"
-              />
-            </div>
-            <footer className="prototype-modal__foot">
-              <span className="muted">
-                点击图片外侧或按 Esc 关闭
-              </span>
-              <a
-                className="prototype-button"
-                href="/prototype/design-11-conclusion.png"
-                target="_blank"
-                rel="noreferrer"
-              >
-                在新窗口打开 ↗
-              </a>
-            </footer>
+          {/* 底部双行警告（与设计原型 11 一致） */}
+          <div
+            className="conclusion-frozen-warning"
+            data-testid="frozen-warning"
+            role="note"
+          >
+            <strong>使用冻结输入重新运算</strong>
+            <p>
+              同一版本呈现相同输入集合；AI 复跑只生成新草案，不能覆盖原结论。
+            </p>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
