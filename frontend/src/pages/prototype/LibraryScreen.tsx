@@ -13,6 +13,14 @@ const REVIEW_LABEL: Record<string, string> = {
   pending_review: "待人工审核",
 };
 
+// 三个时间点字段背后的业务含义。给研究员快速对齐"为什么同一篇资料有三
+// 个时间"，避免把"采集时间"误读成"发布日晚了好几天"之类的疑问。
+const TIME_FIELD_HINT: Record<string, string> = {
+  publishedLabel: "原文对外公开的时间，是证据链最早的时间点。",
+  availableLabel: "我们系统能拿到该版本的时点；晚于发布时表示有采集/解析延迟。",
+  acquiredLabel: "该 DocumentVersion 写入资料库的时点；用于追溯何时被纳入证据基础。",
+};
+
 export function LibraryScreen() {
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<LibraryView | null>(null);
@@ -23,6 +31,7 @@ export function LibraryScreen() {
   const [reuseFilter, setReuseFilter] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [extractNotice, setExtractNotice] = useState<string | null>(null);
+  const [sourceMetaOpen, setSourceMetaOpen] = useState(false);
   // 证据图谱"跳转原文"通过 /library?document=<id> 定位到指定文档
   const [searchParams] = useSearchParams();
   const requestedDocRef = useRef<string | null>(searchParams.get("document"));
@@ -242,7 +251,10 @@ export function LibraryScreen() {
                         发布 {d.publishedLabel} · 获取 {d.acquiredLabel}
                       </small>
                       <small>
-                        复用 ×{d.reuseCount} · 链接案例 {d.linkedCaseIds.length}
+                        {/* 复用次数 = 这份资料被多少"证据关系"引用；
+                            复用历史详见右栏"知识复用"面板。链接案例数在同一
+                            复用历史里，已经能覆盖；这里不重复展示。 */}
+                        复用次数 ×{d.reuseCount}
                       </small>
                     </a>
                   ))}
@@ -253,100 +265,19 @@ export function LibraryScreen() {
         </aside>
 
         <section className="library-reading-pane">
-          <div className="prototype-library-inspector">
+          {/* 主线：知识复用。先讲"这份资料在哪些案例里被怎么用"，再回原文。 */}
+          <div
+            className="prototype-paper"
+            style={{ borderColor: "var(--support)" }}
+          >
             <div className="prototype-section-header">
               <div>
-                <p className="section-kicker">阅读面板</p>
+                <p className="section-kicker">知识复用 · 主线</p>
                 <h2>{selected.title}</h2>
               </div>
               <span className="state-badge reviewed">
                 {REVIEW_LABEL[selected.reviewState]}
               </span>
-            </div>
-            {selected.pendingExtraction ? (
-              <div style={{ marginBottom: 8 }}>
-                <button
-                  type="button"
-                  className="prototype-button primary"
-                  disabled={extracting}
-                  onClick={runExtract}
-                  data-testid="extract-button"
-                >
-                  {extracting ? "抽取中…" : "⚗ 抽取陈述"}
-                </button>
-                <small style={{ marginLeft: 8, color: "var(--ink-muted)" }}>
-                  该版本已有原文片段、尚无来源陈述
-                </small>
-              </div>
-            ) : null}
-            {extractNotice ? (
-              <p style={{ fontSize: 12 }} role="status">
-                {extractNotice}
-              </p>
-            ) : null}
-            <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-              {selected.sourceName} · <code>{selected.sourceVersion}</code>
-              （前序版本：<code>{selected.previousVersion}</code>）
-            </p>
-            <blockquote>
-              "{selected.sourceExcerpt}"
-            </blockquote>
-            <p style={{ fontSize: 11, color: "var(--ink-muted)" }}>
-              原文精确区段：{selected.exactSpan}
-            </p>
-            <dl
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: 8,
-                marginTop: 12,
-                fontSize: 11,
-              }}
-            >
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>发布时间</dt>
-                <dd style={{ margin: 0 }}>{selected.publishedLabel}</dd>
-              </div>
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>可用时间</dt>
-                <dd style={{ margin: 0 }}>{selected.availableLabel}</dd>
-              </div>
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>获取时间</dt>
-                <dd style={{ margin: 0 }}>{selected.acquiredLabel}</dd>
-              </div>
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>主体</dt>
-                <dd style={{ margin: 0 }}>{selected.entity}</dd>
-              </div>
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>类型</dt>
-                <dd style={{ margin: 0 }}>{selected.documentType}</dd>
-              </div>
-              <div>
-                <dt style={{ color: "var(--ink-muted)" }}>复用次数</dt>
-                <dd style={{ margin: 0 }}>{selected.reuseCount}</dd>
-              </div>
-            </dl>
-            <h3 style={{ marginTop: 16, fontSize: 13 }}>复用历史</h3>
-            <ul style={{ paddingLeft: 16, margin: 0 }}>
-              {selected.reuseHistory.map((r) => (
-                <li key={`${r.caseId}-${r.reusedAt}`}>
-                  <code>{r.caseId}</code> · {r.label} · {r.reusedAt}
-                </li>
-              ))}
-              {selected.reuseHistory.length === 0 && (
-                <li style={{ color: "var(--ink-muted)" }}>暂无复用记录</li>
-              )}
-            </ul>
-          </div>
-
-          <div className="prototype-paper" style={{ marginTop: 12 }}>
-            <div className="prototype-section-header">
-              <div>
-                <p className="section-kicker">知识复用</p>
-                <h2>陈述 → 关系 → 命题 / 因素</h2>
-              </div>
             </div>
             {view.knowledge ? (
               <article>
@@ -380,12 +311,121 @@ export function LibraryScreen() {
             ) : (
               <p style={{ color: "var(--ink-muted)" }}>该资料暂无关联关系。</p>
             )}
+
+            <h3 style={{ marginTop: 16, fontSize: 13 }}>
+              复用历史（{selected.reuseCount} 次）
+            </h3>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--ink-muted)",
+                margin: "2px 0 8px",
+              }}
+            >
+              "复用次数"指这份资料被多少条证据关系引用；下面每一行是一次
+              具体的引用：哪个案例 → 哪条关系 → 何时建立。
+            </p>
+            <ul style={{ paddingLeft: 16, margin: 0 }}>
+              {selected.reuseHistory.map((r) => (
+                <li key={`${r.caseId}-${r.reusedAt}`}>
+                  <code>{r.caseId}</code> · {r.label} · {r.reusedAt}
+                </li>
+              ))}
+              {selected.reuseHistory.length === 0 && (
+                <li style={{ color: "var(--ink-muted)" }}>暂无复用记录</li>
+              )}
+            </ul>
           </div>
 
+          {/* 入口：原文片段。需要查看、抽取陈述时回到这里。 */}
+          <div className="prototype-library-inspector" style={{ marginTop: 12 }}>
+            <div className="prototype-section-header">
+              <div>
+                <p className="section-kicker">原文片段 · 入口</p>
+                <h2>{selected.sourceName}</h2>
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+              <code>{selected.sourceVersion}</code>
+              {selected.previousVersion && selected.previousVersion !== "—" && (
+                <>
+                  {" · 前序版本："}
+                  <code>{selected.previousVersion}</code>
+                </>
+              )}
+            </p>
+
+            {selected.pendingExtraction ? (
+              <div
+                style={{
+                  marginBottom: 8,
+                  padding: 10,
+                  background: "var(--ai-soft, #fff7e6)",
+                  borderRadius: 6,
+                }}
+              >
+                <button
+                  type="button"
+                  className="prototype-button primary"
+                  disabled={extracting}
+                  onClick={runExtract}
+                  data-testid="extract-button"
+                >
+                  {extracting ? "抽取中…" : "⚗ 抽取陈述"}
+                </button>
+                <p
+                  style={{
+                    fontSize: 11,
+                    color: "var(--ink-muted)",
+                    margin: "6px 0 0",
+                  }}
+                >
+                  这一版本有 {selected.spanCount ?? 0} 段原文、{selected.statementCount ?? 0}{" "}
+                  条陈述。点击后引擎会用 LLM 从原文片段里生成陈述（append-only：只增加，不修改、不删除；
+                  不会改动原文）。
+                </p>
+              </div>
+            ) : (
+              <p
+                style={{
+                  fontSize: 11,
+                  color: "var(--ink-muted)",
+                  margin: "4px 0 8px",
+                }}
+              >
+                已有 {selected.spanCount ?? 0} 段原文、{selected.statementCount ?? 0}{" "}
+                条陈述；不需要再抽取。
+              </p>
+            )}
+            {extractNotice ? (
+              <p style={{ fontSize: 12 }} role="status">
+                {extractNotice}
+              </p>
+            ) : null}
+
+            <blockquote>"{selected.sourceExcerpt}"</blockquote>
+            <p
+              style={{
+                fontSize: 11,
+                color: "var(--ink-muted)",
+                margin: "4px 0 0",
+              }}
+            >
+              {/* exactSpan 是机读 locator 的 JSON，humanSpan 是派生出的"在哪一段"，
+                  默认展示人话版本；如有需要，点开可看原始定位。 */}
+              区段：{selected.humanSpan ?? selected.exactSpan}
+            </p>
+          </div>
+
+          {/* AI 提议关系：仅在当前文档存在 AI 提议且未人工复核时出现。
+              引导进入审核队列。 */}
           {view.proposal && (
             <div
               className="prototype-paper"
-              style={{ marginTop: 12, borderColor: "var(--ai-draft)" }}
+              style={{
+                marginTop: 12,
+                borderColor: "var(--ai-draft)",
+              }}
             >
               <div className="prototype-section-header">
                 <div>
@@ -401,6 +441,79 @@ export function LibraryScreen() {
               </small>
             </div>
           )}
+
+          {/* 来源详情：发布时间 / 可用时间 / 获取时间 / 主体 / 类型。
+              折叠到最末，避免挤占主线。点开后看每个时间点的业务含义。 */}
+          <div
+            className="prototype-paper"
+            style={{ marginTop: 12, fontSize: 12 }}
+          >
+            <div
+              className="prototype-section-header"
+              style={{ cursor: "pointer" }}
+              onClick={() => setSourceMetaOpen((v) => !v)}
+              role="button"
+              aria-expanded={sourceMetaOpen}
+            >
+              <div>
+                <p className="section-kicker">来源详情</p>
+                <h2 style={{ fontSize: 14 }}>
+                  {sourceMetaOpen ? "▾ 收起" : "▸ 展开"}
+                </h2>
+              </div>
+              <span className="state-badge" style={{ color: "var(--ink-muted)" }}>
+                {selected.entity} · {selected.documentType}
+              </span>
+            </div>
+            {sourceMetaOpen && (
+              <dl
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 12,
+                  marginTop: 8,
+                  fontSize: 12,
+                }}
+              >
+                {(
+                  [
+                    ["发布时间", selected.publishedLabel, "publishedLabel"],
+                    ["可用时间", selected.availableLabel, "availableLabel"],
+                    ["获取时间", selected.acquiredLabel, "acquiredLabel"],
+                  ] as Array<[string, string, keyof typeof TIME_FIELD_HINT]>
+                ).map(([label, value, key]) => (
+                  <div key={label}>
+                    <dt style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                      {label}
+                    </dt>
+                    <dd style={{ margin: "2px 0 4px" }}>{value}</dd>
+                    <dd
+                      style={{
+                        margin: 0,
+                        fontSize: 10,
+                        color: "var(--ink-muted)",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {TIME_FIELD_HINT[key]}
+                    </dd>
+                  </div>
+                ))}
+                <div>
+                  <dt style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                    主体
+                  </dt>
+                  <dd style={{ margin: "2px 0 0" }}>{selected.entity}</dd>
+                </div>
+                <div>
+                  <dt style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                    类型
+                  </dt>
+                  <dd style={{ margin: "2px 0 0" }}>{selected.documentType}</dd>
+                </div>
+              </dl>
+            )}
+          </div>
         </section>
       </div>
     </div>

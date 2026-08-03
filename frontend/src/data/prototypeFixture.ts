@@ -54,6 +54,8 @@ export const DOCUMENTS = [
       "资本开支继续用于支持云与 AI 基础设施...我们在本季度看到 Azure AI 收入同比增长，需求仍超过可用容量。",
     exactSpan: "pp. 35-39, capital expenditures and cloud infrastructure",
     sourceSpan: "pp. 35-39, capital expenditures and cloud infrastructure",
+    spanCount: 1,
+    statementCount: 1,
   },
   {
     id: "DOC-NVDA-FY26Q1",
@@ -74,6 +76,8 @@ export const DOCUMENTS = [
       "数据中心收入增长与 Blackwell 系统交付同时披露...Data Center revenue grew to $39.1bn.",
     exactSpan: "pp. 22-27, Data Center revenue and supply commitments",
     sourceSpan: "pp. 22-27, Data Center revenue and supply commitments",
+    spanCount: 1,
+    statementCount: 1,
   },
   {
     id: "DOC-MSFT-FY25Q3-CALL",
@@ -97,6 +101,8 @@ export const DOCUMENTS = [
       "Demand for our AI services remained higher than our available capacity. Capital investments will support growth as new capacity comes online.",
     exactSpan: "prepared remarks, pp. 4-5, capacity constraints and revenue timing",
     sourceSpan: "prepared remarks, pp. 4-5, capacity constraints and revenue timing",
+    spanCount: 1,
+    statementCount: 1,
   },
   {
     id: "DOC-TSMC-2025M05",
@@ -116,6 +122,9 @@ export const DOCUMENTS = [
     sourceExcerpt: "TSMC 2025 年 5 月净营收同比增长 34.8%，反映先进制程与封装需求持续。",
     exactSpan: "table 1, net revenue May 2025",
     sourceSpan: "table 1, net revenue May 2025",
+    // 该版本已分出 1 段原文（营收表），但还没生成陈述；用于演示"待抽取"状态。
+    spanCount: 1,
+    statementCount: 0,
   },
   {
     id: "DOC-BRCM-FY25Q2",
@@ -136,6 +145,8 @@ export const DOCUMENTS = [
       "AI revenue, which came in at $4.4 billion, accelerated to 46% growth year-on-year.",
     exactSpan: "outlook paragraph 4",
     sourceSpan: "outlook paragraph 4",
+    spanCount: 1,
+    statementCount: 1,
   },
 ];
 
@@ -1682,6 +1693,11 @@ export function buildLibraryView(): LibraryView {
     reuseHistory: document.reuseHistory,
     sourceExcerpt: document.sourceExcerpt,
     exactSpan: document.exactSpan,
+    // mock 模式下 exactSpan 已经是人话（"pp. 35-39, ..."），直接复用。
+    humanSpan: document.exactSpan,
+    spanCount: document.spanCount,
+    statementCount: document.statementCount,
+    pendingExtraction: document.spanCount > 0 && document.statementCount === 0,
   }));
   const selected = documents.find((d) => d.id === "DOC-MSFT-FY25Q3-CALL") ?? documents[0];
   const statement = STATEMENTS.find((s) => s.documentId === selected.id)!;

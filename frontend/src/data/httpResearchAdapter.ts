@@ -166,6 +166,43 @@ const EMPTY_METRIC_DETAIL: DataCenterView["selectedMetric"] = {
     "刷新失败只表示本次未取得新版本，不撤销或推测替换已冻结观测。",
 };
 
+/**
+ * 把 span.locator 这种结构化定位翻译成一句人话，给研究员快速判断"这是
+ * 哪一段"。locator 形如 { page: 35, page_end: 39, section: "capital expenditures" }，
+ * 会派生为「第 35-39 页 · 资本开支段」。locator 字段随数据源/Docling 输出会变，
+ * 未知字段忽略，缺字段就退化；layout 顺序稳定。
+ */
+function humanSpanFrom(locator: unknown): string {
+  if (!locator || typeof locator !== "object") return "—";
+  const parts: string[] = [];
+  const loc = locator as Record<string, unknown>;
+  const page = loc.page;
+  const pageEnd = loc.page_end ?? loc.pageEnd;
+  if (typeof page === "number") {
+    parts.push(typeof pageEnd === "number" ? `第 ${page}-${pageEnd} 页` : `第 ${page} 页`);
+  }
+  if (typeof loc.section === "string") {
+    parts.push(`${loc.section} 段`);
+  } else if (typeof loc.section_id === "string") {
+    parts.push(`${loc.section_id} 段`);
+  }
+  if (typeof loc.table === "string") {
+    parts.push(`表 ${loc.table}`);
+  }
+  if (typeof loc.table_id === "string") {
+    parts.push(`表 ${loc.table_id}`);
+  }
+  if (typeof loc.paragraph === "number") {
+    parts.push(`第 ${loc.paragraph} 段`);
+  } else if (typeof loc.paragraph_id === "string") {
+    parts.push(`第 ${loc.paragraph_id} 段`);
+  }
+  if (typeof loc.note === "string") {
+    parts.push(loc.note);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
 function buildRevisionComparison(
   series: DataSeriesPoint[],
 ): DataRevisionComparison {
@@ -1756,6 +1793,9 @@ export class HttpResearchAdapter implements ResearchClient {
         reuseHistory: [],
         sourceExcerpt: excerptOf(span?.verbatim_text),
         exactSpan: span ? JSON.stringify(span.locator) : "—",
+        humanSpan: span ? humanSpanFrom(span.locator) : "—",
+        spanCount: d.span_count,
+        statementCount: d.statement_count,
         pendingExtraction: d.statement_count === 0 && d.span_count > 0,
       };
     };

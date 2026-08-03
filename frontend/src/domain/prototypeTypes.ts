@@ -524,6 +524,16 @@ export interface LibraryDocument {
   reuseHistory: { caseId: string; label: string; reusedAt: string }[];
   sourceExcerpt: string;
   exactSpan: string;
+  /**
+   * 精确区段的人话翻译：HTTP 模式下从 span.locator 派生（如「第 35-39 页 · 资本开支段」）；
+   * mock 模式直接等于 exactSpan。给研究员快速判断"这是哪一段"，不必读 JSON 也不必
+   * 拼接原文范围。
+   */
+  humanSpan?: string;
+  /** 当前版本已抽取的原文片段数；HTTP 模式来自 /documents，mock 模式由 fixture 注入。 */
+  spanCount?: number;
+  /** 当前版本已生成的陈述数；用于"抽取陈述"按钮解释段。 */
+  statementCount?: number;
   /** 有待抽取片段但尚无陈述（span_count > 0 且 statement_count = 0）。 */
   pendingExtraction?: boolean;
 }
