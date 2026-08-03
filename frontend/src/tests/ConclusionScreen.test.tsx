@@ -7,6 +7,7 @@
  *   3. 选中因素时右栏 gap card 同步更新
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { renderWithAppShell } from "./renderWithAppShell";
 import { ConclusionScreen } from "../pages/prototype/ConclusionScreen";
 import { setResearchClient, resetResearchClient } from "../data/researchClient";
@@ -205,5 +206,62 @@ describe("MockResearchAdapter.getConclusionView", () => {
     expect(view.keyFactors.length).toBeGreaterThan(0);
     expect(view.comparison.columns.length).toBeGreaterThan(0);
     expect(view.causalPath.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ConclusionScreen · 设计原型参考图入口", () => {
+  beforeEach(() => {
+    const stub = new StubAdapter();
+    setResearchClient(stub);
+  });
+  afterEach(() => {
+    resetResearchClient();
+  });
+
+  it("renders the 'open prototype' button in the page header", async () => {
+    const screen = renderWithAppShell(
+      <ConclusionScreen />,
+      { initialEntries: ["/conclusion/case-x"] },
+    );
+    const btn = await screen.findByTestId("open-prototype-button");
+    expect(btn).toBeInTheDocument();
+    expect(btn.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("opens a dialog with the design-11 PNG when the button is clicked", async () => {
+    const user = userEvent.setup();
+    const screen = renderWithAppShell(
+      <ConclusionScreen />,
+      { initialEntries: ["/conclusion/case-x"] },
+    );
+    const btn = await screen.findByTestId("open-prototype-button");
+    // Initially the modal is not in the DOM
+    expect(screen.queryByTestId("prototype-modal")).toBeNull();
+    // Click to open
+    await user.click(btn);
+    const modal = await screen.findByTestId("prototype-modal");
+    expect(modal).toBeInTheDocument();
+    expect(modal.getAttribute("aria-modal")).toBe("true");
+    // The image must reference the design-11 PNG (frontend/public/prototype/)
+    const img = modal.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("src")).toBe("/prototype/design-11-conclusion.png");
+    // Aria-expanded on the trigger is now true
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("closes the modal when the close button is clicked", async () => {
+    const user = userEvent.setup();
+    const screen = renderWithAppShell(
+      <ConclusionScreen />,
+      { initialEntries: ["/conclusion/case-x"] },
+    );
+    const btn = await screen.findByTestId("open-prototype-button");
+    await user.click(btn);
+    const closeBtn = await screen.findByTestId("close-prototype-button");
+    await user.click(closeBtn);
+    expect(screen.queryByTestId("prototype-modal")).toBeNull();
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
   });
 });

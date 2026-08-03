@@ -3658,6 +3658,67 @@ a.prototype-button { text-decoration: none; }
   color: var(--ink-soft);
 }
 
+.conclusion-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 设计原型参考图 Modal */
+.prototype-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 16, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 32px;
+}
+.prototype-modal {
+  background: var(--paper-base, #ffffff);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  max-width: 1080px;
+  width: 100%;
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+}
+.prototype-modal__head,
+.prototype-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--ink-line, #e0e0e0);
+}
+.prototype-modal__foot {
+  border-bottom: none;
+  border-top: 1px solid var(--ink-line, #e0e0e0);
+  background: var(--paper-soft, #fafaf6);
+}
+.prototype-modal__body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px;
+  background: var(--paper-soft, #fafaf6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.prototype-modal__img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--ink-line, #e0e0e0);
+  border-radius: 6px;
+  background: white;
+}
+
 @media (max-width: 1180px) {
   .conclusion-grid {
     grid-template-columns: 1fr;

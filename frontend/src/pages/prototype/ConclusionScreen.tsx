@@ -71,6 +71,7 @@ export function ConclusionScreen() {
   const [cutoff, setCutoff] = useState<string | null>(
     searchParams.get("cutoff"),
   );
+  const [prototypeModalOpen, setPrototypeModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -150,25 +151,38 @@ export function ConclusionScreen() {
         title="结论与关键因素"
         lede="结论优先，底图回到因素，因果边、支持与反驳，正反判断只由冻结输入与人工复核产生。"
         actions={
-          <div className="conclusion-cutoff-control">
-            <label>
-              证据截止
-              <input
-                type="date"
-                value={(cutoff ?? header.evidenceCutoff).slice(0, 10)}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setCutoff(next ? `${next}T00:00:00+08:00` : null);
-                  if (next) searchParams.set("cutoff", next);
-                  else searchParams.delete("cutoff");
-                  setSearchParams(searchParams, { replace: true });
-                }}
-              />
-            </label>
-            <span className="conclusion-cutoff-hint">
-              历史截止 {formatDate(header.evidenceCutoff)} ·{" "}
-              {header.reviewState === "reviewed" ? "已人工复核" : "AI 临时标记"}
-            </span>
+          <div className="conclusion-actions">
+            <button
+              type="button"
+              className="prototype-button"
+              onClick={() => setPrototypeModalOpen(true)}
+              data-testid="open-prototype-button"
+              aria-haspopup="dialog"
+              aria-expanded={prototypeModalOpen}
+              title="查看对应设计原型11 视觉稿"
+            >
+              ⊟ 设计原型 11 ↗
+            </button>
+            <div className="conclusion-cutoff-control">
+              <label>
+                证据截止
+                <input
+                  type="date"
+                  value={(cutoff ?? header.evidenceCutoff).slice(0, 10)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setCutoff(next ? `${next}T00:00:00+08:00` : null);
+                    if (next) searchParams.set("cutoff", next);
+                    else searchParams.delete("cutoff");
+                    setSearchParams(searchParams, { replace: true });
+                  }}
+                />
+              </label>
+              <span className="conclusion-cutoff-hint">
+                历史截止 {formatDate(header.evidenceCutoff)} ·{" "}
+                {header.reviewState === "reviewed" ? "已人工复核" : "AI 临时标记"}
+              </span>
+            </div>
           </div>
         }
       />
@@ -500,6 +514,62 @@ export function ConclusionScreen() {
           </PaperCard>
         </div>
       </div>
+
+      {/* 设计原型参考图 Modal（prototype/设计原型11-结论与关键因素.png） */}
+      {prototypeModalOpen && (
+        <div
+          className="prototype-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="设计原型 11 · 结论与关键因素 视觉稿"
+          data-testid="prototype-modal"
+          onClick={(e) => {
+            // 点击遮罩关闭
+            if (e.target === e.currentTarget) setPrototypeModalOpen(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setPrototypeModalOpen(false);
+          }}
+        >
+          <div className="prototype-modal">
+            <header className="prototype-modal__head">
+              <div>
+                <strong>设计原型 11</strong>
+                <span className="muted"> · 结论与关键因素 · 视觉参考稿</span>
+              </div>
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => setPrototypeModalOpen(false)}
+                aria-label="关闭"
+                data-testid="close-prototype-button"
+              >
+                ✕
+              </button>
+            </header>
+            <div className="prototype-modal__body">
+              <img
+                src="/prototype/design-11-conclusion.png"
+                alt="设计原型 11 · 结论与关键因素"
+                className="prototype-modal__img"
+              />
+            </div>
+            <footer className="prototype-modal__foot">
+              <span className="muted">
+                点击图片外侧或按 Esc 关闭
+              </span>
+              <a
+                className="prototype-button"
+                href="/prototype/design-11-conclusion.png"
+                target="_blank"
+                rel="noreferrer"
+              >
+                在新窗口打开 ↗
+              </a>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
