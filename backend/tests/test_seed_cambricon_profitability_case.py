@@ -34,9 +34,10 @@ from app.scripts.seed_cambricon_profitability_case import (
     CUTOFF,
     seed,
 )
-from app.services.research import ResearchService
-from app.services.themes import ThemeService
 from app.services.assessment import AssessmentService
+from app.services.research import ResearchService
+from app.services.review import ReviewService
+from app.services.themes import ThemeService
 
 
 def _rows(session, model):
@@ -78,7 +79,7 @@ def test_seed_creates_one_complete_provisional_profitability_case(session):
         "Thesis": 1,
         "DocumentVersion": 3,
         "SourceSpan": 5,
-        "SourceStatement": 6,
+        "SourceStatement": 5,
         "EvidenceLink": 7,
         "EvidenceSnapshot": 1,
         "AIAssessment": 1,
@@ -172,6 +173,42 @@ def test_seed_preserves_source_precision_roles_and_complete_traceability(session
         assert _aware(link.available_at) >= _aware(version.acquired_at)
 
 
+def test_seed_keeps_source_statements_literal_and_derivations_only_in_links(session):
+    result = seed(session)
+    assessment = session.get(AIAssessment, result.assessment_id)
+    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
+    links = [session.get(EvidenceLink, uuid.UUID(link_id)) for link_id in snapshot.evidence_link_ids]
+    statements = {
+        session.get(SourceStatement, link.source_statement_id).normalized_text
+        for link in links
+    }
+
+    assert "2025Q1至Q4归母净利润分别为355,465,241.04元、682,617,327.53元、566,563,175.54元、454,582,794.56元" in statements
+    assert "2025Q1至Q4扣非归母净利润分别为275,962,803.95元、636,604,043.12元、506,321,130.23元、351,046,180.38元" in statements
+    assert "2025Q1至Q4经营活动产生的现金流量净额分别为-1,399,358,712.85元、2,310,509,034.58元、-940,455,133.44元、-469,093,325.30元" in statements
+    assert "Juyuan原始响应以累计值、亿元返回2025Q1为3.55、2025H1为10.38、2025Q1-Q3为16.05、2025FY为20.59" in statements
+    assert not any("加总" in statement or "相符" in statement for statement in statements)
+    assert any(
+        link.scope.get("calculation_formula")
+        and "2025全年归母净利润" in link.reason
+        for link in links
+    )
+    assert any(
+        link.scope.get("calculation_formula")
+        and "2025全年扣非归母净利润" in link.reason
+        for link in links
+    )
+    assert any(
+        link.scope.get("calculation_formula")
+        and "经营现金流净额" in link.reason
+        for link in links
+    )
+    assert any(
+        link.scope.get("reconciliation") == "Juyuan rounded cumulative value cross-check"
+        for link in links
+    )
+
+
 def test_seed_adds_confirmed_controlled_theme_and_only_cambricon_instrument(session):
     result = seed(session)
 
@@ -183,6 +220,15 @@ def test_seed_adds_confirmed_controlled_theme_and_only_cambricon_instrument(sess
     assert (stock.code, stock.company_id) == ("688256.SH", company.id)
     assert role.company_id == company.id and role.research_case_id == result.case_id
     assert role.source_statement_id is not None
+    assert role.role == "盈利拐点验证对象"
+    assert role.scope == {
+        "boundary": "official quarterly profitability evidence only",
+        "company_subject": "寒武纪",
+    }
+    assert "芯片" not in role.role
+    statement = session.get(SourceStatement, role.source_statement_id)
+    span = session.get(SourceSpan, statement.source_span_id)
+    assert "寒武纪" in span.verbatim_text
 
 
 def test_seed_is_idempotent_only_after_full_completeness_check(session):
@@ -207,20 +253,34 @@ def test_seed_fails_closed_for_same_title_partial_case_without_repair(session):
     assert _counts(session) == before
 
 
-def test_seed_fails_closed_when_a_same_title_case_fabricates_human_review(session):
+def test_seed_is_idempotent_after_legitimate_later_human_reviews(session):
     result = seed(session)
+    assessment = session.get(AIAssessment, result.assessment_id)
+    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
+    review_service = ReviewService(ResearchRepository(session))
+    for link_id in snapshot.evidence_link_ids:
+        link = session.get(EvidenceLink, uuid.UUID(link_id))
+        review_service.review_link(
+            link.id,
+            outcome="confirmed",
+            relation=link.role,
+            factor_role="财务披露证据",
+            scope_boundary="会计利润口径",
+            reason="后续人工审核，不改变种子基础账本",
+            reviewer="test-reviewer",
+        )
     AssessmentService(ResearchRepository(session)).review(
         result.assessment_id,
         outcome="confirmed",
         conclusion="supported",
-        reason="not part of this unreviewed draft seed",
-        reviewer="test",
+        reason="后续人工审核，不改变种子基础账本",
+        reviewer="test-reviewer",
     )
     before = _counts(session)
 
-    with pytest.raises(RuntimeError, match="partial|incomplete|same-title"):
-        seed(session)
+    repeated = seed(session)
 
+    assert repeated == type(result)(result.case_id, result.thesis_id, result.assessment_id, False)
     assert _counts(session) == before
 
 

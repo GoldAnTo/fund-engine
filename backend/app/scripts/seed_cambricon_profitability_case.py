@@ -17,10 +17,8 @@ from app.models.ledger import (
     Company,
     DocumentVersion,
     EvidenceLink,
-    EvidenceReview,
     EvidenceSnapshot,
     ResearchCase,
-    ReviewDecision,
     SourceSpan,
     SourceStatement,
     Stock,
@@ -129,14 +127,9 @@ def _complete_existing(session: Session, case: ResearchCase, data: CaseData) -> 
     ):
         raise RuntimeError("same-title case is partial or incomplete: assessment manifest mismatch")
 
-    if session.scalars(select(ReviewDecision).where(ReviewDecision.ai_assessment_id == assessment.id)).first() is not None:
-        raise RuntimeError("same-title case is partial or incomplete: human review exists")
     links = [session.get(EvidenceLink, uuid.UUID(value)) for value in snapshot.evidence_link_ids]
     if len(links) != 7 or any(link is None for link in links):
         raise RuntimeError("same-title case is partial or incomplete: snapshot links mismatch")
-    link_ids = [link.id for link in links]
-    if session.scalars(select(EvidenceReview).where(EvidenceReview.evidence_link_id.in_(link_ids))).first() is not None:
-        raise RuntimeError("same-title case is partial or incomplete: evidence review exists")
     document_ids: set[uuid.UUID] = set()
     for link in links:
         if (
@@ -281,19 +274,18 @@ def seed(session: Session) -> SeedResult:
     statements = {
         "2024_parent": research_service.add_statement(spans["2024_parent"].id, "2024Q4归属于上市公司股东的净利润为272,152,952.65元", kind="disclosed_fact"),
         "2025_parent": research_service.add_statement(spans["2025_parent"].id, "2025Q1至Q4归母净利润分别为355,465,241.04元、682,617,327.53元、566,563,175.54元、454,582,794.56元", kind="disclosed_fact"),
-        "2025_parent_total": research_service.add_statement(spans["2025_parent"].id, "2025年归母净利润为2,059,228,538.67元（由官方分季度数据加总）", kind="disclosed_fact"),
-        "2025_adjusted": research_service.add_statement(spans["2025_adjusted"].id, "2025年扣非归母净利润为1,769,934,157.68元（由官方分季度数据加总）", kind="disclosed_fact"),
-        "2025_cashflow": research_service.add_statement(spans["2025_cashflow"].id, "2025年经营活动产生的现金流量净额为-498,398,137.01元（由官方分季度数据加总）", kind="disclosed_fact"),
-        "juyuan": research_service.add_statement(spans["juyuan"].id, "Juyuan原始响应以亿元、累计值返回2025FY归母净利润20.59亿元，并与官方精确金额四舍五入后相符", kind="disclosed_fact"),
+        "2025_adjusted": research_service.add_statement(spans["2025_adjusted"].id, "2025Q1至Q4扣非归母净利润分别为275,962,803.95元、636,604,043.12元、506,321,130.23元、351,046,180.38元", kind="disclosed_fact"),
+        "2025_cashflow": research_service.add_statement(spans["2025_cashflow"].id, "2025Q1至Q4经营活动产生的现金流量净额分别为-1,399,358,712.85元、2,310,509,034.58元、-940,455,133.44元、-469,093,325.30元", kind="disclosed_fact"),
+        "juyuan": research_service.add_statement(spans["juyuan"].id, "Juyuan原始响应以累计值、亿元返回2025Q1为3.55、2025H1为10.38、2025Q1-Q3为16.05、2025FY为20.59", kind="disclosed_fact"),
     }
     link_specs = (
         ("2024_parent", "supports", "官方2024年报第11页显示2024Q4归母净利润为正，构成五季度序列的起点", {"metric": "parent_profit", "period": "2024Q4", "source": "official"}),
         ("2025_parent", "supports", "官方2025年报第10页显示Q1至Q4单季度归母净利润均为正", {"metric": "parent_profit", "period": "2025Q1-Q4", "source": "official"}),
-        ("2025_parent_total", "supports", "官方分季度精确金额加总后，2025全年归母净利润为正", {"metric": "parent_profit", "period": "2025FY", "source": "official", "precision": "exact_yuan"}),
-        ("2025_adjusted", "supports", "官方分季度精确金额加总后，2025全年扣非归母净利润为正", {"metric": "adjusted_parent_profit", "period": "2025FY", "source": "official", "precision": "exact_yuan"}),
-        ("juyuan", "supports", "Juyuan原始响应仅以累计值、四舍五入后的20.59亿元对2025全年归母净利润作独立佐证", {"metric": "parent_profit", "period": "2025FY", "source": "Juyuan", "precision": "rounded_亿元"}),
-        ("2025_cashflow", "contextualizes", "官方2025年报分季度数据加总的经营现金流净额为负，提示需要验证回款与现金转化，但不反驳会计利润口径的窄命题", {"metric": "operating_cash_flow", "period": "2025FY", "source": "official"}),
-        ("2025_parent_total", "contextualizes", "本链接仅适用于会计利润口径；官方利润数据本身不能证明国产算力需求是唯一原因或盈利可持续", {"boundary": "accounting_profit_only", "source": "official"}),
+        ("2025_parent", "supports", "2025全年归母净利润 = 355,465,241.04 + 682,617,327.53 + 566,563,175.54 + 454,582,794.56 = 2,059,228,538.67元，为正", {"metric": "parent_profit", "period": "2025FY", "source": "official", "precision": "exact_yuan", "calculation_formula": "355465241.04 + 682617327.53 + 566563175.54 + 454582794.56 = 2059228538.67"}),
+        ("2025_adjusted", "supports", "2025全年扣非归母净利润 = 275,962,803.95 + 636,604,043.12 + 506,321,130.23 + 351,046,180.38 = 1,769,934,157.68元，为正", {"metric": "adjusted_parent_profit", "period": "2025FY", "source": "official", "precision": "exact_yuan", "calculation_formula": "275962803.95 + 636604043.12 + 506321130.23 + 351046180.38 = 1769934157.68"}),
+        ("juyuan", "supports", "Juyuan原始响应仅以累计值、四舍五入后的20.59亿元对2025全年归母净利润作独立佐证；与官方精确金额2,059,228,538.67元按亿元四舍五入一致", {"metric": "parent_profit", "period": "2025FY", "source": "Juyuan", "precision": "rounded_亿元", "reconciliation": "Juyuan rounded cumulative value cross-check"}),
+        ("2025_cashflow", "contextualizes", "2025全年经营现金流净额 = -1,399,358,712.85 + 2,310,509,034.58 - 940,455,133.44 - 469,093,325.30 = -498,398,137.01元，提示需要验证回款与现金转化，但不反驳会计利润口径的窄命题", {"metric": "operating_cash_flow", "period": "2025FY", "source": "official", "calculation_formula": "-1399358712.85 + 2310509034.58 - 940455133.44 - 469093325.30 = -498398137.01"}),
+        ("2025_parent", "contextualizes", "本链接仅适用于会计利润口径；官方利润数据本身不能证明国产算力需求是唯一原因或盈利可持续", {"boundary": "accounting_profit_only", "source": "official"}),
     )
     for statement_key, role, reason, scope in link_specs:
         research_service.link_evidence(
@@ -319,8 +311,11 @@ def seed(session: Session) -> SeedResult:
     instruments.add_theme_role(
         company_id=company.id,
         research_case_id=case.id,
-        role="国产算力芯片公司",
-        scope={"theme": "算力国产化", "boundary": "classification_only"},
+        role="盈利拐点验证对象",
+        scope={
+            "boundary": "official quarterly profitability evidence only",
+            "company_subject": "寒武纪",
+        },
         applicable_from=None,
         source_statement_id=statements["2025_parent"].id,
     )
