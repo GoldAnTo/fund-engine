@@ -1,0 +1,2295 @@
+{
+  "per_thesis": [
+    {
+      "schema_version": "v1",
+      "basis": {
+        "cutoff": "2026-08-03T02:06:13.532615Z",
+        "is_historical": false,
+        "ledger_high_watermark": null,
+        "projection_built_at": null,
+        "projection_schema_version": null
+      },
+      "case": {
+        "id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "title": "AI 算力链",
+        "topic": "ai_compute",
+        "created_by": "seed-ai-compute",
+        "created_at": "2026-08-03T02:06:13.466810",
+        "updated_at": "2026-08-03T02:06:13.466810"
+      },
+      "theses": [
+        {
+          "id": "c938087e-dea3-4b0a-8dbf-56b0aecac9ca",
+          "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.467603",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "605734f2-1d30-481e-933b-7d4ad8976b15",
+          "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468192",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "bc732643-f4b4-4889-b655-591825f00f71",
+          "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468321",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        }
+      ],
+      "focus_thesis_id": "c938087e-dea3-4b0a-8dbf-56b0aecac9ca",
+      "assessment": {
+        "id": "6515a112-5232-4834-8812-87f5f41120eb",
+        "thesis_id": "c938087e-dea3-4b0a-8dbf-56b0aecac9ca",
+        "conclusion": "supported",
+        "rationale": "云厂商CapEx指引同比高增且SK海力士HBM/存储营收高增验证算力需求真实落地，证据一致支持命题",
+        "gaps": [],
+        "provisional": true,
+        "review": {
+          "outcome": "confirmed",
+          "conclusion": "supported",
+          "reason": "人工确认：证据链自云厂商CapEx披露至存储营收高增，无直接矛盾，维持 supported",
+          "reviewer": "seed-human-reviewer",
+          "reviewed_at": "2026-08-03T02:06:13.502902"
+        }
+      },
+      "assess_failure": null,
+      "causal_chain": [],
+      "evidence": {
+        "supports": [
+          {
+            "link_id": "68476342-fbe7-46b1-9b71-045fd5087456",
+            "statement_id": "ce814c87-2fe4-4995-99d5-59b4548aa35f",
+            "statement_text": "2026年北美四大云厂商合计资本开支指引中值同比增长约36%，AI数据中心与GPU集群为增量核心投向",
+            "statement_kind": "disclosed_fact",
+            "span_id": "3ad6060e-45ad-4453-8661-c2b8a34e071c",
+            "verbatim_text": "2026年北美四大云厂商（亚马逊、微软、谷歌、Meta）合计资本开支指引区间为2,750亿至2,950亿美元，中值同比增长约36%，AI数据中心与GPU集群为增量核心投向。",
+            "locator": {
+              "page": 1,
+              "paragraph": 1
+            },
+            "role": "supports",
+            "reason": "海外云厂商CapEx指引中值同比高增，AI数据中心为增量核心，直接驱动算力需求",
+            "scope": {
+              "segment": "云厂商CapEx"
+            },
+            "observed_period": "2026-05-20",
+            "available_at": "2026-08-03T02:06:13.470256",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "208655a4-9efa-46ef-b80b-4a8c9155e5fc",
+            "statement_id": "39d43219-1c2b-416a-897c-165f87bab07a",
+            "statement_text": "微软2026年资本开支指引约950亿美元，同比增长约28%，主要用于Azure AI训练与推理集群扩容",
+            "statement_kind": "disclosed_fact",
+            "span_id": "d9cec6b9-3076-47fc-8c5a-58907f9a7b23",
+            "verbatim_text": "微软：2026年资本开支指引约950亿美元，同比增长约28%，主要用于Azure AI训练与推理集群扩容。",
+            "locator": {
+              "page": 1,
+              "paragraph": 2
+            },
+            "role": "supports",
+            "reason": "微软CapEx指引高增且投向Azure AI集群，验证云厂商算力采购",
+            "scope": {
+              "segment": "云厂商CapEx"
+            },
+            "observed_period": "2026-05-20",
+            "available_at": "2026-08-03T02:06:13.473247",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "1645f72f-2300-4af5-bc28-d943e6a262b9",
+            "statement_id": "409c0ef1-ef99-4d9c-b347-b27c04cef147",
+            "statement_text": "SK海力士2026Q1营业收入17.63万亿韩元，同比增长82%，营业利润率39.2%创历史新高",
+            "statement_kind": "disclosed_fact",
+            "span_id": "7277e280-dcfa-4f9b-a002-0d4fa2a3fcaf",
+            "verbatim_text": "2026年第一季度公司实现营业收入17.63万亿韩元，同比增长82%，环比增长12%；营业利润6.92万亿韩元，营业利润率39.2%，创历史新高。",
+            "locator": {
+              "page": 4,
+              "paragraph": 2
+            },
+            "role": "supports",
+            "reason": "SK海力士Q1营收同比高增，存储景气由算力需求落地驱动",
+            "scope": {
+              "segment": "存储/HBM"
+            },
+            "observed_period": "2026-03-31",
+            "available_at": "2026-08-03T02:06:13.473840",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "abdeda21-7e24-429f-be5d-1018d16004b6",
+            "statement_id": "a638c25a-948f-49b5-9941-6d4acc17d5be",
+            "statement_text": "中信测算2026年海外四大云厂商合计资本开支将超过2800亿美元，同比增长约35%",
+            "statement_kind": "forecast",
+            "span_id": "9b95d3f4-8995-4113-ad04-4f6023b004f7",
+            "verbatim_text": "我们测算2026年海外四大云厂商合计资本开支将超过2,800亿美元，同比增长约35%，其中AI基础设施占比超过55%，将直接驱动GPU与高带宽存储需求扩张。",
+            "locator": {
+              "page": 3,
+              "paragraph": 1
+            },
+            "role": "supports",
+            "reason": "研报测算海外四大云厂商CapEx超2800亿美元，同比高增",
+            "scope": {
+              "segment": "云厂商CapEx"
+            },
+            "observed_period": "2026-06-10",
+            "available_at": "2026-08-03T02:06:13.474298",
+            "review_state": "machine_generated"
+          }
+        ],
+        "contradicts": [],
+        "contextualizes": [
+          {
+            "link_id": "a5799870-370f-472c-9a4a-d2113c2f6789",
+            "statement_id": "36b5079a-166c-458a-ad0b-c87e5af3d98d",
+            "statement_text": "HBM景气度将在2026年延续，SK海力士HBM产能被云厂商锁定，存储CapEx扩张验证算力需求真实落地",
+            "statement_kind": "research_opinion",
+            "span_id": "59962857-352a-4605-8da9-7207578a5b86",
+            "verbatim_text": "存储方面，HBM景气度将在2026年延续，SK海力士HBM产能被云厂商锁定，存储CapEx扩张验证算力需求真实落地。",
+            "locator": {
+              "page": 7,
+              "paragraph": 1
+            },
+            "role": "contextualizes",
+            "reason": "HBM产能被云厂商锁定，存储CapEx扩张与算力需求一致",
+            "scope": {
+              "segment": "HBM"
+            },
+            "observed_period": "2026-06-10",
+            "available_at": "2026-08-03T02:06:13.475102",
+            "review_state": "machine_generated"
+          }
+        ]
+      },
+      "competitive_explanations": [],
+      "gaps": []
+    },
+    {
+      "schema_version": "v1",
+      "basis": {
+        "cutoff": "2026-08-03T02:06:13.538435Z",
+        "is_historical": false,
+        "ledger_high_watermark": null,
+        "projection_built_at": null,
+        "projection_schema_version": null
+      },
+      "case": {
+        "id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "title": "AI 算力链",
+        "topic": "ai_compute",
+        "created_by": "seed-ai-compute",
+        "created_at": "2026-08-03T02:06:13.466810",
+        "updated_at": "2026-08-03T02:06:13.466810"
+      },
+      "theses": [
+        {
+          "id": "c938087e-dea3-4b0a-8dbf-56b0aecac9ca",
+          "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.467603",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "605734f2-1d30-481e-933b-7d4ad8976b15",
+          "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468192",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "bc732643-f4b4-4889-b655-591825f00f71",
+          "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468321",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        }
+      ],
+      "focus_thesis_id": "605734f2-1d30-481e-933b-7d4ad8976b15",
+      "assessment": {
+        "id": "2fe5bcec-7b65-407c-87b9-fc8fe2397fc2",
+        "thesis_id": "605734f2-1d30-481e-933b-7d4ad8976b15",
+        "conclusion": "insufficient_evidence",
+        "rationale": "缺少从云厂商CapEx到代工端订单的直接传导证据，仅有公司整体收入与管理层定性表态，且研报观点分歧",
+        "gaps": [
+          "缺少云厂商CapEx向工业富联代工端订单传导的直接披露证据",
+          "工业富联AI服务器分部数据未单独披露，无法验证传导弹性"
+        ],
+        "provisional": true,
+        "review": {
+          "outcome": "confirmed",
+          "conclusion": "insufficient_evidence",
+          "reason": "人工维持：缺少云厂商CapEx→代工端订单的直接传导披露，且研报观点分歧，维持 insufficient_evidence",
+          "reviewer": "seed-human-reviewer",
+          "reviewed_at": "2026-08-03T02:06:13.503285"
+        }
+      },
+      "assess_failure": null,
+      "causal_chain": [],
+      "evidence": {
+        "supports": [
+          {
+            "link_id": "e2cd48b2-3bdc-4688-ba0f-f8a17798e745",
+            "statement_id": "4268e829-024d-4daf-8571-a59df829c2e9",
+            "statement_text": "工业富联2025年AI服务器及相关算力基础设施收入同比增长超过80%，占云计算板块收入比重约45%",
+            "statement_kind": "disclosed_fact",
+            "span_id": "b6d13d16-633f-41c2-93a5-a72d958f78c6",
+            "verbatim_text": "云计算板块：2025年云计算板块营业收入人民币2,650亿元，同比增长34.6%，其中AI服务器及相关算力基础设施收入同比增长超过80%，占云计算板块收入比重提升至约45%。",
+            "locator": {
+              "page": 18,
+              "paragraph": 1
+            },
+            "role": "supports",
+            "reason": "工业富联AI服务器收入同比高增体现向代工端传导迹象",
+            "scope": {
+              "level": "company",
+              "segment": "AI服务器",
+              "note": "公司整体口径，非AI服务器分部单独披露"
+            },
+            "observed_period": "2025-12-31",
+            "available_at": "2026-08-03T02:06:13.475639",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "c18a3491-ae35-404b-9794-4292c2f08b15",
+            "statement_id": "bda50c2c-e986-40fb-b096-1d70fe691bec",
+            "statement_text": "工业富联管理层表示AI服务器订单能见度已延伸至2026年下半年",
+            "statement_kind": "management_attribution",
+            "span_id": "3a23fa77-c982-4fe7-9d2b-63d2a03022f7",
+            "verbatim_text": "管理层讨论与分析：AI算力需求正向算力基础设施代工与整机交付端传导，公司作为全球主要云厂商AI服务器ODM/代工合作伙伴，订单能见度已延伸至2026年下半年。",
+            "locator": {
+              "page": 22,
+              "paragraph": 4
+            },
+            "role": "supports",
+            "reason": "管理层确认AI服务器订单能见度延伸至2026H2",
+            "scope": {
+              "segment": "AI服务器代工"
+            },
+            "observed_period": "2025-12-31",
+            "available_at": "2026-08-03T02:06:13.476015",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "54bda0c6-f483-4a1b-86a9-7791d9391693",
+            "statement_id": "3ca66598-cf27-4d40-b8b0-bdd62ef9f845",
+            "statement_text": "中信预测工业富联2026年AI服务器收入有望同比增长60%以上，订单能见度清晰",
+            "statement_kind": "forecast",
+            "span_id": "adb983b5-818a-472d-bc41-28279730509d",
+            "verbatim_text": "我们认为AI算力采购将沿供应链向代工/ODM端传导，工业富联作为核心AI服务器代工方，2026年AI服务器收入有望同比增长60%以上，订单能见度清晰。",
+            "locator": {
+              "page": 5,
+              "paragraph": 2
+            },
+            "role": "supports",
+            "reason": "研报预测AI服务器收入同比+60%，传导兑现",
+            "scope": {
+              "segment": "AI服务器代工"
+            },
+            "observed_period": "2026-06-10",
+            "available_at": "2026-08-03T02:06:13.476487",
+            "review_state": "machine_generated"
+          }
+        ],
+        "contradicts": [
+          {
+            "link_id": "19f0e815-742a-4e46-b566-8c6b5ea5042c",
+            "statement_id": "3ef8b57c-4bc2-4952-9b45-4c24b27ded50",
+            "statement_text": "国信认为市场对算力采购向代工端传导节奏过于乐观，工业富联AI服务器毛利率偏低，传导弹性需审慎验证",
+            "statement_kind": "research_opinion",
+            "span_id": "543b1608-f097-4951-aef2-23b711e7254b",
+            "verbatim_text": "我们认为市场对算力采购向代工端传导的节奏过于乐观，工业富联AI服务器收入中相当部分来自零部件与整机代工，毛利率偏低，且云厂商订单存在季度波动，传导弹性需审慎验证。",
+            "locator": {
+              "page": 2,
+              "paragraph": 2
+            },
+            "role": "contradicts",
+            "reason": "国信认为代工传导节奏过于乐观，毛利率偏低，传导弹性需审慎验证",
+            "scope": {
+              "segment": "AI服务器代工"
+            },
+            "observed_period": "2026-06-18",
+            "available_at": "2026-08-03T02:06:13.477054",
+            "review_state": "machine_generated"
+          }
+        ],
+        "contextualizes": [
+          {
+            "link_id": "27d313b7-fe97-4b4c-809a-909c4b7b5d46",
+            "statement_id": "4005cdb9-e402-4ae4-8df3-c45cc67b361e",
+            "statement_text": "工业富联整体收入中代工及零部件业务占比较高，AI服务器分部数据尚需进一步披露",
+            "statement_kind": "disclosed_fact",
+            "span_id": "a8052c76-c9aa-4101-ac46-c23170063e9c",
+            "verbatim_text": "风险提示：AI服务器客户集中度较高，毛利率受上游GPU及存储价格波动影响较大；公司整体收入中代工及零部件业务占比较高，AI服务器分部数据尚需进一步披露。",
+            "locator": {
+              "page": 25,
+              "paragraph": 1
+            },
+            "role": "contextualizes",
+            "reason": "AI服务器分部数据未单独披露，限制传导证据强度",
+            "scope": {
+              "level": "company",
+              "note": "公司整体口径，分部缺失"
+            },
+            "observed_period": "2025-12-31",
+            "available_at": "2026-08-03T02:06:13.477459",
+            "review_state": "machine_generated"
+          }
+        ]
+      },
+      "competitive_explanations": [],
+      "gaps": [
+        "缺少云厂商CapEx向工业富联代工端订单传导的直接披露证据",
+        "工业富联AI服务器分部数据未单独披露，无法验证传导弹性"
+      ]
+    },
+    {
+      "schema_version": "v1",
+      "basis": {
+        "cutoff": "2026-08-03T02:06:13.544004Z",
+        "is_historical": false,
+        "ledger_high_watermark": null,
+        "projection_built_at": null,
+        "projection_schema_version": null
+      },
+      "case": {
+        "id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "title": "AI 算力链",
+        "topic": "ai_compute",
+        "created_by": "seed-ai-compute",
+        "created_at": "2026-08-03T02:06:13.466810",
+        "updated_at": "2026-08-03T02:06:13.466810"
+      },
+      "theses": [
+        {
+          "id": "c938087e-dea3-4b0a-8dbf-56b0aecac9ca",
+          "statement": "2026年云厂商资本开支高增长将持续驱动AI算力需求扩张",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.467603",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "605734f2-1d30-481e-933b-7d4ad8976b15",
+          "statement": "云厂商算力采购将沿供应链向代工/ODM端传导，带动工业富联AI服务器收入兑现",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468192",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        {
+          "id": "bc732643-f4b4-4889-b655-591825f00f71",
+          "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+          "created_by": "seed-ai-compute",
+          "created_at": "2026-08-03T02:06:13.468321",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        }
+      ],
+      "focus_thesis_id": "bc732643-f4b4-4889-b655-591825f00f71",
+      "assessment": {
+        "id": "870e733f-33d3-41d4-b32a-6fd69faef4f7",
+        "thesis_id": "bc732643-f4b4-4889-b655-591825f00f71",
+        "conclusion": "contradicted",
+        "rationale": "国信研报指出寒武纪PE超300倍透支出货预期且代工传导谨慎，与兑现并支撑估值的假设矛盾",
+        "gaps": [
+          "寒武纪2026年出货量缺乏直接定量披露"
+        ],
+        "provisional": true,
+        "review": {
+          "outcome": "confirmed",
+          "conclusion": "contradicted",
+          "reason": "人工维持：国信估值透支观点与兑现假设直接冲突，且公司尚未盈利，维持 contradicted",
+          "reviewer": "seed-human-reviewer",
+          "reviewed_at": "2026-08-03T02:06:13.503385"
+        }
+      },
+      "assess_failure": null,
+      "causal_chain": [
+        {
+          "id": "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+          "sequence": 1,
+          "description": "全球 AI 算力需求爆发（大模型训练+推理）"
+        },
+        {
+          "id": "021c86cd-391f-4cf2-8e1b-d86018091791",
+          "sequence": 2,
+          "description": "国产算力芯片需求提升（自主可控政策驱动）"
+        },
+        {
+          "id": "4d4d5a25-8664-44df-b36b-69318904c713",
+          "sequence": 3,
+          "description": "寒武纪思元系列芯片出货量增长"
+        },
+        {
+          "id": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+          "sequence": 4,
+          "description": "寒武纪营收兑现且毛利率改善"
+        },
+        {
+          "id": "830d9957-788f-4864-8942-d4c29bed88d3",
+          "sequence": 5,
+          "description": "寒武纪估值获得业绩支撑"
+        }
+      ],
+      "evidence": {
+        "supports": [
+          {
+            "link_id": "02292a67-3022-490b-9c72-29b35fd6b11e",
+            "statement_id": "8591971d-3683-4ce7-a635-0fd7edd29552",
+            "statement_text": "寒武纪管理层表示思元系列芯片已在国内多个智算中心完成适配，预计随云厂商算力采购放量出货规模将显著提升",
+            "statement_kind": "management_attribution",
+            "span_id": "45c97c66-e0c3-4622-b775-a114b5211136",
+            "verbatim_text": "公司管理层表示：本次募投项目紧扣大模型训练与推理算力需求，思元系列芯片已在国内多个智算中心完成适配，预计随着云厂商算力采购放量，公司出货规模将显著提升。",
+            "locator": {
+              "page": 2,
+              "paragraph": 2
+            },
+            "role": "supports",
+            "reason": "管理层确认思元系列适配完成，预计出货放量",
+            "scope": {
+              "segment": "AI算力芯片"
+            },
+            "observed_period": "2026-03-15",
+            "available_at": "2026-08-03T02:06:13.478182",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "b062463d-0a13-4d27-9ede-9416f2a566d9",
+            "statement_id": "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+            "statement_text": "寒武纪思元系列加速卡2025年出货量同比增长超过60%，已在15个规模化智算中心完成集群适配",
+            "statement_kind": "disclosed_fact",
+            "span_id": "76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+            "verbatim_text": "出货与适配：思元系列加速卡全年出货量同比增长超过60%，已在国内15个规模化智算中心完成集群适配，累计提供算力规模超过8,000 PFLOPS（FP16）。",
+            "locator": {
+              "page": 14,
+              "paragraph": 3
+            },
+            "role": "supports",
+            "reason": "思元加速卡出货同比+60%，支撑兑现节奏",
+            "scope": {
+              "segment": "AI算力芯片"
+            },
+            "observed_period": "2025-12-31",
+            "available_at": "2026-08-03T02:06:13.478532",
+            "review_state": "machine_generated"
+          },
+          {
+            "link_id": "33eedc35-4e7a-41b5-a9e6-434ccc0d5043",
+            "statement_id": "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+            "statement_text": "中信看好寒武纪思元系列在国产智算中心的兑现节奏，维持买入评级，对应2026年PE约85倍",
+            "statement_kind": "research_opinion",
+            "span_id": "e89ab734-a07b-47a9-9e59-10e8adb57970",
+            "verbatim_text": "国产算力芯片方面，我们看好寒武纪思元系列在国产智算中心的兑现节奏，认为当前估值已部分反映2026年出货预期，维持\"买入\"评级，对应2026年PE约85倍。",
+            "locator": {
+              "page": 10,
+              "paragraph": 3
+            },
+            "role": "supports",
+            "reason": "研报认为估值已部分反映出货预期，维持买入",
+            "scope": {
+              "segment": "AI算力芯片",
+              "valuation": "PE"
+            },
+            "observed_period": "2026-06-10",
+            "available_at": "2026-08-03T02:06:13.478884",
+            "review_state": "machine_generated"
+          }
+        ],
+        "contradicts": [
+          {
+            "link_id": "18ac0176-f362-4abf-8603-ef90732911c6",
+            "statement_id": "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+            "statement_text": "国信认为寒武纪当前股价对应2026年PE超过300倍，已显著透支出货预期，估值存在回调风险",
+            "statement_kind": "research_opinion",
+            "span_id": "c6778089-d9a3-48f5-8b09-861de3630dbc",
+            "verbatim_text": "国产算力芯片方面，寒武纪当前股价对应2026年PE超过300倍，已显著透支2026-2027年出货预期，在尚未盈利且出货规模有限的背景下，估值存在回调风险，给予\"谨慎推荐\"评级。",
+            "locator": {
+              "page": 4,
+              "paragraph": 1
+            },
+            "role": "contradicts",
+            "reason": "国信认为PE超300倍透支预期，估值存在回调风险，与兑现假设矛盾",
+            "scope": {
+              "segment": "AI算力芯片",
+              "valuation": "PE"
+            },
+            "observed_period": "2026-06-18",
+            "available_at": "2026-08-03T02:06:13.479360",
+            "review_state": "machine_generated"
+          }
+        ],
+        "contextualizes": [
+          {
+            "link_id": "c97e9fbe-3011-499c-9980-c7447441fe8c",
+            "statement_id": "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+            "statement_text": "寒武纪定增募资49.8亿元，投向新一代云端训练芯片、推理芯片与智能算力集群项目",
+            "statement_kind": "disclosed_fact",
+            "span_id": "bd6b3a11-814d-4f99-891d-96f20c18e99b",
+            "verbatim_text": "募集资金投向：新一代云端训练芯片项目拟投入人民币21.5亿元，新一代边缘推理芯片项目拟投入人民币12.3亿元，智能算力集群建设项目拟投入人民币10.2亿元，补充流动资金5.8亿元。",
+            "locator": {
+              "page": 2,
+              "paragraph": 1
+            },
+            "role": "contextualizes",
+            "reason": "募投方向聚焦算力芯片与集群，与兑现假设一致",
+            "scope": {
+              "segment": "AI算力芯片"
+            },
+            "observed_period": "2026-03-15",
+            "available_at": "2026-08-03T02:06:13.477825",
+            "review_state": "machine_generated"
+          }
+        ]
+      },
+      "competitive_explanations": [],
+      "gaps": [
+        "寒武纪2026年出货量缺乏直接定量披露"
+      ]
+    }
+  ],
+  "overview": {
+    "schema_version": "v1",
+    "basis": {
+      "cutoff": "2026-08-03T02:06:13.564261Z",
+      "is_historical": false,
+      "ledger_high_watermark": null,
+      "projection_built_at": null,
+      "projection_schema_version": null
+    },
+    "case": {
+      "id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+      "title": "AI 算力链",
+      "topic": "ai_compute",
+      "created_by": "seed-ai-compute",
+      "created_at": "2026-08-03T02:06:13.466810",
+      "updated_at": "2026-08-03T02:06:13.466810"
+    },
+    "thesis": {
+      "id": "bc732643-f4b4-4889-b655-591825f00f71",
+      "statement": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+      "created_by": "seed-ai-compute",
+      "created_at": "2026-08-03T02:06:13.468321"
+    },
+    "assessment": {
+      "id": "870e733f-33d3-41d4-b32a-6fd69faef4f7",
+      "thesis_id": "bc732643-f4b4-4889-b655-591825f00f71",
+      "conclusion": "contradicted",
+      "rationale": "国信研报指出寒武纪PE超300倍透支出货预期且代工传导谨慎，与兑现并支撑估值的假设矛盾",
+      "gaps": [
+        "寒武纪2026年出货量缺乏直接定量披露"
+      ],
+      "provisional": true,
+      "review": {
+        "outcome": "confirmed",
+        "conclusion": "contradicted",
+        "reason": "人工维持：国信估值透支观点与兑现假设直接冲突，且公司尚未盈利，维持 contradicted",
+        "reviewer": "seed-human-reviewer",
+        "reviewed_at": "2026-08-03T02:06:13.503385"
+      }
+    },
+    "key_changes": [
+      {
+        "id": "18ac0176-f362-4abf-8603-ef90732911c6",
+        "tag": "新增",
+        "text": "国信认为寒武纪当前股价对应2026年PE超过300倍，已显著透支出货预期，估值存在回调风险",
+        "occurred_at": "2026-08-03T02:06:13.479360",
+        "source_label": "research_opinion",
+        "review_state": "machine_generated"
+      },
+      {
+        "id": "33eedc35-4e7a-41b5-a9e6-434ccc0d5043",
+        "tag": "新增",
+        "text": "中信看好寒武纪思元系列在国产智算中心的兑现节奏，维持买入评级，对应2026年PE约85倍",
+        "occurred_at": "2026-08-03T02:06:13.478884",
+        "source_label": "research_opinion",
+        "review_state": "machine_generated"
+      },
+      {
+        "id": "b062463d-0a13-4d27-9ede-9416f2a566d9",
+        "tag": "新增",
+        "text": "寒武纪思元系列加速卡2025年出货量同比增长超过60%，已在15个规模化智算中心完成集群适配",
+        "occurred_at": "2026-08-03T02:06:13.478532",
+        "source_label": "disclosed_fact",
+        "review_state": "machine_generated"
+      },
+      {
+        "id": "02292a67-3022-490b-9c72-29b35fd6b11e",
+        "tag": "新增",
+        "text": "寒武纪管理层表示思元系列芯片已在国内多个智算中心完成适配，预计随云厂商算力采购放量出货规模将显著提升",
+        "occurred_at": "2026-08-03T02:06:13.478182",
+        "source_label": "management_attribution",
+        "review_state": "machine_generated"
+      },
+      {
+        "id": "c97e9fbe-3011-499c-9980-c7447441fe8c",
+        "tag": "新增",
+        "text": "寒武纪定增募资49.8亿元，投向新一代云端训练芯片、推理芯片与智能算力集群项目",
+        "occurred_at": "2026-08-03T02:06:13.477825",
+        "source_label": "disclosed_fact",
+        "review_state": "machine_generated"
+      }
+    ],
+    "framework": [
+      {
+        "id": "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+        "sequence": 1,
+        "description": "全球 AI 算力需求爆发（大模型训练+推理）"
+      },
+      {
+        "id": "021c86cd-391f-4cf2-8e1b-d86018091791",
+        "sequence": 2,
+        "description": "国产算力芯片需求提升（自主可控政策驱动）"
+      },
+      {
+        "id": "4d4d5a25-8664-44df-b36b-69318904c713",
+        "sequence": 3,
+        "description": "寒武纪思元系列芯片出货量增长"
+      },
+      {
+        "id": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "sequence": 4,
+        "description": "寒武纪营收兑现且毛利率改善"
+      },
+      {
+        "id": "830d9957-788f-4864-8942-d4c29bed88d3",
+        "sequence": 5,
+        "description": "寒武纪估值获得业绩支撑"
+      }
+    ],
+    "totals": {
+      "evidence_total": 5,
+      "pending_review": 5,
+      "major_gaps": 1
+    },
+    "task_queue": [],
+    "evidence_changes": [],
+    "activity": []
+  },
+  "graph": {
+    "schema_version": "graph/v1",
+    "basis": {
+      "cutoff": "2026-08-03T02:06:13.571787Z",
+      "is_historical": false,
+      "ledger_high_watermark": null,
+      "projection_built_at": null,
+      "projection_schema_version": null
+    },
+    "nodes": [
+      {
+        "id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "kind": "case",
+        "label": "AI 算力链",
+        "properties": {
+          "topic": "ai_compute"
+        }
+      },
+      {
+        "id": "bc732643-f4b4-4889-b655-591825f00f71",
+        "kind": "thesis",
+        "label": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+        "properties": {}
+      },
+      {
+        "id": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+        "kind": "document",
+        "label": "cambricon-placement-2026 · 2026-03-15 · docling-v1",
+        "properties": {
+          "source_url": "https://example.test/ai-compute/cambricon-placement-2026",
+          "parser_version": "docling-v1",
+          "published_at": "2026-03-15T00:00:00",
+          "available_at": "2026-08-03T02:06:13.452956"
+        }
+      },
+      {
+        "id": "bd6b3a11-814d-4f99-891d-96f20c18e99b",
+        "kind": "span",
+        "label": "p.2 · ¶1 · 募集资金投向：新一代云端训练芯片项目拟投入人民币21.5亿元…",
+        "properties": {
+          "locator": {
+            "page": 2,
+            "paragraph": 1
+          }
+        }
+      },
+      {
+        "id": "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+        "kind": "statement",
+        "label": "寒武纪定增募资49.8亿元，投向新一代云端训练芯片、推理芯片与智能算力集群项目",
+        "properties": {
+          "statement_kind": "disclosed_fact",
+          "document_id": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+          "span_id": "bd6b3a11-814d-4f99-891d-96f20c18e99b"
+        }
+      },
+      {
+        "id": "45c97c66-e0c3-4622-b775-a114b5211136",
+        "kind": "span",
+        "label": "p.2 · ¶2 · 公司管理层表示：本次募投项目紧扣大模型训练与推理算力需求，思…",
+        "properties": {
+          "locator": {
+            "page": 2,
+            "paragraph": 2
+          }
+        }
+      },
+      {
+        "id": "8591971d-3683-4ce7-a635-0fd7edd29552",
+        "kind": "statement",
+        "label": "寒武纪管理层表示思元系列芯片已在国内多个智算中心完成适配，预计随云厂商算力采购放量出货规模将显著提升",
+        "properties": {
+          "statement_kind": "management_attribution",
+          "document_id": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+          "span_id": "45c97c66-e0c3-4622-b775-a114b5211136"
+        }
+      },
+      {
+        "id": "88b4a9a6-f541-4c08-b72f-7dd0fb3ff470",
+        "kind": "document",
+        "label": "cambricon-annual-2025 · 2026-04-25 · docling-v1",
+        "properties": {
+          "source_url": "https://example.test/ai-compute/cambricon-annual-2025",
+          "parser_version": "docling-v1",
+          "published_at": "2026-04-25T00:00:00",
+          "available_at": "2026-08-03T02:06:13.460909"
+        }
+      },
+      {
+        "id": "76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+        "kind": "span",
+        "label": "p.14 · ¶3 · 出货与适配：思元系列加速卡全年出货量同比增长超过60%，已在…",
+        "properties": {
+          "locator": {
+            "page": 14,
+            "paragraph": 3
+          }
+        }
+      },
+      {
+        "id": "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+        "kind": "statement",
+        "label": "寒武纪思元系列加速卡2025年出货量同比增长超过60%，已在15个规模化智算中心完成集群适配",
+        "properties": {
+          "statement_kind": "disclosed_fact",
+          "document_id": "88b4a9a6-f541-4c08-b72f-7dd0fb3ff470",
+          "span_id": "76408cc8-8776-43cd-9e2f-7e4f29bd08df"
+        }
+      },
+      {
+        "id": "3c68f936-d70a-4198-af8e-72b5f351ca58",
+        "kind": "document",
+        "label": "citic-compute-2026 · 2026-06-10 · docling-v1",
+        "properties": {
+          "source_url": "https://example.test/ai-compute/citic-compute-2026",
+          "parser_version": "docling-v1",
+          "published_at": "2026-06-10T00:00:00",
+          "available_at": "2026-08-03T02:06:13.462352"
+        }
+      },
+      {
+        "id": "e89ab734-a07b-47a9-9e59-10e8adb57970",
+        "kind": "span",
+        "label": "p.10 · ¶3 · 国产算力芯片方面，我们看好寒武纪思元系列在国产智算中心的兑现…",
+        "properties": {
+          "locator": {
+            "page": 10,
+            "paragraph": 3
+          }
+        }
+      },
+      {
+        "id": "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+        "kind": "statement",
+        "label": "中信看好寒武纪思元系列在国产智算中心的兑现节奏，维持买入评级，对应2026年PE约85倍",
+        "properties": {
+          "statement_kind": "research_opinion",
+          "document_id": "3c68f936-d70a-4198-af8e-72b5f351ca58",
+          "span_id": "e89ab734-a07b-47a9-9e59-10e8adb57970"
+        }
+      },
+      {
+        "id": "e60738e7-51c0-456b-96c0-641849fafb7c",
+        "kind": "document",
+        "label": "guosen-compute-2026 · 2026-06-18 · docling-v1",
+        "properties": {
+          "source_url": "https://example.test/ai-compute/guosen-compute-2026",
+          "parser_version": "docling-v1",
+          "published_at": "2026-06-18T00:00:00",
+          "available_at": "2026-08-03T02:06:13.463960"
+        }
+      },
+      {
+        "id": "c6778089-d9a3-48f5-8b09-861de3630dbc",
+        "kind": "span",
+        "label": "p.4 · ¶1 · 国产算力芯片方面，寒武纪当前股价对应2026年PE超过300…",
+        "properties": {
+          "locator": {
+            "page": 4,
+            "paragraph": 1
+          }
+        }
+      },
+      {
+        "id": "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+        "kind": "statement",
+        "label": "国信认为寒武纪当前股价对应2026年PE超过300倍，已显著透支出货预期，估值存在回调风险",
+        "properties": {
+          "statement_kind": "research_opinion",
+          "document_id": "e60738e7-51c0-456b-96c0-641849fafb7c",
+          "span_id": "c6778089-d9a3-48f5-8b09-861de3630dbc"
+        }
+      },
+      {
+        "id": "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+        "kind": "step",
+        "label": "全球 AI 算力需求爆发（大模型训练+推理）",
+        "properties": {
+          "sequence": 1
+        }
+      },
+      {
+        "id": "021c86cd-391f-4cf2-8e1b-d86018091791",
+        "kind": "step",
+        "label": "国产算力芯片需求提升（自主可控政策驱动）",
+        "properties": {
+          "sequence": 2
+        }
+      },
+      {
+        "id": "4d4d5a25-8664-44df-b36b-69318904c713",
+        "kind": "step",
+        "label": "寒武纪思元系列芯片出货量增长",
+        "properties": {
+          "sequence": 3
+        }
+      },
+      {
+        "id": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "kind": "step",
+        "label": "寒武纪营收兑现且毛利率改善",
+        "properties": {
+          "sequence": 4
+        }
+      },
+      {
+        "id": "830d9957-788f-4864-8942-d4c29bed88d3",
+        "kind": "step",
+        "label": "寒武纪估值获得业绩支撑",
+        "properties": {
+          "sequence": 5
+        }
+      },
+      {
+        "id": "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+        "kind": "company",
+        "label": "寒武纪",
+        "properties": {
+          "code": "688256"
+        }
+      },
+      {
+        "id": "5050591d-f601-408a-afd1-41abd942f25c",
+        "kind": "stock",
+        "label": "寒武纪",
+        "properties": {
+          "code": "688256.SH",
+          "market": "SSE"
+        }
+      },
+      {
+        "id": "b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620",
+        "kind": "fund",
+        "label": "华夏国证半导体芯片ETF联接",
+        "properties": {
+          "code": "008888"
+        }
+      },
+      {
+        "id": "e81043ed-e893-4486-999d-21e06aba6939",
+        "kind": "valuation",
+        "label": "PE_TTM",
+        "properties": {
+          "as_of": "2026-06-30"
+        }
+      },
+      {
+        "id": "761118a7-eabc-4871-981c-05607c16897f",
+        "kind": "valuation",
+        "label": "PB",
+        "properties": {
+          "as_of": "2026-06-30"
+        }
+      },
+      {
+        "id": "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+        "kind": "company",
+        "label": "工业富联",
+        "properties": {
+          "code": "601138"
+        }
+      },
+      {
+        "id": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "kind": "stock",
+        "label": "工业富联",
+        "properties": {
+          "code": "601138.SH",
+          "market": "SSE"
+        }
+      },
+      {
+        "id": "e5873b1d-aace-4b55-ba35-26e7d04595d8",
+        "kind": "fund",
+        "label": "国泰CES半导体行业混合",
+        "properties": {
+          "code": "012345"
+        }
+      },
+      {
+        "id": "5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db",
+        "kind": "valuation",
+        "label": "PE_TTM",
+        "properties": {
+          "as_of": "2026-06-30"
+        }
+      },
+      {
+        "id": "38f01419-b1d5-4d3a-876c-760d8d4ffc17",
+        "kind": "valuation",
+        "label": "PB",
+        "properties": {
+          "as_of": "2026-06-30"
+        }
+      },
+      {
+        "id": "c3bd8adb-e26e-45b3-8058-369e54a761c4",
+        "kind": "company",
+        "label": "SK海力士",
+        "properties": {
+          "code": "000660.KS"
+        }
+      },
+      {
+        "id": "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+        "kind": "stock",
+        "label": "SK海力士",
+        "properties": {
+          "code": "000660.KS",
+          "market": "KRX"
+        }
+      },
+      {
+        "id": "a0e54681-e143-4ffe-864a-4df5b3007dbb",
+        "kind": "valuation",
+        "label": "PE_TTM",
+        "properties": {
+          "as_of": "2026-06-30"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+        "semantic_kind": "contains_thesis",
+        "source": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "target": "bc732643-f4b4-4889-b655-591825f00f71",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains:e58d81a5-322a-47df-9ceb-26188a0c39d9:bd6b3a11-814d-4f99-891d-96f20c18e99b",
+        "semantic_kind": "contains",
+        "source": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+        "target": "bd6b3a11-814d-4f99-891d-96f20c18e99b",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "derived:bd6b3a11-814d-4f99-891d-96f20c18e99b:5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+        "semantic_kind": "derived",
+        "source": "bd6b3a11-814d-4f99-891d-96f20c18e99b",
+        "target": "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "c97e9fbe-3011-499c-9980-c7447441fe8c",
+        "semantic_kind": "evidence",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+        "review_state": "machine_generated",
+        "available_at": "2026-08-03T02:06:13.477825",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains:e58d81a5-322a-47df-9ceb-26188a0c39d9:45c97c66-e0c3-4622-b775-a114b5211136",
+        "semantic_kind": "contains",
+        "source": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+        "target": "45c97c66-e0c3-4622-b775-a114b5211136",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "derived:45c97c66-e0c3-4622-b775-a114b5211136:8591971d-3683-4ce7-a635-0fd7edd29552",
+        "semantic_kind": "derived",
+        "source": "45c97c66-e0c3-4622-b775-a114b5211136",
+        "target": "8591971d-3683-4ce7-a635-0fd7edd29552",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "02292a67-3022-490b-9c72-29b35fd6b11e",
+        "semantic_kind": "evidence",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "8591971d-3683-4ce7-a635-0fd7edd29552",
+        "review_state": "machine_generated",
+        "available_at": "2026-08-03T02:06:13.478182",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains:88b4a9a6-f541-4c08-b72f-7dd0fb3ff470:76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+        "semantic_kind": "contains",
+        "source": "88b4a9a6-f541-4c08-b72f-7dd0fb3ff470",
+        "target": "76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "derived:76408cc8-8776-43cd-9e2f-7e4f29bd08df:f7b24c7e-58e9-4b0d-904e-c83508d49934",
+        "semantic_kind": "derived",
+        "source": "76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+        "target": "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "b062463d-0a13-4d27-9ede-9416f2a566d9",
+        "semantic_kind": "evidence",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+        "review_state": "machine_generated",
+        "available_at": "2026-08-03T02:06:13.478532",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains:3c68f936-d70a-4198-af8e-72b5f351ca58:e89ab734-a07b-47a9-9e59-10e8adb57970",
+        "semantic_kind": "contains",
+        "source": "3c68f936-d70a-4198-af8e-72b5f351ca58",
+        "target": "e89ab734-a07b-47a9-9e59-10e8adb57970",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "derived:e89ab734-a07b-47a9-9e59-10e8adb57970:d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+        "semantic_kind": "derived",
+        "source": "e89ab734-a07b-47a9-9e59-10e8adb57970",
+        "target": "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "33eedc35-4e7a-41b5-a9e6-434ccc0d5043",
+        "semantic_kind": "evidence",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+        "review_state": "machine_generated",
+        "available_at": "2026-08-03T02:06:13.478884",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains:e60738e7-51c0-456b-96c0-641849fafb7c:c6778089-d9a3-48f5-8b09-861de3630dbc",
+        "semantic_kind": "contains",
+        "source": "e60738e7-51c0-456b-96c0-641849fafb7c",
+        "target": "c6778089-d9a3-48f5-8b09-861de3630dbc",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "derived:c6778089-d9a3-48f5-8b09-861de3630dbc:1d7b231c-8bee-4340-8b71-745c982b5cd5",
+        "semantic_kind": "derived",
+        "source": "c6778089-d9a3-48f5-8b09-861de3630dbc",
+        "target": "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "18ac0176-f362-4abf-8603-ef90732911c6",
+        "semantic_kind": "evidence",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+        "review_state": "machine_generated",
+        "available_at": "2026-08-03T02:06:13.479360",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains_step:bc732643-f4b4-4889-b655-591825f00f71:6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+        "semantic_kind": "contains_step",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains_step:bc732643-f4b4-4889-b655-591825f00f71:021c86cd-391f-4cf2-8e1b-d86018091791",
+        "semantic_kind": "contains_step",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "021c86cd-391f-4cf2-8e1b-d86018091791",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains_step:bc732643-f4b4-4889-b655-591825f00f71:4d4d5a25-8664-44df-b36b-69318904c713",
+        "semantic_kind": "contains_step",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "4d4d5a25-8664-44df-b36b-69318904c713",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains_step:bc732643-f4b4-4889-b655-591825f00f71:55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "semantic_kind": "contains_step",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "contains_step:bc732643-f4b4-4889-b655-591825f00f71:830d9957-788f-4864-8942-d4c29bed88d3",
+        "semantic_kind": "contains_step",
+        "source": "bc732643-f4b4-4889-b655-591825f00f71",
+        "target": "830d9957-788f-4864-8942-d4c29bed88d3",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "e0661fbb-f558-4c39-95f8-51cd5e5cf397",
+        "semantic_kind": "causal",
+        "source": "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc",
+        "target": "021c86cd-391f-4cf2-8e1b-d86018091791",
+        "review_state": "reviewed",
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "rationale": "算力需求爆发传导至国产替代需求"
+        }
+      },
+      {
+        "id": "6d349463-634e-4abd-a959-b7a5642566b3",
+        "semantic_kind": "causal",
+        "source": "021c86cd-391f-4cf2-8e1b-d86018091791",
+        "target": "4d4d5a25-8664-44df-b36b-69318904c713",
+        "review_state": "reviewed",
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "rationale": "国产需求提升推动寒武纪出货"
+        }
+      },
+      {
+        "id": "5689c488-40ff-4622-93f5-bf706d316c3d",
+        "semantic_kind": "causal",
+        "source": "4d4d5a25-8664-44df-b36b-69318904c713",
+        "target": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "review_state": "reviewed",
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "rationale": "出货量增长带动营收兑现"
+        }
+      },
+      {
+        "id": "998033d2-75d2-4e35-b9b2-eee3ce3530e8",
+        "semantic_kind": "causal",
+        "source": "55a2d62c-a445-4f06-bcd8-cc150d487bbd",
+        "target": "830d9957-788f-4864-8942-d4c29bed88d3",
+        "review_state": "reviewed",
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "rationale": "营收兑现支撑当前估值"
+        }
+      },
+      {
+        "id": "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62",
+        "semantic_kind": "theme_role",
+        "source": "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+        "target": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "role": "算力芯片受益方"
+        }
+      },
+      {
+        "id": "company_stock:daf520ea-5312-4f5f-abf5-f62a41bdbcd0:5050591d-f601-408a-afd1-41abd942f25c",
+        "semantic_kind": "company_stock",
+        "source": "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+        "target": "5050591d-f601-408a-afd1-41abd942f25c",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "holding:c829b523-e4e9-423e-99f0-079751176836",
+        "semantic_kind": "holding",
+        "source": "b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620",
+        "target": "5050591d-f601-408a-afd1-41abd942f25c",
+        "review_state": null,
+        "available_at": "2026-04-22T00:00:00",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "weight": "0.0820000000",
+          "report_period": "2026-03-31"
+        }
+      },
+      {
+        "id": "valuation:e81043ed-e893-4486-999d-21e06aba6939",
+        "semantic_kind": "valuation",
+        "source": "5050591d-f601-408a-afd1-41abd942f25c",
+        "target": "e81043ed-e893-4486-999d-21e06aba6939",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "valuation:761118a7-eabc-4871-981c-05607c16897f",
+        "semantic_kind": "valuation",
+        "source": "5050591d-f601-408a-afd1-41abd942f25c",
+        "target": "761118a7-eabc-4871-981c-05607c16897f",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6",
+        "semantic_kind": "theme_role",
+        "source": "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+        "target": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "role": "AI服务器代工方"
+        }
+      },
+      {
+        "id": "company_stock:e6f80f94-a1de-42fe-aafd-c6cda9d63a82:95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "semantic_kind": "company_stock",
+        "source": "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+        "target": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "holding:e19f5adc-f48e-41a2-afbf-22be5d9f0681",
+        "semantic_kind": "holding",
+        "source": "b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620",
+        "target": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "review_state": null,
+        "available_at": "2026-04-22T00:00:00",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "weight": "0.0650000000",
+          "report_period": "2026-03-31"
+        }
+      },
+      {
+        "id": "holding:88a2aa26-f7e8-4c21-a654-72f7e804046f",
+        "semantic_kind": "holding",
+        "source": "e5873b1d-aace-4b55-ba35-26e7d04595d8",
+        "target": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "review_state": null,
+        "available_at": "2026-04-22T00:00:00",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "weight": "0.0710000000",
+          "report_period": "2026-03-31"
+        }
+      },
+      {
+        "id": "holding:e7a7c52a-e91f-437e-911e-84acec374c29",
+        "semantic_kind": "holding",
+        "source": "e5873b1d-aace-4b55-ba35-26e7d04595d8",
+        "target": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "review_state": null,
+        "available_at": "2025-07-24T00:00:00",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "weight": "0.0550000000",
+          "report_period": "2025-06-30"
+        }
+      },
+      {
+        "id": "valuation:5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db",
+        "semantic_kind": "valuation",
+        "source": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "target": "5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "valuation:38f01419-b1d5-4d3a-876c-760d8d4ffc17",
+        "semantic_kind": "valuation",
+        "source": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+        "target": "38f01419-b1d5-4d3a-876c-760d8d4ffc17",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "theme_role:1d91ffba-c90b-4968-a02e-bd67be2b7ccd",
+        "semantic_kind": "theme_role",
+        "source": "c3bd8adb-e26e-45b3-8058-369e54a761c4",
+        "target": "59da0935-3a26-49eb-a726-e38bc57fed00",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "role": "HBM/存储供应方"
+        }
+      },
+      {
+        "id": "company_stock:c3bd8adb-e26e-45b3-8058-369e54a761c4:428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+        "semantic_kind": "company_stock",
+        "source": "c3bd8adb-e26e-45b3-8058-369e54a761c4",
+        "target": "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      },
+      {
+        "id": "holding:71e8b106-f3ec-4123-bc26-dd661a0d46c4",
+        "semantic_kind": "holding",
+        "source": "e5873b1d-aace-4b55-ba35-26e7d04595d8",
+        "target": "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+        "review_state": null,
+        "available_at": "2026-04-22T00:00:00",
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {
+          "weight": "0.0400000000",
+          "report_period": "2026-03-31"
+        }
+      },
+      {
+        "id": "valuation:a0e54681-e143-4ffe-864a-4df5b3007dbb",
+        "semantic_kind": "valuation",
+        "source": "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+        "target": "a0e54681-e143-4ffe-864a-4df5b3007dbb",
+        "review_state": null,
+        "available_at": null,
+        "valid_interval": null,
+        "source_refs": [],
+        "properties": {}
+      }
+    ],
+    "paths": [
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->bc732643-f4b4-4889-b655-591825f00f71"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "daf520ea-5312-4f5f-abf5-f62a41bdbcd0"
+        ],
+        "edge_ids": [
+          "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->daf520ea-5312-4f5f-abf5-f62a41bdbcd0"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "e6f80f94-a1de-42fe-aafd-c6cda9d63a82"
+        ],
+        "edge_ids": [
+          "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e6f80f94-a1de-42fe-aafd-c6cda9d63a82"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "c3bd8adb-e26e-45b3-8058-369e54a761c4"
+        ],
+        "edge_ids": [
+          "theme_role:1d91ffba-c90b-4968-a02e-bd67be2b7ccd"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->c3bd8adb-e26e-45b3-8058-369e54a761c4"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "5b4c2043-2251-4aea-a4d5-e8acedd567c3"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "c97e9fbe-3011-499c-9980-c7447441fe8c"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->5b4c2043-2251-4aea-a4d5-e8acedd567c3"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "8591971d-3683-4ce7-a635-0fd7edd29552"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "02292a67-3022-490b-9c72-29b35fd6b11e"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->8591971d-3683-4ce7-a635-0fd7edd29552"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "f7b24c7e-58e9-4b0d-904e-c83508d49934"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "b062463d-0a13-4d27-9ede-9416f2a566d9"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->f7b24c7e-58e9-4b0d-904e-c83508d49934"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "d3d31fda-fb97-4392-99f7-f32b5c3474e5"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "33eedc35-4e7a-41b5-a9e6-434ccc0d5043"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->d3d31fda-fb97-4392-99f7-f32b5c3474e5"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "1d7b231c-8bee-4340-8b71-745c982b5cd5"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "18ac0176-f362-4abf-8603-ef90732911c6"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->1d7b231c-8bee-4340-8b71-745c982b5cd5"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "contains_step:bc732643-f4b4-4889-b655-591825f00f71:6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->6eb1c276-d1a3-4ccb-91c6-073c1bdb24fc"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "021c86cd-391f-4cf2-8e1b-d86018091791"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "contains_step:bc732643-f4b4-4889-b655-591825f00f71:021c86cd-391f-4cf2-8e1b-d86018091791"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->021c86cd-391f-4cf2-8e1b-d86018091791"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "4d4d5a25-8664-44df-b36b-69318904c713"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "contains_step:bc732643-f4b4-4889-b655-591825f00f71:4d4d5a25-8664-44df-b36b-69318904c713"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->4d4d5a25-8664-44df-b36b-69318904c713"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "55a2d62c-a445-4f06-bcd8-cc150d487bbd"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "contains_step:bc732643-f4b4-4889-b655-591825f00f71:55a2d62c-a445-4f06-bcd8-cc150d487bbd"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->55a2d62c-a445-4f06-bcd8-cc150d487bbd"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "830d9957-788f-4864-8942-d4c29bed88d3"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "contains_step:bc732643-f4b4-4889-b655-591825f00f71:830d9957-788f-4864-8942-d4c29bed88d3"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->830d9957-788f-4864-8942-d4c29bed88d3"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+          "5050591d-f601-408a-afd1-41abd942f25c"
+        ],
+        "edge_ids": [
+          "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62",
+          "company_stock:daf520ea-5312-4f5f-abf5-f62a41bdbcd0:5050591d-f601-408a-afd1-41abd942f25c"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->5050591d-f601-408a-afd1-41abd942f25c"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+          "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42"
+        ],
+        "edge_ids": [
+          "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6",
+          "company_stock:e6f80f94-a1de-42fe-aafd-c6cda9d63a82:95a6d0d0-96dc-4156-ac0b-1fdfc315ab42"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->95a6d0d0-96dc-4156-ac0b-1fdfc315ab42"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "c3bd8adb-e26e-45b3-8058-369e54a761c4",
+          "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae"
+        ],
+        "edge_ids": [
+          "theme_role:1d91ffba-c90b-4968-a02e-bd67be2b7ccd",
+          "company_stock:c3bd8adb-e26e-45b3-8058-369e54a761c4:428256a4-9e4a-4dbd-a24e-d35d10d4c5ae"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->428256a4-9e4a-4dbd-a24e-d35d10d4c5ae"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+          "bd6b3a11-814d-4f99-891d-96f20c18e99b"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "c97e9fbe-3011-499c-9980-c7447441fe8c",
+          "derived:bd6b3a11-814d-4f99-891d-96f20c18e99b:5b4c2043-2251-4aea-a4d5-e8acedd567c3"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->bd6b3a11-814d-4f99-891d-96f20c18e99b"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "8591971d-3683-4ce7-a635-0fd7edd29552",
+          "45c97c66-e0c3-4622-b775-a114b5211136"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "02292a67-3022-490b-9c72-29b35fd6b11e",
+          "derived:45c97c66-e0c3-4622-b775-a114b5211136:8591971d-3683-4ce7-a635-0fd7edd29552"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->45c97c66-e0c3-4622-b775-a114b5211136"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+          "76408cc8-8776-43cd-9e2f-7e4f29bd08df"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "b062463d-0a13-4d27-9ede-9416f2a566d9",
+          "derived:76408cc8-8776-43cd-9e2f-7e4f29bd08df:f7b24c7e-58e9-4b0d-904e-c83508d49934"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->76408cc8-8776-43cd-9e2f-7e4f29bd08df"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+          "e89ab734-a07b-47a9-9e59-10e8adb57970"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "33eedc35-4e7a-41b5-a9e6-434ccc0d5043",
+          "derived:e89ab734-a07b-47a9-9e59-10e8adb57970:d3d31fda-fb97-4392-99f7-f32b5c3474e5"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e89ab734-a07b-47a9-9e59-10e8adb57970"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+          "c6778089-d9a3-48f5-8b09-861de3630dbc"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "18ac0176-f362-4abf-8603-ef90732911c6",
+          "derived:c6778089-d9a3-48f5-8b09-861de3630dbc:1d7b231c-8bee-4340-8b71-745c982b5cd5"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->c6778089-d9a3-48f5-8b09-861de3630dbc"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+          "5050591d-f601-408a-afd1-41abd942f25c",
+          "b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620"
+        ],
+        "edge_ids": [
+          "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62",
+          "company_stock:daf520ea-5312-4f5f-abf5-f62a41bdbcd0:5050591d-f601-408a-afd1-41abd942f25c",
+          "holding:c829b523-e4e9-423e-99f0-079751176836"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+          "5050591d-f601-408a-afd1-41abd942f25c",
+          "e81043ed-e893-4486-999d-21e06aba6939"
+        ],
+        "edge_ids": [
+          "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62",
+          "company_stock:daf520ea-5312-4f5f-abf5-f62a41bdbcd0:5050591d-f601-408a-afd1-41abd942f25c",
+          "valuation:e81043ed-e893-4486-999d-21e06aba6939"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e81043ed-e893-4486-999d-21e06aba6939"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+          "5050591d-f601-408a-afd1-41abd942f25c",
+          "761118a7-eabc-4871-981c-05607c16897f"
+        ],
+        "edge_ids": [
+          "theme_role:00ea4f4d-bd59-4b94-bfd4-b556d5589a62",
+          "company_stock:daf520ea-5312-4f5f-abf5-f62a41bdbcd0:5050591d-f601-408a-afd1-41abd942f25c",
+          "valuation:761118a7-eabc-4871-981c-05607c16897f"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->761118a7-eabc-4871-981c-05607c16897f"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+          "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "e5873b1d-aace-4b55-ba35-26e7d04595d8"
+        ],
+        "edge_ids": [
+          "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6",
+          "company_stock:e6f80f94-a1de-42fe-aafd-c6cda9d63a82:95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "holding:88a2aa26-f7e8-4c21-a654-72f7e804046f"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e5873b1d-aace-4b55-ba35-26e7d04595d8"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+          "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db"
+        ],
+        "edge_ids": [
+          "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6",
+          "company_stock:e6f80f94-a1de-42fe-aafd-c6cda9d63a82:95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "valuation:5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->5b73cb59-8a9c-4f9b-ba9f-c29c6ba830db"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "e6f80f94-a1de-42fe-aafd-c6cda9d63a82",
+          "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "38f01419-b1d5-4d3a-876c-760d8d4ffc17"
+        ],
+        "edge_ids": [
+          "theme_role:9659132b-be17-4ae5-b078-95e5278ee9c6",
+          "company_stock:e6f80f94-a1de-42fe-aafd-c6cda9d63a82:95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+          "valuation:38f01419-b1d5-4d3a-876c-760d8d4ffc17"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->38f01419-b1d5-4d3a-876c-760d8d4ffc17"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "c3bd8adb-e26e-45b3-8058-369e54a761c4",
+          "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+          "a0e54681-e143-4ffe-864a-4df5b3007dbb"
+        ],
+        "edge_ids": [
+          "theme_role:1d91ffba-c90b-4968-a02e-bd67be2b7ccd",
+          "company_stock:c3bd8adb-e26e-45b3-8058-369e54a761c4:428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+          "valuation:a0e54681-e143-4ffe-864a-4df5b3007dbb"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->a0e54681-e143-4ffe-864a-4df5b3007dbb"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+          "bd6b3a11-814d-4f99-891d-96f20c18e99b",
+          "e58d81a5-322a-47df-9ceb-26188a0c39d9"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "c97e9fbe-3011-499c-9980-c7447441fe8c",
+          "derived:bd6b3a11-814d-4f99-891d-96f20c18e99b:5b4c2043-2251-4aea-a4d5-e8acedd567c3",
+          "contains:e58d81a5-322a-47df-9ceb-26188a0c39d9:bd6b3a11-814d-4f99-891d-96f20c18e99b"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e58d81a5-322a-47df-9ceb-26188a0c39d9"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "f7b24c7e-58e9-4b0d-904e-c83508d49934",
+          "76408cc8-8776-43cd-9e2f-7e4f29bd08df",
+          "88b4a9a6-f541-4c08-b72f-7dd0fb3ff470"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "b062463d-0a13-4d27-9ede-9416f2a566d9",
+          "derived:76408cc8-8776-43cd-9e2f-7e4f29bd08df:f7b24c7e-58e9-4b0d-904e-c83508d49934",
+          "contains:88b4a9a6-f541-4c08-b72f-7dd0fb3ff470:76408cc8-8776-43cd-9e2f-7e4f29bd08df"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->88b4a9a6-f541-4c08-b72f-7dd0fb3ff470"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+          "e89ab734-a07b-47a9-9e59-10e8adb57970",
+          "3c68f936-d70a-4198-af8e-72b5f351ca58"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "33eedc35-4e7a-41b5-a9e6-434ccc0d5043",
+          "derived:e89ab734-a07b-47a9-9e59-10e8adb57970:d3d31fda-fb97-4392-99f7-f32b5c3474e5",
+          "contains:3c68f936-d70a-4198-af8e-72b5f351ca58:e89ab734-a07b-47a9-9e59-10e8adb57970"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->3c68f936-d70a-4198-af8e-72b5f351ca58"
+      },
+      {
+        "node_ids": [
+          "59da0935-3a26-49eb-a726-e38bc57fed00",
+          "bc732643-f4b4-4889-b655-591825f00f71",
+          "1d7b231c-8bee-4340-8b71-745c982b5cd5",
+          "c6778089-d9a3-48f5-8b09-861de3630dbc",
+          "e60738e7-51c0-456b-96c0-641849fafb7c"
+        ],
+        "edge_ids": [
+          "contains_thesis:59da0935-3a26-49eb-a726-e38bc57fed00:bc732643-f4b4-4889-b655-591825f00f71",
+          "18ac0176-f362-4abf-8603-ef90732911c6",
+          "derived:c6778089-d9a3-48f5-8b09-861de3630dbc:1d7b231c-8bee-4340-8b71-745c982b5cd5",
+          "contains:e60738e7-51c0-456b-96c0-641849fafb7c:c6778089-d9a3-48f5-8b09-861de3630dbc"
+        ],
+        "label": "59da0935-3a26-49eb-a726-e38bc57fed00->e60738e7-51c0-456b-96c0-641849fafb7c"
+      }
+    ],
+    "page": {
+      "next_cursor": null,
+      "has_more": false
+    }
+  },
+  "fund_exposure": {
+    "case_id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+    "as_of": "2026-08-03",
+    "funds": [
+      {
+        "fund_id": "b2d4f6f6-b277-44d4-b0c8-c6bc6cfaa620",
+        "fund_code": "008888",
+        "fund_name": "华夏国证半导体芯片ETF联接",
+        "theme_exposure": 0.147,
+        "positions": [
+          {
+            "stock_id": "5050591d-f601-408a-afd1-41abd942f25c",
+            "stock_code": "688256.SH",
+            "stock_name": "寒武纪",
+            "weight": 0.082,
+            "report_period": "2026-03-31",
+            "pe_ttm": 380.5,
+            "pb": 12.3
+          },
+          {
+            "stock_id": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+            "stock_code": "601138.SH",
+            "stock_name": "工业富联",
+            "weight": 0.065,
+            "report_period": "2026-03-31",
+            "pe_ttm": 25.6,
+            "pb": 3.1
+          }
+        ]
+      },
+      {
+        "fund_id": "e5873b1d-aace-4b55-ba35-26e7d04595d8",
+        "fund_code": "012345",
+        "fund_name": "国泰CES半导体行业混合",
+        "theme_exposure": 0.111,
+        "positions": [
+          {
+            "stock_id": "95a6d0d0-96dc-4156-ac0b-1fdfc315ab42",
+            "stock_code": "601138.SH",
+            "stock_name": "工业富联",
+            "weight": 0.071,
+            "report_period": "2026-03-31",
+            "pe_ttm": 25.6,
+            "pb": 3.1
+          },
+          {
+            "stock_id": "428256a4-9e4a-4dbd-a24e-d35d10d4c5ae",
+            "stock_code": "000660.KS",
+            "stock_name": "SK海力士",
+            "weight": 0.04,
+            "report_period": "2026-03-31",
+            "pe_ttm": 9.8,
+            "pb": null
+          }
+        ]
+      }
+    ]
+  },
+  "documents": {
+    "schema_version": "v1",
+    "basis": {
+      "cutoff": "2026-08-03T02:06:13.592310Z",
+      "is_historical": false,
+      "ledger_high_watermark": null,
+      "projection_built_at": null,
+      "projection_schema_version": null
+    },
+    "items": [
+      {
+        "id": "7c943b49-718f-4940-9789-77afeb93af10",
+        "content_sha256": "d78649bdad8b8d650f3461ca9aa52b36d0d9b406ff1a388c8499bbf0cf218947",
+        "source_url": "https://example.test/ai-compute/cloud-capex-2026-note",
+        "published_at": "2026-05-20T00:00:00",
+        "available_at": "2026-08-03T02:06:13.465453",
+        "acquired_at": "2026-08-03T02:06:13.465453",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 2,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "e60738e7-51c0-456b-96c0-641849fafb7c",
+        "content_sha256": "4bf9216183340ea08539da8ef199dab7ea864555a557ef9b19fe391583aff564",
+        "source_url": "https://example.test/ai-compute/guosen-compute-2026",
+        "published_at": "2026-06-18T00:00:00",
+        "available_at": "2026-08-03T02:06:13.463960",
+        "acquired_at": "2026-08-03T02:06:13.463960",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 4,
+        "statement_count": 2,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "3c68f936-d70a-4198-af8e-72b5f351ca58",
+        "content_sha256": "0d6896517a2992e80245690055f72ab3c744a67811dfe19652d3c6c87c7261fd",
+        "source_url": "https://example.test/ai-compute/citic-compute-2026",
+        "published_at": "2026-06-10T00:00:00",
+        "available_at": "2026-08-03T02:06:13.462352",
+        "acquired_at": "2026-08-03T02:06:13.462352",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 4,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "88b4a9a6-f541-4c08-b72f-7dd0fb3ff470",
+        "content_sha256": "fd3a58ceb4f80758d6cecd1c598cce6a3ac85d87c02e03a2c6d8fe7862df71dd",
+        "source_url": "https://example.test/ai-compute/cambricon-annual-2025",
+        "published_at": "2026-04-25T00:00:00",
+        "available_at": "2026-08-03T02:06:13.460909",
+        "acquired_at": "2026-08-03T02:06:13.460909",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 1,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "fa6c8c5e-5a73-48d4-a978-1ef37762f501",
+        "content_sha256": "05b380015ea9676cd0c98532b46507fc3e6b894bf0a7f1620ab026cb31887db5",
+        "source_url": "https://example.test/ai-compute/sk-hynix-2026q1",
+        "published_at": "2026-04-30T00:00:00",
+        "available_at": "2026-08-03T02:06:13.457970",
+        "acquired_at": "2026-08-03T02:06:13.457970",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 1,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "254f1531-9e3f-44a2-9e4a-d9ca900070e6",
+        "content_sha256": "83fb7a2b36dd924ec20260c74d99cab29007d694379bc1e4cdf22ea02f45b3e7",
+        "source_url": "https://example.test/ai-compute/fii-annual-2025",
+        "published_at": "2026-03-28T00:00:00",
+        "available_at": "2026-08-03T02:06:13.455883",
+        "acquired_at": "2026-08-03T02:06:13.455883",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 3,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      },
+      {
+        "id": "e58d81a5-322a-47df-9ceb-26188a0c39d9",
+        "content_sha256": "090ff982b25f8d229c1ee0f9d1dac4979d44792d8243176e28965376fbfc9085",
+        "source_url": "https://example.test/ai-compute/cambricon-placement-2026",
+        "published_at": "2026-03-15T00:00:00",
+        "available_at": "2026-08-03T02:06:13.452956",
+        "acquired_at": "2026-08-03T02:06:13.452956",
+        "parser_version": "docling-v1",
+        "supersedes_id": null,
+        "span_count": 5,
+        "statement_count": 2,
+        "parse_state": "parsed",
+        "extraction_state": "extracted",
+        "last_extracted_at": null,
+        "content_quality": "ok",
+        "quality_reasons": [],
+        "title": null,
+        "org": null,
+        "doc_kind": null,
+        "entity": null
+      }
+    ],
+    "page": {
+      "next_cursor": null,
+      "has_more": false
+    }
+  },
+  "kpis": {
+    "as_of": "2026-08-03T02:06:13.603651+00:00",
+    "case_id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+    "throughput": {
+      "link_reviews_total": 0,
+      "link_reviews_last_7d": 0,
+      "assessment_reviews_total": 3,
+      "assessment_reviews_last_7d": 3,
+      "reviews_by_reviewer": {
+        "seed-human-reviewer": 3
+      },
+      "pending_link_reviews": 15,
+      "pending_assessment_reviews": 0
+    },
+    "agreement": {
+      "assessment_outcomes": {
+        "confirmed": 3
+      },
+      "assessment_agreement_rate": 1.0,
+      "conclusion_changed": 0,
+      "link_outcomes": {},
+      "link_agreement_rate": null,
+      "link_modified": 0
+    },
+    "latency": {
+      "evidence_to_assessment_avg_days": 0.0,
+      "evidence_to_assessment_max_days": 0.0,
+      "assessment_to_review_avg_days": 0.0,
+      "assessment_to_review_max_days": 0.0
+    }
+  },
+  "search": {
+    "schema_version": "v1",
+    "basis": {
+      "cutoff": "2026-08-03T02:06:13.609386Z",
+      "is_historical": false,
+      "ledger_high_watermark": null,
+      "projection_built_at": null,
+      "projection_schema_version": null
+    },
+    "groups": [
+      {
+        "object_type": "case",
+        "hits": []
+      },
+      {
+        "object_type": "thesis",
+        "hits": [
+          {
+            "object_type": "thesis",
+            "object_id": "bc732643-f4b4-4889-b655-591825f00f71",
+            "title": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+            "snippet": "寒武纪将在2026年兑现算力芯片出货并支撑当前估值",
+            "case_id": "59da0935-3a26-49eb-a726-e38bc57fed00",
+            "review_state": null,
+            "available_at": null,
+            "deep_link": "/research-cases/59da0935-3a26-49eb-a726-e38bc57fed00/dossier"
+          }
+        ]
+      },
+      {
+        "object_type": "evidence",
+        "hits": []
+      },
+      {
+        "object_type": "company",
+        "hits": [
+          {
+            "object_type": "company",
+            "object_id": "daf520ea-5312-4f5f-abf5-f62a41bdbcd0",
+            "title": "寒武纪",
+            "snippet": "688256",
+            "case_id": null,
+            "review_state": null,
+            "available_at": null,
+            "deep_link": "/instruments/companies/daf520ea-5312-4f5f-abf5-f62a41bdbcd0"
+          }
+        ]
+      },
+      {
+        "object_type": "stock",
+        "hits": [
+          {
+            "object_type": "stock",
+            "object_id": "5050591d-f601-408a-afd1-41abd942f25c",
+            "title": "寒武纪",
+            "snippet": "688256.SH",
+            "case_id": null,
+            "review_state": null,
+            "available_at": null,
+            "deep_link": "/instruments/stocks/5050591d-f601-408a-afd1-41abd942f25c"
+          }
+        ]
+      },
+      {
+        "object_type": "fund",
+        "hits": []
+      }
+    ],
+    "page": {
+      "next_cursor": null,
+      "has_more": false
+    }
+  }
+}

@@ -67,3 +67,6 @@ docs/evaluation/raw/
 
 # Local reference clones (read-only, not part of the product)
 .reference/
+
+# Workbuddy tool local memory (read-only assistant state, not part of the product)
+.workbuddy/
