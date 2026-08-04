@@ -2444,8 +2444,29 @@ export interface components {
             statement: string;
             /** Title */
             title?: string | null;
+            evidence_counts?: {
+                [key: string]: number;
+            };
+            evidence?: components["schemas"]["ThemeEvidenceSummaryDTO"][];
             ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
             review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
+        /** ThemeEvidenceSummaryDTO */
+        ThemeEvidenceSummaryDTO: {
+            /** Link Id */
+            link_id: string;
+            /** Role */
+            role: "supports" | "contradicts" | "contextualizes";
+            /** Statement */
+            statement: string;
+            /** Source Url */
+            source_url?: string | null;
+            /** Locator */
+            locator: { [key: string]: unknown };
+            /** Review State */
+            review_state: string;
+            /** Scope */
+            scope: { [key: string]: unknown };
         };
         /** ThemeCompanyRoleDTO */
         ThemeCompanyRoleDTO: {

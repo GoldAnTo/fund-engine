@@ -53,11 +53,16 @@ export function TopicListPage() {
   const [view, setView] = useState<TopicView | null>(null);
   const [companies, setCompanies] = useState<CompanyListItem[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedTag = searchParams.get("tag") ?? "AI 算力基础设施";
+  const requestedTag = searchParams.get("tag");
+  const selectedTag =
+    (requestedTag && items.some((topic) => topic.tag === requestedTag)
+      ? requestedTag
+      : items[0]?.tag) ?? "";
   const [filter, setFilter] = useState<string>("");
   const [auditFilter, setAuditFilter] = useState<"all" | "confirmed" | "pending">(
     "all",
   );
+  const [selectedThesisId, setSelectedThesisId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +89,7 @@ export function TopicListPage() {
   }, []);
 
   useEffect(() => {
+    if (!selectedTag) return;
     let cancelled = false;
     setState({ kind: "loading" });
     researchClient
@@ -109,13 +115,14 @@ export function TopicListPage() {
   }, [items, filter]);
 
   const pinnedThesis: TopicThesisView | null = useMemo(() => {
-    if (!view?.pinnedThesisId) return null;
+    const targetId = selectedThesisId ?? view?.pinnedThesisId;
+    if (!targetId || !view) return null;
     for (const c of view.cases) {
-      const t = c.theses.find((th) => th.thesisId === view.pinnedThesisId);
+      const t = c.theses.find((th) => th.thesisId === targetId);
       if (t) return t;
     }
     return null;
-  }, [view]);
+  }, [selectedThesisId, view]);
 
   const totalThesisCount = view?.derivedFrom.thesisIds.length ?? 0;
   const pendingReviewCount = view
@@ -164,10 +171,13 @@ export function TopicListPage() {
           </p>
         </div>
         <dl className="topic-list__banner-meta">
-          <BannerMeta label="证据截止" value="2025-06-30" />
           <BannerMeta
-            label="冻结快照"
-            value="RS-2025-06-30-v3"
+            label="证据截止"
+            value={view ? view.cutoff.slice(0, 10) : "—"}
+          />
+          <BannerMeta
+            label="历史口径"
+            value={view?.isHistorical ? "历史截面" : "当前账本"}
             mono
           />
           <BannerMeta
@@ -330,10 +340,11 @@ export function TopicListPage() {
             ) : (
               <div className="topic-list__case-grid-cards">
                 {view?.cases.map((c) => (
-                  <CaseCard
+                    <CaseCard
                     key={c.caseId}
                     caseCard={c}
-                    pinnedId={view.pinnedThesisId}
+                    pinnedId={selectedThesisId ?? view.pinnedThesisId}
+                    onSelectThesis={setSelectedThesisId}
                   />
                 ))}
               </div>
@@ -514,25 +525,24 @@ export function TopicListPage() {
                   }}
                 >
                   <InspectorRow
-                    label="来源名称"
-                    value="Microsoft FY2025 Q3 earnings call transcript"
+                    label="证据数量"
+                    value={`支持 ${pinnedThesis.evidenceCounts?.supports ?? 0} · 反证 ${pinnedThesis.evidenceCounts?.contradicts ?? 0} · 上下文 ${pinnedThesis.evidenceCounts?.contextualizes ?? 0}`}
                   />
                   <InspectorRow
-                    label="DocumentVersion"
-                    value="issuer-call-2025-04-30-v1"
-                    mono
+                    label="AI判断"
+                    value={`${AI_LABEL[pinnedThesis.aiConclusion ?? ""] ?? "未评估"}${pinnedThesis.aiProvisional ? " · 草案" : ""}`}
                   />
                   <InspectorRow
-                    label="发布 / 可用时间"
-                    value="2025-04-30 · 2025-04-30 21:44 UTC"
+                    label="人工状态"
+                    value={pinnedThesis.reviewOutcome ? REVIEW_LABEL[pinnedThesis.reviewOutcome] ?? pinnedThesis.reviewOutcome : "待复核"}
                   />
                   <InspectorRow
-                    label="精确 SourceSpan"
-                    value="prepared remarks, pp. 4-5, capacity constraints and revenue timing"
+                    label="来源时点"
+                    value={pinnedThesis.evidence?.[0]?.sourceUrl ?? "冻结材料未提供 URL"}
                   />
                   <InspectorRow
-                    label="适用范围"
-                    value={`${view?.tag ?? "—"} · 当前主题聚合`}
+                    label="证据范围"
+                    value={pinnedThesis.evidence?.[0] ? JSON.stringify(pinnedThesis.evidence[0].locator) : "—"}
                   />
                 </dl>
                 <blockquote
@@ -543,11 +553,9 @@ export function TopicListPage() {
                     borderLeft: "3px solid var(--ink-muted)",
                     background: "var(--paper-soft, #faf6ed)",
                     fontSize: 12,
-                    fontStyle: "italic",
                   }}
                 >
-                  "Demand for our AI services remained higher than our
-                  available capacity."
+                  {pinnedThesis.evidence?.[0]?.statement ?? "当前命题暂无可展示的证据陈述。"}
                 </blockquote>
               </>
             ) : (
@@ -604,9 +612,11 @@ function pathNodeLabel(kind: TopicPathNode["kind"]): string {
 function CaseCard({
   caseCard,
   pinnedId,
+  onSelectThesis,
 }: {
   caseCard: TopicCaseView;
   pinnedId: string | null | undefined;
+  onSelectThesis: (id: string) => void;
 }) {
   const primary = caseCard.theses[0];
   return (
@@ -658,6 +668,45 @@ function CaseCard({
         >
           {caseCard.nextEventBullet}
         </p>
+      )}
+      {caseCard.theses.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            borderTop: "1px solid var(--line)",
+            paddingTop: 10,
+          }}
+          data-testid={`topic-case-evidence-${caseCard.caseId}`}
+        >
+          <p className="section-kicker" style={{ marginBottom: 6 }}>
+            证据维度
+          </p>
+          {caseCard.theses.map((thesis) => (
+            <button
+              key={thesis.thesisId}
+              type="button"
+              onClick={() => onSelectThesis(thesis.thesisId)}
+              style={{ display: "block", width: "100%", textAlign: "left", marginBottom: 10, border: "0", borderBottom: "1px solid var(--line)", background: pinnedId === thesis.thesisId ? "var(--selected-surface)" : "transparent", color: "inherit", padding: "6px 4px", cursor: "pointer" }}
+              data-testid={`topic-thesis-select-${thesis.thesisId}`}
+            >
+              <div style={{ fontSize: 12, fontWeight: 650 }}>
+                {thesis.title ?? thesis.statement}
+              </div>
+              <div className="muted" style={{ fontSize: 11 }}>
+                支持 {thesis.evidenceCounts?.supports ?? 0} · 反证 {thesis.evidenceCounts?.contradicts ?? 0} · 上下文 {thesis.evidenceCounts?.contextualizes ?? 0}
+              </div>
+              {(thesis.evidence ?? []).slice(0, 3).map((evidence) => (
+                <div key={evidence.linkId} style={{ fontSize: 11, marginTop: 4 }}>
+                  <span className={evidence.role === "contradicts" ? "muted-warn" : "muted"}>
+                    {evidence.role === "supports" ? "支持" : evidence.role === "contradicts" ? "反证" : "范围"}
+                  </span>{" "}
+                  {evidence.statement}
+                  <span className="muted"> · {evidence.reviewState === "machine_generated" ? "待人工复核" : evidence.reviewState}</span>
+                </div>
+              ))}
+            </button>
+          ))}
+        </div>
       )}
       {primary?.aiConclusion && (
         <div

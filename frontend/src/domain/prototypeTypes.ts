@@ -1322,10 +1322,22 @@ export interface TopicListItem {
   thesisCount: number;
 }
 
+export interface TopicEvidenceSummary {
+  linkId: string;
+  role: "supports" | "contradicts" | "contextualizes";
+  statement: string;
+  sourceUrl: string | null;
+  locator: Record<string, unknown>;
+  reviewState: string;
+  scope: Record<string, unknown>;
+}
+
 export interface TopicThesisView {
   thesisId: string;
   statement: string;
   title: string | null;
+  evidenceCounts?: Record<string, number>;
+  evidence?: TopicEvidenceSummary[];
   aiConclusion: string | null;
   aiProvisional: boolean;
   assessedAt: string | null;

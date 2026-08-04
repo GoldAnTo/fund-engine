@@ -418,30 +418,81 @@ function CaseMatrix({ c }: { c: TopicCaseView }) {
 }
 
 function ThesisRow({ t }: { t: TopicThesisView }) {
+  const evidence = t.evidence ?? [];
   return (
-    <li style={{ marginBottom: 4 }}>
-      <span style={{ fontSize: 12 }}>{t.title ?? t.statement.slice(0, 36)}</span>
-      <span style={{ marginLeft: 6, display: "inline-flex", gap: 4 }}>
-        <StatusBadge
-          variant={
-            t.aiConclusion ? AI_VARIANT[t.aiConclusion] ?? "ai" : "ai"
-          }
-        >
-          AI · {t.aiConclusion ? AI_LABEL[t.aiConclusion] : "未评估"}
-          {t.aiProvisional ? " · 草案" : ""}
-        </StatusBadge>
-        {t.reviewOutcome ? (
+    <li style={{ marginBottom: 12 }}>
+      <div>
+        <span style={{ fontSize: 12 }}>{t.title ?? t.statement.slice(0, 36)}</span>
+        <span style={{ marginLeft: 6, display: "inline-flex", gap: 4 }}>
           <StatusBadge
-            variant={REVIEW_VARIANT[t.reviewOutcome] ?? "reviewed"}
+            variant={
+              t.aiConclusion ? AI_VARIANT[t.aiConclusion] ?? "ai" : "ai"
+            }
           >
-            人工 · {REVIEW_LABEL[t.reviewOutcome] ?? t.reviewOutcome}
+            AI · {t.aiConclusion ? AI_LABEL[t.aiConclusion] : "未评估"}
+            {t.aiProvisional ? " · 草案" : ""}
           </StatusBadge>
-        ) : (
-          <StatusBadge variant="ai">人工 · 待复核</StatusBadge>
-        )}
-      </span>
+          {t.reviewOutcome ? (
+            <StatusBadge
+              variant={REVIEW_VARIANT[t.reviewOutcome] ?? "reviewed"}
+            >
+              人工 · {REVIEW_LABEL[t.reviewOutcome] ?? t.reviewOutcome}
+            </StatusBadge>
+          ) : (
+            <StatusBadge variant="ai">人工 · 待复核</StatusBadge>
+          )}
+        </span>
+      </div>
+      <div className="topic-evidence-summary">
+        {Object.entries(t.evidenceCounts ?? {}).map(([role, count]) => (
+          count > 0 ? <span key={role}>{evidenceRoleLabel(role)} {count}</span> : null
+        ))}
+      </div>
+      {evidence.length > 0 ? (
+        <details className="topic-evidence-details" data-testid={`topic-evidence-${t.thesisId}`}>
+          <summary>展开证据（{evidence.length} 条）</summary>
+          <div className="topic-evidence-list">
+            {evidence.map((item) => <EvidenceItem key={item.linkId} item={item} />)}
+          </div>
+        </details>
+      ) : (
+        <p className="muted" style={{ fontSize: 11 }}>暂无可见证据</p>
+      )}
     </li>
   );
+}
+
+function evidenceRoleLabel(role: string): string {
+  return role === "supports" ? "支持" : role === "contradicts" ? "反向" : role === "contextualizes" ? "背景" : role;
+}
+
+function EvidenceItem({ item }: { item: NonNullable<TopicThesisView["evidence"]>[number] }) {
+  const scope = item.scope;
+  const status = typeof scope.evidence_status === "string" ? scope.evidence_status : "未标注";
+  const period = typeof scope.period === "string" ? scope.period : "时点未标注";
+  const sourceType = typeof scope.source === "string" ? scope.source : "来源类型未标注";
+  const missing = Array.isArray(scope.missing) ? scope.missing.filter((v): v is string => typeof v === "string") : [];
+  return (
+    <article className="topic-evidence-item">
+      <div className="topic-evidence-item__head">
+        <strong>{evidenceRoleLabel(item.role)}</strong>
+        <span className="muted">{period} · {status}</span>
+        <span className="muted">审核：{item.reviewState}</span>
+      </div>
+      <p>{item.statement}</p>
+      <dl className="topic-evidence-meta">
+        <div><dt>来源</dt><dd>{item.sourceUrl ?? "冻结来源（无外链）"}</dd></div>
+        <div><dt>来源类型</dt><dd>{sourceType}</dd></div>
+        <div><dt>原文定位</dt><dd>{formatLocator(item.locator)}</dd></div>
+      </dl>
+      {missing.length > 0 && <p className="topic-evidence-missing">待补证据：{missing.join("、")}</p>}
+    </article>
+  );
+}
+
+function formatLocator(locator: Record<string, unknown>): string {
+  const parts = Object.entries(locator).slice(0, 3).map(([key, value]) => `${key}=${String(value)}`);
+  return parts.length > 0 ? parts.join(" · ") : "定位未标注";
 }
 
 function DerivedSection({ label, ids }: { label: string; ids: string[] }) {

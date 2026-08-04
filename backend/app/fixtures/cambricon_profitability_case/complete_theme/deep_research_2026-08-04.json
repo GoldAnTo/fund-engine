@@ -1,0 +1,118 @@
+{
+  "case": "寒武纪 688256.SH 完整主题研究深度补充",
+  "captured_at": "2026-08-04T09:58:29+08:00",
+  "provider": "neodata-financial-search",
+  "evidence_status": "frozen_structured_response_derived",
+  "source_documents": [
+    {
+      "file": "quality_2026-08-04.json",
+      "sha256": "d37517d332cbb3ab9024a64601598ffb3cf274becd304007f6a7bccbc5b3a0c1",
+      "source_url": "neodata://query/cambricon-fundamentals-2026-08-04",
+      "query": "寒武纪 688256 最新股价 总市值 PE PB 近10年营收归母净利润扣非净利润毛利率经营现金流资产负债率ROE 2025年年报 2026年一季度",
+      "published_periods": ["2025FY", "2026Q1"],
+      "source_type": "structured_financial_search"
+    },
+    {
+      "file": "fund_holding_2026-08-04.json",
+      "sha256": "d494527fde6a107c50280a03caef2a6346f9417b60ea39b35b1c3dbda2541211",
+      "source_url": "neodata://query/cambricon-fund-holding-2026-08-04",
+      "query": "寒武纪 688256 公募基金 持仓 2025年年报 2026年一季报 基金名称 持股数量",
+      "published_periods": ["2025FY", "2026Q1"],
+      "source_type": "structured_financial_search"
+    },
+    {
+      "file": "demand_context_2026-08-04.json",
+      "sha256": "02c9009595722dd7c2ba8cca0e0ee41692e60a9bb0d9e6090cab304d95439a0e",
+      "source_url": "https://gu.qq.com/resources/shy/news/detail-v2/index.html?t=1#/index?_tentrees_trans=0&id=SN20250828150623a4a4620e",
+      "query": "寒武纪 2025年年度报告 云端产品收入 AI芯片 客户 订单 需求来源 业绩说明会",
+      "published_periods": ["2024FY", "2025H1"],
+      "source_type": "third_party_financial_article",
+      "verification": "需回核公司原始公告/业绩说明会原文"
+    },
+    {
+      "file": "customer_risk_2026-08-04.json",
+      "sha256": "ff87ceb77822d8f74da742469b5cf63812a73bb2b4b225a1c3d9047eb4a5fb27",
+      "source_url": "https://gu.qq.com/resources/shy/news/detail-v2/index.html?t=1#/index?_tentrees_trans=0&id=SN20250421164622973f3155",
+      "query": "寒武纪 688256 2025年报 前五大客户占比 第一大客户 应收账款 存货 合同负债 毛利率 风险",
+      "published_periods": ["2024FY"],
+      "source_type": "third_party_financial_article_citing_annual_report",
+      "verification": "需回核公司原始年报原文"
+    }
+  ],
+  "quarterly_observations": [
+    {
+      "period": "2025FY",
+      "published_at": "2026-03-13",
+      "revenue_yuan": "6497196198.68",
+      "gross_profit_yuan": "3583313004.19",
+      "gross_margin": "55.15%",
+      "parent_profit_yuan": "2059228538.67",
+      "operating_cash_flow_yuan": "-498398137.01",
+      "rd_expense_yuan": "1350804571.97",
+      "accounts_receivable_yuan": "670643223.27",
+      "inventory_yuan": "4943532510.26",
+      "contract_liabilities_yuan": "610619.47",
+      "evidence_level": "A_structured_financial_search"
+    },
+    {
+      "period": "2026Q1",
+      "published_at": "2026-04-30",
+      "revenue_yuan": "2884696746.86",
+      "gross_profit_yuan": "1567266596.14",
+      "gross_margin": "54.34%",
+      "parent_profit_yuan": "1013213581.94",
+      "operating_cash_flow_yuan": "833967832.10",
+      "rd_expense_yuan": "324039549.09",
+      "accounts_receivable_yuan": "1219156884.63",
+      "inventory_yuan": "4496708960.39",
+      "contract_liabilities_yuan": "395520707.96",
+      "evidence_level": "A_structured_financial_search"
+    }
+  ],
+  "derived_checks": {
+    "2026Q1_revenue_vs_2025FY": "44.40%",
+    "2026Q1_parent_profit_vs_2025FY": "49.21%",
+    "2026Q1_operating_cash_flow_vs_2025FY": "167.33%",
+    "accounts_receivable_change_yuan": "548513661.36",
+    "accounts_receivable_change_pct": "81.79%",
+    "inventory_change_yuan": "-446823549.87",
+    "inventory_change_pct": "-9.04%",
+    "gross_margin_change_pp": "-0.81",
+    "interpretation": "2026Q1利润和经营现金流转正，但应收账款较2025FY上升81.79%，毛利率下降0.81个百分点；只能支持短期延续，不足以证明长期盈利质量。"
+  },
+  "demand_transmission": {
+    "observed": [
+      "2025FY云端产品线收入6477000000元，占营业收入99.69%，同比增长455.34%",
+      "公开第三方材料提到运营商、金融、互联网等场景部署与客户验证，但订单、交付、回款到收入确认的端到端一手链条未冻结"
+    ],
+    "status": "partial_chain",
+    "missing": ["客户级订单/中标金额", "出货或验收数量", "客户CapEx到公司收入的匹配表"]
+  },
+  "fund_holding": {
+    "public_fund_aggregate": {
+      "2025FY_shares": "78011514",
+      "2025FY_institutions": "2088",
+      "2026Q1_shares": "48137640",
+      "2026Q1_institutions": "659",
+      "status": "structured_aggregate"
+    },
+    "named_top10_holder_funds": [
+      {"report_period": "2026Q1", "name": "华夏上证科创板50成份ETF", "shares": "6527594", "share_capital_pct": "1.55", "source_role": "top10_shareholder_not_portfolio_weight"},
+      {"report_period": "2026Q1", "name": "嘉实上证科创板芯片ETF", "shares": "3755189", "share_capital_pct": "0.89", "source_role": "top10_shareholder_not_portfolio_weight"},
+      {"report_period": "2026Q1", "name": "易方达上证科创板50成份ETF", "shares": "3539280", "share_capital_pct": "0.84", "source_role": "top10_shareholder_not_portfolio_weight"}
+    ],
+    "status": "holding_exists_but_portfolio_weight_unavailable",
+    "missing": ["基金净值规模", "持仓市值占基金净值比例", "完整基金季报组合", "同一基金跨期增减仓序列"]
+  },
+  "valuation_quality": {
+    "status": "not_usable_for_company_valuation",
+    "reason": "冻结估值响应未返回可唯一归属于688256.SH寒武纪的估值行；响应中混入688521.SH、688041.SH等其他标的，不能将原聚合文件中的PE/PS/PEG直接写成寒武纪估值事实。",
+    "required_next_source": "重新获取严格限定标的代码688256.SH的估值响应或公司市值与财务数据后自行计算，并保留定义和时点。"
+  },
+  "red_team": [
+    {"risk": "单一大客户/客户集中度", "evidence": "第三方材料引用2024年报称前五大客户占比94.63%、第一大客户79.15%", "status": "B_C_requires_original_report", "test": "后续年报客户集中度下降且客户结构多元化"},
+    {"risk": "营运资金占用", "evidence": "2026Q1应收账款1219156884.63元，较2025FY增加548513661.36元", "status": "A_structured_financial_search", "test": "后续季度应收增速低于收入增速并转化为经营现金流"},
+    {"risk": "毛利率回落", "evidence": "2025FY毛利率55.15%，2026Q1毛利率54.34%，下降0.81个百分点", "status": "A_structured_financial_search", "test": "后续季度毛利率稳定或回升，且非一次性产品组合因素"},
+    {"risk": "估值数据错配", "evidence": "估值冻结响应混入多个股票代码，寒武纪行无法唯一定位", "status": "A_data_quality_failure", "test": "取得单标的估值原文后再形成估值结论"}
+  ]
+}

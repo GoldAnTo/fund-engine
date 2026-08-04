@@ -24,9 +24,13 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.ledger import (
     Company,
+    DocumentVersion,
+    EvidenceLink,
     Fund,
     HoldingDisclosure,
     ResearchCase,
+    SourceSpan,
+    SourceStatement,
     Stock,
     ThemeRole,
 )
@@ -39,6 +43,7 @@ from app.schemas.v1.themes import (
     ThemeCaseDTO,
     ThemeCaseThesisDTO,
     ThemeCompanyRoleDTO,
+    ThemeEvidenceSummaryDTO,
     ThemeExposurePositionDTO,
     ThemeListItemDTO,
     ThemeListResponse,
@@ -197,6 +202,32 @@ class ThemeReadQueries:
             effective = "no_assessment"
         return effective, assessment_dto, review_dto
 
+    def _evidence_for_thesis(self, thesis_id: uuid.UUID, basis: HistoricalBasis) -> tuple[dict[str, int], list[ThemeEvidenceSummaryDTO]]:
+        links = list(self._session.scalars(
+            select(EvidenceLink)
+            .where(EvidenceLink.thesis_id == thesis_id)
+            .where(EvidenceLink.available_at <= basis.cutoff)
+            .where(EvidenceLink.created_at <= basis.cutoff)
+            .order_by(EvidenceLink.created_at, EvidenceLink.id)
+        ))
+        counts = {"supports": 0, "contradicts": 0, "contextualizes": 0}
+        evidence = []
+        for link in links:
+            counts[link.role] = counts.get(link.role, 0) + 1
+            statement = self._session.get(SourceStatement, link.source_statement_id)
+            span = self._session.get(SourceSpan, statement.source_span_id) if statement else None
+            document = self._session.get(DocumentVersion, span.document_version_id) if span else None
+            evidence.append(ThemeEvidenceSummaryDTO(
+                link_id=link.id,
+                role=link.role,
+                statement=statement.normalized_text if statement else "",
+                source_url=document.source_url if document else None,
+                locator=span.locator if span else {},
+                review_state=link.review_state,
+                scope=link.scope or {},
+            ))
+        return counts, evidence
+
     def _case_section(self, case: ResearchCase, basis: HistoricalBasis) -> ThemeCaseDTO:
         counts = {
             "supported": 0,
@@ -212,6 +243,7 @@ class ThemeReadQueries:
                 thesis.id, basis
             )
             counts[bucket] += 1
+            evidence_counts, evidence = self._evidence_for_thesis(thesis.id, basis)
             theses.append(
                 ThemeCaseThesisDTO(
                     thesis_id=thesis.id,
@@ -219,6 +251,8 @@ class ThemeReadQueries:
                     title=thesis.title,
                     ai_assessment=assessment_dto,
                     review=review_dto,
+                    evidence_counts=evidence_counts,
+                    evidence=evidence,
                 )
             )
         return ThemeCaseDTO(

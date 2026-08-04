@@ -41,6 +41,7 @@ THEME_TAG_VOCABULARY: frozenset[str] = frozenset(
         "AI服务器",
         "锂电储能",
         "光模块",
+        "半导体设备国产化",
     }
 )
 

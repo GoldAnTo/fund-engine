@@ -54,6 +54,49 @@ const ROLE_TONE: Record<EvidenceRecord["role"], "moss" | "clay" | "neutral"> = {
   contextualizes: "neutral",
 };
 
+function ScopeSummary({ scope }: { scope: Record<string, unknown> }) {
+  const entries = Object.entries(scope);
+  if (entries.length === 0) return <span className="muted">未提供范围</span>;
+  return (
+    <div className="scope-summary">
+      <div className="scope-summary__facts">
+        {entries.slice(0, 4).map(([key, value]) => (
+          <span key={key} className="scope-summary__fact">
+            <span>{scopeKeyLabel(key)}</span>
+            <strong>{scopeValueText(value)}</strong>
+          </span>
+        ))}
+      </div>
+      <details className="scope-summary__raw">
+        <summary>查看原始范围</summary>
+        <pre>{JSON.stringify(scope, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function scopeKeyLabel(key: string): string {
+  const labels: Record<string, string> = {
+    segment: "环节",
+    level: "层级",
+    period: "期间",
+    date: "日期",
+    entity: "标的",
+    verification: "核验状态",
+    source: "来源",
+    note: "备注",
+    valuation: "估值口径",
+  };
+  return labels[key] ?? key.split("_").join(" ");
+}
+
+function scopeValueText(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return "结构化范围";
+  const text = String(value);
+  return text.length > 72 ? `${text.slice(0, 69)}…` : text;
+}
+
 export function SourceInspector({ record, citations, onClose }: Props) {
   if (!record) {
     return (
@@ -149,7 +192,7 @@ export function SourceInspector({ record, citations, onClose }: Props) {
         <div>
           <dt>范围</dt>
           <dd>
-            <code>{JSON.stringify(record.scope)}</code>
+            <ScopeSummary scope={record.scope} />
           </dd>
         </div>
         <div>

@@ -74,6 +74,46 @@ import type {
 
 type Schemas = components["schemas"];
 
+function humanizeGraphNodeLabel(label: string, kind: string): { title: string; meta: string } {
+  try {
+    const value = JSON.parse(label) as Record<string, unknown>;
+    const rows = Array.isArray(value.results) ? value.results : [value];
+    const first = rows[0] && typeof rows[0] === "object" && !Array.isArray(rows[0])
+      ? rows[0] as Record<string, unknown>
+      : value;
+    const title = typeof value.api_name === "string"
+      ? value.api_name
+      : kind === "statement"
+        ? "结构化来源事实"
+        : kind;
+    const facts = Object.entries(first)
+      .filter(([key, item]) => key !== "table_markdown" && key !== "results" && item !== null && typeof item !== "object")
+      .slice(0, 2)
+      .map(([key, item]) => `${graphKeyLabel(key)}: ${String(item).slice(0, 28)}`);
+    return { title, meta: facts.join(" · ") || "已冻结来源" };
+  } catch {
+    return {
+      title: label.length > 44 ? `${label.slice(0, 41)}…` : label,
+      meta: kind === "statement" ? "来源事实" : kind,
+    };
+  }
+}
+
+function graphKeyLabel(key: string): string {
+  const labels: Record<string, string> = {
+    code: "代码",
+    name: "名称",
+    entity: "标的",
+    period: "期间",
+    date: "日期",
+    value: "数值",
+    unit: "单位",
+    metric: "指标",
+  };
+  return labels[key] ?? key.split("_").join(" ");
+}
+
+
 // Backend does not prefix /api/v1 in the OpenAPI spec; the adapter always
 // runs against the configured base URL which already includes the version.
 type ErrorEnvelopeDTO = components["schemas"]["ErrorEnvelope"];
@@ -1608,12 +1648,13 @@ export class HttpResearchAdapter implements ResearchClient {
     const toNodeView = (node: Schemas["GraphNodeDTO"]): GraphNodeView => {
       const review = reviewByStatement.get(node.id);
       const documentId = node.properties?.document_id;
-      return {
-        id: node.id,
-        layer: node.kind,
-        title: node.label,
-        meta: String(node.properties?.statement_kind ?? node.kind),
-        kind: node.kind,
+        const display = humanizeGraphNodeLabel(node.label, node.kind);
+        return {
+          id: node.id,
+          layer: node.kind,
+          title: display.title,
+          meta: display.meta,
+          kind: node.kind,
         kindLabel: KIND_LABEL[node.kind] ?? node.kind,
         relation: String(node.properties?.reason ?? ""),
         review: review
@@ -2462,6 +2503,16 @@ export class HttpResearchAdapter implements ResearchClient {
           thesisId: t.thesis_id,
           statement: t.statement,
           title: t.title ?? null,
+          evidenceCounts: t.evidence_counts ?? {},
+          evidence: (t.evidence ?? []).map((e) => ({
+            linkId: e.link_id,
+            role: e.role,
+            statement: e.statement,
+            sourceUrl: e.source_url ?? null,
+            locator: e.locator ?? {},
+            reviewState: e.review_state,
+            scope: (e as typeof e & { scope?: Record<string, unknown> }).scope ?? {},
+          })),
           aiConclusion: t.ai_assessment?.conclusion ?? null,
           aiProvisional: t.ai_assessment?.provisional ?? false,
           assessedAt: t.ai_assessment?.assessed_at ?? null,

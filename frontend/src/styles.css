@@ -1135,7 +1135,41 @@ button, .btn {
 }
 .citation-list__date { font-size: 11px; flex-shrink: 0; }
 
-/* ── Source inspector ───────────────────────────────────────────────────── */
+
+
+/* Evidence graph inspector: readable scope summary with auditable raw fallback. */
+.scope-summary__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.scope-summary__fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+.scope-summary__fact > span { color: var(--ink-muted); }
+.scope-summary__fact > strong { color: var(--ink); font-weight: 600; }
+.scope-summary__raw { margin-top: 6px; font-size: 10px; }
+.scope-summary__raw summary { cursor: pointer; color: var(--ink-muted); }
+.scope-summary__raw pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  padding: 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 
 .source-inspector {
   border: 1px solid var(--rule); border-radius: var(--radius-md);

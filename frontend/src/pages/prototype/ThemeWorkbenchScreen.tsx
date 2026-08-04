@@ -366,10 +366,7 @@ function ClaimRow({
           <StatusBadge variant="ai">AI 提议</StatusBadge>
         )}
       </div>
-      <blockquote className="claim-row__snippet">
-        “{claim.snippet}”
-        <small> · {claim.span}</small>
-      </blockquote>
+      <EvidenceClaimBody claim={claim} />
       {conflictClaims.length > 0 && (
         <div className="claim-row__conflict">
           <strong>⚠ 与以下证据冲突：</strong>
@@ -388,6 +385,90 @@ function ClaimRow({
       )}
     </li>
   );
+}
+
+function EvidenceClaimBody({ claim }: { claim: ThemeClaim }) {
+  const parsed = parseClaimContent(claim.content);
+  const summary = parseClaimContent(claim.snippet);
+  return (
+    <>
+      {parsed ? (
+        <div className="theme-claim-card">
+          <div className="theme-claim-card__title">{parsed.title}</div>
+          {parsed.facts.length > 0 && (
+            <div className="theme-claim-card__facts">
+              {parsed.facts.map((fact) => (
+                <div key={fact.label} className="theme-claim-card__fact">
+                  <span>{fact.label}</span>
+                  <strong>{fact.value}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+          <p>{parsed.summary}</p>
+          <details>
+            <summary>查看原始响应</summary>
+            <pre>{claim.content}</pre>
+          </details>
+        </div>
+      ) : (
+        <blockquote className="claim-row__snippet">
+          “{summary?.summary ?? claim.snippet}”
+          <small> · {claim.span}</small>
+        </blockquote>
+      )}
+    </>
+  );
+}
+
+type ParsedClaim = {
+  title: string;
+  summary: string;
+  facts: Array<{ label: string; value: string }>;
+};
+
+function parseClaimContent(raw: string): ParsedClaim | null {
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const rows = Array.isArray(value.results) ? value.results : [value];
+    const first = isObject(rows[0]) ? rows[0] : value;
+    const facts: Array<{ label: string; value: string }> = [];
+    for (const [key, item] of Object.entries(first)) {
+      if (facts.length >= 6 || key === "table_markdown" || key === "results") continue;
+      const formatted = formatClaimValue(item);
+      if (formatted) facts.push({ label: claimKeyLabel(key), value: formatted });
+    }
+    const title = typeof value.api_name === "string" ? value.api_name : "结构化证据";
+    const message = typeof value.msg === "string" && value.msg !== "success" ? value.msg : "已提取结构化字段，原始响应保留供复核。";
+    return { title, summary: message, facts };
+  } catch {
+    return null;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatClaimValue(value: unknown): string | null {
+  if (value === null || value === undefined || typeof value === "object") return null;
+  const text = String(value);
+  return text.length > 100 ? `${text.slice(0, 97)}…` : text;
+}
+
+function claimKeyLabel(key: string): string {
+  const labels: Record<string, string> = {
+    code: "代码",
+    name: "名称",
+    entity: "标的",
+    period: "期间",
+    date: "日期",
+    value: "数值",
+    unit: "单位",
+    metric: "指标",
+    source: "来源",
+  };
+  return labels[key] ?? key.split("_").join(" ");
 }
 
 function StockRow({ stock }: { stock: ThemeStock }) {

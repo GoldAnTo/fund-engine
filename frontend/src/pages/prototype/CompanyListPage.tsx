@@ -43,7 +43,11 @@ export function CompanyListPage() {
   const [list, setList] = useState<CompanyListView | null>(null);
   const [view, setView] = useState<CompanyDossierView | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get("id") ?? "co-nvda";
+  const requestedId = searchParams.get("id");
+  const selectedId =
+    (requestedId && list?.items.some((company) => company.id === requestedId)
+      ? requestedId
+      : list?.items[0]?.id) ?? "";
   const [filter, setFilter] = useState<string>("");
   const [auditFilter, setAuditFilter] = useState<"all" | "conflict" | "pending">(
     "all",
@@ -65,6 +69,7 @@ export function CompanyListPage() {
   }, []);
 
   useEffect(() => {
+    if (!selectedId) return;
     let cancelled = false;
     setState({ kind: "loading" });
     researchClient

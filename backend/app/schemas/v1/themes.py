@@ -51,12 +51,25 @@ class ThemeListResponse(V1Model):
     items: list[ThemeListItemDTO]
 
 
+class ThemeEvidenceSummaryDTO(V1Model):
+    link_id: uuid.UUID
+    role: Literal["supports", "contradicts", "contextualizes"]
+    statement: str
+    source_url: str | None = None
+    locator: dict[str, Any] = {}
+    review_state: str
+    # 原始证据范围：期间、来源类型、证据状态、待补数据等可审计元数据。
+    scope: dict[str, Any] = {}
+
+
 class ThemeCaseThesisDTO(V1Model):
     thesis_id: uuid.UUID
     statement: str
     title: str | None = None
     ai_assessment: AssessmentViewDTO | None = None
     review: RoleReviewDTO | None = None
+    evidence_counts: dict[str, int] = {}
+    evidence: list[ThemeEvidenceSummaryDTO] = []
 
 
 class ThemeCaseDTO(V1Model):

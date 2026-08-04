@@ -1842,7 +1842,6 @@ const TOPIC_LIST: TopicListItem[] = [
   { tag: "数据中心电力约束", caseCount: 2, companyCount: 1, thesisCount: 1 },
   { tag: "云厂商CapEx", caseCount: 1, companyCount: 1, thesisCount: 1 },
   { tag: "先进封装供给", caseCount: 2, companyCount: 4, thesisCount: 3 },
-  { tag: "主题聚合", caseCount: 1, companyCount: 0, thesisCount: 0 },
 ];
 
 const TOPIC_VIEWS: Record<string, TopicView> = {
