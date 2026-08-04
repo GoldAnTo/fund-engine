@@ -24,6 +24,9 @@ from app.api.v1.provider_runs import router as provider_runs_router
 from app.api.v1.research_ops import router as research_ops_router
 from app.api.v1.search import router as search_router
 from app.api.v1.themes import router as themes_router
+from app.api.v1.commands.proposals import router as review_proposals_router
+from app.api.v1.jobs import router as jobs_router
+from app.api.v1.activity import router as activity_router
 from app.schemas.v1.common import HealthResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -60,3 +63,7 @@ router.include_router(ingest_commands_router)
 router.include_router(instrument_commands_router)
 router.include_router(causal_commands_router)
 router.include_router(theme_commands_router)
+# Operational / proposal / activity endpoints (jobs, proposals, activity).
+router.include_router(jobs_router)
+router.include_router(activity_router)
+router.include_router(review_proposals_router)

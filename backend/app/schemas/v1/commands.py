@@ -216,9 +216,9 @@ class ExtractResponse(V1Model):
 
 
 class ProposedLinkDTO(V1Model):
-    """One evidence link proposed by the proposer (pending review)."""
+    """One evidence_link Proposal created by the proposer (pending review)."""
 
-    link_id: str
+    proposal_id: str
     source_statement_id: str
     role: str
     reason: str
@@ -228,13 +228,14 @@ class ProposedLinkDTO(V1Model):
 class ProposeResponse(V1Model):
     """Result of running evidence proposal for one thesis.
 
-    Every proposed link lands in the review queue as
-    ``machine_generated``; nothing is auto-confirmed.  ``mode`` is
-    ``mock`` without an LLM key (non-production only).
+    Every proposed link lands as a ``Proposal(kind=evidence_link)`` in the
+    review queue; nothing is auto-confirmed.  ``job_id`` lets the client track
+    progress / cancellation.  ``mode`` is ``mock`` without an LLM key.
     """
 
     thesis_id: str
     mode: str
+    job_id: str
     link_count: int
     links: list[ProposedLinkDTO]
 

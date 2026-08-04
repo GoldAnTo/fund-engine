@@ -296,15 +296,17 @@ def test_proposer_uses_recall_scope_and_records_cutoff(
     client = LLMClient(model_version="mock-test", mock=True)
     proposer = EvidenceProposer(client)
 
-    links = proposer.propose(thesis.id, session)
-    assert links
+    proposal_ids = proposer.propose(thesis.id, session)
+    assert proposal_ids
 
     from app.models.ledger import AIRun
+    from app.models.proposals import Proposal
 
+    proposals = [session.get(Proposal, pid) for pid in proposal_ids]
     run = session.scalars(select(AIRun).where(AIRun.kind == "propose")).one()
     assert "cutoff" in run.input_ref
     assert set(run.input_ref["statement_ids"]) == {
-        str(link.source_statement_id) for link in links
+        p.payload["source_statement_id"] for p in proposals
     }
     assert str(relevant.id) in run.input_ref["statement_ids"]
 
@@ -316,8 +318,12 @@ def test_proposer_excludes_irrelevant_statements(
         document_service, research_service, document, "白酒 消费 疲软 库存"
     )
     client = LLMClient(model_version="mock-test", mock=True)
-    links = EvidenceProposer(client).propose(thesis.id, session)
-    assert all("白酒" not in str(link.reason) for link in links)
+    proposal_ids = EvidenceProposer(client).propose(thesis.id, session)
+
+    from app.models.proposals import Proposal
+
+    proposals = [session.get(Proposal, pid) for pid in proposal_ids]
+    assert all("白酒" not in str(p.payload.get("reason")) for p in proposals)
 
 
 def test_proposer_derives_scope_from_case_when_llm_omits_it(
@@ -338,9 +344,13 @@ def test_proposer_derives_scope_from_case_when_llm_omits_it(
         ]
     }
     with patch.object(client, "chat_json", return_value=payload):
-        links = EvidenceProposer(client).propose(thesis.id, session)
-    assert len(links) == 1
-    assert links[0].scope == {"industry_topic": "ai_compute"}
+        proposal_ids = EvidenceProposer(client).propose(thesis.id, session)
+    assert len(proposal_ids) == 1
+
+    from app.models.proposals import Proposal
+
+    proposal = session.get(Proposal, proposal_ids[0])
+    assert proposal.payload["scope"] == {"industry_topic": "ai_compute"}
 
 
 def test_proposer_rerun_creates_no_duplicate_links(
@@ -354,12 +364,16 @@ def test_proposer_rerun_creates_no_duplicate_links(
 
     first = proposer.propose(thesis.id, session)
     assert first
+    # Re-running must not re-propose statements already covered by a Proposal:
+    # recall excludes them even though no EvidenceLink exists yet (design §9.2).
     second = proposer.propose(thesis.id, session)
     assert second == []
 
+    from app.models.proposals import Proposal
+
     total = list(
         session.scalars(
-            select(EvidenceLink).where(EvidenceLink.thesis_id == thesis.id)
+            select(Proposal).where(Proposal.kind == "evidence_link")
         )
     )
     assert len(total) == len(first)

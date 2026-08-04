@@ -23,8 +23,9 @@ from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import DocumentVersion
+from app.models.ledger import DocumentVersion, Thesis
 from app.services.compliance import ComplianceRefusedError
+from app.services.jobs import JobService
 from app.schemas.v1.commands import (
     ExtractResponse,
     ExtractStatementDTO,
@@ -86,29 +87,47 @@ def propose_evidence(
 ):
     """Run the propose step for one thesis.
 
-    Recall is cutoff-safe (only statements visible before this run started),
-    and every proposed link enters the review queue as machine_generated —
-    nothing is auto-confirmed.
+    Recall is cutoff-safe (only statements visible before this run started).
+    Every proposed link enters the review queue as a ``Proposal(kind=evidence_link)``
+    — nothing is auto-confirmed; a human decision publishes the formal link.
+    The work runs inside a Job row so progress / cancellation are observable.
     """
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None:
+        raise NotFoundError(f"thesis {thesis_id} not found")
     client = LLMClient.from_env()
+    jobs = JobService(db)
+    job = jobs.create(
+        kind="propose",
+        target_type="thesis",
+        target_id=thesis_id,
+        research_case_id=thesis.research_case_id,
+        actor=f"ai:{client.model_version}",
+    )
+    jobs.start(job, step="recalling statements")
     try:
-        links = EvidenceProposer(client).propose(thesis_id, db)
+        proposal_ids = EvidenceProposer(client).propose(thesis_id, db)
     except ValueError as exc:
+        jobs.finish(job, status="failed", error=str(exc))
+        commit_or_rollback(db)
         raise NotFoundError(str(exc)) from exc
+    jobs.progress(job, step="proposed", progress=100)
+    jobs.finish(job, status="succeeded", step="proposed")
     commit_or_rollback(db)
     return ProposeResponse(
         thesis_id=str(thesis_id),
         mode="mock" if client._mock else client.model_version,
-        link_count=len(links),
+        job_id=str(job.id),
+        link_count=len(proposal_ids),
         links=[
             ProposedLinkDTO(
-                link_id=str(link.id),
-                source_statement_id=str(link.source_statement_id),
-                role=link.role,
-                reason=link.reason,
-                scope=dict(link.scope),
+                proposal_id=str(pid),
+                source_statement_id="",
+                role="",
+                reason="",
+                scope={},
             )
-            for link in links
+            for pid in proposal_ids
         ],
     )
 

@@ -100,15 +100,25 @@ def test_proposal_creates_links_and_airun(
     client = LLMClient(model_version="mock-test", mock=True)
     proposer = EvidenceProposer(client)
 
-    links = proposer.propose(thesis.id, session)
+    proposal_ids = proposer.propose(thesis.id, session)
 
-    assert len(links) >= 1
-    for link in links:
-        assert link.creator_type == "ai"
-        assert link.review_state == "machine_generated"
-        assert link.role in {"supports", "contradicts", "contextualizes"}
-        assert link.reason
-        assert link.scope
+    # The proposer emits Proposals awaiting human review, never reviewed
+    # EvidenceLinks (design §9.2).
+    from app.models.proposals import Proposal
+
+    assert len(proposal_ids) >= 1
+    for pid in proposal_ids:
+        proposal = session.get(Proposal, pid)
+        assert proposal.kind == "evidence_link"
+        assert proposal.proposed_by_type == "ai"
+        assert proposal.status == "pending"
+        assert proposal.payload["role"] in {
+            "supports",
+            "contradicts",
+            "contextualizes",
+        }
+        assert proposal.payload["reason"]
+        assert proposal.payload["scope"]
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
     assert len(runs) == 1

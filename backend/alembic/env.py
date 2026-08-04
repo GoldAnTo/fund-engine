@@ -4,7 +4,12 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.db import DATABASE_URL
-from app.models.ledger import Base
+from app.models import Base  # imports all model submodules, aggregating metadata
+from app.models.ledger import Base as _LedgerBase  # noqa: F401  (kept for clarity)
+
+# Importing ``app.models`` registers every table (operational / events /
+# versions / proposals) on the same ``Base.metadata`` used below.
+import app.models  # noqa: F401
 
 config = context.config
 

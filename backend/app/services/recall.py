@@ -319,6 +319,11 @@ class RecallService:
                     )
                 )
             )
+            # Statements already covered by an evidence_link Proposal for this
+            # thesis are excluded too.  Since the proposer now writes Proposals
+            # instead of EvidenceLinks (design §9.2), checking only the link
+            # table would let every re-run re-propose the same statements.
+            linked_statement_ids |= self._proposed_statement_ids(thesis)
 
         candidates: list[SourceStatement] = []
         for statement, version in rows:
@@ -330,3 +335,35 @@ class RecallService:
                 continue
             candidates.append(statement)
         return candidates
+
+    def _proposed_statement_ids(self, thesis: Thesis) -> set[uuid.UUID]:
+        """Statement ids already proposed as evidence for ``thesis``.
+
+        Withdrawn proposals are ignored so a withdrawn suggestion can be
+        re-proposed; pending and decided ones are excluded because the
+        statement has either been resolved or is already awaiting review.
+
+        ``payload`` / ``target_context`` are JSON columns, so the thesis filter
+        is applied in Python to stay portable across PostgreSQL and SQLite.
+        """
+        from app.models.proposals import Proposal
+
+        rows = self._session.scalars(
+            select(Proposal)
+            .where(Proposal.kind == "evidence_link")
+            .where(Proposal.status != "withdrawn")
+        )
+        thesis_id = str(thesis.id)
+        proposed: set[uuid.UUID] = set()
+        for proposal in rows:
+            context = proposal.target_context or {}
+            if str(context.get("thesis_id", "")) != thesis_id:
+                continue
+            raw_id = (proposal.payload or {}).get("source_statement_id")
+            if not raw_id:
+                continue
+            try:
+                proposed.add(uuid.UUID(str(raw_id)))
+            except (ValueError, TypeError):
+                continue
+        return proposed

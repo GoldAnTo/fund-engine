@@ -131,9 +131,14 @@ def test_proposal_skips_refused_links_but_keeps_clean_ones(
     from unittest.mock import patch
 
     with patch.object(client, "chat_json", return_value=payload):
-        links = EvidenceProposer(client).propose(thesis.id, session)
+        proposal_ids = EvidenceProposer(client).propose(thesis.id, session)
 
-    assert [link.source_statement_id for link in links] == [stmt_a.id]
+    # The proposer now returns Proposal ids (design §9.2); the refused link is
+    # never proposed at all.
+    from app.models.proposals import Proposal
+
+    proposals = [session.get(Proposal, pid) for pid in proposal_ids]
+    assert [p.payload["source_statement_id"] for p in proposals] == [str(stmt_a.id)]
     run = session.scalars(select(AIRun).where(AIRun.kind == "propose")).one()
     assert "1 refused by compliance" in run.output_summary
 

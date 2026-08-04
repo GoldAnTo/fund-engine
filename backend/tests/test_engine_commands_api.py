@@ -72,6 +72,7 @@ def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
 
 def test_propose_creates_links_landing_in_review_queue(cmd_client, cmd_seeded):
     from app.models.ledger import EvidenceLink, Thesis
+    from app.models.proposals import Proposal
 
     thesis = cmd_seeded.scalars(select(Thesis)).first()
     before = cmd_seeded.scalar(select(func.count()).select_from(EvidenceLink))
@@ -82,22 +83,28 @@ def test_propose_creates_links_landing_in_review_queue(cmd_client, cmd_seeded):
     assert body["thesis_id"] == str(thesis.id)
     assert body["mode"] == "mock"
     assert body["link_count"] >= 1
+    assert "job_id" in body
     assert len(body["links"]) == body["link_count"]
     first = body["links"][0]
-    assert first["link_id"]
-    assert first["source_statement_id"]
-    assert first["role"]
+    assert first["proposal_id"]
     assert isinstance(first["scope"], dict)
 
+    # DESIGN CONTRACT (§9.2): the AI proposer writes Proposals, NOT reviewed
+    # EvidenceLinks.  No formal link is created until a human decides.
     after = cmd_seeded.scalar(select(func.count()).select_from(EvidenceLink))
-    assert after == before + body["link_count"]
+    assert after == before
+
+    proposal_count = cmd_seeded.scalar(
+        select(func.count()).select_from(Proposal)
+    )
+    assert proposal_count >= body["link_count"]
 
     # Every proposed link is pending review — nothing auto-confirmed.
-    queue = cmd_client.get("/api/v1/review-queue")
+    queue = cmd_client.get("/api/v1/review-proposals")
     assert queue.status_code == 200
-    queued_ids = {item["link_id"] for item in queue.json()["items"]}
+    queued_ids = {item["id"] for item in queue.json()["items"]}
     for link in body["links"]:
-        assert link["link_id"] in queued_ids
+        assert link["proposal_id"] in queued_ids
 
 
 def test_propose_unknown_thesis_returns_404(cmd_client, cmd_seeded):

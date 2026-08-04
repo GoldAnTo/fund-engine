@@ -32,7 +32,10 @@ down_revision: Union[str, None] = "0007"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-IMMUTABLE_TABLES = ("case_theme_tag_events", "audit_logs")
+# Only tables CREATED by this migration belong here.  ``case_theme_tag_events``
+# already had its triggers installed by 0007, so re-creating them raised
+# DuplicateObject and blocked any fresh database from migrating to head.
+IMMUTABLE_TABLES = ("audit_logs",)
 
 
 def upgrade() -> None:
