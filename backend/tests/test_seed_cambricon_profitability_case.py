@@ -72,7 +72,13 @@ def _counts(session) -> dict[str, int]:
     }
 
 
-def _clone_full_looking_legacy_case(source, target) -> None:
+def _clone_full_looking_legacy_case(
+    source,
+    target,
+    *,
+    thesis_overrides: dict[str, str] | None = None,
+    legacy_semantics: bool = False,
+) -> None:
     """Copy a complete seed without mutating its immutable source rows."""
     models = (
         DocumentVersion,
@@ -94,12 +100,16 @@ def _clone_full_looking_legacy_case(source, target) -> None:
                 column.name: getattr(entity, column.name)
                 for column in model.__table__.columns
             }
+            if model is Thesis and thesis_overrides:
+                values.update(thesis_overrides)
             if (
+                legacy_semantics
+                and
                 model is SourceStatement
                 and values["normalized_text"].startswith("2025Q1至Q4归母净利润")
             ):
                 values["normalized_text"] = "2025年归母净利润为2,059,228,538.67元（由官方分季度数据加总）"
-            if model is ThemeRole:
+            if legacy_semantics and model is ThemeRole:
                 values["role"] = "国产算力芯片公司"
                 values["scope"] = {"theme": "算力国产化", "boundary": "classification_only"}
             target.add(model(**values))
@@ -114,9 +124,9 @@ def test_seed_creates_one_complete_provisional_profitability_case(session):
         "ResearchCase": 1,
         "Thesis": 1,
         "DocumentVersion": 3,
-        "SourceSpan": 5,
-        "SourceStatement": 5,
-        "EvidenceLink": 7,
+        "SourceSpan": 6,
+        "SourceStatement": 6,
+        "EvidenceLink": 8,
         "EvidenceSnapshot": 1,
         "AIAssessment": 1,
         "ReviewDecision": 0,
@@ -222,6 +232,7 @@ def test_seed_keeps_source_statements_literal_and_derivations_only_in_links(sess
     assert "2025Q1至Q4归母净利润分别为355,465,241.04元、682,617,327.53元、566,563,175.54元、454,582,794.56元" in statements
     assert "2025Q1至Q4扣非归母净利润分别为275,962,803.95元、636,604,043.12元、506,321,130.23元、351,046,180.38元" in statements
     assert "2025Q1至Q4经营活动产生的现金流量净额分别为-1,399,358,712.85元、2,310,509,034.58元、-940,455,133.44元、-469,093,325.30元" in statements
+    assert "2025Q1至Q4营业收入分别为1,111,398,926.80元、1,769,244,544.29元、1,726,780,892.57元、1,889,771,835.02元" in statements
     assert "Juyuan原始响应以累计值、亿元返回2025Q1为3.55、2025H1为10.38、2025Q1-Q3为16.05、2025FY为20.59" in statements
     assert not any("加总" in statement or "相符" in statement for statement in statements)
     assert any(
@@ -295,7 +306,38 @@ def test_seed_rejects_a_full_looking_legacy_graph_with_broken_manifest(session):
     Base.metadata.create_all(engine)
     target = sessionmaker(bind=engine, future=True)()
     try:
-        _clone_full_looking_legacy_case(session, target)
+        _clone_full_looking_legacy_case(session, target, legacy_semantics=True)
+        before = _counts(target)
+
+        with pytest.raises(RuntimeError, match="partial|incomplete|same-title"):
+            seed(target)
+
+        assert _counts(target) == before
+    finally:
+        target.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("support_condition", "错误的支持条件"),
+        ("falsification_condition", "错误的证伪条件"),
+        ("next_verification_event", "错误的后续验证事件"),
+    ],
+)
+def test_seed_rejects_full_looking_graph_with_thesis_manifest_drift(
+    session, field, replacement
+):
+    seed(session)
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    target = sessionmaker(bind=engine, future=True)()
+    try:
+        _clone_full_looking_legacy_case(
+            session, target, thesis_overrides={field: replacement}
+        )
         before = _counts(target)
 
         with pytest.raises(RuntimeError, match="partial|incomplete|same-title"):
@@ -347,4 +389,4 @@ def test_seed_does_not_expose_fixture_evidence_before_capture(session):
     assert repository.visible_links(
         thesis_id=result.thesis_id, cutoff=before_capture
     ) == []
-    assert len(repository.visible_links(thesis_id=result.thesis_id, cutoff=CUTOFF)) == 7
+    assert len(repository.visible_links(thesis_id=result.thesis_id, cutoff=CUTOFF)) == 8

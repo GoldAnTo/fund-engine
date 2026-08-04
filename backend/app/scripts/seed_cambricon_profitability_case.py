@@ -110,6 +110,13 @@ STATEMENT_SPECS = (
         "2025Q1至Q4经营活动产生的现金流量净额分别为-1,399,358,712.85元、2,310,509,034.58元、-940,455,133.44元、-469,093,325.30元",
     ),
     SourceStatementSpec(
+        "2025_revenue",
+        "official_2025",
+        "2025_revenue",
+        "disclosed_fact",
+        "2025Q1至Q4营业收入分别为1,111,398,926.80元、1,769,244,544.29元、1,726,780,892.57元、1,889,771,835.02元",
+    ),
+    SourceStatementSpec(
         "juyuan",
         "juyuan",
         "juyuan",
@@ -126,6 +133,7 @@ LINK_SPECS = (
     EvidenceLinkSpec("juyuan", "supports", "Juyuan原始响应仅以累计值、四舍五入后的20.59亿元对2025全年归母净利润作独立佐证；与官方精确金额2,059,228,538.67元按亿元四舍五入一致", '{"metric":"parent_profit","period":"2025FY","precision":"rounded_亿元","reconciliation":"Juyuan rounded cumulative value cross-check","source":"Juyuan"}'),
     EvidenceLinkSpec("2025_cashflow", "contextualizes", "2025全年经营现金流净额 = -1,399,358,712.85 + 2,310,509,034.58 - 940,455,133.44 - 469,093,325.30 = -498,398,137.01元，提示需要验证回款与现金转化，但不反驳会计利润口径的窄命题", '{"calculation_formula":"-1399358712.85 + 2310509034.58 - 940455133.44 - 469093325.30 = -498398137.01","metric":"operating_cash_flow","period":"2025FY","source":"official"}'),
     EvidenceLinkSpec("2025_parent", "contextualizes", "本链接仅适用于会计利润口径；官方利润数据本身不能证明国产算力需求是唯一原因或盈利可持续", '{"boundary":"accounting_profit_only","source":"official"}'),
+    EvidenceLinkSpec("2025_revenue", "supports", "2025全年营业收入 = 1,111,398,926.80 + 1,769,244,544.29 + 1,726,780,892.57 + 1,889,771,835.02 = 6,497,196,198.68元，由四季度相加得到", '{"calculation_formula":"1111398926.80 + 1769244544.29 + 1726780892.57 + 1889771835.02 = 6497196198.68","metric":"operating_revenue","period":"2025FY","precision":"exact_yuan","source":"official"}'),
 )
 
 COMPANY_SPEC = ("688256", "寒武纪", "listed")
@@ -206,6 +214,12 @@ def _complete_existing(session: Session, case: ResearchCase, data: CaseData) -> 
         or thesis.review_state != "draft"
     ):
         raise RuntimeError("same-title case is partial or incomplete: thesis manifest mismatch")
+    if (
+        thesis.support_condition != "连续五季度单季度归母净利润为正且2025全年归母、扣非均为正"
+        or thesis.falsification_condition != "任一季度归母净利润不为正，或2025全年归母/扣非任一不为正"
+        or thesis.next_verification_event != "复核2026年季度利润与经营现金流，判断拐点可持续性"
+    ):
+        raise RuntimeError("same-title case is partial or incomplete: thesis manifest drift")
     snapshot = _one(
         list(session.scalars(select(EvidenceSnapshot).where(EvidenceSnapshot.thesis_id == thesis.id))),
         "evidence snapshot",
@@ -379,6 +393,11 @@ def _insert_documents(document_repo: DocumentRepository, document_service: Docum
         "2025_cashflow": document_service.add_span(
             versions["official_2025"].id,
             {"page": data.annual_report.page, "section": "2025年分季度主要财务数据", "metric": "经营活动产生的现金流量净额"},
+            data.annual_report.verbatim_text,
+        ),
+        "2025_revenue": document_service.add_span(
+            versions["official_2025"].id,
+            {"page": data.annual_report.page, "section": "2025年分季度主要财务数据", "metric": "营业收入"},
             data.annual_report.verbatim_text,
         ),
         "2024_parent": document_service.add_span(

@@ -42,6 +42,21 @@ def test_case_data_derives_exact_quarters_from_official_2025_report() -> None:
     assert "[ROW" not in data.annual_report.verbatim_text
 
 
+def test_case_data_reconciles_operating_revenue_quarter_sum_to_annual() -> None:
+    data = load_case_data()
+
+    assert data.annual_report.revenue == {
+        "2025Q1": Decimal("1111398926.80"),
+        "2025Q2": Decimal("1769244544.29"),
+        "2025Q3": Decimal("1726780892.57"),
+        "2025Q4": Decimal("1889771835.02"),
+    }
+    assert sum(data.annual_report.revenue.values()) == Decimal("6497196198.68")
+    assert (
+        sum(data.annual_report.revenue.values()) / Decimal("100000000")
+    ).quantize(Decimal("0.0000000001")) == Decimal("64.9719619868")
+
+
 def test_juyuan_is_only_rounded_yi_corroboration_of_the_official_parent_profit() -> None:
     data = load_case_data()
 
