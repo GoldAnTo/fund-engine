@@ -40,7 +40,11 @@ CREATED_BY = "codex-case-draft"
 CAPTURED_AT = datetime.fromisoformat("2026-08-03T15:21:55+08:00")
 # SQLite drops offsets; persist UTC-normalized values so its read-side
 # compatibility helpers retain the actual capture instant.
-CUTOFF = datetime(2026, 8, 3, 15, 59, 59, tzinfo=timezone.utc)
+# The snapshot cutoff is a stable future boundary for this reproducible fixture.
+# It must include the ledger rows created during a seed run even when the
+# repository is replayed after the original capture date; historical API
+# cutoffs still filter evidence by each row's own available/created timestamps.
+CUTOFF = datetime(2030, 1, 1, tzinfo=timezone.utc)
 ASSESSMENT_RATIONALE = (
     "冻结数据支持会计利润口径的盈利拐点：2024Q4至2025Q4连续五个季度归母净利润为正，"
     "2025全年归母与扣非归母净利润均为正。该判断不证明国产算力需求是唯一原因，也不证明盈利可持续；"

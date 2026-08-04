@@ -1,17 +1,16 @@
 /// <reference types="vite/client" />
 import type { Conclusion, ReviewOutcome } from "../domain/types";
 import type { ResearchClient } from "../domain/prototypeTypes";
-import { MockResearchAdapter } from "./mockResearchAdapter";
 import { HttpResearchAdapter } from "./httpResearchAdapter";
 
-// Default client is chosen by environment: when VITE_RESEARCH_API_URL is set
-// the HTTP adapter talks to the live v1 API; otherwise the mock adapter is
-// used so Storybooks and local dev keep working without a backend.
+// The application always reads from the real HTTP ledger by default. Use an
+// explicit VITE_RESEARCH_API_URL when the API is on another origin; otherwise
+// the same-origin /api/v1 path works with the Vite proxy and production host.
+// MockResearchAdapter remains available only through explicit setResearchClient
+// calls in tests and prototypes.
 function defaultClient(): ResearchClient {
-  const baseUrl = import.meta.env.VITE_RESEARCH_API_URL;
-  return baseUrl
-    ? new HttpResearchAdapter({ baseUrl: baseUrl.replace(/\/$/, "") })
-    : new MockResearchAdapter();
+  const baseUrl = import.meta.env.VITE_RESEARCH_API_URL || "/api/v1";
+  return new HttpResearchAdapter({ baseUrl: baseUrl.replace(/\/$/, "") });
 }
 
 let _client: ResearchClient = defaultClient();
