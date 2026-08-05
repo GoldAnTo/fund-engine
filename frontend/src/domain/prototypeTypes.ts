@@ -1373,6 +1373,15 @@ export interface TopicCompanyRoleView {
   applicableFrom: string | null;
   applicableTo: string | null;
   statementId: string | null;
+  valuations?: Array<{
+    stockId: string;
+    stockCode: string;
+    metricName: string;
+    metricValue: number;
+    asOfDate: string;
+    source: string;
+    definition: string;
+  }>;
   // 设计图 9/10 表格"关联命题"列的传导描述（如"资本开支→设备交付"）
   transmission?: string;
   // 表格"证据状态"列文案（"已复核支持" / "待补证据" / "AI 提议·待复核"）

@@ -25,6 +25,8 @@ dist/
 build/
 .vite/
 *.tsbuildinfo
+*.config.d.ts
+*.config.js
 .npm/
 .pnpm-store/
 

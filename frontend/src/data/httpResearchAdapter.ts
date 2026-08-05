@@ -2534,6 +2534,15 @@ export class HttpResearchAdapter implements ResearchClient {
         applicableFrom: r.applicable_from ?? null,
         applicableTo: r.applicable_to ?? null,
         statementId: r.statement_id ?? null,
+        valuations: (r.valuations ?? []).map((v) => ({
+          stockId: v.stock_id,
+          stockCode: v.stock_code,
+          metricName: v.metric_name,
+          metricValue: v.metric_value,
+          asOfDate: v.as_of_date,
+          source: v.source,
+          definition: v.definition,
+        })),
       })),
       fundExposure: dto.fund_exposure.map((p) => ({
         fundId: p.fund_id,

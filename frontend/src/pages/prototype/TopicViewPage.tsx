@@ -263,6 +263,15 @@ export function TopicViewPage() {
                         ) : (
                           <span className="muted">无来源记录</span>
                         )}
+                        {(r.valuations ?? []).length > 0 && (
+                          <div className="topic-valuation-inline">
+                            {(r.valuations ?? []).map((v) => (
+                              <span key={`${v.stockCode}-${v.metricName}-${v.asOfDate}`}>
+                                {v.metricName} {v.metricValue} · {v.asOfDate}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -471,6 +480,8 @@ function EvidenceItem({ item }: { item: NonNullable<TopicThesisView["evidence"]>
   const status = typeof scope.evidence_status === "string" ? scope.evidence_status : "未标注";
   const period = typeof scope.period === "string" ? scope.period : "时点未标注";
   const sourceType = typeof scope.source === "string" ? scope.source : "来源类型未标注";
+  const verification = typeof scope.verification === "string" ? scope.verification : "";
+  const isDemoSource = Boolean(item.sourceUrl?.includes("example.test"));
   const missing = Array.isArray(scope.missing) ? scope.missing.filter((v): v is string => typeof v === "string") : [];
   return (
     <article className="topic-evidence-item">
@@ -485,6 +496,8 @@ function EvidenceItem({ item }: { item: NonNullable<TopicThesisView["evidence"]>
         <div><dt>来源类型</dt><dd>{sourceType}</dd></div>
         <div><dt>原文定位</dt><dd>{formatLocator(item.locator)}</dd></div>
       </dl>
+      {isDemoSource && <p className="topic-evidence-missing">演示来源：example.test，需回核真实原始材料</p>}
+      {verification && <p className="muted" style={{ fontSize: 10 }}>核验说明：{verification}</p>}
       {missing.length > 0 && <p className="topic-evidence-missing">待补证据：{missing.join("、")}</p>}
     </article>
   );

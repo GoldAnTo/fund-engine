@@ -49,6 +49,7 @@ from app.schemas.v1.themes import (
     ThemeListResponse,
     ThemeViewResponse,
 )
+from app.schemas.v1.companies import ValuationViewDTO
 from app.services.themes import THEME_TAG_VOCABULARY
 
 # Effective-judgment buckets for the per-case thesis matrix.
@@ -311,6 +312,10 @@ class ThemeReadQueries:
             if company is None:
                 continue
             case = cases.get(role.research_case_id)
+            company_stocks = self._instruments.stocks_for_companies([company.id])
+            company_valuations = self._instruments.valuation_snapshots_for_stocks(
+                [stock.id for stock in company_stocks]
+            )
             views.append(
                 ThemeCompanyRoleDTO(
                     company_id=company.id,
@@ -329,6 +334,20 @@ class ThemeReadQueries:
                         role.applicable_to.isoformat() if role.applicable_to else None
                     ),
                     statement_id=role.source_statement_id,
+                    valuations=[
+                        ValuationViewDTO(
+                            stock_id=stock.id,
+                            stock_code=stock.code,
+                            metric_name=value.metric_name,
+                            metric_value=float(value.metric_value),
+                            as_of_date=value.as_of_date.isoformat(),
+                            source=value.source,
+                            definition=value.definition,
+                        )
+                        for value in company_valuations
+                        for stock in company_stocks
+                        if value.stock_id == stock.id
+                    ],
                 )
             )
         views.sort(key=lambda v: (v.company_code, v.case_title or ""))

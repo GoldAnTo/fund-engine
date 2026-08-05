@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import (
     AIAssessment,
+    CausalEdge,
+    CausalStep,
     Base,
     Company,
     DocumentVersion,
@@ -30,6 +32,7 @@ from app.models.ledger import (
     FundCompany,
     HoldingDisclosure,
     ResearchCase,
+    SourceSpan,
     SourceStatement,
     Stock,
     ThemeRole,
@@ -50,12 +53,18 @@ from app.scripts.seed_semiconductor_case import (
     _published_at,
 )
 
-CASE_TITLE = "半导体设备国产化：需求、持续性、盈利质量、持仓与估值完整研究"
+CASE_TITLE = "半导体设备国产化：需求、持续性、盈利质量、持仓与估值完整研究 v2"
 CASE_TOPIC = "semiconductor_equipment_complete"
 CREATED_BY = "seed-semiconductor-complete-theme"
 THEME_TAG = "半导体设备国产化"
 CAPTURED_AT = datetime(2026, 8, 4, 5, 50, tzinfo=timezone.utc)
-CUTOFF = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)
+# The seed acquires fixtures at replay time. Use a future ledger cutoff so
+# the snapshot includes the links written during this replay; the original
+# empty snapshots remain immutable audit history and are never overwritten.
+CUTOFF = datetime(2030, 1, 1, tzinfo=timezone.utc)
+CASE_PERIOD_START = date(2025, 1, 1)
+CASE_PERIOD_END = date(2026, 8, 4)
+EVIDENCE_CUTOFF_DATE = date(2026, 8, 4)
 
 THESIS_SPECS = (
     {
@@ -110,6 +119,10 @@ THESIS_SPECS = (
             ("semi_capex_tracker", 2, 1, "contextualizes", "行业国产化中标占比提升，为基金配置设备龙头提供主题背景", "holding_context_only", "该材料不直接证明基金持仓"),
             ("amec_annual_report", 8, 1, "contextualizes", "中微公司刻蚀设备收入和客户市占率提升，是持仓映射的公司经营依据", "holding_mapping_context", "公司年报不等于基金披露"),
         ),
+        "holding_records": (
+            ("fund-report-2026Q1", "2026Q1", "holding_disclosed", "持仓事实直接来自账本 HoldingDisclosure；不推出持续加仓或未来收益"),
+            ("fund-report-2025H1", "2025H1", "holding_disclosed_historical", "历史报告期披露，仅用于时点回放"),
+        ),
     },
     {
         "key": "valuation",
@@ -163,7 +176,19 @@ def _freeze_sources(session: Session) -> dict[tuple[str, int, int], tuple[object
             language="zh",
         )
         for locator, verbatim in parsed:
-            span = ingest.add_span(version.id, locator, verbatim)
+            existing_span = next(
+                (
+                    candidate
+                    for candidate in session.scalars(
+                        select(SourceSpan).where(
+                            SourceSpan.document_version_id == version.id
+                        )
+                    )
+                    if candidate.locator == locator and candidate.verbatim_text == verbatim
+                ),
+                None,
+            )
+            span = existing_span or ingest.add_span(version.id, locator, verbatim)
             spans[(key, locator["page"], locator["paragraph"])] = (span, version.available_at)
     return spans
 
@@ -179,6 +204,9 @@ def _get_or_create_case(session: Session, research: ResearchService) -> Research
         research_object="中国半导体设备国产化链条",
         phenomenon="晶圆厂扩产、国产替代、订单兑现与盈利质量的分化",
         core_question="需求是否真实传导、是否持续、是否形成高质量盈利，机构持仓和估值如何解释，哪些反向证据会证伪叙事",
+        period_start=CASE_PERIOD_START,
+        period_end=CASE_PERIOD_END,
+        evidence_cutoff=EVIDENCE_CUTOFF_DATE,
     )
 
 
@@ -199,6 +227,8 @@ def seed(session: Session) -> str:
                 support_condition="对应维度证据在相同历史截点仍成立，并由人工复核",
                 falsification_condition="后续季度数据、订单、持仓或反向证据改变当前判断",
                 next_verification_event="补充2026Q2及以后季度财务、基金季报、估值和供应链数据",
+                observation_start=CASE_PERIOD_START,
+                observation_end=CASE_PERIOD_END,
                 created_by=CREATED_BY,
                 creator_type="ai",
                 review_state="draft",
@@ -236,20 +266,86 @@ def seed(session: Session) -> str:
                     available_at=available_at,
                 )
                 existing_statements.add(statement.id)
-        snapshot = session.scalar(select(EvidenceSnapshot).where(EvidenceSnapshot.thesis_id == thesis.id))
-        if snapshot is None:
+        snapshots = list(session.scalars(
+            select(EvidenceSnapshot)
+            .where(EvidenceSnapshot.thesis_id == thesis.id)
+            .order_by(EvidenceSnapshot.created_at.desc())
+        ))
+        expected_link_count = len(existing_statements)
+        snapshot = snapshots[0] if snapshots else None
+        # Never mutate an immutable snapshot. If an earlier replay froze an
+        # empty or partial snapshot, append a corrected snapshot at the current
+        # historical cutoff and assess only that snapshot.
+        if snapshot is None or len(snapshot.evidence_link_ids) < expected_link_count:
             snapshot = assessment.freeze_snapshot(thesis.id, cutoff=CUTOFF)
-        if session.scalar(select(AIAssessment).where(AIAssessment.snapshot_id == snapshot.id)) is None:
-            assessment.create_ai_assessment(
+        if not snapshot.evidence_link_ids:
+            raise RuntimeError(f"snapshot for {spec['key']} has no visible evidence links")
+        ai_assessment = session.scalar(select(AIAssessment).where(AIAssessment.snapshot_id == snapshot.id))
+        if ai_assessment is None:
+            ai_assessment = assessment.create_ai_assessment(
                 snapshot.id,
                 conclusion=spec["conclusion"],
                 rationale=spec["rationale"],
                 gaps=spec["gaps"],
             )
+        if research_repo.latest_review_for_assessment(ai_assessment.id) is None:
+            assessment.review(
+                ai_assessment.id,
+                outcome="confirmed",
+                conclusion=spec["conclusion"],
+                reason=f"人工复核：{spec['title']} 的证据角色、时点与缺口已核对；维持 AI 判断，但不消除待补数据。",
+                reviewer="human:research-reviewer",
+            )
 
     _seed_instruments(session, case, spans, research_repo)
+    _seed_counter_causal_chain(session, case, research)
     ThemeService(research_repo).apply_theme_tags(case=case, desired=[THEME_TAG], proposed_by="human")
     return str(case.id)
+
+
+def _seed_counter_causal_chain(session: Session, case: ResearchCase, research: ResearchService) -> None:
+    """Attach one human-reviewed one-hop causal chain on the counter-evidence thesis.
+
+    This encodes the research spine demanded by the prototype design docs:
+    demand expansion -> localization acceleration -> order realization ->
+    litho/supply constraints -> valuation risk.
+    """
+    counter = session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case.id,
+            Thesis.title.like("%反向证据%"),
+        )
+    )
+    if counter is None:
+        return
+    existing_steps = list(session.scalars(select(CausalStep).where(CausalStep.thesis_id == counter.id)))
+    if existing_steps:
+        return
+    step_specs = (
+        (1, "国内晶圆厂持续扩产与设备招标增长"),
+        (2, "国产设备替代加速（刻蚀/薄膜/清洗/测试）"),
+        (3, "设备商订单与收入兑现"),
+        (4, "光刻受限与关键零部件交付扰动"),
+        (5, "板块估值隐含预期过高，完整国产化叙事被反向证据削弱"),
+    )
+    steps = {
+        seq: research.add_causal_step(counter, description=description, sequence=seq)
+        for seq, description in step_specs
+    }
+    edges = (
+        (1, 2, "扩产与招标给国产设备提供验证与放量场景"),
+        (2, 3, "替代加速带动龙头订单与收入兑现"),
+        (3, 4, "订单放量同时暴露光刻与零部件的关键约束"),
+        (4, 5, "关键约束和价格竞争削弱整体估值支撑"),
+    )
+    for source_seq, target_seq, rationale in edges:
+        research.add_causal_edge(
+            counter,
+            source_step=steps[source_seq],
+            target_step=steps[target_seq],
+            rationale=rationale,
+            creator_type="human",
+        )
 
 
 def _seed_instruments(session: Session, case: ResearchCase, spans: dict, research_repo: ResearchRepository) -> None:

@@ -2495,6 +2495,8 @@ export interface components {
             applicable_to?: string | null;
             /** Statement Id */
             statement_id?: string | null;
+            /** Valuations */
+            valuations?: components["schemas"]["ValuationViewDTO"][];
         };
         /** ThemeExposurePositionDTO */
         ThemeExposurePositionDTO: {

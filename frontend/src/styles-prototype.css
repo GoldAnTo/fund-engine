@@ -1336,6 +1336,19 @@ a.prototype-button { text-decoration: none; }
 }
 
 
+.topic-valuation-inline {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--warning);
+  font-size: 10px;
+}
+.topic-valuation-inline span {
+  padding: 2px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
 .topic-evidence-summary {
   display: flex;
   gap: 6px;

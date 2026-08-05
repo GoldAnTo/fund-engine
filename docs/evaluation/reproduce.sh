@@ -9,4 +9,5 @@ if [ ! -x "$PY" ]; then
   PY=python
 fi
 
-exec "$PY" scripts/verify_ai_compute_slice.py
+exec "$PY" scripts/verify_ai_compute_slice.py && \
+  "$PY" scripts/verify_semiconductor_complete_case.py

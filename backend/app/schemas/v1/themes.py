@@ -13,7 +13,7 @@ import uuid
 from typing import Any, Literal
 
 from app.schemas.v1.common import HistoricalBasisDTO, V1Model
-from app.schemas.v1.companies import AssessmentViewDTO, RoleReviewDTO
+from app.schemas.v1.companies import AssessmentViewDTO, RoleReviewDTO, ValuationViewDTO
 
 
 class UpdateThemeTagsRequest(V1Model):
@@ -90,6 +90,7 @@ class ThemeCompanyRoleDTO(V1Model):
     applicable_from: str | None = None
     applicable_to: str | None = None
     statement_id: uuid.UUID | None = None
+    valuations: list[ValuationViewDTO] = []
 
 
 class ThemeExposurePositionDTO(V1Model):
