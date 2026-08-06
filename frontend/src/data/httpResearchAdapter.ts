@@ -12,8 +12,11 @@ import type {
   PageStateErrorKind,
   RelationshipGraph,
   RelationshipQuery,
+  CreateResearchTaskInput,
   ResearchCaseDossier,
   ResearchCaseSummary,
+  ResearchTaskItem,
+  ResearchTaskStatus,
   ReviewDecisionView,
   ReviewOutcome,
   SearchHit,
@@ -70,9 +73,26 @@ import type {
   VersionsView,
   WorkspaceOverviewScreen,
   ConclusionView,
+  ResearchRunDetail,
+  ResearchRunSummary,
 } from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
+
+type TaskItemWire = {
+  id: string;
+  title: string;
+  description?: string | null;
+  status: string;
+  priority: string;
+  task_type: string;
+  ref_type?: string | null;
+  ref_id?: string | null;
+  research_case_id?: string | null;
+  assignee?: string | null;
+  created_at: string;
+  due_at?: string | null;
+};
 
 function humanizeGraphNodeLabel(label: string, kind: string): { title: string; meta: string } {
   try {
@@ -289,10 +309,10 @@ export class HttpResearchAdapter implements ResearchClient {
         () => null,
       )) as ErrorEnvelopeDTO | null;
       const code = payload?.error?.code;
-      throw new PageStateError(
-        asPageStateErrorKind(code),
-        payload?.error?.message,
-      );
+      const message = response.status === 404
+        ? "自动研究接口不存在，请重启后端服务后重试"
+        : payload?.error?.message;
+      throw new PageStateError(asPageStateErrorKind(code), message);
     }
     return (await response.json()) as T;
   }
@@ -324,6 +344,69 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await response.json()) as T;
   }
 
+  private async requestJson<T>(
+    path: string,
+    init: RequestInit,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.options.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
+        },
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
+      throw new PageStateError(
+        asPageStateErrorKind(payload?.error?.code),
+        payload?.error?.message,
+      );
+    }
+    return (await response.json()) as T;
+  }
+
+  private mapResearchTask(dto: TaskItemWire): ResearchTaskItem {
+    return {
+      id: dto.id,
+      title: dto.title,
+      description: dto.description ?? null,
+      status: dto.status as ResearchTaskStatus,
+      priority: dto.priority,
+      task_type: dto.task_type,
+      ref_type: dto.ref_type ?? null,
+      ref_id: dto.ref_id ?? null,
+      research_case_id: dto.research_case_id ?? null,
+      assignee: dto.assignee ?? null,
+      created_at: dto.created_at,
+      due_at: dto.due_at ?? null,
+    };
+  }
+
+  async createResearchTask(input: CreateResearchTaskInput): Promise<ResearchTaskItem> {
+    const dto = await this.post<TaskItemWire>("/tasks", input);
+    return this.mapResearchTask(dto);
+  }
+
+  async updateResearchTask(
+    taskId: string,
+    taskStatus: ResearchTaskStatus,
+    assignee?: string,
+  ): Promise<ResearchTaskItem> {
+    const dto = await this.requestJson<TaskItemWire>(
+      `/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status: taskStatus, assignee }),
+      },
+    );
+    return this.mapResearchTask(dto);
+  }
   private buildQuery(params: Record<string, string | undefined>): string {
     const sp = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
@@ -737,6 +820,32 @@ export class HttpResearchAdapter implements ResearchClient {
       // assessment can legitimately be null (no AI snapshot for the focus
       // thesis yet); expose null so the UI renders an honest placeholder.
       assessment,
+      judgement_card: dto.judgement_card
+        ? {
+            thesis_id: dto.judgement_card.thesis_id,
+            statement: dto.judgement_card.statement,
+            conclusion: dto.judgement_card.conclusion,
+            rationale: dto.judgement_card.rationale ?? null,
+            provisional: dto.judgement_card.provisional ?? true,
+            review: dto.judgement_card.review
+              ? {
+                  outcome: this.mapReviewOutcome(dto.judgement_card.review.outcome),
+                  conclusion: dto.judgement_card.review.conclusion ?? null,
+                  reason: dto.judgement_card.review.reason,
+                  reviewer: dto.judgement_card.review.reviewer,
+                  reviewed_at: dto.judgement_card.review.reviewed_at,
+                }
+              : null,
+            support_condition: dto.judgement_card.support_condition ?? null,
+            falsification_condition: dto.judgement_card.falsification_condition ?? null,
+            next_verification_event: dto.judgement_card.next_verification_event ?? null,
+            evidence_counts: dto.judgement_card.evidence_counts,
+            gaps: dto.judgement_card.gaps,
+            next_action: dto.judgement_card.next_action ?? null,
+            blocking_reason: dto.judgement_card.blocking_reason ?? null,
+            responsible: dto.judgement_card.responsible ?? null,
+          }
+        : null,
       causal_chain: dto.causal_chain.map((c) => this.mapCausalStep(c)),
       evidence: {
         supports: (evidence.supports ?? []).map((e) => this.mapEvidence(e)),
@@ -749,7 +858,31 @@ export class HttpResearchAdapter implements ResearchClient {
       },
       competitive_explanations: dto.competitive_explanations,
       gaps: dto.gaps,
-      log: [],
+      changes: (dto.changes ?? []).map((change) => ({
+        id: change.id,
+        event_type: change.event_type,
+        aggregate_type: change.aggregate_type,
+        summary: change.summary,
+        source: change.source ?? null,
+        actor: change.actor ?? null,
+        occurred_at: change.occurred_at,
+        payload: change.payload,
+      })),
+      counter_research: (dto.counter_research ?? []).map((task) => ({
+        id: task.id,
+        thesis_id: task.thesis_id,
+        thesis_statement: task.thesis_statement,
+        assessment_id: task.assessment_id ?? null,
+        objective: task.objective,
+        status: task.status,
+        contradicts_count: task.contradicts_count,
+        next_action: task.next_action,
+      })),
+      log: (dto.changes ?? []).map((change) => ({
+        id: change.id,
+        at: change.occurred_at,
+        text: `${change.event_type}: ${change.summary}`,
+      })),
     };
   }
 
@@ -1170,6 +1303,16 @@ export class HttpResearchAdapter implements ResearchClient {
       stocks: [...stockMap.values()],
       funds,
       chain: [],
+      counterResearch: (dossier.counter_research ?? []).map((task) => ({
+        id: task.id,
+        thesis_id: task.thesis_id,
+        thesis_statement: task.thesis_statement,
+        assessment_id: task.assessment_id ?? null,
+        objective: task.objective,
+        status: task.status,
+        contradicts_count: task.contradicts_count,
+        next_action: task.next_action,
+      })),
       conflictCount: claims.filter((c) => c.sentiment === "negative").length,
     };
   }
@@ -2555,6 +2698,28 @@ export class HttpResearchAdapter implements ResearchClient {
         reportPeriod: p.report_period,
         source: p.source,
       })),
+      expressionCandidates: (dto.expression_candidates ?? []).map((c) => ({
+        stockId: c.stock_id,
+        stockCode: c.stock_code,
+        stockName: c.stock_name,
+        companyRole: c.company_role,
+        thesisIds: c.thesis_ids,
+        supportStatus: c.support_status,
+        valuation: (c.valuation ?? []).map((v) => ({
+          stockId: v.stock_id,
+          stockCode: v.stock_code,
+          metricName: v.metric_name,
+          metricValue: v.metric_value,
+          asOfDate: v.as_of_date,
+          source: v.source,
+          definition: v.definition,
+        })),
+        holdingCount: c.holding_count ?? 0,
+        latestReportPeriod: c.latest_report_period ?? null,
+        freshness: c.freshness ?? "missing",
+        constraints: c.constraints ?? [],
+        matchExplanation: c.match_explanation,
+      })),
       derivedFrom: {
         caseIds: dto.derived_from.case_ids,
         thesisIds: dto.derived_from.thesis_ids,
@@ -2562,6 +2727,15 @@ export class HttpResearchAdapter implements ResearchClient {
         disclosureIds: dto.derived_from.disclosure_ids,
       },
     };
+  }
+
+  async listResearchRuns(caseId: string): Promise<ResearchRunSummary[]> {
+    const dto = await this.get<{ items: ResearchRunSummary[] }>(`/research-cases/${encodeURIComponent(caseId)}/runs`);
+    return dto.items;
+  }
+
+  async getResearchRun(runId: string): Promise<ResearchRunDetail> {
+    return this.get<ResearchRunDetail>(`/research-runs/${encodeURIComponent(runId)}`);
   }
 
   async getConclusionView(

@@ -11,6 +11,7 @@ import type {
   ThemeStock,
   ThemeWorkbenchView,
 } from "../../domain/prototypeTypes";
+import type { CounterResearchTask } from "../../domain/types";
 
 interface PageState {
   kind: "loading" | "error" | "ready";
@@ -50,6 +51,27 @@ export function ThemeWorkbenchScreen() {
     "all" | ThemeClaim["sentiment"]
   >("all");
   const [selectedHypothesisId, setSelectedHypothesisId] = useState<string>("");
+  const [startedTasks, setStartedTasks] = useState<Record<string, string>>({});
+
+  const startCounterResearch = async (task: CounterResearchTask) => {
+    if (startedTasks[task.id]) return;
+    const created = await researchClient.createResearchTask({
+      title: task.objective,
+      description: task.next_action,
+      task_type: "counter_research",
+      priority: "high",
+      ref_type: "thesis",
+      ref_id: task.thesis_id,
+      research_case_id: view?.id ?? themeId,
+    });
+    setStartedTasks((current) => ({ ...current, [task.id]: created.id }));
+  };
+
+  const completeCounterResearch = async (task: CounterResearchTask) => {
+    const createdTaskId = startedTasks[task.id];
+    if (!createdTaskId) return;
+    await researchClient.updateResearchTask(createdTaskId, "done");
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +217,13 @@ export function ThemeWorkbenchScreen() {
           </ul>
         </section>
 
+        <CounterResearchPanel
+          tasks={view.counterResearch}
+          startedTasks={startedTasks}
+          onStart={startCounterResearch}
+          onComplete={completeCounterResearch}
+        />
+
         {/* 右：穿透结果（设计文档 §6 右列） */}
         <section className="theme-col theme-col--penetration">
           <div className="theme-col__head">
@@ -241,6 +270,68 @@ export function ThemeWorkbenchScreen() {
         </section>
       </div>
     </div>
+  );
+}
+
+function CounterResearchPanel({
+  tasks,
+  startedTasks,
+  onStart,
+  onComplete,
+}: {
+  tasks: CounterResearchTask[];
+  startedTasks: Record<string, string>;
+  onStart: (task: CounterResearchTask) => void;
+  onComplete: (task: CounterResearchTask) => void;
+}) {
+  return (
+    <section className="theme-col theme-col--counter" data-testid="counter-research-panel">
+      <div className="theme-col__head">
+        <p className="section-kicker">显式反方研究</p>
+        <h2>反方任务</h2>
+      </div>
+      {tasks.length === 0 ? (
+        <p className="muted">当前没有待发起的反方任务。</p>
+      ) : (
+        <ul className="counter-research-list">
+          {tasks.map((task) => {
+            const started = Boolean(startedTasks[task.id]);
+            return (
+              <li key={task.id} className="counter-research-card">
+                <div className="counter-research-card__head">
+                  <strong>{task.objective}</strong>
+                  <span className="muted">{task.status}</span>
+                </div>
+                <p>{task.thesis_statement}</p>
+                <small className="muted">下一步：{task.next_action}</small>
+                <div className="counter-research-card__actions">
+                  <span className={task.contradicts_count > 0 ? "count-contradict" : "muted"}>
+                    {task.contradicts_count} 条反方证据
+                  </span>
+                  <button
+                    type="button"
+                    className="prototype-button prototype-button--small"
+                    disabled={started}
+                    onClick={() => void onStart(task)}
+                  >
+                    {started ? "已发起" : "发起研究"}
+                  </button>
+                  {started && (
+                    <button
+                      type="button"
+                      className="prototype-button prototype-button--small"
+                      onClick={() => void onComplete(task)}
+                    >
+                      标记完成
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

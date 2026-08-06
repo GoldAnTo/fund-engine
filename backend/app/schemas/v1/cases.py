@@ -67,6 +67,25 @@ class AssessmentDTO(V1Model):
     review: ReviewDecisionDTO | None
 
 
+class ThesisJudgementCardDTO(V1Model):
+    """Stable, auditable judgement card for the focused thesis."""
+
+    thesis_id: str
+    statement: str
+    conclusion: Literal["supported", "contradicted", "insufficient_evidence", "unreviewed"]
+    rationale: str | None = None
+    provisional: bool = True
+    review: ReviewDecisionDTO | None = None
+    support_condition: str | None = None
+    falsification_condition: str | None = None
+    next_verification_event: str | None = None
+    evidence_counts: dict[str, int]
+    gaps: list[str]
+    next_action: str | None = None
+    blocking_reason: str | None = None
+    responsible: str | None = None
+
+
 class CausalStepDTO(V1Model):
     id: str
     sequence: int
@@ -93,6 +112,28 @@ class CaseListResponse(V1Model):
     page: CursorPage
 
 
+class DossierChangeDTO(V1Model):
+    id: str
+    event_type: str
+    aggregate_type: str
+    summary: str
+    source: str | None = None
+    actor: str | None = None
+    occurred_at: str
+    payload: dict[str, Any]
+
+
+class CounterResearchTaskDTO(V1Model):
+    id: str
+    thesis_id: str
+    thesis_statement: str
+    assessment_id: str | None = None
+    objective: str
+    status: Literal["待发起", "已有反方证据", "已形成反方"]
+    contradicts_count: int
+    next_action: str
+
+
 class DossierResponse(V1Model):
     schema_version: Literal["v1"] = "v1"
     basis: HistoricalBasisDTO
@@ -100,8 +141,11 @@ class DossierResponse(V1Model):
     theses: list[ThesisSummaryDTO]
     focus_thesis_id: str
     assessment: AssessmentDTO | None
+    judgement_card: ThesisJudgementCardDTO | None = None
     assess_failure: AssessFailureDTO | None = None
     causal_chain: list[CausalStepDTO]
     evidence: dict[str, list[EvidenceRecordDTO]]
     competitive_explanations: list[str]
     gaps: list[str]
+    changes: list[DossierChangeDTO] = []
+    counter_research: list[CounterResearchTaskDTO] = []

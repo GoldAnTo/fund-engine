@@ -1416,6 +1416,28 @@ export interface components {
             /** Available At */
             available_at: string;
         };
+        /** DossierChangeDTO */
+        DossierChangeDTO: {
+            id: string;
+            event_type: string;
+            aggregate_type: string;
+            summary: string;
+            source?: string | null;
+            actor?: string | null;
+            occurred_at: string;
+            payload: { [key: string]: unknown };
+        };
+        /** CounterResearchTaskDTO */
+        CounterResearchTaskDTO: {
+            id: string;
+            thesis_id: string;
+            thesis_statement: string;
+            assessment_id?: string | null;
+            objective: string;
+            status: "待发起" | "已有反方证据" | "已形成反方";
+            contradicts_count: number;
+            next_action: string;
+        };
         /** DossierResponse */
         DossierResponse: {
             /**
@@ -1431,6 +1453,7 @@ export interface components {
             /** Focus Thesis Id */
             focus_thesis_id: string;
             assessment: components["schemas"]["AssessmentDTO"] | null;
+            judgement_card?: components["schemas"]["ThesisJudgementCardDTO"] | null;
             assess_failure?: components["schemas"]["AssessFailureDTO"] | null;
             /** Causal Chain */
             causal_chain: components["schemas"]["CausalStepDTO"][];
@@ -1442,6 +1465,8 @@ export interface components {
             competitive_explanations: string[];
             /** Gaps */
             gaps: string[];
+            changes: components["schemas"]["DossierChangeDTO"][];
+            counter_research?: components["schemas"]["CounterResearchTaskDTO"][];
         };
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
@@ -2643,6 +2668,33 @@ export interface components {
             /** Promoted Proposal Id */
             promoted_proposal_id?: string | null;
         };
+        /** ThemeExpressionCandidateDTO */
+        ThemeExpressionCandidateDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Company Role */
+            company_role: string;
+            /** Thesis Ids */
+            thesis_ids: string[];
+            /** Support Status */
+            support_status: "supported" | "insufficient_evidence" | "contradicted" | "unreviewed";
+            /** Valuation */
+            valuation?: components["schemas"]["ValuationViewDTO"][];
+            /** Holding Count */
+            holding_count?: number;
+            /** Latest Report Period */
+            latest_report_period?: string | null;
+            /** Freshness */
+            freshness?: "fresh" | "stale" | "missing";
+            /** Constraints */
+            constraints?: string[];
+            /** Match Explanation */
+            match_explanation: string;
+        };
         /** ThemeViewResponse */
         ThemeViewResponse: {
             /**
@@ -2660,6 +2712,8 @@ export interface components {
             company_roles: components["schemas"]["ThemeCompanyRoleDTO"][];
             /** Fund Exposure */
             fund_exposure: components["schemas"]["ThemeExposurePositionDTO"][];
+            /** Expression Candidates */
+            expression_candidates?: components["schemas"]["ThemeExpressionCandidateDTO"][];
             derived_from: components["schemas"]["DerivedFromDTO"];
         };
         /** ThesisCompareDTO */
@@ -2745,6 +2799,38 @@ export interface components {
              * @default confirmed
              */
             review_state: string;
+        };
+        /** TaskItemDTO */
+        TaskItemDTO: {
+            id: string;
+            title: string;
+            description?: string | null;
+            status: string;
+            priority: string;
+            task_type: string;
+            ref_type?: string | null;
+            ref_id?: string | null;
+            research_case_id?: string | null;
+            assignee?: string | null;
+            created_at: string;
+            due_at?: string | null;
+        };
+        /** ThesisJudgementCardDTO */
+        ThesisJudgementCardDTO: {
+            thesis_id: string;
+            statement: string;
+            conclusion: "supported" | "contradicted" | "insufficient_evidence" | "unreviewed";
+            rationale?: string | null;
+            provisional?: boolean;
+            review?: components["schemas"]["ReviewDecisionDTO"] | null;
+            support_condition?: string | null;
+            falsification_condition?: string | null;
+            next_verification_event?: string | null;
+            evidence_counts: { [key: string]: number };
+            gaps: string[];
+            next_action?: string | null;
+            blocking_reason?: string | null;
+            responsible?: string | null;
         };
         /** UpdateThemeTagsRequest */
         UpdateThemeTagsRequest: {

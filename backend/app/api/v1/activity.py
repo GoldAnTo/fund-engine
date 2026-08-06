@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -19,8 +20,10 @@ from app.repositories.operational import TaskRepository
 from app.schemas.v1.operational import (
     ActivityItemDTO,
     ActivityResponse,
+    TaskCreateRequest,
     TaskItemDTO,
     TasksResponse,
+    TaskUpdateRequest,
 )
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
@@ -79,6 +82,60 @@ def get_evidence_changes(
     next_cursor = items[-1].event_id if has_more else None
     return ActivityResponse(items=items, next_cursor=next_cursor, has_more=has_more)
 
+
+@router.post("/tasks", response_model=TaskItemDTO, status_code=status.HTTP_201_CREATED)
+def create_task(
+    payload: TaskCreateRequest,
+    db: Session = Depends(get_db),
+):
+    repo = TaskRepository(db)
+    task = repo.add_task(
+        title=payload.title,
+        description=payload.description,
+        task_type=payload.task_type,
+        priority=payload.priority,
+        ref_type=payload.ref_type,
+        ref_id=uuid.UUID(payload.ref_id) if payload.ref_id else None,
+        research_case_id=(
+            uuid.UUID(payload.research_case_id) if payload.research_case_id else None
+        ),
+        assignee=payload.assignee,
+    )
+    db.commit()
+    return _task_to_dto(task)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskItemDTO)
+def update_task(
+    task_id: uuid.UUID,
+    payload: TaskUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    repo = TaskRepository(db)
+    task = repo.get_task(task_id)
+    if task is None:
+        from app.errors import NotFoundError
+        raise NotFoundError(f"task {task_id} not found")
+    repo.set_status(task, status=payload.status, assignee=payload.assignee)
+    db.commit()
+    return _task_to_dto(task)
+
+
+def _task_to_dto(task) -> TaskItemDTO:
+    return TaskItemDTO(
+        id=str(task.id),
+        title=task.title,
+        description=task.description,
+        status=task.status,
+        priority=task.priority,
+        task_type=task.task_type,
+        ref_type=task.ref_type,
+        ref_id=str(task.ref_id) if task.ref_id else None,
+        research_case_id=str(task.research_case_id) if task.research_case_id else None,
+        assignee=task.assignee,
+        created_at=task.created_at.isoformat(),
+        due_at=task.due_at.isoformat() if task.due_at else None,
+    )
 
 @router.get("/tasks", response_model=TasksResponse)
 def get_tasks(

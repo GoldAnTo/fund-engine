@@ -26,7 +26,7 @@ from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.proposals import ProposalReviewDecision
 from app.queries.review_queue import ReviewQueueQueries
-from app.repositories.operational import ReviewAssignmentRepository
+from app.repositories.operational import ReviewAssignmentRepository, TaskRepository
 from app.repositories.proposals import ProposalRepository
 from app.schemas.v1.operational import (
     ActivityItemDTO,
@@ -164,6 +164,12 @@ def _decide(
         str(published.evidence_link_id)
         if published is not None and hasattr(published, "evidence_link_id")
         else None
+    )
+
+    TaskRepository(db).close_review_task(
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=proposal_id,
     )
     return decision, published_id
 

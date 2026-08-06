@@ -112,6 +112,21 @@ class DerivedFromDTO(V1Model):
     disclosure_ids: list[uuid.UUID]
 
 
+class ThemeExpressionCandidateDTO(V1Model):
+    stock_id: uuid.UUID
+    stock_code: str
+    stock_name: str
+    company_role: str
+    thesis_ids: list[uuid.UUID]
+    support_status: Literal["supported", "insufficient_evidence", "contradicted", "unreviewed"]
+    valuation: list[ValuationViewDTO] = []
+    holding_count: int = 0
+    latest_report_period: str | None = None
+    freshness: Literal["fresh", "stale", "missing"] = "missing"
+    constraints: list[str] = []
+    match_explanation: str
+
+
 class ThemeViewResponse(V1Model):
     schema_version: Literal["v1"] = "v1"
     basis: HistoricalBasisDTO
@@ -119,4 +134,5 @@ class ThemeViewResponse(V1Model):
     cases: list[ThemeCaseDTO]
     company_roles: list[ThemeCompanyRoleDTO]
     fund_exposure: list[ThemeExposurePositionDTO]
+    expression_candidates: list[ThemeExpressionCandidateDTO] = []
     derived_from: DerivedFromDTO

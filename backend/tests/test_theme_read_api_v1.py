@@ -62,6 +62,19 @@ def test_theme_view_sections_and_derived_from(
     assert exposure[0]["fund_code"] == "001001"
     assert exposure[0]["stock_code"] == "600519.SH"
 
+    candidates = payload["expression_candidates"]
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["stock_code"] == "600519.SH"
+    assert candidate["stock_name"] == "Mapped Corp"
+    assert candidate["company_role"] == roles[0]["role"]
+    assert candidate["thesis_ids"] == [str(workbench_case.thesis.id)]
+    assert candidate["support_status"] == "unreviewed"
+    assert candidate["holding_count"] == 1
+    assert candidate["freshness"] in {"fresh", "stale"}
+    assert candidate["valuation"]
+    assert "不是买入建议" in candidate["match_explanation"]
+
     derived = payload["derived_from"]
     assert derived["case_ids"] == [str(workbench_case.case.id)]
     assert derived["thesis_ids"] == [str(workbench_case.thesis.id)]

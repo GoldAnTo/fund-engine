@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.models.ledger import EvidenceLink
 from app.models.proposals import Proposal, ProposalReviewDecision
 from app.models.versions import EvidenceLinkVersion
+from app.repositories.operational import TaskRepository
 
 
 def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
@@ -193,3 +194,82 @@ def test_queue_lists_pending_proposals(cmd_client, cmd_session):
     assert resp.status_code == 200
     assert resp.json()["items"]  # at least one pending
     assert all(item["status"] == "pending" for item in resp.json()["items"])
+
+
+def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
+    """Deciding a proposal marks the matching review task done (any outcome)."""
+    proposal = _seed_proposal(cmd_session)
+    other = _seed_proposal(cmd_session)
+    task_repo = TaskRepository(cmd_session)
+    open_task = task_repo.add_task(
+        title="Review proposal",
+        task_type="review_proposal",
+        status="open",
+        ref_type="proposal",
+        ref_id=proposal.id,
+    )
+    in_progress_other = task_repo.add_task(
+        title="Review other proposal",
+        task_type="review_proposal",
+        status="in_progress",
+        ref_type="proposal",
+        ref_id=other.id,
+    )
+    cmd_session.commit()
+
+    resp = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "rejected",
+            "reason": "not supported",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    cmd_session.refresh(open_task)
+    cmd_session.refresh(in_progress_other)
+    assert open_task.status == "done"
+    # Only the decided proposal's task is closed.
+    assert in_progress_other.status == "in_progress"
+
+    # Idempotent: already-done task stays done and does not raise.
+    already = task_repo.close_review_task(
+        "review_proposal", "proposal", proposal.id
+    )
+    assert already is not None
+    assert already.status == "done"
+    # Missing task is a no-op (no error).
+    assert (
+        task_repo.close_review_task(
+            "review_proposal", "proposal", uuid.uuid4()
+        )
+        is None
+    )
+
+
+def test_confirmed_decision_closes_in_progress_review_task(
+    cmd_client, cmd_session
+):
+    proposal = _seed_proposal(cmd_session)
+    task = TaskRepository(cmd_session).add_task(
+        title="Review proposal",
+        task_type="review_proposal",
+        status="in_progress",
+        ref_type="proposal",
+        ref_id=proposal.id,
+    )
+    cmd_session.commit()
+
+    resp = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "looks correct",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    cmd_session.refresh(task)
+    assert task.status == "done"

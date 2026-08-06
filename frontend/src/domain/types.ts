@@ -191,12 +191,80 @@ export interface EvidenceRecord {
   source_meta?: string;
 }
 
+export interface ThesisJudgementCard {
+  thesis_id: string;
+  statement: string;
+  conclusion: Conclusion | "unreviewed";
+  rationale: string | null;
+  provisional: boolean;
+  review: ReviewDecisionView | null;
+  support_condition: string | null;
+  falsification_condition: string | null;
+  next_verification_event: string | null;
+  evidence_counts: Record<string, number>;
+  gaps: string[];
+  next_action: string | null;
+  blocking_reason: string | null;
+  responsible: string | null;
+}
+
+export interface DossierChange {
+  id: string;
+  event_type: string;
+  aggregate_type: string;
+  summary: string;
+  source: string | null;
+  actor: string | null;
+  occurred_at: string;
+  payload: Record<string, unknown>;
+}
+
+export interface CounterResearchTask {
+  id: string;
+  thesis_id: string;
+  thesis_statement: string;
+  assessment_id: string | null;
+  objective: string;
+  status: "待发起" | "已有反方证据" | "已形成反方";
+  contradicts_count: number;
+  next_action: string;
+}
+
+export type ResearchTaskStatus = "open" | "in_progress" | "done" | "cancelled";
+
+export interface CreateResearchTaskInput {
+  title: string;
+  description?: string;
+  task_type?: string;
+  priority?: string;
+  ref_type?: string;
+  ref_id?: string;
+  research_case_id?: string;
+  assignee?: string;
+}
+
+export interface ResearchTaskItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: ResearchTaskStatus;
+  priority: string;
+  task_type: string;
+  ref_type: string | null;
+  ref_id: string | null;
+  research_case_id: string | null;
+  assignee: string | null;
+  created_at: string;
+  due_at: string | null;
+}
+
 export interface ResearchCaseDossier {
   case: ResearchCaseSummary;
   theses: ResearchCaseSummary[];
   focus_thesis_id: string;
   tabs: string[];
   assessment: ThesisAssessment | null;
+  judgement_card: ThesisJudgementCard | null;
   causal_chain: CausalStepView[];
   evidence: {
     supports: EvidenceRecord[];
@@ -206,6 +274,8 @@ export interface ResearchCaseDossier {
   competitive_explanations: string[];
   gaps: string[];
   log: { id: string; at: string; text: string }[];
+  changes: DossierChange[];
+  counter_research: CounterResearchTask[];
 }
 
 // ── Relationship canvas (Prototype 3) ─────────────────────────────────────
@@ -387,6 +457,8 @@ export interface ResearchClient {
   getReviewQueue(): Promise<ReviewQueueItem[]>;
   search(query: string): Promise<SearchHit[]>;
   getCaseSummaries(): Promise<ResearchCaseSummary[]>;
+  createResearchTask(input: CreateResearchTaskInput): Promise<ResearchTaskItem>;
+  updateResearchTask(taskId: string, status: ResearchTaskStatus, assignee?: string): Promise<ResearchTaskItem>;
   submitReviewDecision(
     itemId: string,
     decision: {

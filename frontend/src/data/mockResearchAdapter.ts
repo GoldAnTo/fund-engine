@@ -9,6 +9,9 @@ import type {
   PageStateErrorKind,
   ResearchCaseDossier,
   ResearchCaseSummary,
+  ResearchTaskItem,
+  ResearchTaskStatus,
+  CreateResearchTaskInput,
   RelationshipGraph,
   DocumentsQuery,
   DossierQuery,
@@ -51,6 +54,8 @@ import type {
   ThemeIndexView,
   ThesisRerunResult,
   ThemeWorkbenchView,
+  ResearchRunDetail,
+  ResearchRunSummary,
   TopicListItem,
   TopicPathNode,
   TopicThesisView,
@@ -406,6 +411,22 @@ const DOSSIER: ResearchCaseDossier = {
     confidence_label: "中高",
     focus_axes: ["政策驱动", "成本下降", "需求扩张", "供应链分化"],
   } satisfies ThesisAssessment,
+  judgement_card: {
+    thesis_id: "t-gpu-demand",
+    statement: "全球新能源车渗透率提升将推动中国供应链盈利中枢上移",
+    conclusion: "supported",
+    rationale: "已有政策、成本和需求证据支持该判断。",
+    provisional: true,
+    review: null,
+    support_condition: "新能源车渗透率持续提升",
+    falsification_condition: "行业投运比例持续低于规划",
+    next_verification_event: "跟踪下一季度行业投运比例",
+    evidence_counts: { supports: 2, contradicts: 1, contextualizes: 0 },
+    gaps: ["缺反证：行业整体投运比例低于规划"],
+    next_action: "补充验证：缺反证：行业整体投运比例低于规划",
+    blocking_reason: "缺反证：行业整体投运比例低于规划",
+    responsible: "Research Team",
+  },
   causal_chain: [
     {
       id: "step-1",
@@ -586,6 +607,30 @@ const DOSSIER: ResearchCaseDossier = {
     "缺头部车企跨城覆盖样本",
     "缺接管率口径下的安全指标",
     "缺保险定价与事故责任划分的现行规范",
+  ],
+  changes: [
+    {
+      id: "chg-1",
+      event_type: "evidence_link_published",
+      aggregate_type: "evidence_link",
+      summary: "新增城市 NOA 商业化证据",
+      source: "工信部官网",
+      actor: "ai:research",
+      occurred_at: "2024-05-20T14:32:00+08:00",
+      payload: { role: "supports" },
+    },
+  ],
+  counter_research: [
+    {
+      id: "counter-t-gpu-demand",
+      thesis_id: "t-gpu-demand",
+      thesis_statement: "全球新能源车渗透率提升将推动中国供应链盈利中枢上移",
+      assessment_id: "a-gpu-1",
+      objective: "缺反证：行业整体投运比例低于规划",
+      status: "已有反方证据",
+      contradicts_count: 1,
+      next_action: "整理反方证据并提交人工复核",
+    },
   ],
   log: [
     {
@@ -2862,6 +2907,25 @@ function applyTopicCutoff(view: TopicView, cutoff: string): TopicView {
 
 // ── Adapter ───────────────────────────────────────────────────────────────
 
+const MOCK_RESEARCH_RUNS: ResearchRunDetail[] = [
+  {
+    id: "run-aic-001",
+    case_id: FIXTURE_CASE_ID,
+    status: "running",
+    stage: "evidence_search",
+    round: 2,
+    stop_reason: null,
+    created_at: "2026-08-05T09:10:00+08:00",
+    next_action: "等待人工审核 2 条提议关系",
+    progress: { tasks_total: 6, tasks_completed: 4, tasks_failed: 1 },
+    evidence: { discovered: 18, accepted: 11, pending: 3 },
+    pending_proposals: [{ id: "proposal-1", thesis_id: "TH-AIC-03", task_id: "task-3", status: "pending" }],
+    review_tasks: [{ id: "review-1", status: "open", task_type: "evidence_link", ref_type: "evidence_link", ref_id: "EL-003" }],
+    gap_tasks: [{ id: "gap-1", status: "open", task_type: "gap", stage: "evidence_search", round: 2, query: "订单到收入的独立披露", evidence_count: 0, gap_reason: "缺少同主体连续披露" }],
+    failed_tasks: [{ id: "failed-1", status: "failed", task_type: "provider_query", stage: "evidence_search", round: 2, query: "历史持仓明细", evidence_count: 0, gap_reason: "权限不足" }],
+  },
+];
+
 export class MockResearchAdapter implements ResearchClient {
   private scenario: MockScenario;
   // mutable per-instance copies for tests that write review decisions.
@@ -2900,6 +2964,46 @@ export class MockResearchAdapter implements ResearchClient {
     this.throwIfOffline();
     if (this.scenario === "empty") return simulateLatency(emptyOverview());
     return simulateLatency(OVERVIEW);
+  }
+
+  async createResearchTask(input: CreateResearchTaskInput): Promise<ResearchTaskItem> {
+    const task: ResearchTaskItem = {
+      id: `mock-task-${Date.now()}`,
+      title: input.title,
+      description: input.description ?? null,
+      status: "open",
+      priority: input.priority ?? "normal",
+      task_type: input.task_type ?? "counter_research",
+      ref_type: input.ref_type ?? null,
+      ref_id: input.ref_id ?? null,
+      research_case_id: input.research_case_id ?? null,
+      assignee: input.assignee ?? null,
+      created_at: new Date().toISOString(),
+      due_at: null,
+    };
+    return simulateLatency(task);
+  }
+
+  async updateResearchTask(
+    taskId: string,
+    status: ResearchTaskStatus,
+    assignee?: string,
+  ): Promise<ResearchTaskItem> {
+    const current = DOSSIER.counter_research[0];
+    return simulateLatency({
+      id: taskId,
+      title: current?.objective ?? "反方研究",
+      description: current?.next_action ?? null,
+      status,
+      priority: "normal",
+      task_type: "counter_research",
+      ref_type: "thesis",
+      ref_id: current?.thesis_id ?? null,
+      research_case_id: "ai-compute",
+      assignee: assignee ?? null,
+      created_at: new Date().toISOString(),
+      due_at: null,
+    });
   }
 
   async getCaseDossier(
@@ -3497,6 +3601,18 @@ export class MockResearchAdapter implements ResearchClient {
     const derived = deriveTopicPathNodes(base);
     // 装饰案例卡片 / 角色行的设计图文案（设计图 9/10 视觉）
     return simulateLatency(decorateTopicView({ ...base, ...derived }));
+  }
+
+  async listResearchRuns(caseId: string): Promise<ResearchRunSummary[]> {
+    this.throwIfOffline();
+    return simulateLatency(MOCK_RESEARCH_RUNS.filter((run) => run.case_id === caseId).map(({ id, status, stage, round, stop_reason, created_at, next_action }) => ({ id, status, stage, round, stop_reason, created_at, next_action })));
+  }
+
+  async getResearchRun(runId: string): Promise<ResearchRunDetail> {
+    this.throwIfOffline();
+    const run = MOCK_RESEARCH_RUNS.find((item) => item.id === runId);
+    if (!run) throw new PageStateError("parse_failed", "研究运行不存在");
+    return simulateLatency(run);
   }
 
   async getConclusionView(

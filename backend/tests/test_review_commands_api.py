@@ -5,6 +5,8 @@ COMMIT, so they never share the session-scoped engine.
 """
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
 
 
@@ -309,8 +311,17 @@ def test_review_missing_link_is_404(cmd_client, cmd_seeded):
 
 def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
     from app.models.ledger import AIAssessment
+    from app.repositories.operational import TaskRepository
 
     assessment = cmd_seeded.scalar(select(AIAssessment))
+    task = TaskRepository(cmd_seeded).add_task(
+        title="Review assessment",
+        task_type="review_assessment",
+        status="in_progress",
+        ref_type="ai_assessment",
+        ref_id=assessment.id,
+    )
+    cmd_seeded.commit()
     response = cmd_client.post(
         f"/api/v1/assessments/{assessment.id}/reviews",
         json={
@@ -322,6 +333,21 @@ def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
     )
     assert response.status_code == 201, response.text
     assert response.json()["outcome"] == "confirmed"
+    cmd_seeded.refresh(task)
+    assert task.status == "done"
+
+    # Idempotent: re-closing a done task (or a missing one) is a no-op.
+    task_repo = TaskRepository(cmd_seeded)
+    closed = task_repo.close_review_task(
+        "review_assessment", "ai_assessment", assessment.id
+    )
+    assert closed is not None and closed.status == "done"
+    assert (
+        task_repo.close_review_task(
+            "review_assessment", "ai_assessment", uuid.uuid4()
+        )
+        is None
+    )
 
 
 def test_assessment_review_missing_is_404(cmd_client, cmd_seeded):
@@ -331,3 +357,31 @@ def test_assessment_review_missing_is_404(cmd_client, cmd_seeded):
     )
     assert response.status_code == 404
     assert _error_code(response) == "not_found"
+
+
+def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
+    from app.models.ledger import AIAssessment
+    from app.repositories.operational import TaskRepository
+
+    assessment = cmd_seeded.scalar(select(AIAssessment))
+    task = TaskRepository(cmd_seeded).add_task(
+        title="Confirm provisional assessment",
+        task_type="review_assessment",
+        status="open",
+        ref_type="ai_assessment",
+        ref_id=assessment.id,
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/assessments/{assessment.id}/reviews",
+        json={
+            "outcome": "confirmed",
+            "conclusion": assessment.conclusion,
+            "reason": "人工确认",
+            "reviewer": "reviewer-test",
+        },
+    )
+    assert response.status_code == 201, response.text
+    cmd_seeded.refresh(task)
+    assert task.status == "done"

@@ -3,7 +3,6 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResearchCaseDossierPage } from "../pages/ResearchCaseDossierPage";
 import {
-  resetResearchClient,
   setResearchClient,
 } from "../data/researchClient";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
@@ -13,7 +12,7 @@ function renderDossier(scenario?: "insufficient" | "empty" | "offline") {
   if (scenario) {
     setResearchClient(new MockResearchAdapter({ scenario }));
   } else {
-    resetResearchClient();
+    setResearchClient(new MockResearchAdapter());
   }
   return renderWithAppShell(<ResearchCaseDossierPage />, {
     initialEntries: ["/cases/ai-compute"],

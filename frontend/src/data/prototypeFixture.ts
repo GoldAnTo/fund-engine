@@ -2636,6 +2636,18 @@ function aiComputeTheme(): ThemeWorkbenchView {
       { code: "002230.SZ", name: "科大讯飞", relation: "customer", side: "downstream" },
       { code: "000977.SZ", name: "浪潮信息", relation: "customer", side: "downstream" },
     ],
+    counterResearch: [
+      {
+        id: "counter-ai-capex",
+        thesis_id: "h-2",
+        thesis_statement: "上游供给：高景气可承接",
+        assessment_id: null,
+        objective: "验证 CoWoS 扩产是否足以覆盖需求",
+        status: "已有反方证据",
+        contradicts_count: 3,
+        next_action: "补充主要厂商产能与交付周期数据",
+      },
+    ],
     conflictCount: 5,
   };
 }
@@ -2781,6 +2793,18 @@ function cityNoaTheme(): ThemeWorkbenchView {
       { code: "002230.SZ", name: "科大讯飞", relation: "supplies", side: "upstream" },
       { code: "9868.HK", name: "小鹏汽车", relation: "customer", side: "downstream" },
       { code: "601633.SH", name: "长城汽车", relation: "competes", side: "competitor" },
+    ],
+    counterResearch: [
+      {
+        id: "counter-noa-capex",
+        thesis_id: "h-2",
+        thesis_statement: "技术方案收敛到纯视觉 + 端到端",
+        assessment_id: null,
+        objective: "验证端到端方案在复杂城市路况的失效率",
+        status: "待发起",
+        contradicts_count: 0,
+        next_action: "寻找独立道路测试与事故样本",
+      },
     ],
     conflictCount: 3,
   };

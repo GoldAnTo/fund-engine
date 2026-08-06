@@ -92,6 +92,42 @@ def test_dossier_selects_requested_thesis_and_returns_visible_evidence(
     assert "ready_for_review" not in payload
 
 
+def test_dossier_returns_case_change_ledger(api_client, workbench_case, session):
+    from app.repositories.outbox import emit_event
+
+    emit_event(
+        session,
+        type="evidence_link_published",
+        aggregate_type="evidence_link",
+        aggregate_id=str(workbench_case.case.id),
+        payload={"summary": "新增可审计证据", "research_case_id": str(workbench_case.case.id)},
+        actor="human:reviewer",
+        origin="ledger",
+    )
+    emit_event(
+        session,
+        type="evidence_link_published",
+        aggregate_type="evidence_link",
+        aggregate_id="00000000-0000-0000-0000-000000000000",
+        payload={
+            "summary": "其他案例事件",
+            "research_case_id": "00000000-0000-0000-0000-000000000000",
+        },
+        actor="human:other",
+        origin="ledger",
+    )
+    session.flush()
+
+    response = api_client.get(
+        f"/api/v1/research-cases/{workbench_case.case.id}/dossier",
+        params={"research_mode": "true"},
+    )
+    assert response.status_code == 200
+    changes = response.json()["changes"]
+    assert any(item["summary"] == "新增可审计证据" for item in changes)
+    assert not any(item["summary"] == "其他案例事件" for item in changes)
+
+
 def test_dossier_hides_machine_generated_evidence_by_default(
     api_client, workbench_case
 ):
@@ -102,6 +138,10 @@ def test_dossier_hides_machine_generated_evidence_by_default(
     )
     assert default.status_code == 200
     assert default.json()["evidence"]["supports"] == []
+    counter = default.json()["counter_research"]
+    assert counter[0]["thesis_id"] == str(workbench_case.thesis.id)
+    assert counter[0]["contradicts_count"] == 0
+    assert counter[0]["status"] == "待发起"
 
     research = api_client.get(
         f"/api/v1/research-cases/{workbench_case.case.id}/dossier",

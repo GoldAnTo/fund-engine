@@ -7,7 +7,6 @@ import {
   Routes,
   useParams,
 } from "react-router-dom";
-import { AppShell } from "./components/AppShell";
 import { PrototypeShell } from "./components/PrototypeShell";
 import { setResearchClient } from "./data/researchClient";
 import { MockResearchAdapter } from "./data/mockResearchAdapter";
@@ -18,12 +17,6 @@ import { MockResearchAdapter } from "./data/mockResearchAdapter";
 if (new URLSearchParams(window.location.search).get("client") === "mock") {
   setResearchClient(new MockResearchAdapter());
 }
-import { ResearchCaseDossierPage } from "./pages/ResearchCaseDossierPage";
-import { RelationshipCanvasPage } from "./pages/RelationshipCanvasPage";
-import { DocumentLibraryPage } from "./pages/DocumentLibraryPage";
-import { ReviewWorkbenchPage } from "./pages/ReviewWorkbenchPage";
-import { ResearchWorkbenchPage } from "./pages/ResearchWorkbenchPage";
-import { NotImplementedPage } from "./pages/NotImplementedPage";
 import { OverviewScreen } from "./pages/prototype/OverviewScreen";
 import { NewResearchScreen } from "./pages/prototype/NewResearchScreen";
 import { ResearchPlanScreen } from "./pages/prototype/ResearchPlanScreen";
@@ -37,6 +30,7 @@ import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
 import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
 import { ConclusionScreen } from "./pages/prototype/ConclusionScreen";
 import { CompanyListPage } from "./pages/prototype/CompanyListPage";
+import { AutoResearchRunsScreen } from "./pages/prototype/AutoResearchRunsScreen";
 import { TopicListPage } from "./pages/prototype/TopicListPage";
 import "./styles.css";
 import "./styles-prototype.css";
@@ -45,13 +39,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* Prototype shell — Theme 一等公民下的工作流：
-            主题列表 → 主题详情（认知假设 + 证据 + 穿透） → 子流程。 */}
         <Route element={<PrototypeShell />}>
-          <Route index element={<ThemeIndexScreen />} />
+          <Route index element={<Navigate to="/workspace" replace />} />
           <Route path="themes" element={<ThemeIndexScreen />} />
           <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
           <Route path="workspace" element={<OverviewScreen />} />
+          <Route path="auto-research/runs" element={<AutoResearchRunsScreen />} />
+          <Route path="auto-research/runs/:runId" element={<AutoResearchRunsScreen />} />
           <Route path="new-research" element={<NewResearchScreen />} />
           <Route path="plan" element={<ResearchPlanScreen />} />
           <Route
@@ -82,67 +76,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             path="topics/:tag"
             element={<TopicViewRedirect />}
           />
-          {/* 未匹配路由兜底：旧链接/书签（如 /cases/:id/graph）不再渲染
-              空白页，回到主题入口。React Router 按特异性排序，* 优先级
-              最低，不会吞掉下方 legacy 路由。 */}
           <Route path="*" element={<Navigate to="/themes" replace />} />
-        </Route>
-
-        {/* Legacy app shell — keeps old entry points working for transitional traffic. */}
-        <Route element={<AppShell />}>
-          <Route
-            path="legacy/dossier/:caseId"
-            element={<LegacyDossierRoute />}
-          />
-          <Route
-            path="legacy/graph/:caseId"
-            element={<LegacyGraphRoute />}
-          />
-          <Route path="legacy/documents" element={<DocumentLibraryPage />} />
-          <Route path="legacy/review" element={<ReviewWorkbenchPage />} />
-          <Route
-            path="macro"
-            element={
-              <NotImplementedPage
-                title="宏观与政策"
-                hint="宏观周期、利率与政策事件的研究追踪模块正在搭建。"
-              />
-            }
-          />
-          <Route
-            path="monitor"
-            element={
-              <NotImplementedPage
-                title="监测中心"
-                hint="实时事件监测面板正在搭建。"
-              />
-            }
-          />
-          <Route
-            path="workbench/:caseId"
-            element={<LegacyWorkbenchRoute />}
-          />
         </Route>
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,
 );
-
-// Legacy workbench keeps working inside the new shell for transitional traffic.
-function LegacyWorkbenchRoute() {
-  const params = new URLSearchParams(window.location.search);
-  return <ResearchWorkbenchPage caseId={params.get("case") ?? "ai-compute"} />;
-}
-
-// Old research-case dossier lives behind /legacy/dossier/:caseId.
-function LegacyDossierRoute() {
-  return <ResearchCaseDossierPage />;
-}
-
-// Old relationship canvas lives behind /legacy/graph/:caseId.
-function LegacyGraphRoute() {
-  return <RelationshipCanvasPage />;
-}
 
 // /companies/:id → /companies?id=...（设计图 10 视觉在 /companies 主路由）
 function CompanyDossierRedirect() {

@@ -245,3 +245,41 @@ class ProjectionCheckpoint(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+# --------------------------------------------------------------------------- #
+# Automatic research orchestration
+# --------------------------------------------------------------------------- #
+class ResearchRun(Base):
+    __tablename__ = "research_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="planning")
+    round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    budget: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    budget_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ResearchTask(Base):
+    __tablename__ = "research_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_runs.id"), nullable=False)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)
+    thesis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("theses.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    round: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gap_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

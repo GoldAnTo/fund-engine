@@ -6,6 +6,7 @@ import { PaperCard } from "../../components/prototype/PaperCard";
 import { StatusBadge } from "../../components/prototype/StatusBadge";
 import type {
   TopicCaseView,
+  TopicExpressionCandidate,
   TopicThesisView,
   TopicView,
 } from "../../domain/prototypeTypes";
@@ -335,6 +336,24 @@ export function TopicViewPage() {
               </p>
             )}
           </PaperCard>
+
+          <PaperCard data-testid="topic-view-expression-candidates">
+            <p className="section-kicker">
+              表达候选 ({view.expressionCandidates?.length ?? 0})
+            </p>
+            <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+              这不是买入建议。每个候选只回答：为什么这个股票/基金可映射当前认知、约束是什么、估值与持仓是否可复核。
+            </p>
+            {(view.expressionCandidates?.length ?? 0) === 0 ? (
+              <p className="muted">暂无表达候选</p>
+            ) : (
+              <div className="topic-expression-list">
+                {(view.expressionCandidates ?? []).map((c) => (
+                  <ExpressionCandidateCard key={c.stockId} candidate={c} />
+                ))}
+              </div>
+            )}
+          </PaperCard>
         </section>
 
         <aside className="topic-view__side">
@@ -372,6 +391,76 @@ export function TopicViewPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function ExpressionCandidateCard({
+  candidate,
+}: {
+  candidate: TopicExpressionCandidate;
+}) {
+  const supportLabel =
+    candidate.supportStatus === "supported"
+      ? "已支持"
+      : candidate.supportStatus === "contradicted"
+        ? "有反证"
+        : candidate.supportStatus === "insufficient_evidence"
+          ? "证据不足"
+          : "未复核";
+  const supportVariant =
+    candidate.supportStatus === "supported"
+      ? "support"
+      : candidate.supportStatus === "contradicted"
+        ? "contradict"
+        : candidate.supportStatus === "insufficient_evidence"
+          ? "warning"
+          : "ai";
+  const freshnessLabel =
+    candidate.freshness === "fresh"
+      ? "持仓新鲜"
+      : candidate.freshness === "stale"
+        ? "持仓偏旧"
+        : "缺持仓";
+  return (
+    <article className="topic-expression-card" data-testid={`topic-expression-${candidate.stockId}`}>
+      <div className="topic-expression-card__head">
+        <strong>
+          {candidate.stockName}
+          <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+            {candidate.stockCode}
+          </span>
+        </strong>
+        <span style={{ display: "inline-flex", gap: 4 }}>
+          <StatusBadge variant={supportVariant}>{supportLabel}</StatusBadge>
+          <StatusBadge variant={candidate.freshness === "fresh" ? "reviewed" : "warning"}>
+            {freshnessLabel}
+          </StatusBadge>
+        </span>
+      </div>
+      <p style={{ fontSize: 12, margin: "6px 0" }}>
+        角色：{candidate.companyRole} · 持仓披露 {candidate.holdingCount} 条
+        {candidate.latestReportPeriod ? ` · 最近报告期 ${candidate.latestReportPeriod}` : ""}
+      </p>
+      {(candidate.valuation?.length ?? 0) > 0 && (
+        <div className="topic-valuation-inline">
+          {candidate.valuation.map((v) => (
+            <span key={`${v.stockCode}-${v.metricName}-${v.asOfDate}`}>
+              {v.metricName} {v.metricValue} · {v.asOfDate}
+            </span>
+          ))}
+        </div>
+      )}
+      <p style={{ fontSize: 11, lineHeight: 1.55, margin: "6px 0" }}>
+        {candidate.matchExplanation}
+      </p>
+      {candidate.constraints.length > 0 && (
+        <ul className="topic-expression-constraints">
+          {candidate.constraints.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      )}
+    </article>
   );
 }
 

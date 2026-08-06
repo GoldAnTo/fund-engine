@@ -135,6 +135,8 @@ class StubAdapter implements ResearchClient {
   search = vi.fn();
   getCaseSummaries = vi.fn();
   submitReviewDecision = vi.fn();
+  createResearchTask = vi.fn();
+  updateResearchTask = vi.fn();
   getWorkspaceOverviewView = vi.fn();
   getWorkspaceOverviewScreen = vi.fn();
   getNewResearchView = vi.fn();
@@ -160,6 +162,8 @@ class StubAdapter implements ResearchClient {
   getCompanyDossier = vi.fn();
   listThemes = vi.fn();
   getThemeView = vi.fn();
+  listResearchRuns = vi.fn();
+  getResearchRun = vi.fn();
 }
 
 describe("ConclusionScreen", () => {

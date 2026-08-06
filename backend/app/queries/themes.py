@@ -45,6 +45,7 @@ from app.schemas.v1.themes import (
     ThemeCompanyRoleDTO,
     ThemeEvidenceSummaryDTO,
     ThemeExposurePositionDTO,
+    ThemeExpressionCandidateDTO,
     ThemeListItemDTO,
     ThemeListResponse,
     ThemeViewResponse,
@@ -151,6 +152,12 @@ class ThemeReadQueries:
         fund_exposure, disclosure_ids = self._fund_exposure(
             company_roles, basis=basis
         )
+        expression_candidates = self._expression_candidates(
+            company_roles=company_roles,
+            cases=cases,
+            fund_exposure=fund_exposure,
+            as_of=as_of,
+        )
 
         return ThemeViewResponse(
             basis=basis.to_dto(),
@@ -158,6 +165,7 @@ class ThemeReadQueries:
             cases=cases,
             company_roles=company_roles,
             fund_exposure=fund_exposure,
+            expression_candidates=expression_candidates,
             derived_from=DerivedFromDTO(
                 case_ids=visible_case_ids,
                 thesis_ids=thesis_ids,
@@ -409,3 +417,134 @@ class ThemeReadQueries:
             )
         positions.sort(key=lambda p: (p.fund_code, -p.weight))
         return positions, [d.id for d in latest.values()]
+
+    def _expression_candidates(
+        self,
+        *,
+        company_roles: list[ThemeCompanyRoleDTO],
+        cases: list[ThemeCaseDTO],
+        fund_exposure: list[ThemeExposurePositionDTO],
+        as_of,
+    ) -> list[ThemeExpressionCandidateDTO]:
+        """Derive stock-level expression candidates from existing theme data.
+
+        Not a recommendation. Each candidate is an auditable mapping from a
+        company/theme-role into a stock expression with valuation, holding
+        freshness, constraints, and an explicit match explanation.
+        """
+        thesis_status: dict[uuid.UUID, str] = {}
+        for case in cases:
+            for thesis in case.theses:
+                if thesis.review and thesis.review.outcome == "rejected":
+                    thesis_status[thesis.thesis_id] = "unreviewed"
+                elif thesis.review and thesis.review.outcome == "modified" and thesis.review.conclusion:
+                    thesis_status[thesis.thesis_id] = thesis.review.conclusion
+                elif thesis.review and thesis.review.outcome == "confirmed":
+                    thesis_status[thesis.thesis_id] = (
+                        thesis.ai_assessment.conclusion
+                        if thesis.ai_assessment
+                        else "unreviewed"
+                    )
+                else:
+                    # AI-only judgments stay visibly unreviewed at expression time.
+                    thesis_status[thesis.thesis_id] = "unreviewed"
+
+        holdings_by_stock: dict[uuid.UUID, list[ThemeExposurePositionDTO]] = {}
+        for position in fund_exposure:
+            holdings_by_stock.setdefault(position.stock_id, []).append(position)
+
+        candidates: list[ThemeExpressionCandidateDTO] = []
+        seen_stocks: set[uuid.UUID] = set()
+        for role in company_roles:
+            stocks = self._instruments.stocks_for_companies([role.company_id])
+            related_thesis_ids = [
+                thesis.thesis_id
+                for case in cases
+                if role.case_id is None or case.case_id == role.case_id
+                for thesis in case.theses
+            ]
+            statuses = [thesis_status.get(tid, "unreviewed") for tid in related_thesis_ids]
+            if any(status == "contradicted" for status in statuses):
+                support_status = "contradicted"
+            elif any(status == "supported" for status in statuses):
+                support_status = "supported"
+            elif any(status == "insufficient_evidence" for status in statuses):
+                support_status = "insufficient_evidence"
+            else:
+                support_status = "unreviewed"
+
+            for stock in stocks:
+                if stock.id in seen_stocks:
+                    continue
+                seen_stocks.add(stock.id)
+                stock_valuations = [
+                    value
+                    for value in role.valuations
+                    if value.stock_id == stock.id
+                ]
+                holdings = holdings_by_stock.get(stock.id, [])
+                latest_period = max((h.report_period for h in holdings), default=None)
+                if latest_period is None:
+                    freshness = "missing"
+                else:
+                    try:
+                        period_date = datetime.fromisoformat(latest_period).date()
+                    except ValueError:
+                        period_date = as_of
+                    age_days = (as_of - period_date).days
+                    freshness = "fresh" if age_days <= 180 else "stale"
+
+                constraints: list[str] = []
+                if support_status == "contradicted":
+                    constraints.append("关联命题存在已确认反向判断，不能仅因主题角色直接表达")
+                if support_status == "insufficient_evidence":
+                    constraints.append("关键命题证据不足，表达仅可作为观察候选")
+                if support_status == "unreviewed":
+                    constraints.append("命题尚未完成人工复核，表达状态仍为临时")
+                if not stock_valuations:
+                    constraints.append("缺少可展示估值，无法判断‘现在多贵’")
+                if freshness == "missing":
+                    constraints.append("缺少公开基金持仓披露，主题暴露不可复核")
+                elif freshness == "stale":
+                    constraints.append("最新持仓披露超过约180天，新鲜度不足")
+
+                pe_text = next(
+                    (
+                        f"{v.metric_name}={v.metric_value}@{v.as_of_date}"
+                        for v in stock_valuations
+                        if "PE" in v.metric_name.upper()
+                    ),
+                    "估值缺失",
+                )
+                match_explanation = (
+                    f"{stock.name} 作为主题角色「{role.role}」进入表达候选；"
+                    f"关联命题支持状态={support_status}；"
+                    f"估值口径={pe_text}；"
+                    f"基金披露持仓={len(holdings)} 条，新鲜度={freshness}。"
+                    " 这不是买入建议，只是把研究判断映射到可审计的表达标的。"
+                )
+                candidates.append(
+                    ThemeExpressionCandidateDTO(
+                        stock_id=stock.id,
+                        stock_code=stock.code,
+                        stock_name=stock.name,
+                        company_role=role.role,
+                        thesis_ids=related_thesis_ids,
+                        support_status=support_status,
+                        valuation=stock_valuations,
+                        holding_count=len(holdings),
+                        latest_report_period=latest_period,
+                        freshness=freshness,
+                        constraints=constraints,
+                        match_explanation=match_explanation,
+                    )
+                )
+
+        rank = {
+            "supported": 0,
+            "insufficient_evidence": 1,
+            "unreviewed": 2,
+            "contradicted": 3,
+        }
+        candidates.sort(key=lambda c: (rank.get(c.support_status, 9), c.stock_code))
+        return candidates

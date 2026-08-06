@@ -870,6 +870,7 @@ export interface ThemeWorkbenchView {
   funds: ThemeFund[];
   chain: ThemeChainLink[];
   conflictCount: number;
+  counterResearch: import("./types").CounterResearchTask[];
 }
 
 // ── Adapter extensions ───────────────────────────────────────────────────
@@ -886,6 +887,7 @@ export interface CreateCaseInput {
   coreQuestion?: string;
   periodStart?: string;
   periodEnd?: string;
+  evidenceCutoff?: string;
   theses: {
     statement: string;
     title?: string;
@@ -1025,6 +1027,42 @@ export interface ConclusionView {
   gapExplanation: ConclusionGapExplanation;
 }
 
+export interface ResearchRunSummary {
+  id: string;
+  status: string;
+  stage: string;
+  round: number;
+  stop_reason: string | null;
+  created_at: string;
+  next_action: string;
+}
+
+export interface ResearchRunTask {
+  id: string;
+  status: string;
+  task_type: string;
+  stage?: string;
+  round?: number;
+  query?: string;
+  evidence_count?: number;
+  gap_reason?: string | null;
+}
+
+export interface ResearchRunDetail extends ResearchRunSummary {
+  case_id: string;
+  progress: Record<string, number>;
+  evidence: Record<string, number>;
+  pending_proposals: { id: string; thesis_id: string | null; task_id: string | null; status: string }[];
+  review_tasks: { id: string; status: string; task_type: string; ref_type: string | null; ref_id: string | null }[];
+  gap_tasks: ResearchRunTask[];
+  failed_tasks: ResearchRunTask[];
+}
+
+export interface AutoResearchClient {
+  listResearchRuns(caseId: string): Promise<ResearchRunSummary[]>;
+  getResearchRun(runId: string): Promise<ResearchRunDetail>;
+}
+
 export interface PrototypeClient {
   getWorkspaceOverviewView(): Promise<WorkspaceOverviewView>;
   getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen>;
@@ -1055,6 +1093,7 @@ export interface PrototypeClient {
 }
 
 export type ResearchClient = BaseResearchClient &
+  AutoResearchClient &
   PrototypeClient &
   ReviewQueueClient &
   VersionsClient &
@@ -1403,6 +1442,29 @@ export interface TopicExposurePosition {
   source: string;
 }
 
+export interface TopicExpressionCandidate {
+  stockId: string;
+  stockCode: string;
+  stockName: string;
+  companyRole: string;
+  thesisIds: string[];
+  supportStatus: "supported" | "insufficient_evidence" | "contradicted" | "unreviewed";
+  valuation: Array<{
+    stockId: string;
+    stockCode: string;
+    metricName: string;
+    metricValue: number;
+    asOfDate: string;
+    source: string;
+    definition: string;
+  }>;
+  holdingCount: number;
+  latestReportPeriod: string | null;
+  freshness: "fresh" | "stale" | "missing";
+  constraints: string[];
+  matchExplanation: string;
+}
+
 // 主题关系路径：5 节点链，固定证据→命题→公司角色→股票映射→基金披露。
 // 每个节点都是"可点击回链"——左栏主题目录选中主题后，主区底部展示路径。
 export interface TopicPathNode {
@@ -1419,6 +1481,7 @@ export interface TopicView {
   cases: TopicCaseView[];
   companyRoles: TopicCompanyRoleView[];
   fundExposure: TopicExposurePosition[];
+  expressionCandidates?: TopicExpressionCandidate[];
   // 关系路径（设计图 9 底部 5 节点链），可由 mock 适配器自动派生
   pathNodes?: TopicPathNode[];
   // 当前主题内被右栏检查器锁定的命题（默认第一条 ai_pending / contradicted）

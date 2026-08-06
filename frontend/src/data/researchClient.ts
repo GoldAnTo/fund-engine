@@ -32,6 +32,9 @@ export const researchClient: ResearchClient = {
   getReviewQueue: () => _client.getReviewQueue(),
   search: (q) => _client.search(q),
   getCaseSummaries: () => _client.getCaseSummaries(),
+  createResearchTask: (input) => _client.createResearchTask(input),
+  updateResearchTask: (taskId, status, assignee) =>
+    _client.updateResearchTask(taskId, status, assignee),
   submitReviewDecision: (itemId, decision) =>
     _client.submitReviewDecision(itemId, decision),
   getWorkspaceOverviewView: () => _client.getWorkspaceOverviewView(),
@@ -68,6 +71,8 @@ export const researchClient: ResearchClient = {
   listThemes: () => _client.listThemes(),
   getThemeView: (tag, opts) => _client.getThemeView(tag, opts),
   getConclusionView: (caseId, opts) => _client.getConclusionView(caseId, opts),
+  listResearchRuns: (caseId) => _client.listResearchRuns(caseId),
+  getResearchRun: (runId) => _client.getResearchRun(runId),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

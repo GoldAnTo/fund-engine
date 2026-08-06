@@ -123,6 +123,22 @@ class ActivityResponse(V1Model):
 # --------------------------------------------------------------------------- #
 # Tasks
 # --------------------------------------------------------------------------- #
+class TaskCreateRequest(V1Model):
+    title: str
+    description: str | None = None
+    task_type: str = "counter_research"
+    priority: str = "normal"
+    ref_type: str | None = None
+    ref_id: str | None = None
+    research_case_id: str | None = None
+    assignee: str | None = None
+
+
+class TaskUpdateRequest(V1Model):
+    status: Literal["open", "in_progress", "done", "cancelled"]
+    assignee: str | None = None
+
+
 class TaskItemDTO(V1Model):
     id: str
     title: str

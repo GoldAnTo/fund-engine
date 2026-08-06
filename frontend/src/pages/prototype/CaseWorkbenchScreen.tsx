@@ -252,6 +252,12 @@ export function CaseWorkbenchScreen() {
               </button>
               <Link
                 className="prototype-button"
+                to={`/plan?caseId=${encodeURIComponent(selectedCaseId)}`}
+              >
+                研究计划 →
+              </Link>
+              <Link
+                className="prototype-button"
                 to={`/relationships/${selectedCaseId}`}
               >
                 证据图谱 →

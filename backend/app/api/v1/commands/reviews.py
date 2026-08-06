@@ -10,6 +10,7 @@ from app.api.v1.commands.common import commit_or_rollback, translate_validation
 from app.db import get_db
 from app.errors import NotFoundError
 from app.queries.review_queue import ReviewQueueQueries
+from app.repositories.operational import TaskRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.commands import (
     AssessmentReviewRequest,
@@ -89,6 +90,11 @@ def review_assessment(
         conclusion=payload.conclusion,
         reason=payload.reason,
         reviewer=payload.reviewer,
+    )
+    TaskRepository(db).close_review_task(
+        task_type="review_assessment",
+        ref_type="ai_assessment",
+        ref_id=assessment_id,
     )
     commit_or_rollback(db)
     return AssessmentReviewResponse(

@@ -11,10 +11,11 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/themes", label: "主题", icon: "⏚", group: "primary" },
+  { to: "/workspace", label: "研究总览", icon: "⌂", group: "primary" },
+  { to: "/auto-research/runs", label: "自动研究运行", icon: "▶", group: "primary" },
+  { to: "/new-research", label: "开始研究", icon: "＋", group: "primary" },
+  { to: "/themes", label: "主题库", icon: "⏚", group: "primary" },
   { to: "/topics", label: "主题研究", icon: "✦", group: "primary" },
-  { to: "/workspace", label: "工作台", icon: "⌂", group: "primary" },
-  { to: "/new-research", label: "新建研究", icon: "⌬", group: "primary" },
   { to: "/relationships", label: "证据图谱", icon: "⧉", group: "primary" },
   { to: "/companies", label: "公司研究", icon: "◉", group: "primary" },
   { to: "/conclusion", label: "结论与关键因素", icon: "✱", group: "primary" },
@@ -36,6 +37,7 @@ const SHELL_CONTEXT: Record<string, [string, string]> = {
   themes: ["主题驱动", "主题列表"],
   topics: ["主题研究", "横切主题"],
   workspace: ["研究工作台", "研究总览"],
+  "auto-research": ["自动研究", "运行列表"],
   "new-research": ["主题驱动", "新建主题"],
   relationships: ["主题驱动", "证据图谱"],
   companies: ["公司研究", "公司深度"],
@@ -56,7 +58,8 @@ interface ActivePath {
 function resolveActive(pathname: string): ActivePath {
   if (pathname.startsWith("/themes")) return { primary: "/themes", label: "主题", module: "主题驱动", page: "主题列表" };
   if (pathname.startsWith("/topics")) return { primary: "/topics", label: "主题研究", module: "主题研究", page: "横切主题" };
-  if (pathname.startsWith("/workspace")) return { primary: "/workspace", label: "工作台", module: "研究工作台", page: "研究总览" };
+  if (pathname.startsWith("/auto-research")) return { primary: "/auto-research/runs", label: "自动研究运行", module: "自动研究", page: "运行列表" };
+  if (pathname.startsWith("/workspace")) return { primary: "/workspace", label: "研究总览", module: "研究工作台", page: "研究总览" };
   if (pathname.startsWith("/new-research")) return { primary: "/new-research", label: "新建研究", module: "主题驱动", page: "新建主题" };
   if (pathname.startsWith("/plan")) return { primary: "/plan", label: "研究计划", module: "主题驱动", page: "研究计划" };
   if (pathname.startsWith("/relationships")) return { primary: "/relationships", label: "证据图谱", module: "主题驱动", page: "证据图谱" };

@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { researchClient } from "../data/researchClient";
 import { useResearchQuery } from "../data/useResearchQuery";
-import type { EvidenceRecord, ResearchCaseDossier } from "../domain/types";
+import type {
+  EvidenceRecord,
+  ResearchCaseDossier,
+  ResearchTaskStatus,
+} from "../domain/types";
 import { ResearchCaseNavigator } from "../components/ResearchCaseNavigator";
 import { ResearchCaseHeader } from "../components/ResearchCaseHeader";
 import { ThesisHeader } from "../components/ThesisHeader";
@@ -52,8 +56,36 @@ export function ResearchCaseDossierPage() {
     () => researchClient.getCaseDossier(caseId, { cutoff: cutoff ?? undefined }),
     [caseId, cutoff]
   );
-
+  const [taskBusy, setTaskBusy] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [createdCounterTaskIds, setCreatedCounterTaskIds] = useState<Record<string, string>>({});
   const dossier = dossierState.data;
+
+  async function changeCounterTask(task: ResearchCaseDossier["counter_research"][number], status: ResearchTaskStatus): Promise<void> {
+    setTaskBusy(task.id);
+    setTaskError(null);
+    try {
+      if (status === "open") {
+        const created = await researchClient.createResearchTask({
+          title: `反方研究：${task.objective}`,
+          description: task.next_action,
+          task_type: "counter_research",
+          priority: "high",
+          ref_type: "thesis",
+          ref_id: task.thesis_id,
+          research_case_id: caseId,
+        });
+        setCreatedCounterTaskIds((current) => ({ ...current, [task.id]: created.id }));
+      } else {
+        await researchClient.updateResearchTask(createdCounterTaskIds[task.id] ?? task.id, status);
+      }
+      dossierState.reload();
+    } catch (error) {
+      setTaskError(error instanceof Error ? error.message : "任务更新失败");
+    } finally {
+      setTaskBusy(null);
+    }
+  }
 
   const focusedRecord: EvidenceRecord | null = useMemo(() => {
     if (!dossier || !focusedEvidenceId) return null;
@@ -235,14 +267,21 @@ export function ResearchCaseDossierPage() {
           )}
           {tab === "研究日志" && (
             <section className="dossier-pane">
-              <ol className="dossier__log">
-                {dossier.log.map((entry) => (
-                  <li key={entry.id}>
-                    <time>{entry.at}</time>
-                    <span>{entry.text}</span>
-                  </li>
-                ))}
-              </ol>
+              <h2>变化账本</h2>
+              {dossier.changes.length ? (
+                <ol className="dossier__log" data-testid="dossier-changes">
+                  {dossier.changes.map((change) => (
+                    <li key={change.id}>
+                      <time>{change.occurred_at}</time>
+                      <span>
+                        <strong>{change.event_type}</strong>：{change.summary}
+                        {change.source ? ` · 来源：${change.source}` : ""}
+                        {change.actor ? ` · ${change.actor}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="muted">当前案例暂无可审计的变化事件。</p>}
             </section>
           )}
 
@@ -299,8 +338,43 @@ export function ResearchCaseDossierPage() {
             </section>
           )}
           {thesisView === "预测与证伪" && (
-            <section className="dossier-pane">
-              <p className="muted">预测与证伪视图占位。</p>
+            <section className="dossier-pane" data-testid="counter-research">
+              <h2>反方研究</h2>
+              {taskError && <p className="error" role="alert">{taskError}</p>}
+              {dossier.counter_research.length ? dossier.counter_research.map((task) => {
+                const busy = taskBusy === task.id;
+                const persisted = Boolean(createdCounterTaskIds[task.id]) || task.id !== `counter-${task.thesis_id}`;
+                return (
+                  <article key={task.id} className="dossier-counter-task">
+                    <p><strong>状态：</strong>{task.status}</p>
+                    <p><strong>反方目标：</strong>{task.objective}</p>
+                    <p><strong>已有反方证据：</strong>{task.contradicts_count} 条</p>
+                    <p><strong>下一步：</strong>{task.next_action}</p>
+                    <div className="dossier-counter-task__actions">
+                      {!persisted && (
+                        <button type="button" disabled={busy} onClick={() => void changeCounterTask(task, "open")}>
+                          {busy ? "发起中…" : "发起反方研究"}
+                        </button>
+                      )}
+                      {persisted && task.status === "待发起" && (
+                        <button type="button" disabled={busy} onClick={() => void changeCounterTask(task, "in_progress")}>
+                          {busy ? "更新中…" : "开始研究"}
+                        </button>
+                      )}
+                      {persisted && task.status === "已有反方证据" && (
+                        <button type="button" disabled={busy} onClick={() => void changeCounterTask(task, "done")}>
+                          {busy ? "更新中…" : "标记完成"}
+                        </button>
+                      )}
+                      {persisted && task.status !== "已形成反方" && (
+                        <button type="button" disabled={busy} onClick={() => void changeCounterTask(task, "cancelled")}>
+                          取消任务
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              }) : <p className="muted">暂无反方研究任务</p>}
             </section>
           )}
           {thesisView === "股票与基金" && (

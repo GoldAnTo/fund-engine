@@ -53,8 +53,10 @@ export function NewResearchScreen() {
     industryTopic: "",
     researchObject: "",
     phenomenon: "",
+    coreQuestion: "",
     periodStart: "",
     periodEnd: "",
+    evidenceCutoff: "",
   });
 
   useEffect(() => {
@@ -135,8 +137,11 @@ export function NewResearchScreen() {
   function validateAndConfirm(): boolean {
     setSubmitError(null);
     const issues: string[] = [];
-    if (!caseForm.title.trim()) issues.push("案例标题不能为空");
+    if (!caseForm.title.trim()) issues.push("研究名称不能为空");
     if (!caseForm.industryTopic.trim()) issues.push("行业主题不能为空");
+    if (!caseForm.researchObject.trim()) issues.push("研究对象不能为空");
+    if (!caseForm.phenomenon.trim()) issues.push("研究起点不能为空：请填写已发生的现象或研报预测");
+    if (!caseForm.coreQuestion.trim()) issues.push("核心研究问题不能为空");
     for (const draft of Object.values(drafts)) {
       const { thesis, touched } = draft;
       if (!touched) continue;
@@ -181,8 +186,10 @@ export function NewResearchScreen() {
         createdBy: "prototype-user",
         researchObject: caseForm.researchObject || undefined,
         phenomenon: caseForm.phenomenon || undefined,
+        coreQuestion: caseForm.coreQuestion || undefined,
         periodStart: caseForm.periodStart || undefined,
         periodEnd: caseForm.periodEnd || undefined,
+        evidenceCutoff: caseForm.evidenceCutoff || undefined,
         theses,
       });
       setCreatedCaseId(result.caseId);
@@ -212,6 +219,27 @@ export function NewResearchScreen() {
         ))}
       </ol>
 
+      <section className="prototype-paper research-workflow" aria-label="固定研究工作流">
+        <div className="prototype-section-header">
+          <div>
+            <p className="section-kicker">固定工作流</p>
+            <h2>从研究起点到可复现版本</h2>
+          </div>
+          <span className="state-badge reviewed">每个研究案例统一执行</span>
+        </div>
+        <p className="lede">
+          研究不会从一个主题词直接跳到结论；系统会沿着以下步骤推进，并在每一步记录证据、缺口、责任人和下一动作。
+        </p>
+        <ol className="case-bullets">
+          <li><strong>提出起点：</strong>记录已发生现象或研报预测，并注明来源、日期和可核对事实。</li>
+          <li><strong>定义问题：</strong>明确研究对象、核心问题、时间范围、证据截止日与证伪条件。</li>
+          <li><strong>形成命题：</strong>拆成 1—3 条可验证 Thesis，写清支持条件和下一验证事件。</li>
+          <li><strong>收集证据：</strong>先复用冻结资产，再针对正面、反面和结果指标缺口检索。</li>
+          <li><strong>审核与映射：</strong>AI 只能提出草案；人工确认支持/反驳关系、因素角色、公司股票和基金表达边界。</li>
+          <li><strong>冻结版本：</strong>保留本次输入、证据截止日、审核理由和下一次更新触发条件，便于历史回放。</li>
+        </ol>
+      </section>
+
       <section className="prototype-paper">
         <div className="prototype-section-header">
           <div>
@@ -222,16 +250,17 @@ export function NewResearchScreen() {
         </div>
         <div className="thesis-fields">
           <label className="title-field">
-            案例标题
+            研究名称
             <input
               type="text"
               value={caseForm.title}
               onChange={(e) =>
                 setCaseForm((p) => ({ ...p, title: e.target.value }))
               }
-              aria-label="案例标题"
-              placeholder="例如：AI 算力链"
+              aria-label="研究名称"
+              placeholder="例如：国产半导体设备订单增长是否能转化为持续盈利"
             />
+            <small>名称描述要研究的问题，不要把完整结论、维度清单和 v2 写进标题。</small>
           </label>
           <label>
             行业主题
@@ -257,14 +286,28 @@ export function NewResearchScreen() {
             />
           </label>
           <label className="statement-field">
-            观察现象
+            研究起点：已发生现象或研报预测
             <textarea
-              rows={2}
+              rows={3}
               value={caseForm.phenomenon}
               onChange={(e) =>
                 setCaseForm((p) => ({ ...p, phenomenon: e.target.value }))
               }
-              aria-label="观察现象"
+              aria-label="研究起点：已发生现象或研报预测"
+              placeholder="例如：多家研报预测 2025—2027 年晶圆厂扩产将推动国产设备订单持续增长；同时观察到部分设备公司订单增长与利润增速出现分化。请写明来源、日期和可核对事实。"
+            />
+            <small>这是研究的开始：必须能回答“发生了什么”或“谁预测了什么”，不能只写一个主题词。</small>
+          </label>
+          <label className="statement-field">
+            核心研究问题
+            <textarea
+              rows={3}
+              value={caseForm.coreQuestion}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, coreQuestion: e.target.value }))
+              }
+              aria-label="核心研究问题"
+              placeholder="例如：需求是否真实传导、能否持续、是否形成高质量盈利，哪些证据会证伪这一判断？"
             />
           </label>
           <label>
@@ -286,6 +329,17 @@ export function NewResearchScreen() {
                 setCaseForm((p) => ({ ...p, periodEnd: e.target.value }))
               }
             />
+          </label>
+          <label>
+            证据截止日
+            <input
+              type="date"
+              value={caseForm.evidenceCutoff}
+              onChange={(e) =>
+                setCaseForm((p) => ({ ...p, evidenceCutoff: e.target.value }))
+              }
+            />
+            <small>固定本次研究允许使用的资料边界。</small>
           </label>
         </div>
       </section>
@@ -428,7 +482,14 @@ export function NewResearchScreen() {
         {createdCaseId && (
           <p style={{ marginTop: 12 }}>
             ✅ 案例已创建：
-            <Link to={`/cases/${createdCaseId}`}>进入案例工作台 →</Link>
+            <span className="research-created-actions">
+              <Link to={`/plan?caseId=${encodeURIComponent(createdCaseId)}`} className="prototype-button primary">
+                进入研究计划 →
+              </Link>
+              <Link to={`/cases/${encodeURIComponent(createdCaseId)}`} className="prototype-button">
+                直接打开工作台
+              </Link>
+            </span>
           </p>
         )}
       </section>
@@ -454,8 +515,11 @@ export function NewResearchScreen() {
             <p className="section-kicker">研究计划预览</p>
             <h2>能力探测 · 证据检索 · 结果指标（示例 · 非目标范围）</h2>
           </div>
-          <Link to="/plan" className="prototype-next-action">
-            查看完整计划 →
+          <Link
+            to={createdCaseId ? `/plan?caseId=${encodeURIComponent(createdCaseId)}` : "/plan"}
+            className="prototype-next-action"
+          >
+            {createdCaseId ? "进入该案例的研究计划 →" : "查看研究计划模板 →"}
           </Link>
         </div>
         <div className="prototype-plan-regions">

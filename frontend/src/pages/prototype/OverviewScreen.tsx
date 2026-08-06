@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import { PageHeader } from "../../components/prototype/PageHeader";
 import type {
@@ -114,6 +115,16 @@ export function OverviewScreen() {
     {},
   );
 
+  const workflowStage = view.totals.pendingReview > 0 ? 4 : view.totals.evidenceTotal > 0 ? 3 : 1;
+  const workflowStages = [
+    { number: "01", label: "研究问题", detail: "定义对象与核心问题", to: "/new-research" },
+    { number: "02", label: "形成命题", detail: "写出可验证的判断", to: "/new-research" },
+    { number: "03", label: "获取证据", detail: "接入资料与结果数据", to: `/plan?caseId=${encodeURIComponent(view.caseId)}` },
+    { number: "04", label: "人工复核", detail: `${view.totals.pendingReview} 条待处理关系`, to: "/review" },
+    { number: "05", label: "冻结结论", detail: "形成可回放版本", to: `/conclusion/${encodeURIComponent(view.caseId)}` },
+  ];
+  const nextStage = workflowStages[Math.min(workflowStage, workflowStages.length - 1)];
+
   return (
     <div className="prototype-screen workspace-overview" data-testid="overview-screen">
       <PageHeader
@@ -127,7 +138,52 @@ export function OverviewScreen() {
             </span>
           </>
         }
+        actions={
+          <span>
+            <Link to="/new-research" className="prototype-button primary" data-testid="start-research">
+              ＋ 开始一项研究
+            </Link>{" "}
+            <Link to="/auto-research/runs" className="prototype-button" data-testid="auto-research-runs-entry">自动研究运行</Link>
+          </span>
+        }
       />
+
+      <section className="research-command-center" data-testid="research-command-center">
+        <div className="research-command-center__topline">
+          <div>
+            <p className="section-kicker">研究工作流 · 当前进度</p>
+            <h2>把一个问题推进成可复核结论</h2>
+            <p>每一步都有产物、责任和下一动作。当前优先处理：{nextStage.label}。</p>
+          </div>
+          <Link to={nextStage.to} className="research-command-center__primary" data-testid="workflow-next-action">
+            <span>下一步</span>
+            <strong>{nextStage.label} →</strong>
+          </Link>
+        </div>
+        <ol className="research-stage-track" aria-label="研究阶段">
+          {workflowStages.map((stage, index) => {
+            const complete = index < workflowStage - 1;
+            const current = index === workflowStage - 1;
+            return (
+              <li key={stage.number} className={`research-stage${complete ? " is-complete" : ""}${current ? " is-current" : ""}`}>
+                <Link to={stage.to}>
+                  <span className="research-stage__number">{complete ? "✓" : stage.number}</span>
+                  <span className="research-stage__copy">
+                    <strong>{stage.label}</strong>
+                    <small>{stage.detail}</small>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="research-command-center__shortcuts" aria-label="研究快捷入口">
+          <Link to="/new-research">＋ 新建研究</Link>
+          <Link to={`/plan?caseId=${encodeURIComponent(view.caseId)}`}>接入证据</Link>
+          <Link to={`/relationships/${encodeURIComponent(view.caseId)}`}>查看证据图谱</Link>
+          <Link to="/review">打开审核中心</Link>
+        </div>
+      </section>
 
       <nav className="workspace-overview__tabs" aria-label="研究总览分类">
         {tabs.map((tab) => (
@@ -232,7 +288,9 @@ export function OverviewScreen() {
                     <ul>
                       {tasksByCategory[cat].map((t) => (
                         <li key={t.id} className="workspace-task">
-                          <strong>{t.title}</strong>
+                          <Link to={`/cases/${encodeURIComponent(view.caseId)}`}>
+                            <strong>{t.title}</strong>
+                          </Link>
                           <small>
                             来源：{t.source} · {t.updatedAt}
                           </small>

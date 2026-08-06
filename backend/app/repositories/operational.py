@@ -177,10 +177,28 @@ class TaskRepository:
     def get_task(self, task_id: uuid.UUID) -> TaskItem | None:
         return self._session.get(TaskItem, task_id)
 
+    def find_by_ref(self, *, task_type: str, ref_type: str, ref_id: uuid.UUID) -> TaskItem | None:
+        return self._session.scalar(
+            select(TaskItem)
+            .where(TaskItem.task_type == task_type)
+            .where(TaskItem.ref_type == ref_type)
+            .where(TaskItem.ref_id == ref_id)
+        )
+
     def set_status(self, task: TaskItem, *, status: str, assignee: str | None = None) -> None:
         task.status = status
         if assignee is not None:
             task.assignee = assignee
+
+    def close_review_task(
+        self, task_type: str, ref_type: str, ref_id: uuid.UUID
+    ) -> TaskItem | None:
+        task = self.find_by_ref(task_type=task_type, ref_type=ref_type, ref_id=ref_id)
+        if task is None or task.status == "done":
+            return task
+        if task.status in {"open", "in_progress"}:
+            self.set_status(task, status="done")
+        return task
 
     def tasks_page(
         self,

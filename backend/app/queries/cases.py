@@ -21,7 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
+from app.models.events import DomainEvent
 from app.models.ledger import ResearchCase
+from app.models.operational import TaskItem
+from app.queries.activity import ActivityQueries
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
     effective_review_state,
@@ -34,10 +37,13 @@ from app.schemas.v1.cases import (
     CaseListResponse,
     CaseSummaryDTO,
     CausalStepDTO,
+    CounterResearchTaskDTO,
+    DossierChangeDTO,
     DossierResponse,
     EvidenceRecordDTO,
     ReviewDecisionDTO,
     ThesisSummaryDTO,
+    ThesisJudgementCardDTO,
 )
 from app.schemas.v1.common import CursorPage
 
@@ -175,11 +181,167 @@ class CaseReadQueries:
             theses=[self._thesis_summary(t) for t in theses],
             focus_thesis_id=focus_thesis_id,
             assessment=assessment_dto,
+            judgement_card=self._judgement_card(
+                thesis=thesis,
+                assessment=assessment_dto,
+                evidence=evidence,
+                gaps=gaps,
+            ),
             assess_failure=assess_failure,
             causal_chain=causal_chain,
             evidence=evidence,
             competitive_explanations=[],
             gaps=gaps,
+            changes=self._changes(
+                case=case,
+                theses=theses,
+                cutoff=basis.cutoff,
+            ),
+            counter_research=self._counter_research(
+                thesis=thesis,
+                assessment=assessment,
+                evidence=evidence,
+            ),
+        )
+
+    def _counter_research(
+        self,
+        *,
+        thesis,
+        assessment,
+        evidence: dict[str, list[EvidenceRecordDTO]],
+    ) -> list[CounterResearchTaskDTO]:
+        if thesis is None:
+            return []
+        contradicts_count = len(evidence.get("contradicts", []))
+        gaps = list(assessment.gaps) if assessment is not None else []
+        objective = (
+            gaps[0]
+            if gaps
+            else thesis.falsification_condition
+            or "主动检索可能推翻当前命题的证据"
+        )
+        persisted = self._session.scalar(
+            select(TaskItem)
+            .where(TaskItem.task_type == "counter_research")
+            .where(TaskItem.ref_type == "thesis")
+            .where(TaskItem.ref_id == thesis.id)
+            .order_by(TaskItem.created_at.desc())
+        )
+        if persisted is not None:
+            status_map = {
+                "open": "待发起",
+                "in_progress": "已有反方证据",
+                "done": "已形成反方",
+                "cancelled": "待发起",
+            }
+            next_action = persisted.description or (
+                "整理反方证据并提交人工复核"
+                if contradicts_count > 0
+                else f"发起反方检索：{objective}"
+            )
+            return [
+                CounterResearchTaskDTO(
+                    id=str(persisted.id),
+                    thesis_id=str(thesis.id),
+                    thesis_statement=thesis.statement,
+                    assessment_id=str(assessment.id) if assessment is not None else None,
+                    objective=objective,
+                    status=status_map.get(persisted.status, "待发起"),
+                    contradicts_count=contradicts_count,
+                    next_action=next_action,
+                )
+            ]
+        if contradicts_count > 0 and assessment is not None and assessment.conclusion == "contradicted":
+            status = "已形成反方"
+        elif contradicts_count > 0:
+            status = "已有反方证据"
+        else:
+            status = "待发起"
+        next_action = (
+            "整理反方证据并提交人工复核"
+            if contradicts_count > 0
+            else f"发起反方检索：{objective}"
+        )
+        return [
+            CounterResearchTaskDTO(
+                id=f"counter-{thesis.id}",
+                thesis_id=str(thesis.id),
+                thesis_statement=thesis.statement,
+                assessment_id=str(assessment.id) if assessment is not None else None,
+                objective=objective,
+                status=status,
+                contradicts_count=contradicts_count,
+                next_action=next_action,
+            )
+        ]
+
+    def _changes(self, *, case, theses, cutoff: datetime) -> list[DossierChangeDTO]:
+        thesis_ids = {str(t.id) for t in theses}
+        rows = self._session.scalars(
+            select(DomainEvent)
+            .where(DomainEvent.created_at <= cutoff)
+            .order_by(DomainEvent.created_at.desc(), DomainEvent.id.desc())
+        ).all()
+        changes: list[DossierChangeDTO] = []
+        for event in rows:
+            payload = event.payload or {}
+            related_case = str(payload.get("research_case_id") or payload.get("case_id") or "")
+            related_thesis = str(payload.get("thesis_id") or "")
+            if event.aggregate_id != str(case.id) and related_case != str(case.id) and related_thesis not in thesis_ids:
+                continue
+            summary = str(payload.get("summary") or payload.get("message") or payload.get("reason") or event.type.replace("_", " "))
+            changes.append(
+                DossierChangeDTO(
+                    id=str(event.id),
+                    event_type=event.type,
+                    aggregate_type=event.aggregate_type,
+                    summary=summary,
+                    source=payload.get("source_url") or payload.get("source") or payload.get("document_title"),
+                    actor=event.actor,
+                    occurred_at=_iso(event.created_at) or "",
+                    payload=payload,
+                )
+            )
+        return changes[:100]
+
+    def _judgement_card(
+        self,
+        *,
+        thesis,
+        assessment: AssessmentDTO | None,
+        evidence: dict[str, list[EvidenceRecordDTO]],
+        gaps: list[str],
+    ) -> ThesisJudgementCardDTO | None:
+        if thesis is None:
+            return None
+        conclusion = assessment.conclusion if assessment is not None else "unreviewed"
+        review = assessment.review if assessment is not None else None
+        responsible = review.reviewer if review is not None else thesis.created_by
+        blocking_reason = gaps[0] if gaps else None
+        if blocking_reason:
+            next_action = f"补充验证：{blocking_reason}"
+        elif thesis.next_verification_event:
+            next_action = thesis.next_verification_event
+        elif thesis.falsification_condition:
+            next_action = f"检查证伪条件：{thesis.falsification_condition}"
+        else:
+            next_action = None
+        return ThesisJudgementCardDTO(
+            thesis_id=str(thesis.id),
+            statement=thesis.statement,
+            conclusion=conclusion,
+            rationale=assessment.rationale if assessment is not None else None,
+            provisional=assessment.provisional if assessment is not None else True,
+            review=review,
+            support_condition=thesis.support_condition,
+            falsification_condition=thesis.falsification_condition,
+            next_verification_event=thesis.next_verification_event,
+            evidence_counts={role: len(rows) for role, rows in evidence.items()},
+            gaps=list(gaps),
+            next_action=next_action,
+            blocking_reason=blocking_reason,
+            responsible=responsible,
         )
 
     # ----------------------------------------------------------- mappers

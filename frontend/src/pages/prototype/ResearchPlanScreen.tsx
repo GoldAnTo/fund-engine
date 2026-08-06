@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   CaseSummaryItem,
@@ -19,13 +19,15 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export function ResearchPlanScreen() {
+  const [searchParams] = useSearchParams();
+  const requestedCaseId = searchParams.get("caseId") ?? "";
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<ResearchPlanView | null>(null);
   const [ingesting, setIngesting] = useState(false);
   const [ingestNotice, setIngestNotice] = useState<string | null>(null);
   const [ingestSucceeded, setIngestSucceeded] = useState(false);
   const [cases, setCases] = useState<CaseSummaryItem[]>([]);
-  const [caseId, setCaseId] = useState<string>("");
+  const [caseId, setCaseId] = useState<string>(requestedCaseId);
   // 宏观时序查询输入（每行一条 MacroIndustryData 查询），不填则只跑原有
   // 默认研报/公告/新闻/行情。"碳酸锂价格走势"等缺口可在 UI 一键补齐。
   const [macroQueriesText, setMacroQueriesText] = useState("");
@@ -133,6 +135,14 @@ export function ResearchPlanScreen() {
           ) : null}
         </div>
         <div>
+          <div className="plan-next-actions">
+            <Link to={view ? `/cases/${encodeURIComponent(view.case.id)}` : "/cases"} className="prototype-button">
+              打开研究工作台 →
+            </Link>
+            <Link to={view ? `/relationships/${encodeURIComponent(view.case.id)}` : "/relationships"} className="prototype-button">
+              查看证据图谱
+            </Link>
+          </div>
           <label
             htmlFor="macro-queries"
             style={{ display: "block", fontSize: 11, color: "var(--ink-muted)" }}

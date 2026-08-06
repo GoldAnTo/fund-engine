@@ -135,3 +135,25 @@ def test_tasks_api(cmd_client, cmd_session):
     resp = cmd_client.get("/api/v1/tasks")
     assert resp.status_code == 200
     assert resp.json()["items"]
+
+
+def test_close_review_task_is_idempotent(cmd_session):
+    repo = TaskRepository(cmd_session)
+    ref_id = uuid.uuid4()
+    task = repo.add_task(
+        title="Review proposal",
+        task_type="review_proposal",
+        status="open",
+        ref_type="proposal",
+        ref_id=ref_id,
+    )
+    cmd_session.commit()
+
+    closed = repo.close_review_task("review_proposal", "proposal", ref_id)
+    assert closed is not None
+    assert closed.status == "done"
+    assert closed.id == task.id
+
+    again = repo.close_review_task("review_proposal", "proposal", ref_id)
+    assert again is not None and again.status == "done"
+    assert repo.close_review_task("review_proposal", "proposal", uuid.uuid4()) is None

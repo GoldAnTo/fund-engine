@@ -369,7 +369,7 @@ def _seed_instruments(session: Session, case: ResearchCase, spans: dict, researc
     )
     for stock_code, as_of, metric, value in valuation_rows:
         stock = session.scalar(select(Stock).where(Stock.code == stock_code))
-        if stock and session.scalar(select(ValuationSnapshot).where(ValuationSnapshot.stock_id == stock.id, ValuationSnapshot.metric_name == metric, ValuationSnapshot.as_of_date == as_of)) is None:
+        if stock and session.scalar(select(ValuationSnapshot).where(ValuationSnapshot.stock_id == stock.id, ValuationSnapshot.metric_name == metric, ValuationSnapshot.as_of_date == as_of, ValuationSnapshot.source == "historical_semiconductor_fixture")) is None:
             instruments.add_valuation_snapshot(
                 stock_id=stock.id,
                 as_of_date=as_of,
