@@ -1149,6 +1149,7 @@ export interface ReviewQueueViewItem {
   statementText: string;
   statementKind: string;
   verbatimText: string;
+  locator: Record<string, unknown>;
   documentVersionId: string;
   documentSourceUrl: string;
   documentPublishedAt: string | null;

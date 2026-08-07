@@ -2499,6 +2499,7 @@ export class HttpResearchAdapter implements ResearchClient {
       statementText: dto.statement_text,
       statementKind: dto.statement_kind,
       verbatimText: dto.verbatim_text,
+      locator: dto.locator,
       documentVersionId: dto.document_version_id,
       documentSourceUrl: dto.document_source_url,
       documentPublishedAt: dto.document_published_at ?? null,

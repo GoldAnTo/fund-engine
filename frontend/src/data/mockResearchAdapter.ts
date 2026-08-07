@@ -3445,6 +3445,7 @@ export class MockResearchAdapter implements ResearchClient {
           statementText: st?.text ?? item.task,
           statementKind: "disclosed_fact",
           verbatimText: link?.sourceSpan ?? item.sourceSpan,
+          locator: {},
           documentVersionId: link?.sourceVersion ?? item.sourceVersion,
           documentSourceUrl: st?.documentId ?? "",
           documentPublishedAt: st?.publishedAt ?? item.publishedAt,
