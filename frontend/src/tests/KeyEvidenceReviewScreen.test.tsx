@@ -40,6 +40,11 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(source).toHaveAttribute("href", "https://investor.tsmc.com/english/quarterly-results/2026/q2");
     expect(source).toHaveAttribute("target", "_blank");
     expect(source).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getAllByText("AI 关系：支持")[0]).toBeVisible();
+    expect(screen.getByText("发布日期")).toBeVisible();
+    const rawUrl = screen.getByRole("link", { name: "https://investor.tsmc.com/english/quarterly-results/2026/q2" });
+    expect(rawUrl).toHaveAttribute("target", "_blank");
+    expect(rawUrl).toHaveAttribute("rel", "noopener noreferrer");
     expect(getEventQueue).toHaveBeenCalledWith("event-tsm");
     expect(getLegacyQueue).not.toHaveBeenCalled();
   });
@@ -70,6 +75,7 @@ describe("KeyEvidenceReviewScreen", () => {
           pending: 0,
           nextAction: "没有可采纳证据，系统将继续寻找真实来源",
         },
+        items: [],
       } : queue;
     });
     vi.spyOn(adapter, "reviewProposal").mockImplementation(async (proposalId, payload) => {
@@ -82,5 +88,7 @@ describe("KeyEvidenceReviewScreen", () => {
 
     expect(await screen.findByText("已采纳为“资本开支 / 自由现金流担忧”的正式证据；剩余 0 条有效待审。下一步：没有可采纳证据，系统将继续寻找真实来源")).toBeVisible();
     expect(screen.getByText("下一步：没有可采纳证据，系统将继续寻找真实来源")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("已采纳为“资本开支 / 自由现金流担忧”的正式证据");
+    expect(screen.getByText("本轮没有待审证据")).toBeVisible();
   });
 });

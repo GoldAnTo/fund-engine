@@ -10,6 +10,12 @@ const sourceStatusLabel = {
   invalid: "无效来源",
 } as const;
 
+const roleLabel = {
+  supports: "支持",
+  contradicts: "反驳",
+  contextualizes: "补充背景",
+} as const;
+
 function displayDate(value: string | null): string {
   return value ? new Date(value).toLocaleString("zh-CN") : "未记录";
 }
@@ -96,29 +102,41 @@ export function KeyEvidenceReviewScreen() {
 
   if (loading && !queue) return <main className="prototype-screen"><p role="status">正在准备关键证据队列…</p></main>;
   if (error && !queue) return <main className="prototype-screen"><p role="alert">{error}</p><button className="prototype-button" onClick={() => void load()} type="button">重新加载</button></main>;
-  if (!queue || queue.items.length === 0) return <main className="prototype-screen evidence-review-screen"><header className="event-page-header"><div><p className="section-kicker">关键证据审核</p><h1>本轮没有待审证据</h1><p>系统会在找到可核验的原文后把它加入此处。</p></div><Link className="prototype-button" to={`/events/${caseId}`}>返回结论工作台</Link></header></main>;
-  if (!item) return null;
+  if (!queue) return null;
 
   const currentNextAction = nextAction(queue.summary);
-  const sourceTitle = item.sourceTitle || "未标明来源标题";
-
-  return <main className="prototype-screen evidence-review-screen">
-    <header className="event-page-header evidence-review-header">
+  const header = <header className="event-page-header evidence-review-header">
       <div>
         <p className="section-kicker">关键证据审核</p>
         <h1>核验原文，再决定是否计入因素</h1>
         <p>每项决定都保留来源、定位和可用时间，便于复核。</p>
       </div>
       <Link className="prototype-button" to={`/events/${caseId}`}>返回结论工作台</Link>
-    </header>
-
-    <section aria-label="本轮审核进度" className="evidence-review-progress prototype-paper">
+    </header>;
+  const progress = <section aria-label="本轮审核进度" className="evidence-review-progress prototype-paper">
       <span>总数 {queue.summary.total}</span><span>已审核 {queue.summary.reviewed}</span><span>待审核 {queue.summary.pending}</span><span>无效来源 {queue.summary.invalidSource}</span>
-      <strong>当前第 {position + 1} 条/第 {queue.summary.currentRound} 轮</strong>
+      <strong>{queue.items.length ? `当前第 ${position + 1} 条/第 ${queue.summary.currentRound} 轮` : `本轮第 ${queue.summary.currentRound} 轮已完成`}</strong>
       <p>下一步：{currentNextAction}</p>
-    </section>
+    </section>;
+  const feedback = message ? <p className="event-started" role="status">{message}</p> : null;
+
+  if (queue.items.length === 0) return <main className="prototype-screen evidence-review-screen">
+    {header}
+    {progress}
+    {error ? <p className="evidence-review-alert" role="alert">{error}<button className="prototype-button" onClick={() => void load()} type="button">重新加载</button></p> : null}
+    {feedback}
+    <section className="prototype-paper evidence-review-empty"><p className="section-kicker">队列已清空</p><h2>本轮没有待审证据</h2><p>系统会在找到可核验的原文后把它加入此处。</p></section>
+  </main>;
+  if (!item) return null;
+
+  const sourceTitle = item.sourceTitle || "未标明来源标题";
+
+  return <main className="prototype-screen evidence-review-screen">
+    {header}
+    {progress}
 
     {error ? <p className="evidence-review-alert" role="alert">{error}<button className="prototype-button" onClick={() => void load()} type="button">重新加载</button></p> : null}
+    {feedback}
 
     <div className="evidence-review-layout">
       <aside aria-label="关键证据队列" className="evidence-review-queue prototype-paper">
@@ -127,7 +145,7 @@ export function KeyEvidenceReviewScreen() {
           {queue.items.map((queued, index) => <li key={queued.proposalId}>
             <button aria-current={index === position ? "true" : undefined} className={index === position ? "is-selected" : ""} onClick={() => setPosition(index)} type="button">
               <span className="evidence-review-queue-index">{index + 1}</span>
-              <span><strong>{factorLabel(queued)}</strong><small>{queued.sourceTitle || "未标明来源标题"}</small></span>
+              <span><strong>{factorLabel(queued)}</strong><small>{queued.sourceTitle || "未标明来源标题"}</small><small>AI 关系：{queued.aiRole && queued.aiRole in roleLabel ? roleLabel[queued.aiRole as keyof typeof roleLabel] : queued.aiRole || "未说明"}</small></span>
               <span className={`evidence-source-status evidence-source-status--${queued.sourceStatus}`}>{sourceStatusLabel[queued.sourceStatus]}</span>
             </button>
           </li>)}
@@ -145,7 +163,9 @@ export function KeyEvidenceReviewScreen() {
           <div className="evidence-review-rationale"><p><strong>支持的因素</strong>{factorLabel(item)}</p><p><strong>AI 理由</strong>{item.aiReason || item.proposalReason || "未提供"}</p></div>
           <dl className="evidence-review-metadata">
             <div><dt>来源标题</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{sourceTitle}</a> : sourceTitle}</dd></div>
+            <div><dt>原始 URL</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{item.documentSourceUrl}</a> : "未提供"}</dd></div>
             <div><dt>定位</dt><dd>{Object.keys(item.locator).length ? JSON.stringify(item.locator) : "未提供"}</dd></div>
+            <div><dt>发布日期</dt><dd>{displayDate(item.documentPublishedAt)}</dd></div>
             <div><dt>可用时间</dt><dd>{displayDate(item.availableAt)}</dd></div>
             <div><dt>来源状态</dt><dd><span className={`evidence-source-status evidence-source-status--${item.sourceStatus}`}>{sourceStatusLabel[item.sourceStatus]}</span><span>{item.sourceStatusReason}</span></dd></div>
           </dl>
@@ -161,7 +181,6 @@ export function KeyEvidenceReviewScreen() {
             <button className="prototype-button" disabled={!canWriteDecision} onClick={() => decide("rejected", "rejected")} type="button">不采纳，不计入结论</button>
             <button className="prototype-button" disabled={!canWriteDecision} onClick={() => decide("rejected", "returned")} type="button">退回并继续找真实来源</button>
           </div>
-          {message ? <p className="event-started" role="status">{message}</p> : null}
         </section>
       </section>
     </div>
