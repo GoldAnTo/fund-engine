@@ -7,10 +7,22 @@ import pytest
 from sqlalchemy import select
 
 from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchFactorDraft,
+    EventResearchScopeEvidenceAssignment,
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.ledger import DocumentVersion, EvidenceLink, SourceSpan, SourceStatement, Thesis
+from app.models.ledger import (
+    DocumentVersion,
+    EvidenceLink,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
+from app.models.operational import EventResearchLifecycle
+from app.services.event_research_scope import EventResearchScopeService
 
 
 INITIAL_FACTORS = [
@@ -151,6 +163,62 @@ def test_scope_update_appends_v2_without_rewriting_v1(cmd_client, cmd_session) -
     assert _scope_statements(cmd_session, versions[1].id) == updated_factors
 
 
+def test_scope_service_backfills_legacy_drafts_before_appending_an_update(cmd_session) -> None:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Legacy event",
+        industry_topic="事件研究",
+        created_by="legacy-author",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchBrief(
+            research_case_id=case.id,
+            raw_input="legacy event input",
+            source_url=None,
+            event_title="Legacy event",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            research_question="What explains the event?",
+            extraction_state="human_confirmed",
+            created_at=now,
+        )
+    )
+    for position, statement in enumerate(INITIAL_FACTORS, start=1):
+        cmd_session.add(
+            EventResearchFactorDraft(
+                research_case_id=case.id,
+                statement=statement,
+                position=position,
+                created_by="legacy-author",
+                created_at=now,
+            )
+        )
+    cmd_session.commit()
+
+    updated = EventResearchScopeService(cmd_session).update(
+        case.id,
+        [INITIAL_FACTORS[0], INITIAL_FACTORS[2], "New legacy scope factor"],
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    versions = list(
+        cmd_session.scalars(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case.id)
+            .order_by(EventResearchScopeVersion.version)
+        )
+    )
+    assert updated.version == 2
+    assert [version.version for version in versions] == [1, 2]
+    assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
+
+
 def test_scope_update_keeps_removed_factor_evidence_and_reports_mapping_counts(
     cmd_client, cmd_session
 ) -> None:
@@ -179,6 +247,86 @@ def test_scope_update_keeps_removed_factor_evidence_and_reports_mapping_counts(
     assert cmd_session.get(EvidenceLink, removed_link.id).review_state == "reviewed"
 
 
+def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecycle(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    retained_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    removed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[1])
+
+    second = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[2],
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    third = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[1],
+                INITIAL_FACTORS[2],
+                "广告业务增长弱于市场预期",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+
+    assert second.status_code == 200
+    assert third.status_code == 200
+    versions = list(
+        cmd_session.scalars(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version)
+        )
+    )
+    assignments = list(
+        cmd_session.scalars(
+            select(EventResearchScopeEvidenceAssignment)
+            .where(
+                EventResearchScopeEvidenceAssignment.scope_version_id.in_(
+                    [versions[1].id, versions[2].id]
+                )
+            )
+            .order_by(
+                EventResearchScopeEvidenceAssignment.scope_version_id,
+                EventResearchScopeEvidenceAssignment.evidence_link_id,
+            )
+        )
+    )
+    by_scope = {
+        scope_id: {
+            assignment.evidence_link_id: (
+                assignment.factor_statement,
+                assignment.disposition,
+            )
+            for assignment in assignments
+            if assignment.scope_version_id == scope_id
+        }
+        for scope_id in [versions[1].id, versions[2].id]
+    }
+    assert by_scope[versions[1].id] == {
+        retained_link.id: (INITIAL_FACTORS[0], "mapped"),
+        removed_link.id: (None, "unmapped"),
+    }
+    assert by_scope[versions[2].id] == {
+        retained_link.id: (None, "unmapped"),
+        removed_link.id: (INITIAL_FACTORS[1], "mapped"),
+    }
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle.status == "researching"
+    assert lifecycle.status_summary == "已更新因素，正在重新归类证据"
+    assert lifecycle.current_gap == "已更新因素，正在重新归类证据"
+    assert lifecycle.next_human_action is None
+
+
 @pytest.mark.parametrize(
     "factors",
     [
@@ -194,6 +342,17 @@ def test_scope_update_rejects_invalid_factor_sets(cmd_client, factors: list[str]
     response = cmd_client.put(
         f"/api/v1/event-research/{created['case_id']}/scope",
         json={"factors": factors, "changed_by": "reviewer"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_scope_update_rejects_changed_by_longer_than_128_characters(cmd_client) -> None:
+    created = _create_event(cmd_client)
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{created['case_id']}/scope",
+        json={"factors": INITIAL_FACTORS, "changed_by": "x" * 129},
     )
 
     assert response.status_code == 422

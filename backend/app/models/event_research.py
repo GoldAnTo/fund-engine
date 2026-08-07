@@ -10,7 +10,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, Uuid, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    Uuid,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
@@ -93,6 +103,34 @@ class EventResearchScopeFactor(Base):
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class EventResearchScopeEvidenceAssignment(Base):
+    """Append-only classification of reviewed evidence for one scope version."""
+
+    __tablename__ = "event_research_scope_evidence_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_version_id",
+            "evidence_link_id",
+            name="uq_event_research_scope_evidence_assignments_scope_link",
+        ),
+        CheckConstraint(
+            "disposition IN ('mapped', 'unmapped')",
+            name="ck_event_research_scope_evidence_assignment_disposition",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=False, index=True
+    )
+    evidence_link_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("evidence_links.id"), nullable=False
+    )
+    factor_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disposition: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class EventResearchConclusion(Base):

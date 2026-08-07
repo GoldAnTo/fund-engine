@@ -17,6 +17,7 @@ depends_on: Union[str, Sequence[str], None] = None
 _IMMUTABLE_TABLES = (
     "event_research_scope_versions",
     "event_research_scope_factors",
+    "event_research_scope_evidence_assignments",
 )
 
 
@@ -89,6 +90,101 @@ def upgrade() -> None:
         ["scope_version_id"],
     )
 
+    op.create_table(
+        "event_research_scope_evidence_assignments",
+        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column(
+            "scope_version_id",
+            sa.Uuid(),
+            sa.ForeignKey("event_research_scope_versions.id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "evidence_link_id",
+            sa.Uuid(),
+            sa.ForeignKey("evidence_links.id"),
+            nullable=False,
+        ),
+        sa.Column("factor_statement", sa.Text(), nullable=True),
+        sa.Column("disposition", sa.String(length=16), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint(
+            "scope_version_id",
+            "evidence_link_id",
+            name="uq_event_research_scope_evidence_assignments_scope_link",
+        ),
+        sa.CheckConstraint(
+            "disposition IN ('mapped', 'unmapped')",
+            name="ck_event_research_scope_evidence_assignment_disposition",
+        ),
+    )
+    op.create_index(
+        "ix_event_research_scope_evidence_assignments_scope_version",
+        "event_research_scope_evidence_assignments",
+        ["scope_version_id"],
+    )
+
+    op.execute(
+        """
+        INSERT INTO event_research_scope_versions (
+            id, research_case_id, version, changed_by, change_summary, created_at
+        )
+        SELECT
+            research_case_id,
+            research_case_id,
+            1,
+            MIN(created_by),
+            'Migrated initial event research factors',
+            MIN(created_at)
+        FROM event_research_factor_drafts
+        GROUP BY research_case_id
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO event_research_scope_factors (
+            id, scope_version_id, statement, position
+        )
+        SELECT id, research_case_id, statement, position
+        FROM event_research_factor_drafts
+        """
+    )
+    op.execute(
+        """
+        INSERT INTO event_research_scope_evidence_assignments (
+            id, scope_version_id, evidence_link_id, factor_statement, disposition, created_at
+        )
+        SELECT
+            evidence_links.id,
+            theses.research_case_id,
+            evidence_links.id,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM event_research_factor_drafts
+                    WHERE event_research_factor_drafts.research_case_id = theses.research_case_id
+                    AND event_research_factor_drafts.statement = theses.statement
+                ) THEN theses.statement
+                ELSE NULL
+            END,
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM event_research_factor_drafts
+                    WHERE event_research_factor_drafts.research_case_id = theses.research_case_id
+                    AND event_research_factor_drafts.statement = theses.statement
+                ) THEN 'mapped'
+                ELSE 'unmapped'
+            END,
+            evidence_links.created_at
+        FROM evidence_links
+        JOIN theses ON theses.id = evidence_links.thesis_id
+        JOIN event_research_scope_versions
+            ON event_research_scope_versions.id = theses.research_case_id
+        WHERE evidence_links.review_state = 'reviewed'
+        """
+    )
+
     for table in _IMMUTABLE_TABLES:
         _add_immutable_triggers(table)
 
@@ -96,6 +192,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in reversed(_IMMUTABLE_TABLES):
         _drop_immutable_triggers(table)
+    op.drop_index(
+        "ix_event_research_scope_evidence_assignments_scope_version",
+        table_name="event_research_scope_evidence_assignments",
+    )
+    op.drop_table("event_research_scope_evidence_assignments")
     op.drop_index(
         "ix_event_research_scope_factors_scope_version",
         table_name="event_research_scope_factors",

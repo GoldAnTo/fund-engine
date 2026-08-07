@@ -162,6 +162,15 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
     ) == _confirmed_event()["candidate_factors"]
 
 
+def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:
+    payload = _confirmed_event()
+    payload["candidate_factors"] = ["factor a", " factor a ", "factor c"]
+
+    response = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert response.status_code == 422
+
+
 def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_session) -> None:
     payload = _confirmed_event()
     response = cmd_client.post("/api/v1/event-research", json=payload)

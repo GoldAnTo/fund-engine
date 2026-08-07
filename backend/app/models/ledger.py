@@ -46,6 +46,7 @@ IMMUTABLE_TABLES = frozenset(
         "event_research_factor_drafts",
         "event_research_scope_versions",
         "event_research_scope_factors",
+        "event_research_scope_evidence_assignments",
         "event_research_conclusions",
         "source_spans",
         "research_cases",
