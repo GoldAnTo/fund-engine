@@ -40,7 +40,7 @@ from app.schemas.v1.operational import (
     ReviewDecisionRequest,
     ReviewQueueResponse,
 )
-from app.services.proposal_publisher import ProposalPublisher
+from app.services.proposal_publisher import ProposalPublisher, final_evidence_payload
 from app.services.proposals import ProposalService, ReviewConflictError
 
 router = APIRouter(tags=["proposal-review-commands-v1"])
@@ -148,6 +148,13 @@ def _decide(
     proposal_id: uuid.UUID, payload: ReviewDecisionRequest, db: Session
 ):
     proposal = ProposalRepository(db).get_proposal(proposal_id)
+    final_payload = (
+        final_evidence_payload(
+            proposal, payload.outcome, payload.replacement_payload
+        )
+        if proposal is not None
+        else None
+    )
     if (
         proposal is not None
         and proposal.research_case_id is not None
@@ -156,9 +163,7 @@ def _decide(
         and not proposal_evidence_context(
             db,
             proposal,
-            evidence_payload=(
-                payload.replacement_payload if payload.outcome == "modified" else None
-            ),
+            evidence_payload=final_payload,
         ).admission.can_accept
     ):
         raise ValidationError(

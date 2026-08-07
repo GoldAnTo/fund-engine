@@ -30,6 +30,17 @@ from app.repositories.proposals import ProposalRepository
 from app.repositories.research import ResearchRepository
 
 
+def final_evidence_payload(
+    proposal: Proposal,
+    outcome: str,
+    replacement_payload: dict | None,
+) -> dict:
+    """Return the payload that will be published for an evidence proposal."""
+    if outcome == "modified" and replacement_payload:
+        return replacement_payload
+    return proposal.payload
+
+
 class ProposalPublisher:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -70,9 +81,9 @@ class ProposalPublisher:
     def _publish_evidence_link(
         self, proposal: Proposal, decision: ProposalReviewDecision
     ) -> EvidenceLinkVersion:
-        payload = proposal.payload
-        if decision.outcome == "modified" and decision.replacement_payload:
-            payload = decision.replacement_payload
+        payload = final_evidence_payload(
+            proposal, decision.outcome, decision.replacement_payload
+        )
 
         thesis_id = uuid.UUID(proposal.target_context["thesis_id"])
         statement_id = uuid.UUID(payload["source_statement_id"])

@@ -211,6 +211,33 @@ def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_sessi
     assert cmd_session.scalars(select(EvidenceLinkVersion)).one().proposal_id == proposal.id
 
 
+def test_modified_event_proposal_with_empty_replacement_uses_original_source(
+    cmd_client, cmd_session
+):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://news.example.org/valid"
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "modified",
+            "reason": "no payload changes",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+            "replacement_payload": {},
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    version = cmd_session.scalars(select(EvidenceLinkVersion)).one()
+    assert version.source_statement_id == uuid.UUID(
+        proposal.payload["source_statement_id"]
+    )
+
+
 def test_modified_event_proposal_rejects_invalid_replacement_source(
     cmd_client, cmd_session
 ):
