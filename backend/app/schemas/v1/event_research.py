@@ -7,6 +7,7 @@ from typing import Annotated
 from pydantic import Field
 
 from app.schemas.v1.common import V1Model
+from app.services.source_admission import SourceStatus
 
 
 class ExtractEventResearchRequest(V1Model):
@@ -96,7 +97,7 @@ class EventReviewQueueItemDTO(V1Model):
     document_published_at: datetime | None
     available_at: datetime | None
     source_title: str | None
-    source_status: str
+    source_status: SourceStatus
     source_status_reason: str
     can_accept: bool
     proposal_reason: str

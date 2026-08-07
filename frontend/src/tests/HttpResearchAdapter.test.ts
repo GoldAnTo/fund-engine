@@ -989,6 +989,24 @@ describe("HttpResearchAdapter", () => {
     });
   });
 
+  it("downgrades an unknown event source status to invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        summary: { total: 1, reviewed: 0, pending: 0, invalid_source: 0, current_round: 1, next_action: null },
+        items: [{ proposal_id: "proposal-unknown", status: "pending", proposed_at: "2026-08-07T09:00:00Z", link_id: "link-unknown", case_id: "event-unknown", source_status: "retired", source_status_reason: "服务端返回了已废弃状态", can_accept: true, proposal_reason: "" }],
+      })),
+    );
+
+    const queue = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .getEventReviewQueue("event-unknown");
+
+    expect(queue.items[0]).toMatchObject({
+      sourceStatus: "invalid",
+      sourceStatusReason: "服务端返回了已废弃状态",
+    });
+  });
+
   it("mock event review queue covers all source admission states", async () => {
     const queue = await new MockResearchAdapter().getEventReviewQueue("event-tsm");
 

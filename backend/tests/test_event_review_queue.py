@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.models.events import DomainEvent
@@ -17,6 +19,7 @@ from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.operational import TaskRepository
+from app.schemas.v1.event_research import EventReviewQueueItemDTO
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.auto_research import AutoResearchService
 
@@ -104,6 +107,38 @@ def _case(session) -> ResearchCase:
         )
     )
     return case
+
+
+def test_event_review_queue_schema_rejects_unknown_source_status() -> None:
+    with pytest.raises(ValidationError):
+        EventReviewQueueItemDTO(
+            proposal_id="proposal-1",
+            status="pending",
+            proposed_at=datetime.now(timezone.utc),
+            link_id="link-1",
+            thesis_id=None,
+            case_id="case-1",
+            thesis_statement=None,
+            ai_role="supports",
+            ai_reason="reason",
+            ai_scope={},
+            statement_id=None,
+            statement_text=None,
+            statement_kind=None,
+            span_id=None,
+            verbatim_text=None,
+            locator={},
+            document_version_id=None,
+            document_source_url=None,
+            document_published_at=None,
+            available_at=None,
+            source_title=None,
+            source_status="retired",
+            source_status_reason="unknown state",
+            can_accept=False,
+            proposal_reason="reason",
+            position=None,
+        )
 
 
 def test_event_review_queue_summarizes_pending_invalid_and_reviewed_items(
