@@ -91,9 +91,16 @@ class EvidenceProposer:
             {"role": "system", "content": PROPOSE_SYSTEM},
             {"role": "user", "content": json.dumps(user_data, ensure_ascii=False)},
         ]
+        statement_ids = {str(statement.id): statement.id for statement in statements}
+        case_id = thesis.research_case_id
+        thesis_id_text = str(thesis.id)
 
         created_ids: list[uuid.UUID] = []
         try:
+            # Prompt construction only reads the database.  End that read
+            # transaction before waiting on the external provider so this
+            # connection cannot keep an idle transaction or row locks open.
+            session.commit()
             result = self._client.chat_json(messages, schema_hint="propose")
             links_data = result.get("links", [])
 
@@ -103,8 +110,7 @@ class EvidenceProposer:
             if before_persist is not None and not before_persist():
                 return []
 
-            stmt_map = {str(s.id): s for s in statements}
-            case = session.get(ResearchCase, thesis.research_case_id)
+            case = session.get(ResearchCase, case_id)
             derived_scope = (
                 {"industry_topic": case.industry_topic}
                 if case is not None and case.industry_topic
@@ -114,8 +120,8 @@ class EvidenceProposer:
             refused = 0
             for link_data in links_data:
                 stmt_id = link_data.get("source_statement_id", "")
-                statement = stmt_map.get(stmt_id)
-                if statement is None or stmt_id in seen_statement_ids:
+                statement_id = statement_ids.get(stmt_id)
+                if statement_id is None or stmt_id in seen_statement_ids:
                     continue
                 # Non-investment-advice gate: a link whose rationale crosses
                 # the boundary is skipped, never proposed.
@@ -129,20 +135,20 @@ class EvidenceProposer:
                 proposal = proposals.create_proposal(
                     kind="evidence_link",
                     payload={
-                        "source_statement_id": str(statement.id),
+                        "source_statement_id": str(statement_id),
                         "role": link_data["role"],
                         "reason": link_data["reason"],
                         "scope": scope,
                     },
                     target_context={
-                        "thesis_id": str(thesis.id),
+                        "thesis_id": thesis_id_text,
                         "entity_type": "evidence_link",
                     },
                     proposed_by_type="ai",
                     proposed_by_ref=self._client.model_version,
                     basis_cutoff=cutoff,
-                    input_entity_ids=[str(statement.id)],
-                    research_case_id=thesis.research_case_id,
+                    input_entity_ids=[str(statement_id)],
+                    research_case_id=case_id,
                     actor=f"ai:{self._client.model_version}",
                 )
                 created_ids.append(proposal.id)
@@ -153,7 +159,7 @@ class EvidenceProposer:
                     aggregate_id=str(proposal.id),
                     ref_type="proposal",
                     ref_id=proposal.id,
-                    payload={"thesis_id": str(thesis.id), "role": link_data["role"]},
+                    payload={"thesis_id": thesis_id_text, "role": link_data["role"]},
                     origin="ledger",
                     actor=f"ai:{self._client.model_version}",
                 )

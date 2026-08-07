@@ -19,8 +19,10 @@ from app.models.event_research import (
     EventResearchScopeVersion,
 )
 from app.models.ledger import (
+    AIAssessment,
     DocumentVersion,
     EvidenceLink,
+    EvidenceSnapshot,
     ResearchCase,
     SourceSpan,
     SourceStatement,
@@ -382,11 +384,13 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
 
 
 @pytest.mark.pg_only
+@pytest.mark.parametrize("task_type", ["support", "result"])
 def test_postgres_scope_replacement_discards_inflight_old_run_output(
-    engine, monkeypatch
+    engine, monkeypatch, task_type
 ) -> None:
-    """A provider return after replacement cannot persist an old-run proposal."""
+    """A successful provider return cannot outlive a committed replacement."""
     from app.ai.proposal import EvidenceProposer
+    from app.ai.assessment_gen import AssessmentGenerator
 
     SessionLocal = sessionmaker(bind=engine, future=True)
     bootstrap = SessionLocal()
@@ -412,7 +416,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
                 .order_by(ResearchTask.created_at)
             )
         )
-        target_task = next(task for task in tasks if task.task_type == "support")
+        target_task = next(task for task in tasks if task.task_type == task_type)
         for task in tasks:
             if task.id != target_task.id:
                 task.status = "cancelled"
@@ -424,6 +428,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
 
     provider_entered, allow_provider_return = Event(), Event()
     scope_completed = Event()
+    output_slot_checked = Event()
     worker_errors: list[BaseException] = []
     scope_errors: list[BaseException] = []
 
@@ -431,6 +436,9 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         provider_entered.set()
         if not allow_provider_return.wait(timeout=5):
             raise RuntimeError("test did not release blocked provider")
+        if before_persist is None:
+            return [uuid.uuid4()]
+        output_slot_checked.set()
         if before_persist is not None and not before_persist():
             return []
         proposal = Proposal(
@@ -446,7 +454,26 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         session.flush()
         return [proposal.id]
 
-    monkeypatch.setattr(EvidenceProposer, "propose", blocked_propose)
+    class _SuccessfulAssessment:
+        id = uuid.uuid4()
+        conclusion = "insufficient_evidence"
+        gaps: list[str] = []
+
+    def blocked_assessment(self, thesis_id, cutoff, session, *, before_persist=None):
+        provider_entered.set()
+        if not allow_provider_return.wait(timeout=5):
+            raise RuntimeError("test did not release blocked provider")
+        if before_persist is None:
+            return _SuccessfulAssessment()
+        output_slot_checked.set()
+        if not before_persist():
+            return None
+        raise AssertionError("scope replacement should have cancelled this assessment")
+
+    if task_type == "support":
+        monkeypatch.setattr(EvidenceProposer, "propose", blocked_propose)
+    else:
+        monkeypatch.setattr(AssessmentGenerator, "generate", blocked_assessment)
     monkeypatch.setattr("app.services.auto_research._pending_versions", lambda *_: [])
 
     def execute_old_run() -> None:
@@ -496,6 +523,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
     assert not replacement_worker.is_alive()
     assert not worker.is_alive()
     assert not worker_errors
+    assert output_slot_checked.is_set()
 
     verify = SessionLocal()
     try:
@@ -514,6 +542,12 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         assert old_job.cancel_requested is True
         assert verify.scalar(
             select(Proposal.id).where(Proposal.research_case_id == case_id)
+        ) is None
+        assert verify.scalar(
+            select(AIAssessment.id)
+            .join(EvidenceSnapshot, EvidenceSnapshot.id == AIAssessment.snapshot_id)
+            .join(Thesis, Thesis.id == EvidenceSnapshot.thesis_id)
+            .where(Thesis.research_case_id == case_id)
         ) is None
         assert lifecycle is not None
         assert lifecycle.status == "continuing"

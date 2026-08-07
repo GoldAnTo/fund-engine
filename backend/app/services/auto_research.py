@@ -136,12 +136,17 @@ class AutoResearchService:
                         proposed_ids = self._propose_for_task(proposer, task, run)
                     else:
                         assessment = generator.generate(
-                            task.thesis_id, datetime.now(timezone.utc), self.session
+                            task.thesis_id,
+                            datetime.now(timezone.utc),
+                            self.session,
+                            before_persist=lambda: self._claim_task_output_slot(run, task),
                         )
                     # Providers may return after their run was superseded.
                     # Do not flush their proposals/assessments or overwrite a
                     # task that the scope update has already cancelled.
                     if self._is_cancelled(run, task):
+                        cancelled_during_task = True
+                    elif task.task_type == "result" and assessment is None:
                         cancelled_during_task = True
                     elif task.task_type in {"support", "contradict", "alternative"}:
                         task.result = {

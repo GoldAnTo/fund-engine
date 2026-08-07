@@ -16,14 +16,17 @@ or return promise), the model gets exactly one chance to neutralize the
 text, the rewritten text is re-evaluated, and any residual hit refuses the
 whole run.  The loop never iterates more than once.
 
-Every assessment operation writes exactly one ``AIRun`` audit record
+Every completed assessment operation writes exactly one ``AIRun`` audit record
 (``kind=assess``); a run whose text was repaired carries
-``rewritten_for_compliance`` in its output summary.
+``rewritten_for_compliance`` in its output summary.  A cooperative scope
+cancellation before persistence deliberately writes neither an assessment nor
+an audit row for the superseded run.
 """
 from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -60,7 +63,9 @@ class AssessmentGenerator:
         thesis_id: uuid.UUID,
         cutoff: datetime,
         session: Session,
-    ) -> AIAssessment:
+        *,
+        before_persist: Callable[[], bool] | None = None,
+    ) -> AIAssessment | None:
         started_at = datetime.now(timezone.utc)
         repo = ResearchRepository(session)
         assessment_service = AssessmentService(repo)
@@ -104,6 +109,9 @@ class AssessmentGenerator:
                 {"role": "user", "content": json.dumps(user_data, ensure_ascii=False)},
             ]
 
+            # Only reads have occurred so far.  Do not retain an idle
+            # database transaction while waiting on an external provider.
+            session.commit()
             result = self._client.chat_json(messages, schema_hint="assess")
             conclusion = result["conclusion"]
             rationale = result["rationale"]
@@ -113,6 +121,12 @@ class AssessmentGenerator:
             # for REWRITE-category hits): refused text never reaches the
             # ledger; the failure is recorded on the AIRun below.
             rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
+
+            # Auto research supplies a case/run/task output slot here.  If a
+            # scope replacement committed while the provider was in flight,
+            # leave no immutable snapshot, assessment, or AI audit output.
+            if before_persist is not None and not before_persist():
+                return None
 
             snapshot = assessment_service.freeze_snapshot(
                 thesis_id, cutoff=cutoff

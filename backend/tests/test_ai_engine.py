@@ -129,6 +129,36 @@ def test_proposal_creates_links_and_airun(
     assert "proposed" in run.output_summary
 
 
+def test_proposer_releases_read_transaction_before_provider(
+    session, document_service, research_service, thesis, document
+):
+    span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="GPU demand 预计 增长",
+    )
+    statement = research_service.add_statement(
+        span.id, "GPU demand 预计 增长", kind="research_opinion"
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    def provider(*_args, **_kwargs):
+        assert not session.in_transaction()
+        return {
+            "links": [
+                {
+                    "source_statement_id": str(statement.id),
+                    "role": "supports",
+                    "reason": "demand growth supports the factor",
+                    "scope": {"segment": "DC"},
+                }
+            ]
+        }
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        assert EvidenceProposer(client).propose(thesis.id, session)
+
+
 # ---------------------------------------------------------------------------
 # Assessment
 # ---------------------------------------------------------------------------
@@ -167,6 +197,33 @@ def test_assessment_gen_creates_assessment_and_airun(
     assert run.model_version == "mock-test"
     assert run.prompt_version == ASSESS_PROMPT_VERSION
     assert "conclusion=" in run.output_summary
+
+
+def test_assessment_releases_read_transaction_before_provider(
+    session, research_service, thesis, statement
+):
+    research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    def provider(*_args, **_kwargs):
+        assert not session.in_transaction()
+        return {
+            "conclusion": "insufficient_evidence",
+            "rationale": "One source does not settle the factor.",
+            "gaps": [],
+        }
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+    assert assessment is not None
 
 
 # ---------------------------------------------------------------------------
