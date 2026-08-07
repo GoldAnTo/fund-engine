@@ -709,7 +709,8 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
         "position": 1,
         "reviewed_support_count": 1,
         "reviewed_contradiction_count": 0,
-        "current_gap": "缺少对资本开支解释的反证",
+        "pending_proposal_count": 0,
+        "current_gap": None,
     }
     assert exhausted["next_action"] == {
         "kind": "edit_factors",
@@ -762,6 +763,59 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
+
+
+def test_draft_workbench_exposes_only_current_reviewed_evidence_and_factor_pending_counts(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    factors = _confirmed_event()["candidate_factors"]
+    for factor in factors:
+        thesis = cmd_session.scalar(select(Thesis).where(
+            Thesis.research_case_id == case_id, Thesis.statement == factor
+        ))
+        assert thesis is not None
+        proposal = _evidence_proposal(
+            cmd_session, case_id, source_url=f"https://investor.tsmc.com/{thesis.id}",
+            title=f"Reviewed {factor}", thesis_id=thesis.id,
+        )
+        accepted = cmd_client.post(
+            f"/api/v1/review-proposals/{proposal.id}/decisions",
+            json={"outcome": "confirmed", "reason": "reviewed", "reviewer_id": "reviewer", "expected_version": proposal.version},
+        )
+        assert accepted.status_code == 201
+
+    pending_thesis = cmd_session.scalar(select(Thesis).where(
+        Thesis.research_case_id == case_id, Thesis.statement == factors[1]
+    ))
+    assert pending_thesis is not None
+    _evidence_proposal(
+        cmd_session, case_id, source_url="https://investor.tsmc.com/pending",
+        title="Pending only for factor two", thesis_id=pending_thesis.id,
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "draft_ready"
+    lifecycle.current_gap = "不应作为每个因素的缺口重复展示"
+    cmd_session.commit()
+
+    body = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert body["conclusion"]["confidence"] == "medium"
+    assert len(body["evidence"]) == 3
+    assert {item["review_state"] for item in body["evidence"]} == {"reviewed"}
+    assert all(item["factor_statement"] in factors for item in body["evidence"])
+    assert [item["pending_proposal_count"] for item in body["factors"]] == [0, 1, 0]
+    assert [item["current_gap"] for item in body["factors"]] == [None, "有关键证据待审核", None]
+
+    pending = cmd_session.scalar(select(Proposal).where(
+        Proposal.research_case_id == case_id, Proposal.status == "pending"
+    ))
+    assert pending is not None
+    pending.status = "decided"
+    cmd_session.commit()
+    assert cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()["conclusion"]["confidence"] == "high"
 
 
 def test_scope_update_persists_optional_factor_descriptions_and_accepts_legacy_strings(

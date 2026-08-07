@@ -3780,11 +3780,11 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({
       event, lifecycle,
       conclusion: event.status === "published"
-        ? { state: "published", text: "人工确认：当前材料不足以断定唯一原因。", citations: [] }
+        ? { state: "published", text: "人工确认：当前材料不足以断定唯一原因。", confidence: "high", citations: [] }
         : event.status === "draft_ready"
-          ? { state: "ai_draft", text: "当前结论草案等待人工复核。", citations: [] }
-          : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
-      factors: activeFactors.map((factor, index) => ({ statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap: lifecycle.currentGap })),
+          ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
+          : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", confidence: "low", citations: [] },
+      factors: activeFactors.map((factor, index) => { const pendingProposalCount = caseId === "event-tsm" && index === 0 ? 1 : 0; const reviewedSupportCount = reviewedCount ? 1 : 0; return { statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
       evidence,
       progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },

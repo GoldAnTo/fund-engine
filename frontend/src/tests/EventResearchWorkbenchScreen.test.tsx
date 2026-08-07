@@ -17,8 +17,8 @@ function workbench(overrides: Partial<EventWorkbench> = {}): EventWorkbench {
   return {
     event: { id: "event-1", eventTitle: "财报后的异常下跌", companyName: "示例公司", ticker: "XYZ", eventAt: null, status: "exhausted", statusSummary: "需要补充研究范围", nextHumanAction: "编辑因素", updatedAt: "2026-08-07T00:00:00Z" },
     lifecycle: { status: "exhausted", activeRunId: null, currentRound: 3, summary: "已核验现有材料，等待补充范围", currentGap: "缺少能区分主要解释的反证", nextHumanAction: "编辑因素" },
-    conclusion: { state: "cannot_conclude", text: "当前证据不足以判断主要原因。", citations: [] },
-    factors: initialFactors.map((factor, index) => ({ ...factor, position: index + 1, reviewedSupportCount: index + 1, reviewedContradictionCount: index, currentGap: index === 0 ? "需要更多反证" : null })),
+    conclusion: { state: "cannot_conclude", text: "当前证据不足以判断主要原因。", confidence: "low", citations: [] },
+    factors: initialFactors.map((factor, index) => ({ ...factor, position: index + 1, reviewedSupportCount: index + 1, reviewedContradictionCount: index, pendingProposalCount: 0, currentGap: index === 0 ? "需要更多反证" : null })),
     evidence: [],
     progress: { verified: 3, pending: 2, invalidSource: 1, currentGap: "缺少能区分主要解释的反证" },
     scope: { version: 1, factors: initialFactors, unmappedEvidenceCount: 0 },
@@ -60,6 +60,7 @@ describe("EventResearchWorkbenchScreen", () => {
     const conclusion = screen.getByRole("heading", { name: "暂不能下结论" }).closest("section");
     const progress = screen.getByLabelText("研究进度");
     expect(conclusion?.compareDocumentPosition(progress)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByRole("main")).toHaveAttribute("data-layout", "conclusion-first");
   });
 
   it("links the evidence-review action when key evidence awaits review", async () => {
@@ -74,14 +75,15 @@ describe("EventResearchWorkbenchScreen", () => {
 
   it("links the conclusion review action when a draft is ready", async () => {
     currentView = workbench({
-      conclusion: { state: "ai_draft", text: "当前证据最支持资本开支压力。", citations: [] },
+      conclusion: { state: "ai_draft", text: "当前证据最支持资本开支压力。", confidence: "medium", citations: [] },
       lifecycle: { ...workbench().lifecycle, status: "draft_ready" },
       nextAction: { kind: "review_conclusion", label: "审核结论草案" },
     });
     renderWorkbench();
 
     expect(await screen.findByRole("link", { name: "审核结论草案" })).toHaveAttribute("href", "/events/event-1/conclusion");
-    expect(screen.getAllByText(/结论置信度：支持更强/)).toHaveLength(3);
+    expect(screen.getByText("结论置信度：中")).toBeVisible();
+    expect(screen.getAllByText(/因素置信度：支持更强/)).toHaveLength(3);
   });
 
   it("links researching work to its evidence basis instead of exposing a manual run", async () => {
@@ -97,12 +99,35 @@ describe("EventResearchWorkbenchScreen", () => {
     expect(screen.getByText("当前缺口：当前未发现范围缺口")).toBeVisible();
   });
 
+  it("uses reviewed evidence only and keeps pending evidence with its own factor", async () => {
+    currentView = workbench({
+      conclusion: { state: "ai_draft", text: "结论草案", confidence: "medium", citations: [] },
+      factors: [
+        { statement: "资本开支压力", position: 1, reviewedSupportCount: 1, reviewedContradictionCount: 0, pendingProposalCount: 0, currentGap: null },
+        { statement: "盈利预期变化", position: 2, reviewedSupportCount: 0, reviewedContradictionCount: 0, pendingProposalCount: 1, currentGap: "有关键证据待审核" },
+        { statement: "估值重定价", position: 3, reviewedSupportCount: 0, reviewedContradictionCount: 0, pendingProposalCount: 0, currentGap: "尚缺少可采纳证据" },
+      ],
+      evidence: [
+        { caseId: "event-1", factorStatement: "资本开支压力", role: "supports", reviewState: "reviewed", sourceTitle: "已审核来源", sourceUrl: null, excerpt: "已审核支持摘录", locator: {}, availableAt: "2026-08-08T00:00:00Z" },
+        { caseId: "event-1", factorStatement: "盈利预期变化", role: "supports", reviewState: "pending", sourceTitle: "待审核来源", sourceUrl: null, excerpt: "待审核摘录不能作为支持", locator: {}, availableAt: "2026-08-08T00:00:00Z" },
+      ],
+    });
+    renderWorkbench();
+
+    expect(await screen.findByText(/已审核支持摘录/)).toBeVisible();
+    expect(screen.queryByText("待审核摘录不能作为支持")).not.toBeInTheDocument();
+    expect(screen.getByText("结论置信度：中")).toBeVisible();
+    expect(screen.getByText("支持 0 · 反证 0 · 待审核 1")).toBeVisible();
+    expect(screen.getByText(/有关键证据待审核/)).toBeVisible();
+    expect(screen.getByText(/尚缺少可采纳证据/)).toBeVisible();
+  });
+
   it("adds, reorders, and saves factors before reloading the factor statements", async () => {
     const user = userEvent.setup();
     const update = vi.spyOn(adapter, "updateEventResearchScope").mockImplementation(async ({ factors }) => {
       const normalizedFactors = factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor);
       currentView = workbench({
-        factors: normalizedFactors.map((factor, index) => ({ ...factor, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
+        factors: normalizedFactors.map((factor, index) => ({ ...factor, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, pendingProposalCount: 0, currentGap: null })),
         scope: { version: 2, factors: normalizedFactors, unmappedEvidenceCount: 0 },
       });
       return { version: 2, factors: normalizedFactors, reclassifiedEvidenceCount: 2, unmappedEvidenceCount: 0 };
@@ -168,7 +193,7 @@ describe("EventResearchWorkbenchScreen", () => {
   it("does not offer factor editing after publication and links to the conclusion", async () => {
     currentView = workbench({
       event: { ...workbench().event, id: "event-published", status: "published" },
-      conclusion: { state: "published", text: "人工确认的结论。", citations: [] },
+      conclusion: { state: "published", text: "人工确认的结论。", confidence: "high", citations: [] },
       lifecycle: { ...workbench().lifecycle, status: "published" },
       nextAction: { kind: "view_conclusion_change", label: "查看结论变更" },
     });

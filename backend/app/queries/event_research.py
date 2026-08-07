@@ -15,9 +15,18 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.ledger import DocumentVersion, EvidenceLink, SourceSpan, SourceStatement, Thesis
+from app.models.ledger import (
+    CaseDocumentVersion,
+    DocumentVersion,
+    EvidenceLink,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
 from app.models.operational import EventResearchLifecycle
+from app.models.proposals import Proposal
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
+from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
     EventConclusionDraftDTO,
     EventKeyEvidenceDTO,
@@ -64,15 +73,18 @@ class EventResearchQueries:
             raise NotFoundError("event research case not found")
         event = self._list_item(brief, lifecycle)
         scope = self._latest_scope(case_id)
-        evidence = self._evidence(case_id)
-        conclusion = self._conclusion(case_id, lifecycle, evidence)
+        progress = self._progress(case_id, lifecycle)
+        factors = self._factors(case_id, scope, self._pending_by_factor(case_id, scope))
+        confidence = self._conclusion_confidence(factors)
+        evidence = self._formal_evidence(case_id)
+        conclusion = self._conclusion(case_id, lifecycle, confidence)
         return EventWorkbenchDTO(
             event=event,
             lifecycle=self._lifecycle(lifecycle),
             conclusion=conclusion,
-            factors=self._factors(case_id, scope, lifecycle.current_gap),
+            factors=factors,
             evidence=evidence,
-            progress=self._progress(case_id, lifecycle),
+            progress=progress,
             scope=self._scope(scope, case_id),
             next_action=self._next_action(lifecycle),
         )
@@ -81,7 +93,7 @@ class EventResearchQueries:
         self,
         case_id: uuid.UUID,
         lifecycle: EventResearchLifecycle,
-        evidence: list[EventKeyEvidenceDTO],
+        confidence: str,
     ) -> EventConclusionDraftDTO:
         if lifecycle.status == "published":
             record = self._session.scalar(
@@ -95,11 +107,13 @@ class EventResearchQueries:
                 return EventConclusionDraftDTO(
                     state=record.state,
                     text=record.text,
+                    confidence=confidence,
                     citations=self._formal_evidence(case_id, record.evidence_link_ids),
                 )
             return EventConclusionDraftDTO(
                 state="published",
                 text="结论已发布，正在载入可复核证据。",
+                confidence=confidence,
                 citations=self._formal_evidence(case_id),
             )
         scope = self._session.scalar(
@@ -121,23 +135,26 @@ class EventResearchQueries:
             # immutable link-id snapshot is retained for audit, while the
             # visible citations remain limited to human-reviewed material.
             return EventConclusionDraftDTO(
-                state=record.state, text=record.text, citations=reviewed
+                state=record.state, text=record.text, confidence=confidence, citations=reviewed
             )
         if record is not None:
             return EventConclusionDraftDTO(
                 state="cannot_conclude",
                 text="研究范围已更新，先前结论草案不再适用于当前因素。",
+                confidence="low",
                 citations=reviewed,
             )
         if lifecycle.status == "draft_ready":
             return EventConclusionDraftDTO(
                 state="ai_draft",
                 text="当前已进入结论复核：尚无足以支持主要因素判断的已审核证据；本研究不能给出因果结论。",
+                confidence=confidence,
                 citations=reviewed,
             )
         return EventConclusionDraftDTO(
             state="cannot_conclude",
             text="尚不能下结论：系统正在核验各项解释及其反证。",
+            confidence="low",
             citations=reviewed,
         )
 
@@ -223,7 +240,7 @@ class EventResearchQueries:
         self,
         case_id: uuid.UUID,
         scope: EventResearchScopeVersion | None,
-        current_gap: str | None,
+        pending_by_factor: dict[str, int],
     ) -> list[EventResearchFactorDTO]:
         if scope is not None:
             factors = list(
@@ -281,10 +298,101 @@ class EventResearchQueries:
                     position=factor.position,
                     reviewed_support_count=int(counts.get("supports", 0)),
                     reviewed_contradiction_count=int(counts.get("contradicts", 0)),
-                    current_gap=current_gap,
+                    pending_proposal_count=pending_by_factor.get(factor.statement, 0),
+                    current_gap=(
+                        "有关键证据待审核" if pending_by_factor.get(factor.statement, 0)
+                        else "尚缺少可采纳证据"
+                        if int(counts.get("supports", 0)) + int(counts.get("contradicts", 0)) == 0
+                        else None
+                    ),
                 )
             )
         return result
+
+    def _pending_by_factor(
+        self, case_id: uuid.UUID, scope: EventResearchScopeVersion | None
+    ) -> dict[str, int]:
+        if scope is None:
+            return {}
+        active_factors = set(self._session.scalars(
+            select(EventResearchScopeFactor.statement).where(
+                EventResearchScopeFactor.scope_version_id == scope.id
+            )
+        ))
+        proposals = list(
+            self._session.scalars(
+                select(Proposal)
+                .where(Proposal.research_case_id == case_id)
+                .where(Proposal.kind == "evidence_link")
+                .where(Proposal.status == "pending")
+            )
+        )
+        statement_ids = {
+            source_statement_id
+            for proposal in proposals
+            if (source_statement_id := _payload_uuid(proposal.payload, "source_statement_id"))
+            is not None
+        }
+        thesis_ids = {
+            thesis_id
+            for proposal in proposals
+            if (thesis_id := _payload_uuid(proposal.target_context, "thesis_id"))
+            is not None
+        }
+        statements = self._records_by_id(SourceStatement, statement_ids)
+        theses = self._records_by_id(Thesis, thesis_ids)
+        spans = self._records_by_id(
+            SourceSpan,
+            {statement.source_span_id for statement in statements.values()},
+        )
+        documents = self._records_by_id(
+            DocumentVersion,
+            {span.document_version_id for span in spans.values()},
+        )
+        linked_document_ids = set(
+            self._session.scalars(
+                select(CaseDocumentVersion.document_version_id)
+                .where(CaseDocumentVersion.research_case_id == case_id)
+                .where(CaseDocumentVersion.document_version_id.in_(set(documents)))
+            )
+        ) if documents else set()
+        pending: dict[str, int] = {}
+        for proposal in proposals:
+            source_statement = statements.get(
+                _payload_uuid(proposal.payload, "source_statement_id")
+            )
+            thesis = theses.get(_payload_uuid(proposal.target_context, "thesis_id"))
+            span = spans.get(source_statement.source_span_id) if source_statement else None
+            document = documents.get(span.document_version_id) if span else None
+            if thesis is None or thesis.research_case_id != case_id:
+                continue
+            if document is None or document.id not in linked_document_ids:
+                continue
+            admission = classify_source(
+                document.source_url,
+                document.parser_version,
+                document.parse_state in {"success", "parsed"},
+            )
+            if admission.can_accept and thesis.statement in active_factors:
+                pending[thesis.statement] = pending.get(thesis.statement, 0) + 1
+        return pending
+
+    def _records_by_id(self, model, ids: set[uuid.UUID]) -> dict:
+        if not ids:
+            return {}
+        return {
+            record.id: record
+            for record in self._session.scalars(select(model).where(model.id.in_(ids)))
+        }
+
+    @staticmethod
+    def _conclusion_confidence(factors: list[EventResearchFactorDTO]) -> str:
+        if not factors or any(
+            factor.reviewed_support_count + factor.reviewed_contradiction_count == 0
+            for factor in factors
+        ):
+            return "low"
+        return "medium" if any(factor.pending_proposal_count for factor in factors) else "high"
 
     def _evidence(self, case_id: uuid.UUID) -> list[EventKeyEvidenceDTO]:
         rows = self._session.execute(
@@ -389,3 +497,11 @@ def _leading_count(value: str | None) -> int | None:
         return None
     digits = "".join(char for char in value if char.isdigit())
     return int(digits) if digits else None
+
+
+def _payload_uuid(payload: object, key: str) -> uuid.UUID | None:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None

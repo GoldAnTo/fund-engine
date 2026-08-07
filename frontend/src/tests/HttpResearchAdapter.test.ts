@@ -1039,10 +1039,10 @@ describe("HttpResearchAdapter", () => {
           status: "exhausted", active_run_id: null, current_round: 3,
           status_summary: "无法下结论", current_gap: "缺少反证", next_human_action: null,
         },
-        conclusion: { state: "cannot_conclude", text: "当前不能下结论", citations: [] },
+        conclusion: { state: "cannot_conclude", text: "当前不能下结论", confidence: "medium", citations: [] },
         factors: [{
           statement: "资本开支担忧", position: 1, reviewed_support_count: 2,
-          reviewed_contradiction_count: 1, current_gap: "缺少反证",
+          reviewed_contradiction_count: 1, pending_proposal_count: 1, current_gap: "缺少反证",
         }],
         evidence: [],
         progress: { verified: 3, pending: 2, invalid_source: 1, current_gap: "缺少反证" },
@@ -1061,8 +1061,10 @@ describe("HttpResearchAdapter", () => {
       position: 1,
       reviewedSupportCount: 2,
       reviewedContradictionCount: 1,
+      pendingProposalCount: 1,
       currentGap: "缺少反证",
     });
+    expect(view.conclusion.confidence).toBe("medium");
     expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
   });
 
@@ -1141,9 +1143,9 @@ describe("HttpResearchAdapter", () => {
       position: factor.position,
       currentGap: factor.currentGap,
     }))).toEqual([
-      { statement: "新因素甲", position: 1, currentGap: "缺少能区分主要解释的反证" },
-      { statement: "新因素乙", position: 2, currentGap: "缺少能区分主要解释的反证" },
-      { statement: "新因素丙", position: 3, currentGap: "缺少能区分主要解释的反证" },
+      { statement: "新因素甲", position: 1, currentGap: "尚缺少可采纳证据" },
+      { statement: "新因素乙", position: 2, currentGap: "尚缺少可采纳证据" },
+      { statement: "新因素丙", position: 3, currentGap: "尚缺少可采纳证据" },
     ]);
     expect(view.lifecycle).toMatchObject({
       status: "continuing",

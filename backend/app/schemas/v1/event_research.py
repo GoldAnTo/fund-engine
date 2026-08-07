@@ -163,6 +163,7 @@ class EventResearchFactorDTO(V1Model):
     position: int
     reviewed_support_count: int
     reviewed_contradiction_count: int
+    pending_proposal_count: int
     current_gap: str | None
 
 
@@ -181,6 +182,7 @@ class EventKeyEvidenceDTO(V1Model):
 class EventConclusionDraftDTO(V1Model):
     state: str
     text: str
+    confidence: str
     citations: list[EventKeyEvidenceDTO]
 
 

@@ -59,6 +59,7 @@ export interface EventFactor {
   position: number;
   reviewedSupportCount: number;
   reviewedContradictionCount: number;
+  pendingProposalCount: number;
   currentGap: string | null;
 }
 
@@ -146,7 +147,7 @@ export interface EventReviewQueue {
 export interface EventWorkbench {
   event: EventResearchListItem;
   lifecycle: EventLifecycle;
-  conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; citations: EventEvidenceCitation[] };
+  conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence: "low" | "medium" | "high"; citations: EventEvidenceCitation[] };
   factors: EventFactor[];
   evidence: EventEvidenceCitation[];
   progress: WorkbenchProgress;
