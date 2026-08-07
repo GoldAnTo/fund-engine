@@ -4,6 +4,27 @@ import { expect, test } from "@playwright/test";
 // regression keeps the corresponding reviewer contract honest: invalid
 // fixtures remain visible for audit but cannot be accepted as formal evidence.
 test.describe("Event research evidence review", () => {
+  test("keeps the conclusion, factors, and sole next action usable on a narrow workbench", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/events/event-tsm?client=mock");
+
+    const conclusion = page.locator(".event-conclusion");
+    const factors = page.locator(".event-factors");
+    const action = page.locator(".event-next-action .prototype-button.primary");
+    await expect(conclusion).toBeVisible();
+    await expect(factors).toBeVisible();
+    await expect(action).toHaveCount(1);
+    await expect(action).toBeVisible();
+
+    const conclusionBox = await conclusion.boundingBox();
+    const factorsBox = await factors.boundingBox();
+    expect(conclusionBox?.y).toBeLessThan(factorsBox?.y ?? Number.POSITIVE_INFINITY);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await action.click();
+    await expect(page).toHaveURL(/\/events\/event-tsm\/review/);
+  });
+
   test("shows review progress, a traceable original-source link, and return feedback", async ({ page }) => {
     await page.goto("/events/event-tsm/review?client=mock");
 
