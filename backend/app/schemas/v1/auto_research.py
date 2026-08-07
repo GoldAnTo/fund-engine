@@ -45,7 +45,9 @@ class ResearchRunEventsResponse(V1Model):
 class StartResearchRunRequest(V1Model):
     max_rounds: int = Field(default=3, ge=1, le=3)
     budget: int = Field(default=100, ge=1)
-    auto_execute: bool = True
+    # Retained only for clients during rollout.  The API always queues work
+    # for the durable worker and never executes in the request process.
+    auto_execute: bool = False
 
 class ResearchTaskDTO(V1Model):
     id: str

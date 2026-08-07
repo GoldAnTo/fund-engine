@@ -30,6 +30,7 @@ from app.env import load_local_env
 from app.models.ledger import (
     AIRun,
     Base,
+    CaseDocumentVersion,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
@@ -39,7 +40,9 @@ from app.models.ledger import (
 from app.services.compliance import ComplianceRefusedError
 
 
-def _pending_versions(session: Session) -> list[DocumentVersion]:
+def _pending_versions(
+    session: Session, research_case_id: uuid.UUID | None = None
+) -> list[DocumentVersion]:
     """Versions that have source spans but no extracted statements yet AND no
     successful extract run on record.
 
@@ -59,11 +62,13 @@ def _pending_versions(session: Session) -> list[DocumentVersion]:
         .where(SourceSpan.document_version_id == DocumentVersion.id)
         .exists()
     )
-    candidates = list(
-        session.scalars(
-            select(DocumentVersion).where(has_span, ~has_statement)
-        )
-    )
+    stmt = select(DocumentVersion).where(has_span, ~has_statement)
+    if research_case_id is not None:
+        stmt = stmt.join(
+            CaseDocumentVersion,
+            CaseDocumentVersion.document_version_id == DocumentVersion.id,
+        ).where(CaseDocumentVersion.research_case_id == research_case_id)
+    candidates = list(session.scalars(stmt))
     extracted = successful_extract_version_ids(session)
     retryable = [v for v in candidates if v.id not in extracted]
 
@@ -103,7 +108,7 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     # 1. Extract statements from every pending document version (has spans,
     # no statements yet).
     if not skip_extract:
-        versions = _pending_versions(session)
+        versions = _pending_versions(session, case.id)
         total_statements = 0
         for version in versions:
             statements = extractor.extract(version.id, session)

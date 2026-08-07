@@ -49,10 +49,14 @@ cd backend && python scripts/eval_recall_ab.py       # recall@20: 0.7333 → 1.0
 
 # 前端：开发与测试
 cd frontend && npm ci
-npm run dev                                          # 默认 mock 模式，无需后端
+npm run dev:live                                     # 默认真实 API（VITE_RESEARCH_API_URL 可指定后端）
+npm run dev:mock                                     # 显式内存 mock，用于 UI 演示和隔离测试
 npm test                                             # 62 vitest
 npm run e2e                                          # 32 条 Playwright（macOS 12 用 PW_BROWSER_CHANNEL=chrome）
 ```
+
+本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
+与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
 
 ## 仓库结构
 
@@ -71,8 +75,7 @@ npm run e2e                                          # 32 条 Playwright（macOS
   双流水线，按目录变更触发
 - **分支保护**：main 要求 4 项检查全部通过方可合并（strict 模式），
   禁止 force push 与删除
-- **e2e 三层覆盖**：结构锚点 → 只读断言（mock/真实后端皆可）→
-  写入闭环（`?client=mock` 强制内存适配器，零真实 API 调用）
+- **e2e 三层覆盖**：结构锚点 → 只读断言（mock 测试显式 `?client=mock`；产品默认始终连接真实 API）
 
 ## 文档导航
 

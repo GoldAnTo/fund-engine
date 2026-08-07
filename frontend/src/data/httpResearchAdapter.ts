@@ -75,6 +75,9 @@ import type {
   ConclusionView,
   ResearchRunDetail,
   ResearchRunSummary,
+  ProposalReviewItem,
+  StartResearchRunOptions,
+  ProposalReviewPayload,
 } from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
@@ -2736,6 +2739,24 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getResearchRun(runId: string): Promise<ResearchRunDetail> {
     return this.get<ResearchRunDetail>(`/research-runs/${encodeURIComponent(runId)}`);
+  }
+
+  async startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail> {
+    return this.post<ResearchRunDetail>(`/research-cases/${encodeURIComponent(caseId)}/runs`, options);
+  }
+
+  async cancelResearchRun(runId: string): Promise<ResearchRunSummary> {
+    return this.post<ResearchRunSummary>(`/research-runs/${encodeURIComponent(runId)}/cancel`, {});
+  }
+
+  async listReviewProposals(caseId?: string): Promise<ProposalReviewItem[]> {
+    const qs = caseId ? `?case_id=${encodeURIComponent(caseId)}` : "";
+    const dto = await this.get<{ items: ProposalReviewItem[] }>(`/review-proposals${qs}`);
+    return dto.items;
+  }
+
+  async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
+    await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
   }
 
   async getConclusionView(

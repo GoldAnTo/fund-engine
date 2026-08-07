@@ -73,6 +73,10 @@ export const researchClient: ResearchClient = {
   getConclusionView: (caseId, opts) => _client.getConclusionView(caseId, opts),
   listResearchRuns: (caseId) => _client.listResearchRuns(caseId),
   getResearchRun: (runId) => _client.getResearchRun(runId),
+  startResearchRun: (caseId, options) => _client.startResearchRun(caseId, options),
+  cancelResearchRun: (runId) => _client.cancelResearchRun(runId),
+  listReviewProposals: (caseId) => _client.listReviewProposals(caseId),
+  reviewProposal: (proposalId, payload) => _client.reviewProposal(proposalId, payload),
 };
 
 // Re-export common types so call sites don't need to dig into the adapter.

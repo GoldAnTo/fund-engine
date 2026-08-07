@@ -158,6 +158,13 @@ class DocumentService:
         )
         return version, True
 
+    def attach_to_case(
+        self, *, research_case_id: uuid.UUID, document_version_id: uuid.UUID
+    ) -> None:
+        self._repo.attach_to_case(
+            research_case_id=research_case_id, document_version_id=document_version_id
+        )
+
     def add_span(
         self,
         document_version_id: uuid.UUID,
