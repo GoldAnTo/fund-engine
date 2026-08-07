@@ -5,8 +5,8 @@ import {
   Navigate,
   Route,
   Routes,
-  useParams,
 } from "react-router-dom";
+import { LegacyEventRedirect } from "./components/LegacyEventRedirect";
 import { PrototypeShell } from "./components/PrototypeShell";
 import { setResearchClient } from "./data/researchClient";
 import { MockResearchAdapter } from "./data/mockResearchAdapter";
@@ -20,21 +20,8 @@ if (
 ) {
   setResearchClient(new MockResearchAdapter());
 }
-import { OverviewScreen } from "./pages/prototype/OverviewScreen";
-import { NewResearchScreen } from "./pages/prototype/NewResearchScreen";
-import { ResearchPlanScreen } from "./pages/prototype/ResearchPlanScreen";
-import { CaseWorkbenchScreen } from "./pages/prototype/CaseWorkbenchScreen";
-import { RelationshipCanvasScreen } from "./pages/prototype/RelationshipCanvasScreen";
-import { ReviewWorkbenchScreen } from "./pages/prototype/ReviewWorkbenchScreen";
 import { LibraryScreen } from "./pages/prototype/LibraryScreen";
-import { DataCenterScreen } from "./pages/prototype/DataCenterScreen";
 import { VersionsScreen } from "./pages/prototype/VersionsScreen";
-import { ThemeIndexScreen } from "./pages/prototype/ThemeIndexScreen";
-import { ThemeWorkbenchScreen } from "./pages/prototype/ThemeWorkbenchScreen";
-import { ConclusionScreen } from "./pages/prototype/ConclusionScreen";
-import { CompanyListPage } from "./pages/prototype/CompanyListPage";
-import { AutoResearchRunsScreen } from "./pages/prototype/AutoResearchRunsScreen";
-import { TopicListPage } from "./pages/prototype/TopicListPage";
 import { EventResearchCreateScreen } from "./pages/prototype/EventResearchCreateScreen";
 import { EventResearchListScreen } from "./pages/prototype/EventResearchListScreen";
 import { EventResearchWorkbenchScreen } from "./pages/prototype/EventResearchWorkbenchScreen";
@@ -60,68 +47,25 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="events/:caseId/basis" element={<EventResearchBasisScreen />} />
           <Route path="library" element={<EventEvidenceLibraryScreen />} />
           <Route path="versions" element={<EventMonitoringScreen />} />
-          <Route path="themes" element={<ThemeIndexScreen />} />
-          <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
-          <Route path="workspace" element={<OverviewScreen />} />
-          <Route path="auto-research/runs" element={<AutoResearchRunsScreen />} />
-          <Route path="auto-research/runs/:runId" element={<AutoResearchRunsScreen />} />
-          <Route path="new-research" element={<NewResearchScreen />} />
-          <Route path="plan" element={<ResearchPlanScreen />} />
-          <Route
-            path="relationships"
-            element={<RelationshipCanvasScreen />}
-          />
-          <Route path="relationships/:caseId" element={<RelationshipCanvasScreen />} />
-          <Route path="conclusion" element={<ConclusionScreen />} />
-          <Route path="conclusion/:caseId" element={<ConclusionScreen />} />
-          <Route path="review" element={<ReviewWorkbenchScreen />} />
+          <Route path="themes/*" element={<LegacyEventRedirect />} />
+          <Route path="workspace" element={<LegacyEventRedirect />} />
+          <Route path="auto-research/*" element={<LegacyEventRedirect />} />
+          <Route path="new-research" element={<LegacyEventRedirect />} />
+          <Route path="plan" element={<LegacyEventRedirect />} />
+          <Route path="relationships" element={<LegacyEventRedirect />} />
+          <Route path="relationships/:caseId" element={<LegacyEventRedirect />} />
+          <Route path="conclusion/*" element={<LegacyEventRedirect />} />
+          <Route path="review" element={<LegacyEventRedirect />} />
           <Route path="legacy/library" element={<LibraryScreen />} />
-          <Route path="data" element={<DataCenterScreen />} />
+          <Route path="data" element={<LegacyEventRedirect />} />
           <Route path="legacy/versions" element={<VersionsScreen />} />
-          {/* 兼容旧版研究案例工作台 */}
-          <Route path="cases" element={<CaseWorkbenchScreen />} />
-          <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
-          {/* 二级研究对象入口：读模型已上线，无写路径（命令 API 在后端提供）。
-              子路由 /companies/:id 与 /topics/:tag 复用同一个三栏页
-              （设计图 9/10 视觉，左栏目录 + 中主区 + 右固定证据检查器），
-              用 query string 决定选中；URL 兼容旧链接。 */}
-          <Route path="companies" element={<CompanyListPage />} />
-          <Route
-            path="companies/:companyId"
-            element={<CompanyDossierRedirect />}
-          />
-          <Route path="topics" element={<TopicListPage />} />
-          <Route
-            path="topics/:tag"
-            element={<TopicViewRedirect />}
-          />
+          <Route path="cases" element={<LegacyEventRedirect />} />
+          <Route path="cases/:caseId" element={<LegacyEventRedirect />} />
+          <Route path="companies/*" element={<LegacyEventRedirect />} />
+          <Route path="topics/*" element={<LegacyEventRedirect />} />
           <Route path="*" element={<Navigate to="/events" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,
 );
-
-// /companies/:id → /companies?id=...（设计图 10 视觉在 /companies 主路由）
-function CompanyDossierRedirect() {
-  const params = useParams<{ companyId?: string }>();
-  const id = params.companyId ?? "";
-  return (
-    <Navigate
-      to={`/companies${id ? `?id=${encodeURIComponent(id)}` : ""}`}
-      replace
-    />
-  );
-}
-
-// /topics/:tag → /topics?tag=...（设计图 9 视觉在 /topics 主路由）
-function TopicViewRedirect() {
-  const params = useParams<{ tag?: string }>();
-  const tag = params.tag ?? "";
-  return (
-    <Navigate
-      to={`/topics${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`}
-      replace
-    />
-  );
-}
