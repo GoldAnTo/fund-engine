@@ -17,7 +17,8 @@ from app.models.event_research import (
     EventResearchScopeVersion,
 )
 from app.models.ledger import EvidenceLink, Thesis
-from app.models.operational import EventResearchLifecycle
+from app.models.operational import EventResearchLifecycle, ResearchRun
+from app.services.auto_research import AutoResearchService
 from app.services.event_research_factors import normalize_event_research_factors
 
 
@@ -83,6 +84,9 @@ class EventResearchScopeService:
                 )
             )
         self._session.flush()
+        active_theses = self._sync_active_factor_theses(
+            case_id, normalized, changed_by.strip(), now
+        )
         reviewed_evidence = list(
             self._session.execute(
                 select(EvidenceLink, Thesis)
@@ -105,10 +109,7 @@ class EventResearchScopeService:
             )
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if lifecycle is not None:
-            lifecycle.status_summary = "已更新因素，正在重新归类证据"
-            lifecycle.current_gap = "已更新因素，正在重新归类证据"
-            lifecycle.next_human_action = None
-            lifecycle.updated_at = now
+            self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()
         return UpdatedEventResearchScope(
             version=scope.version,
@@ -152,6 +153,73 @@ class EventResearchScopeService:
             )
         self._session.flush()
         return scope
+
+    def _sync_active_factor_theses(
+        self,
+        case_id: uuid.UUID,
+        factors: list[str],
+        changed_by: str,
+        created_at: datetime,
+    ) -> list[Thesis]:
+        theses: list[Thesis] = []
+        for statement in factors:
+            thesis = self._session.scalar(
+                select(Thesis)
+                .where(Thesis.research_case_id == case_id)
+                .where(Thesis.statement == statement)
+                .order_by(Thesis.created_at, Thesis.id)
+                .limit(1)
+            )
+            if thesis is None:
+                thesis = Thesis(
+                    research_case_id=case_id,
+                    statement=statement,
+                    created_by=changed_by,
+                    created_at=created_at,
+                    creator_type="human",
+                    review_state="confirmed",
+                )
+                self._session.add(thesis)
+                self._session.flush()
+            theses.append(thesis)
+        return theses
+
+    def _continue_research_if_needed(
+        self,
+        lifecycle: EventResearchLifecycle,
+        active_theses: list[Thesis],
+        now: datetime,
+    ) -> None:
+        current_run = (
+            self._session.get(ResearchRun, lifecycle.active_run_id)
+            if lifecycle.active_run_id is not None
+            else None
+        )
+        should_start_successor = (
+            lifecycle.status in {"awaiting_scope", "exhausted"}
+            or current_run is None
+            or current_run.status not in {"queued", "running"}
+        )
+        if should_start_successor:
+            successor = AutoResearchService(self._session).start(
+                lifecycle.research_case_id,
+                max_rounds=current_run.max_rounds if current_run is not None else 3,
+                budget=current_run.budget if current_run is not None else 100,
+                commit=False,
+                thesis_ids=[thesis.id for thesis in active_theses],
+            )
+            lifecycle.status = "continuing"
+            lifecycle.active_run_id = successor.id
+            lifecycle.current_round = min(lifecycle.current_round + 1, 3)
+            lifecycle.status_summary = "已更新因素，正在重新归类证据并继续检索"
+            lifecycle.current_gap = "已更新因素，正在重新归类证据"
+            lifecycle.next_human_action = None
+            lifecycle.updated_at = now
+            return
+        lifecycle.status_summary = "已更新因素，正在重新归类证据"
+        lifecycle.current_gap = "已更新因素，正在重新归类证据"
+        lifecycle.next_human_action = None
+        lifecycle.updated_at = now
 
     def _factors_for(self, scope_version_id: uuid.UUID) -> list[str]:
         return list(

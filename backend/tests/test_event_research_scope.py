@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.models.event_research import (
     EventResearchBrief,
+    EventResearchConclusion,
     EventResearchFactorDraft,
     EventResearchScopeEvidenceAssignment,
     EventResearchScopeFactor,
@@ -21,7 +22,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle
+from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
 from app.services.event_research_scope import EventResearchScopeService
 
 
@@ -325,6 +326,59 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
     assert lifecycle.status_summary == "已更新因素，正在重新归类证据"
     assert lifecycle.current_gap == "已更新因素，正在重新归类证据"
     assert lifecycle.next_human_action is None
+
+
+@pytest.mark.parametrize("paused_status", ["awaiting_scope", "exhausted"])
+def test_scope_update_resumes_research_with_current_scope_factors_only(
+    cmd_client, cmd_session, paused_status: str
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    initial_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    reviewed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    lifecycle.status = paused_status
+    lifecycle.current_gap = "需要调整研究范围"
+    lifecycle.next_human_action = "补充来源或调整研究范围"
+    cmd_session.commit()
+    active_factors = [
+        INITIAL_FACTORS[0],
+        "广告业务增长弱于市场预期",
+        "AI 投入回报周期可能拉长",
+    ]
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={"factors": active_factors, "changed_by": "reviewer"},
+    )
+
+    assert response.status_code == 200
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle.status == "continuing"
+    assert lifecycle.next_human_action is None
+    assert lifecycle.active_run_id is not None
+    assert lifecycle.active_run_id != initial_run_id
+    successor = cmd_session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    assert successor.research_case_id == case_id
+    task_statements = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert task_statements == set(active_factors)
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert workbench.status_code == 200
+    assert [item["statement"] for item in workbench.json()["factors"]] == active_factors
+    assert cmd_session.get(EvidenceLink, reviewed_link.id) is not None
+    assert cmd_session.scalar(
+        select(EventResearchConclusion.id).where(
+            EventResearchConclusion.research_case_id == case_id
+        )
+    ) is None
+    assert workbench.json()["conclusion"]["state"] == "cannot_conclude"
 
 
 @pytest.mark.parametrize(

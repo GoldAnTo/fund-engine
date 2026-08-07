@@ -7,7 +7,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
-from app.models.event_research import EventResearchBrief, EventResearchConclusion, EventResearchFactorDraft
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchConclusion,
+    EventResearchFactorDraft,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
 from app.models.ledger import DocumentVersion, EvidenceLink, SourceSpan, SourceStatement, Thesis
 from app.models.operational import EventResearchLifecycle
 from app.schemas.v1.event_research import (
@@ -127,18 +133,33 @@ class EventResearchQueries:
         )
 
     def _factors(self, case_id: uuid.UUID, current_gap: str | None) -> list[EventResearchFactorDTO]:
-        drafts = list(
-            self._session.scalars(
-                select(EventResearchFactorDraft)
-                .where(EventResearchFactorDraft.research_case_id == case_id)
-                .order_by(EventResearchFactorDraft.position)
-            )
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
         )
+        if scope is not None:
+            factors = list(
+                self._session.scalars(
+                    select(EventResearchScopeFactor)
+                    .where(EventResearchScopeFactor.scope_version_id == scope.id)
+                    .order_by(EventResearchScopeFactor.position)
+                )
+            )
+        else:
+            factors = list(
+                self._session.scalars(
+                    select(EventResearchFactorDraft)
+                    .where(EventResearchFactorDraft.research_case_id == case_id)
+                    .order_by(EventResearchFactorDraft.position)
+                )
+            )
         result: list[EventResearchFactorDTO] = []
-        for draft in drafts[:5]:
+        for factor in factors[:5]:
             thesis_ids = select(Thesis.id).where(
                 Thesis.research_case_id == case_id,
-                Thesis.statement == draft.statement,
+                Thesis.statement == factor.statement,
             )
             counts = dict(
                 self._session.execute(
@@ -150,8 +171,8 @@ class EventResearchQueries:
             )
             result.append(
                 EventResearchFactorDTO(
-                    statement=draft.statement,
-                    position=draft.position,
+                    statement=factor.statement,
+                    position=factor.position,
                     reviewed_support_count=int(counts.get("supports", 0)),
                     reviewed_contradiction_count=int(counts.get("contradicts", 0)),
                     current_gap=current_gap,

@@ -39,6 +39,7 @@ class AutoResearchService:
         budget: int = 100,
         auto_execute: bool = False,
         commit: bool = True,
+        thesis_ids: list[uuid.UUID] | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -48,9 +49,10 @@ class AutoResearchService:
             max_rounds=max(1, min(max_rounds, 3)),
             budget=max(1, budget),
         )
-        theses = list(
-            self.session.scalars(select(Thesis).where(Thesis.research_case_id == case_id))
-        )
+        thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
+        if thesis_ids is not None:
+            thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
+        theses = list(self.session.scalars(thesis_stmt))
         for thesis in theses:
             for task_type, label in (
                 ("support", "寻找支持证据"),
