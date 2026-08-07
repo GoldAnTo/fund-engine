@@ -48,7 +48,7 @@
 - Create: `backend/alembic/versions/0013_event_research_lifecycle.py`
 - Create: `backend/tests/test_event_research_lifecycle.py`
 
-- [ ] **Step 1: Write the failing persistence tests**
+- [x] **Step 1: Write the failing persistence tests**
 
 ```python
 def test_event_brief_is_case_scoped_and_append_only(session):
@@ -76,13 +76,13 @@ def test_event_brief_is_case_scoped_and_append_only(session):
 
 Add tests for one lifecycle row per case, `active_run_id` targeting the correct case, and lifecycle status transitions limited to `extracting`, `researching`, `awaiting_key_review`, `continuing`, `awaiting_scope`, `draft_ready`, `published`, and `exhausted`.
 
-- [ ] **Step 2: Run the new tests and verify they fail**
+- [x] **Step 2: Run the new tests and verify they fail**
 
 Run: `.venv/bin/pytest backend/tests/test_event_research_lifecycle.py -q`
 
 Expected: FAIL because `EventResearchBrief`, `EventResearchFactorDraft`, and `EventResearchLifecycle` do not exist.
 
-- [ ] **Step 3: Add the event ledger tables and lifecycle projection**
+- [x] **Step 3: Add the event ledger tables and lifecycle projection**
 
 ```python
 # backend/app/models/event_research.py
@@ -115,7 +115,7 @@ class EventResearchLifecycle(Base):
 
 Add the three immutable event tables to `IMMUTABLE_TABLES`; keep only `EventResearchLifecycle` mutable. Write Alembic upgrade/downgrade that creates the event tables, factor table, lifecycle projection, and their foreign keys without altering existing cases.
 
-- [ ] **Step 4: Run persistence tests**
+- [x] **Step 4: Run persistence tests**
 
 Run: `.venv/bin/pytest backend/tests/test_event_research_lifecycle.py -q`
 

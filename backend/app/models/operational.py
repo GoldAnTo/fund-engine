@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -282,4 +283,52 @@ class ResearchTask(Base):
     gap_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Event-research lifecycle projection
+# --------------------------------------------------------------------------- #
+EVENT_RESEARCH_LIFECYCLE_STATES = frozenset(
+    {
+        "extracting",
+        "researching",
+        "awaiting_key_review",
+        "continuing",
+        "awaiting_scope",
+        "draft_ready",
+        "published",
+        "exhausted",
+    }
+)
+
+
+class EventResearchLifecycle(Base):
+    """Mutable, one-row projection of an event case's current next step.
+
+    The permanent facts and human decisions remain in the immutable ledger;
+    this row is intentionally replaceable so users see one concise answer to
+    “the system is doing what / I need to do what now?”.
+    """
+
+    __tablename__ = "event_research_lifecycles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('extracting', 'researching', 'awaiting_key_review', "
+            "'continuing', 'awaiting_scope', 'draft_ready', 'published', 'exhausted')",
+            name="ck_event_research_lifecycle_status",
+        ),
+    )
+
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    active_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("research_runs.id"), nullable=True
+    )
+    current_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    current_gap: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_human_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
