@@ -598,6 +598,144 @@ def test_event_workbench_exposes_a_reviewable_draft_when_research_is_ready(cmd_c
     assert "已审核" in response.json()["conclusion"]["text"]
 
 
+def test_event_workbench_exposes_current_scope_progress_and_action_priority(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    first_factor = _confirmed_event()["candidate_factors"][0]
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == first_factor,
+        )
+    )
+    assert thesis is not None
+    valid = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Verified investor relations release",
+        thesis_id=thesis.id,
+    )
+    _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://example.com/fixture",
+        title="Invalid fixture",
+        thesis_id=thesis.id,
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "awaiting_key_review"
+    lifecycle.current_gap = "缺少对资本开支解释的反证"
+    lifecycle.next_human_action = "审核 1 条关键证据"
+    cmd_session.commit()
+
+    awaiting_review = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/workbench"
+    )
+
+    assert awaiting_review.status_code == 200
+    body = awaiting_review.json()
+    assert body["progress"] == {
+        "verified": 0,
+        "pending": 1,
+        "invalid_source": 1,
+        "current_gap": "缺少对资本开支解释的反证",
+    }
+    assert body["scope"] == {
+        "version": 1,
+        "factors": _confirmed_event()["candidate_factors"],
+        "unmapped_evidence_count": 0,
+    }
+    assert body["next_action"] == {
+        "kind": "review_evidence",
+        "label": "审核 1 条关键证据",
+        "count": 1,
+    }
+
+    accepted = cmd_client.post(
+        f"/api/v1/review-proposals/{valid.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "verified primary source supports the active factor",
+            "reviewer_id": "reviewer",
+            "expected_version": valid.version,
+        },
+    )
+    assert accepted.status_code == 201
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "exhausted"
+    lifecycle.current_gap = "缺少对资本开支解释的反证"
+    lifecycle.next_human_action = None
+    cmd_session.commit()
+
+    exhausted = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/workbench"
+    ).json()
+    assert exhausted["progress"]["verified"] == 1
+    assert exhausted["factors"][0] == {
+        "statement": first_factor,
+        "position": 1,
+        "reviewed_support_count": 1,
+        "reviewed_contradiction_count": 0,
+        "current_gap": "缺少对资本开支解释的反证",
+    }
+    assert exhausted["next_action"] == {
+        "kind": "edit_factors",
+        "label": "编辑并继续自动研究",
+        "count": None,
+    }
+
+    factors = [
+        first_factor,
+        "广告业务增长弱于市场预期",
+        "AI 投入回报周期可能拉长",
+    ]
+    updated = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={"factors": factors, "changed_by": "reviewer"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json() == {
+        "version": 2,
+        "factors": factors,
+        "reclassified_evidence_count": 1,
+        "unmapped_evidence_count": 0,
+    }
+    refreshed = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+    assert refreshed["scope"] == {
+        "version": 2,
+        "factors": factors,
+        "unmapped_evidence_count": 0,
+    }
+
+
+def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client, cmd_session) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+
+    for status, expected_kind in [
+        ("awaiting_scope", "edit_factors"),
+        ("exhausted", "edit_factors"),
+        ("researching", "wait"),
+        ("continuing", "wait"),
+        ("draft_ready", "review_conclusion"),
+        ("published", "view_conclusion_change"),
+    ]:
+        lifecycle.status = status
+        lifecycle.next_human_action = "过时的旧动作"
+        cmd_session.commit()
+        response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+        assert response.status_code == 200
+        assert response.json()["next_action"]["kind"] == expected_kind
+
+
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     case_id = uuid.UUID(created["case_id"])

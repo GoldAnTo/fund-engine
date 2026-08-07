@@ -12,7 +12,10 @@ describe("EventResearchWorkbenchScreen", () => {
       event: { id: "event-draft", eventTitle: "财报后的异常下跌", companyName: "示例公司", ticker: "XYZ", eventAt: null, status: "draft_ready", statusSummary: "等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T00:00:00Z" },
       lifecycle: { status: "draft_ready", activeRunId: "run-1", currentRound: 3, summary: "关键证据已审核", currentGap: null, nextHumanAction: "审核结论草案" },
       conclusion: { state: "ai_draft", text: "当前证据最支持资本开支压力这一解释。", citations: [] },
-      factors: [], evidence: [], nextAction: { kind: "review_conclusion", label: "审核结论草案" },
+      factors: [], evidence: [],
+      progress: { verified: 0, pending: 0, invalidSource: 0, currentGap: null },
+      scope: { version: 1, factors: ["资本开支压力", "盈利预期变化", "估值重定价"], unmappedEvidenceCount: 0 },
+      nextAction: { kind: "review_conclusion", label: "审核结论草案" },
     });
     setResearchClient(adapter);
   });

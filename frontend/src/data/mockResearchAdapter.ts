@@ -3710,22 +3710,58 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     this.throwIfOffline();
-    return simulateLatency([
+    const events: EventResearchListItem[] = [
       { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
       { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: "awaiting_key_review", statusSummary: "已筛出 2 条关键证据，等待审核", nextHumanAction: "审核 2 条关键证据", updatedAt: "2026-08-07T09:00:00Z" },
-    ]);
+      { id: "event-cannot-conclude", eventTitle: "公司上调投入指引后下跌", companyName: "样例公司", ticker: null, eventAt: "2026-08-05T00:00:00Z", status: "exhausted", statusSummary: "当前证据不足以区分主要解释", nextHumanAction: null, updatedAt: "2026-08-07T08:30:00Z" },
+      { id: "event-exhausted", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
+      { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
+      { id: "event-published", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
+    ];
+    return simulateLatency(_status ? events.filter((event) => event.status === _status) : events);
   }
 
   async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
     const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
-    const lifecycle: EventLifecycle = { status: event.status, activeRunId: "run-mock", currentRound: 1, summary: event.statusSummary, currentGap: null, nextHumanAction: event.nextHumanAction };
+    const currentGap = event.status === "exhausted"
+      ? "缺少能区分主要解释的反证" : null;
+    const lifecycle: EventLifecycle = { status: event.status, activeRunId: event.status === "published" ? null : "run-mock", currentRound: 1, summary: event.statusSummary, currentGap, nextHumanAction: event.nextHumanAction };
     const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
+    const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
+    const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
+    const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
+      ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
+      : event.status === "draft_ready"
+        ? { kind: "review_conclusion", label: "审核结论草案" }
+        : event.status === "published"
+          ? { kind: "view_conclusion_change", label: "查看结论变更" }
+          : ["awaiting_scope", "exhausted"].includes(event.status)
+            ? { kind: "edit_factors", label: "编辑并继续自动研究" }
+            : { kind: "wait", label: "系统继续处理" };
     return simulateLatency({
       event, lifecycle,
-      conclusion: { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
-      factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
+      conclusion: event.status === "published"
+        ? { state: "published", text: "人工确认：当前材料不足以断定唯一原因。", citations: [] }
+        : event.status === "draft_ready"
+          ? { state: "ai_draft", text: "当前结论草案等待人工复核。", citations: [] }
+          : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
+      factors: factorStatements.map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap })),
       evidence,
-      nextAction: event.status === "awaiting_key_review" ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 } : { kind: "wait", label: "系统继续处理" },
+      progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap },
+      scope: { version: 1, factors: factorStatements, unmappedEvidenceCount: 0 },
+      nextAction,
+    });
+  }
+
+  async updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<{ version: number; factors: string[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
+    this.throwIfOffline();
+    void input.caseId;
+    void input.changedBy;
+    return simulateLatency({
+      version: 2,
+      factors: input.factors,
+      reclassifiedEvidenceCount: 0,
+      unmappedEvidenceCount: 0,
     });
   }
 
@@ -3760,7 +3796,7 @@ export class MockResearchAdapter implements ResearchClient {
           proposalId: "proposal-event-tsm-invalid", status: "pending", proposedAt: "2026-08-07T09:01:00Z", linkId: "link-event-tsm-invalid", thesisId: "thesis-event-tsm", caseId,
           thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "来源不可验证", aiScope: {},
           statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
-          documentVersionId: null, documentSourceUrl: "https://example.test/unverified", documentPublishedAt: null, availableAt: null,
+          documentVersionId: null, documentSourceUrl: "https://unverified-source.invalid/evidence", documentPublishedAt: null, availableAt: null,
           sourceTitle: "未验证测试来源", sourceStatus: "invalid", sourceStatusReason: "测试域名不能作为正式证据来源", canAccept: false, proposalReason: "来源不可验证", position: null,
         },
       ] : [],

@@ -1026,6 +1026,82 @@ describe("HttpResearchAdapter", () => {
     expect(queue.items.map((item) => item.canAccept)).toEqual([false, false]);
   });
 
+  it("maps conclusion-first event workbench progress, current scope, and edit action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        event: {
+          case_id: "event-1", event_title: "Event", company_name: null, ticker: null,
+          event_at: null, lifecycle_status: "exhausted", status_summary: "无法下结论",
+          next_human_action: null, updated_at: "2026-08-08T00:00:00Z",
+        },
+        lifecycle: {
+          status: "exhausted", active_run_id: null, current_round: 3,
+          status_summary: "无法下结论", current_gap: "缺少反证", next_human_action: null,
+        },
+        conclusion: { state: "cannot_conclude", text: "当前不能下结论", citations: [] },
+        factors: [{
+          statement: "资本开支担忧", position: 1, reviewed_support_count: 2,
+          reviewed_contradiction_count: 1, current_gap: "缺少反证",
+        }],
+        evidence: [],
+        progress: { verified: 3, pending: 2, invalid_source: 1, current_gap: "缺少反证" },
+        scope: { version: 4, factors: ["资本开支担忧", "盈利预期变化", "估值重定价"], unmapped_evidence_count: 2 },
+        next_action: { kind: "edit_factors", label: "编辑并继续自动研究", count: null },
+      })),
+    );
+
+    const view = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .getEventWorkbench("event-1");
+
+    expect(view.progress).toEqual({ verified: 3, pending: 2, invalidSource: 1, currentGap: "缺少反证" });
+    expect(view.scope).toEqual({ version: 4, factors: ["资本开支担忧", "盈利预期变化", "估值重定价"], unmappedEvidenceCount: 2 });
+    expect(view.factors[0]).toMatchObject({
+      statement: "资本开支担忧",
+      position: 1,
+      reviewedSupportCount: 2,
+      reviewedContradictionCount: 1,
+      currentGap: "缺少反证",
+    });
+    expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
+  });
+
+  it("sends event scope updates as PUT and maps the current scope response", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({
+      version: 2,
+      factors: ["因素甲", "因素乙", "因素丙"],
+      reclassified_evidence_count: 1,
+      unmapped_evidence_count: 2,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const scope = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .updateEventResearchScope({
+        caseId: "event-1",
+        factors: ["因素甲", "因素乙", "因素丙"],
+        changedBy: "reviewer",
+      });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "http://api.test/api/v1/event-research/event-1/scope",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({
+        factors: ["因素甲", "因素乙", "因素丙"],
+        changed_by: "reviewer",
+      }),
+    });
+    expect(scope).toEqual({
+      version: 2,
+      factors: ["因素甲", "因素乙", "因素丙"],
+      reclassifiedEvidenceCount: 1,
+      unmappedEvidenceCount: 2,
+    });
+  });
+
   it("mock event review queue covers all source admission states", async () => {
     const queue = await new MockResearchAdapter().getEventReviewQueue("event-tsm");
 

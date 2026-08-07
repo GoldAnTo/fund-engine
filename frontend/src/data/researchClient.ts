@@ -28,6 +28,7 @@ export const researchClient: ResearchClient = {
   createEventResearch: (input) => _client.createEventResearch(input),
   listEventResearch: (status) => _client.listEventResearch(status),
   getEventWorkbench: (caseId) => _client.getEventWorkbench(caseId),
+  updateEventResearchScope: (input) => _client.updateEventResearchScope(input),
   getEventReviewQueue: (caseId) => _client.getEventReviewQueue(caseId),
   publishEventConclusion: (input) => _client.publishEventConclusion(input),
   getOverview: (q) => _client.getOverview(q),

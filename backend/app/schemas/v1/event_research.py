@@ -179,10 +179,25 @@ class EventNextActionDTO(V1Model):
     count: int | None = None
 
 
+class EventWorkbenchProgressDTO(V1Model):
+    verified: int
+    pending: int
+    invalid_source: int
+    current_gap: str | None
+
+
+class EventResearchScopeDTO(V1Model):
+    version: int
+    factors: list[str]
+    unmapped_evidence_count: int
+
+
 class EventWorkbenchDTO(V1Model):
     event: EventResearchListItemDTO
     lifecycle: EventResearchLifecycleDTO
     conclusion: EventConclusionDraftDTO
     factors: list[EventResearchFactorDTO]
     evidence: list[EventKeyEvidenceDTO]
+    progress: EventWorkbenchProgressDTO
+    scope: EventResearchScopeDTO
     next_action: EventNextActionDTO

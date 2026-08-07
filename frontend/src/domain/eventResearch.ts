@@ -61,6 +61,19 @@ export interface EventFactor {
   currentGap: string | null;
 }
 
+export interface WorkbenchProgress {
+  verified: number;
+  pending: number;
+  invalidSource: number;
+  currentGap: string | null;
+}
+
+export interface EventResearchScope {
+  version: number;
+  factors: string[];
+  unmappedEvidenceCount: number;
+}
+
 export interface EventEvidenceCitation {
   caseId: string;
   factorStatement: string;
@@ -128,7 +141,9 @@ export interface EventWorkbench {
   conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; citations: EventEvidenceCitation[] };
   factors: EventFactor[];
   evidence: EventEvidenceCitation[];
-  nextAction: { kind: "wait" | "review_evidence" | "review_conclusion" | "supply_scope"; label: string; count?: number };
+  progress: WorkbenchProgress;
+  scope: EventResearchScope;
+  nextAction: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
 }
 
 export interface EventResearchClient {
@@ -136,6 +151,7 @@ export interface EventResearchClient {
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
+  updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
 }

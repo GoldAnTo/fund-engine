@@ -32,6 +32,7 @@ import type {
   EventLifecycle,
   EventLifecycleStatus,
   EventResearchListItem,
+  EventResearchScope,
   EventReviewQueue,
   EventReviewQueueItem,
   EventSourceStatus,
@@ -2837,7 +2838,10 @@ export class HttpResearchAdapter implements ResearchClient {
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
       conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; citations: unknown[] };
       factors: Array<{ statement: string; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; current_gap: string | null }>;
-      evidence: unknown[]; next_action: { kind: "wait" | "review_evidence" | "review_conclusion" | "supply_scope"; label: string; count?: number | null };
+      evidence: unknown[];
+      progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
+      scope: { version: number; factors: string[]; unmapped_evidence_count: number };
+      next_action: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number | null };
     }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
     const evidence = dto.evidence as EventWorkbench["evidence"];
     return {
@@ -2845,7 +2849,24 @@ export class HttpResearchAdapter implements ResearchClient {
       conclusion: { ...dto.conclusion, citations: dto.conclusion.citations as EventWorkbench["conclusion"]["citations"] },
       factors: dto.factors.map((factor) => ({ statement: factor.statement, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, currentGap: factor.current_gap })),
       evidence,
+      progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
+      scope: { version: dto.scope.version, factors: dto.scope.factors, unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
+    };
+  }
+
+  async updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
+    const dto = await this.requestJson<{
+      version: number; factors: string[]; reclassified_evidence_count: number; unmapped_evidence_count: number;
+    }>(`/event-research/${encodeURIComponent(input.caseId)}/scope`, {
+      method: "PUT",
+      body: JSON.stringify({ factors: input.factors, changed_by: input.changedBy }),
+    });
+    return {
+      version: dto.version,
+      factors: dto.factors,
+      reclassifiedEvidenceCount: dto.reclassified_evidence_count,
+      unmappedEvidenceCount: dto.unmapped_evidence_count,
     };
   }
 

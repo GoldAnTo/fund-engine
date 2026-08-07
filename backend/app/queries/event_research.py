@@ -11,6 +11,7 @@ from app.models.event_research import (
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
+    EventResearchScopeEvidenceAssignment,
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
@@ -25,8 +26,11 @@ from app.schemas.v1.event_research import (
     EventResearchLifecycleDTO,
     EventResearchListItemDTO,
     EventResearchListResponse,
+    EventResearchScopeDTO,
+    EventWorkbenchProgressDTO,
     EventWorkbenchDTO,
 )
+from app.services.event_review_queue import EventReviewQueueService
 
 
 class EventResearchQueries:
@@ -59,14 +63,17 @@ class EventResearchQueries:
         if brief is None or lifecycle is None:
             raise NotFoundError("event research case not found")
         event = self._list_item(brief, lifecycle)
+        scope = self._latest_scope(case_id)
         evidence = self._evidence(case_id)
         conclusion = self._conclusion(case_id, lifecycle, evidence)
         return EventWorkbenchDTO(
             event=event,
             lifecycle=self._lifecycle(lifecycle),
             conclusion=conclusion,
-            factors=self._factors(case_id, lifecycle.current_gap),
+            factors=self._factors(case_id, scope, lifecycle.current_gap),
             evidence=evidence,
+            progress=self._progress(case_id, lifecycle),
+            scope=self._scope(scope, case_id),
             next_action=self._next_action(lifecycle),
         )
 
@@ -161,13 +168,60 @@ class EventResearchQueries:
             next_human_action=lifecycle.next_human_action,
         )
 
-    def _factors(self, case_id: uuid.UUID, current_gap: str | None) -> list[EventResearchFactorDTO]:
-        scope = self._session.scalar(
+    def _latest_scope(self, case_id: uuid.UUID) -> EventResearchScopeVersion | None:
+        return self._session.scalar(
             select(EventResearchScopeVersion)
             .where(EventResearchScopeVersion.research_case_id == case_id)
             .order_by(EventResearchScopeVersion.version.desc())
             .limit(1)
         )
+
+    def _scope(
+        self, scope: EventResearchScopeVersion | None, case_id: uuid.UUID
+    ) -> EventResearchScopeDTO:
+        if scope is not None:
+            factors = list(
+                self._session.scalars(
+                    select(EventResearchScopeFactor.statement)
+                    .where(EventResearchScopeFactor.scope_version_id == scope.id)
+                    .order_by(EventResearchScopeFactor.position)
+                )
+            )
+            unmapped_evidence_count = int(
+                self._session.scalar(
+                    select(func.count())
+                    .select_from(EventResearchScopeEvidenceAssignment)
+                    .where(EventResearchScopeEvidenceAssignment.scope_version_id == scope.id)
+                    .where(EventResearchScopeEvidenceAssignment.disposition == "unmapped")
+                )
+                or 0
+            )
+            return EventResearchScopeDTO(
+                version=scope.version,
+                factors=factors,
+                unmapped_evidence_count=unmapped_evidence_count,
+            )
+        # Only pre-scope migrations can reach this branch. New event cases
+        # always create an immutable scope snapshot before work begins.
+        factors = list(
+            self._session.scalars(
+                select(EventResearchFactorDraft.statement)
+                .where(EventResearchFactorDraft.research_case_id == case_id)
+                .order_by(EventResearchFactorDraft.position)
+            )
+        )
+        return EventResearchScopeDTO(
+            version=0,
+            factors=factors,
+            unmapped_evidence_count=0,
+        )
+
+    def _factors(
+        self,
+        case_id: uuid.UUID,
+        scope: EventResearchScopeVersion | None,
+        current_gap: str | None,
+    ) -> list[EventResearchFactorDTO]:
         if scope is not None:
             factors = list(
                 self._session.scalars(
@@ -186,18 +240,30 @@ class EventResearchQueries:
             )
         result: list[EventResearchFactorDTO] = []
         for factor in factors[:5]:
-            thesis_ids = select(Thesis.id).where(
-                Thesis.research_case_id == case_id,
-                Thesis.statement == factor.statement,
-            )
-            counts = dict(
-                self._session.execute(
-                    select(EvidenceLink.role, func.count())
-                    .where(EvidenceLink.thesis_id.in_(thesis_ids))
-                    .where(EvidenceLink.review_state == "reviewed")
-                    .group_by(EvidenceLink.role)
-                ).all()
-            )
+            counts: dict[str, int] = {}
+            if scope is not None:
+                counts = dict(
+                    self._session.execute(
+                        select(EvidenceLink.role, func.count())
+                        .join(
+                            EventResearchScopeEvidenceAssignment,
+                            EventResearchScopeEvidenceAssignment.evidence_link_id
+                            == EvidenceLink.id,
+                        )
+                        .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+                        .where(
+                            EventResearchScopeEvidenceAssignment.scope_version_id
+                            == scope.id,
+                            EventResearchScopeEvidenceAssignment.disposition == "mapped",
+                            EventResearchScopeEvidenceAssignment.factor_statement
+                            == factor.statement,
+                            Thesis.research_case_id == case_id,
+                            Thesis.statement == factor.statement,
+                            EvidenceLink.review_state == "reviewed",
+                        )
+                        .group_by(EvidenceLink.role)
+                    ).all()
+                )
             result.append(
                 EventResearchFactorDTO(
                     statement=factor.statement,
@@ -234,6 +300,17 @@ class EventResearchQueries:
             )
             for link, thesis, statement, span, document in rows
         ]
+
+    def _progress(
+        self, case_id: uuid.UUID, lifecycle: EventResearchLifecycle
+    ) -> EventWorkbenchProgressDTO:
+        review_summary = EventReviewQueueService(self._session).review_queue(case_id).summary
+        return EventWorkbenchProgressDTO(
+            verified=len(current_mapped_evidence_ids(self._session, case_id)),
+            pending=review_summary.pending,
+            invalid_source=review_summary.invalid_source,
+            current_gap=lifecycle.current_gap,
+        )
 
     def _formal_evidence(
         self, case_id: uuid.UUID, evidence_link_ids: list[str] | None = None
@@ -284,10 +361,14 @@ class EventResearchQueries:
             )
         if lifecycle.status == "draft_ready":
             return EventNextActionDTO(kind="review_conclusion", label="审核结论草案")
-        if lifecycle.status in {"awaiting_scope", "exhausted"}:
+        if lifecycle.status in {"awaiting_scope", "exhausted", "cannot_conclude"}:
             return EventNextActionDTO(
-                kind="supply_scope",
-                label=lifecycle.next_human_action or "补充来源或调整研究范围",
+                kind="edit_factors",
+                label="编辑并继续自动研究",
+            )
+        if lifecycle.status == "published":
+            return EventNextActionDTO(
+                kind="view_conclusion_change", label="查看结论变更"
             )
         return EventNextActionDTO(kind="wait", label="系统继续处理")
 
