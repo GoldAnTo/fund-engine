@@ -234,7 +234,7 @@ def test_event_evidence_publish_takes_the_case_lifecycle_lock(
         return None
 
     monkeypatch.setattr(
-        "app.services.proposal_publisher.lock_event_research_lifecycle",
+        "app.services.event_research_scope_evidence.lock_event_research_lifecycle",
         record_lifecycle_lock,
     )
 

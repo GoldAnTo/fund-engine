@@ -59,6 +59,10 @@ class EventResearchScopeService:
         # This takes ResearchCase before lifecycle.  Keep it ahead of every
         # scope read/backfill so legacy cases cannot race with publication.
         lifecycle = lock_event_research_lifecycle(self._session, case_id)
+        if lifecycle is not None and lifecycle.status == "published":
+            raise ValidationFailedError(
+                "published event research cannot update its scope"
+            )
 
         previous = self._session.scalar(
             select(EventResearchScopeVersion)

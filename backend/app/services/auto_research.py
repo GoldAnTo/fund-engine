@@ -197,7 +197,11 @@ class AutoResearchService:
         """
         lifecycle_repo = EventResearchLifecycleRepository(self.session)
         lifecycle = lock_event_research_lifecycle(self.session, run.research_case_id)
-        if lifecycle is None or lifecycle.active_run_id != run.id:
+        if (
+            lifecycle is None
+            or lifecycle.status == "published"
+            or lifecycle.active_run_id != run.id
+        ):
             return
 
         # This is the production handoff immediately after review tasks are

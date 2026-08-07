@@ -90,10 +90,9 @@ def append_current_scope_evidence_assignment(
     the scope/link uniqueness check keeps this append-only projection safe when
     the publisher is invoked more than once in one transaction.
     """
-    # Lock before choosing the latest scope.  Scope updates acquire the same
-    # row before snapshotting reviewed links, so neither side can miss the
-    # other's append before its transaction commits.
-    lock_event_scope_case(session, case_id)
+    # The public helper is also used by direct callers, so it must take the
+    # full case -> lifecycle lock itself before choosing the latest scope.
+    lock_event_research_lifecycle(session, case_id)
     scope = session.scalar(
         select(EventResearchScopeVersion)
         .where(EventResearchScopeVersion.research_case_id == case_id)

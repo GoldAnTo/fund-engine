@@ -30,7 +30,6 @@ from app.repositories.proposals import ProposalRepository
 from app.repositories.research import ResearchRepository
 from app.services.event_research_scope_evidence import (
     append_current_scope_evidence_assignment,
-    lock_event_research_lifecycle,
 )
 
 
@@ -93,10 +92,6 @@ class ProposalPublisher:
         statement_id = uuid.UUID(payload["source_statement_id"])
         now = datetime.now(timezone.utc)
         thesis = self._session.get(Thesis, thesis_id)
-        if thesis is not None:
-            # Keep the global event writer order: case root, then lifecycle.
-            # Legacy/non-event cases simply have no lifecycle row.
-            lock_event_research_lifecycle(self._session, thesis.research_case_id)
         model_version = (
             proposal.proposed_by_ref if proposal.proposed_by_type == "ai" else None
         )
@@ -119,6 +114,8 @@ class ProposalPublisher:
         self._session.add(legacy)
         self._session.flush()
         if thesis is not None:
+            # The public assignment helper takes the global case -> lifecycle
+            # lock once, which also supports direct non-proposal callers.
             append_current_scope_evidence_assignment(
                 self._session,
                 case_id=thesis.research_case_id,

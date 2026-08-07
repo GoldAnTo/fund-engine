@@ -316,6 +316,45 @@ def test_pending_key_evidence_pauses_automatic_expansion_for_human_review(sessio
     assert lifecycle.next_human_action == "审核 1 条关键证据"
 
 
+def test_worker_refresh_does_not_overwrite_published_lifecycle(session) -> None:
+    case = _case(session, "已发布结论不被后台覆盖")
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    lifecycle = EventResearchLifecycle(
+        research_case_id=case.id,
+        status="published",
+        active_run_id=run.id,
+        current_round=1,
+        status_summary="研究结论已人工确认并发布",
+        current_gap=None,
+        next_human_action=None,
+        updated_at=now,
+    )
+    session.add(lifecycle)
+    session.commit()
+
+    AutoResearchService(session).refresh_event_lifecycle(run)
+    session.commit()
+    session.refresh(lifecycle)
+
+    assert lifecycle.status == "published"
+    assert lifecycle.active_run_id == run.id
+    assert lifecycle.next_human_action is None
+
+
 def test_completed_key_review_returns_control_to_automatic_research(session) -> None:
     case = _case(session, "审核后继续研究的事件")
     run = ResearchRun(

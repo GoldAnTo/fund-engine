@@ -699,6 +699,92 @@ def test_publish_resume_after_scope_snapshot_keeps_one_latest_assignment(
     assert assignments[0].disposition == "mapped"
 
 
+def test_direct_assignment_append_takes_the_case_lifecycle_lock(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    lock_calls: list[uuid.UUID] = []
+
+    def record_lifecycle_lock(session, locked_case_id):
+        lock_calls.append(locked_case_id)
+        return session.get(EventResearchLifecycle, locked_case_id)
+
+    monkeypatch.setattr(
+        "app.services.event_research_scope_evidence.lock_event_research_lifecycle",
+        record_lifecycle_lock,
+    )
+
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert lock_calls == [case_id]
+
+
+def test_published_event_rejects_scope_update_without_starting_successor(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    EventConclusionService(cmd_session).create_draft(case_id)
+    EventConclusionService(cmd_session).publish(
+        case_id,
+        text="Human-reviewed conclusion",
+        reviewer="reviewer",
+    )
+    cmd_session.commit()
+    before_versions = list(
+        cmd_session.scalars(
+            select(EventResearchScopeVersion).where(
+                EventResearchScopeVersion.research_case_id == case_id
+            )
+        )
+    )
+    before_runs = list(
+        cmd_session.scalars(
+            select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+        )
+    )
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                "广告业务增长弱于市场预期",
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(EventResearchScopeVersion).where(
+                    EventResearchScopeVersion.research_case_id == case_id
+                )
+            )
+        )
+    ) == len(before_versions)
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+            )
+        )
+    ) == len(before_runs)
+    assert cmd_session.get(EventResearchLifecycle, case_id).status == "published"
+
+
 def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecycle(
     cmd_client, cmd_session
 ) -> None:
