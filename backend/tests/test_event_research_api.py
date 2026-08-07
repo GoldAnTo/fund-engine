@@ -234,6 +234,11 @@ def test_invalid_fixture_decision_does_not_block_valid_event_evidence_progressio
     lifecycle.next_human_action = "审核 2 条关键证据"
     cmd_session.commit()
 
+    queue = cmd_client.get(f"/api/v1/event-research/{case_id}/review-queue")
+    assert queue.status_code == 200
+    assert queue.json()["summary"]["invalid_source"] == 1
+    assert queue.json()["summary"]["pending"] == 1
+
     rejected = cmd_client.post(
         f"/api/v1/review-proposals/{invalid.id}/decisions",
         json={
