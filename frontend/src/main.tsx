@@ -40,6 +40,8 @@ import { EventResearchListScreen } from "./pages/prototype/EventResearchListScre
 import { EventResearchWorkbenchScreen } from "./pages/prototype/EventResearchWorkbenchScreen";
 import { KeyEvidenceReviewScreen } from "./pages/prototype/KeyEvidenceReviewScreen";
 import { EventConclusionReviewScreen } from "./pages/prototype/EventConclusionReviewScreen";
+import { EventEvidenceLibraryScreen } from "./pages/prototype/EventEvidenceLibraryScreen";
+import { EventMonitoringScreen } from "./pages/prototype/EventMonitoringScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -54,6 +56,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="events/:caseId" element={<EventResearchWorkbenchScreen />} />
           <Route path="events/:caseId/review" element={<KeyEvidenceReviewScreen />} />
           <Route path="events/:caseId/conclusion" element={<EventConclusionReviewScreen />} />
+          <Route path="library" element={<EventEvidenceLibraryScreen />} />
+          <Route path="versions" element={<EventMonitoringScreen />} />
           <Route path="themes" element={<ThemeIndexScreen />} />
           <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
           <Route path="workspace" element={<OverviewScreen />} />
@@ -69,9 +73,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="conclusion" element={<ConclusionScreen />} />
           <Route path="conclusion/:caseId" element={<ConclusionScreen />} />
           <Route path="review" element={<ReviewWorkbenchScreen />} />
-          <Route path="library" element={<LibraryScreen />} />
+          <Route path="legacy/library" element={<LibraryScreen />} />
           <Route path="data" element={<DataCenterScreen />} />
-          <Route path="versions" element={<VersionsScreen />} />
+          <Route path="legacy/versions" element={<VersionsScreen />} />
           {/* 兼容旧版研究案例工作台 */}
           <Route path="cases" element={<CaseWorkbenchScreen />} />
           <Route path="cases/:caseId" element={<CaseWorkbenchScreen />} />
