@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, Uuid, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
@@ -54,4 +54,29 @@ class EventResearchFactorDraft(Base):
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventResearchConclusion(Base):
+    """Append-only conclusion drafts and human-published successors.
+
+    A published conclusion never overwrites the AI draft it was based on.  The
+    evidence-link snapshot makes every conclusion independently reviewable
+    even after a later research cycle adds more material.
+    """
+
+    __tablename__ = "event_research_conclusions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False, index=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    primary_factor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_link_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    based_on_conclusion_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("event_research_conclusions.id"), nullable=True
+    )
+    reviewer: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

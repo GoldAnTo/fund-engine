@@ -15,10 +15,13 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchResponse,
     EventResearchListResponse,
     EventWorkbenchDTO,
+    PublishEventConclusionRequest,
+    PublishEventConclusionResponse,
 )
 from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
+from app.services.event_conclusion import EventConclusionService
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -74,3 +77,14 @@ def event_research_workbench(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> EventWorkbenchDTO:
     return EventResearchQueries(db).workbench(case_id)
+
+
+@router.post("/{case_id}/conclusion/publish", response_model=PublishEventConclusionResponse, status_code=status.HTTP_201_CREATED)
+def publish_event_conclusion(
+    case_id: uuid.UUID, payload: PublishEventConclusionRequest, db: Session = Depends(get_db)
+) -> PublishEventConclusionResponse:
+    published = EventConclusionService(db).publish(
+        case_id, text=payload.text, reviewer=payload.reviewer
+    )
+    db.commit()
+    return PublishEventConclusionResponse(conclusion_id=str(published.id), state=published.state)

@@ -87,4 +87,5 @@ export interface EventResearchClient {
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
+  publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
 }

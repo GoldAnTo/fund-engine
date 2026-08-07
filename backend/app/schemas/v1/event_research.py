@@ -98,6 +98,16 @@ class EventConclusionDraftDTO(V1Model):
     citations: list[EventKeyEvidenceDTO]
 
 
+class PublishEventConclusionRequest(V1Model):
+    text: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+
+
+class PublishEventConclusionResponse(V1Model):
+    conclusion_id: str
+    state: str
+
+
 class EventNextActionDTO(V1Model):
     kind: str
     label: str

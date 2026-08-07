@@ -3716,6 +3716,12 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
+  async publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }> {
+    this.throwIfOffline();
+    void input;
+    return simulateLatency({ conclusionId: "event-conclusion-mock", state: "published" });
+  }
+
   async getConclusionView(
     caseId: string,
     opts?: { cutoff?: string },

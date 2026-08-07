@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
-from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
+from app.models.event_research import EventResearchBrief, EventResearchConclusion, EventResearchFactorDraft
 from app.models.ledger import DocumentVersion, EvidenceLink, SourceSpan, SourceStatement, Thesis
 from app.models.operational import EventResearchLifecycle
 from app.schemas.v1.event_research import (
@@ -53,12 +53,7 @@ class EventResearchQueries:
             raise NotFoundError("event research case not found")
         event = self._list_item(brief, lifecycle)
         evidence = self._evidence(case_id)
-        reviewed = [item for item in evidence if item.review_state == "reviewed"]
-        conclusion = EventConclusionDraftDTO(
-            state="cannot_conclude",
-            text="尚不能下结论：系统正在核验各项解释及其反证。",
-            citations=reviewed,
-        )
+        conclusion = self._conclusion(case_id, lifecycle, evidence)
         return EventWorkbenchDTO(
             event=event,
             lifecycle=self._lifecycle(lifecycle),
@@ -66,6 +61,42 @@ class EventResearchQueries:
             factors=self._factors(case_id, lifecycle.current_gap),
             evidence=evidence,
             next_action=self._next_action(lifecycle),
+        )
+
+    def _conclusion(
+        self,
+        case_id: uuid.UUID,
+        lifecycle: EventResearchLifecycle,
+        evidence: list[EventKeyEvidenceDTO],
+    ) -> EventConclusionDraftDTO:
+        record = self._session.scalar(
+            select(EventResearchConclusion)
+            .where(EventResearchConclusion.research_case_id == case_id)
+            .order_by(EventResearchConclusion.created_at.desc())
+            .limit(1)
+        )
+        reviewed = [item for item in evidence if item.review_state == "reviewed"]
+        if record is not None:
+            # The compact API DTO intentionally has no link id; the record's
+            # immutable link-id snapshot is retained for audit, while the
+            # visible citations remain limited to human-reviewed material.
+            return EventConclusionDraftDTO(
+                state=record.state, text=record.text, citations=reviewed
+            )
+        if lifecycle.status == "draft_ready":
+            return EventConclusionDraftDTO(
+                state="ai_draft",
+                text="当前已进入结论复核：尚无足以支持主要因素判断的已审核证据；本研究不能给出因果结论。",
+                citations=reviewed,
+            )
+        if lifecycle.status == "published":
+            return EventConclusionDraftDTO(
+                state="published", text="结论已发布，正在载入可复核证据。", citations=reviewed
+            )
+        return EventConclusionDraftDTO(
+            state="cannot_conclude",
+            text="尚不能下结论：系统正在核验各项解释及其反证。",
+            citations=reviewed,
         )
 
     @staticmethod

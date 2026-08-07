@@ -282,6 +282,9 @@ class AutoResearchService:
             return
         active_run = self.repo.get_run(lifecycle.active_run_id) if lifecycle.active_run_id else None
         if lifecycle.current_round >= 3:
+            from app.services.event_conclusion import EventConclusionService
+
+            EventConclusionService(self.session).create_draft(case_id)
             lifecycle_repo.update(
                 lifecycle,
                 status="draft_ready",

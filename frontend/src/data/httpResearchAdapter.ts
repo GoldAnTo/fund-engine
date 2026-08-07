@@ -2824,6 +2824,14 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
+  async publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }> {
+    const dto = await this.post<{ conclusion_id: string; state: "published" }>(
+      `/event-research/${encodeURIComponent(input.caseId)}/conclusion/publish`,
+      { text: input.text, reviewer: input.reviewer },
+    );
+    return { conclusionId: dto.conclusion_id, state: dto.state };
+  }
+
   private mapEventLifecycle(value: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null }): EventLifecycle {
     return { status: value.status, activeRunId: value.active_run_id, currentRound: value.current_round, summary: value.status_summary, currentGap: value.current_gap, nextHumanAction: value.next_human_action };
   }

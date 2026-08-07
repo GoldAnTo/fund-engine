@@ -111,3 +111,37 @@ def test_event_workbench_never_surfaces_another_case_factors_or_lifecycle(cmd_cl
     assert second_view.json()["event"]["event_title"] == "另一独立新闻事件"
     assert {item["statement"] for item in second_view.json()["factors"]} == {"因素甲", "因素乙", "因素丙"}
     assert all(item["case_id"] == first["case_id"] for item in first_view.json()["evidence"])
+
+
+def test_event_workbench_exposes_a_reviewable_draft_when_research_is_ready(cmd_client, cmd_session) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(created["case_id"]))
+    lifecycle.status = "draft_ready"
+    lifecycle.status_summary = "关键证据已审核，等待结论复核"
+    lifecycle.next_human_action = "审核结论草案"
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{created['case_id']}/workbench")
+
+    assert response.status_code == 200
+    assert response.json()["conclusion"]["state"] == "ai_draft"
+    assert "已审核" in response.json()["conclusion"]["text"]
+
+
+def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(created["case_id"]))
+    lifecycle.status = "draft_ready"
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{created['case_id']}/conclusion/publish",
+        json={"text": "人工确认：当前材料不足以断定唯一原因。", "reviewer": "xiongjiali"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["state"] == "published"
+    view = cmd_client.get(f"/api/v1/event-research/{created['case_id']}/workbench").json()
+    assert view["lifecycle"]["status"] == "published"
+    assert view["conclusion"]["state"] == "published"
+    assert view["conclusion"]["text"] == "人工确认：当前材料不足以断定唯一原因。"
