@@ -17,6 +17,7 @@ from app.models.ledger import (
 )
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
+from app.repositories.operational import TaskRepository
 
 
 def _confirmed_event() -> dict:
@@ -37,18 +38,20 @@ def _confirmed_event() -> dict:
     }
 
 
-def _invalid_evidence_proposal(cmd_session, case_id: uuid.UUID) -> Proposal:
+def _evidence_proposal(
+    cmd_session, case_id: uuid.UUID, *, source_url: str, title: str
+) -> Proposal:
     now = datetime.now(timezone.utc)
     thesis = Thesis(
         research_case_id=case_id,
-        statement="fixture evidence must not publish",
+        statement=f"evidence from {title}",
         created_by="tester",
         created_at=now,
     )
     document = DocumentVersion(
-        content_sha256=hashlib.sha256(b"https://example.com/fixture").hexdigest(),
-        source_url="https://example.com/fixture",
-        title="Fixture article",
+        content_sha256=hashlib.sha256(source_url.encode()).hexdigest(),
+        source_url=source_url,
+        title=title,
         available_at=now,
         acquired_at=now,
         parser_version="html-v1",
@@ -66,7 +69,7 @@ def _invalid_evidence_proposal(cmd_session, case_id: uuid.UUID) -> Proposal:
     statement = SourceStatement(
         source_span_id=span.id,
         kind="fact",
-        normalized_text="Fixture evidence statement",
+        normalized_text=f"Evidence statement from {title}",
         created_at=now,
     )
     cmd_session.add(statement)
@@ -76,7 +79,7 @@ def _invalid_evidence_proposal(cmd_session, case_id: uuid.UUID) -> Proposal:
         payload={
             "source_statement_id": str(statement.id),
             "role": "supports",
-            "reason": "fixture cannot be formal evidence",
+            "reason": f"Evidence proposed from {title}",
             "scope": {"period": "event"},
         },
         target_context={"thesis_id": str(thesis.id), "entity_type": "evidence_link"},
@@ -158,7 +161,12 @@ def test_invalid_fixture_evidence_is_auditable_but_cannot_publish_formal_link(
     cmd_client, cmd_session
 ) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    proposal = _invalid_evidence_proposal(cmd_session, uuid.UUID(created["case_id"]))
+    proposal = _evidence_proposal(
+        cmd_session,
+        uuid.UUID(created["case_id"]),
+        source_url="https://example.com/fixture",
+        title="Fixture article",
+    )
 
     queue = cmd_client.get(
         f"/api/v1/event-research/{created['case_id']}/review-queue"
@@ -187,6 +195,86 @@ def test_invalid_fixture_evidence_is_auditable_but_cannot_publish_formal_link(
             EvidenceLink.thesis_id == uuid.UUID(proposal.target_context["thesis_id"])
         )
     ) is None
+
+
+def test_invalid_fixture_decision_does_not_block_valid_event_evidence_progression(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    invalid = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://example.com/fixture",
+        title="Fixture article",
+    )
+    valid = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Verified investor relations release",
+    )
+    tasks = TaskRepository(cmd_session)
+    invalid_task = tasks.add_task(
+        title="review fixture evidence",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=invalid.id,
+        research_case_id=case_id,
+    )
+    valid_task = tasks.add_task(
+        title="review verified evidence",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=valid.id,
+        research_case_id=case_id,
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    lifecycle.status = "awaiting_key_review"
+    lifecycle.next_human_action = "审核 2 条关键证据"
+    cmd_session.commit()
+
+    rejected = cmd_client.post(
+        f"/api/v1/review-proposals/{invalid.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "fixture must not publish",
+            "reviewer_id": "reviewer",
+            "expected_version": invalid.version,
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert cmd_session.get(Proposal, invalid.id).status == "pending"
+    assert cmd_session.scalar(
+        select(EvidenceLink.id).where(
+            EvidenceLink.thesis_id == uuid.UUID(invalid.target_context["thesis_id"])
+        )
+    ) is None
+
+    accepted = cmd_client.post(
+        f"/api/v1/review-proposals/{valid.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "verified primary source supports the factor",
+            "reviewer_id": "reviewer",
+            "expected_version": valid.version,
+        },
+    )
+
+    assert accepted.status_code == 201
+    cmd_session.refresh(lifecycle)
+    cmd_session.refresh(invalid_task)
+    cmd_session.refresh(valid_task)
+    assert lifecycle.status == "continuing"
+    assert lifecycle.next_human_action is None
+    assert invalid_task.status == "open"
+    assert valid_task.status == "done"
+    assert cmd_session.scalar(
+        select(EvidenceLink.id).where(
+            EvidenceLink.thesis_id == uuid.UUID(valid.target_context["thesis_id"])
+        )
+    ) is not None
 
 
 def test_create_event_requires_confirmed_question_and_three_to_five_factors(cmd_client) -> None:
