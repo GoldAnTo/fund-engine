@@ -56,10 +56,10 @@ function resolveActive(pathname: string): ActivePath {
   if (pathname.startsWith("/plan")) return { primary: "/plan", label: "研究计划", module: "主题驱动", page: "研究计划" };
   if (pathname.startsWith("/relationships")) return { primary: "/relationships", label: "证据图谱", module: "主题驱动", page: "证据图谱" };
   if (pathname.startsWith("/companies")) return { primary: "/companies", label: "公司研究", module: "公司研究", page: "公司深度" };
-  if (pathname.startsWith("/library")) return { primary: "/library", label: "资料与知识", module: "资料与知识", page: "来源资料" };
+  if (pathname.startsWith("/library")) return { primary: "/library", label: "资料库", module: "事件研究", page: "事件证据库" };
   if (pathname.startsWith("/data")) return { primary: "/data", label: "数据中心", module: "数据中心", page: "时点数据" };
   if (pathname.startsWith("/review")) return { primary: "/review", label: "审核中心", module: "审核中心", page: "关系审核" };
-  if (pathname.startsWith("/versions")) return { primary: "/versions", label: "监测与更新", module: "监测与更新", page: "版本比较" };
+  if (pathname.startsWith("/versions")) return { primary: "/versions", label: "监测与更新", module: "事件研究", page: "事件监测" };
   return { primary: "/events", label: "事件研究", module: "事件研究", page: "事件列表" };
 }
 

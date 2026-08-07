@@ -11,11 +11,6 @@ describe("KeyEvidenceReviewScreen", () => {
   const reviewProposal = vi.spyOn(adapter, "reviewProposal");
 
   beforeEach(() => {
-    vi.spyOn(adapter, "listReviewProposals").mockResolvedValue([{
-      id: "proposal-event-tsm", kind: "evidence_link", payload: {}, target_context: {},
-      proposed_by_type: "ai", proposed_by_ref: "auto-research", proposed_at: "2026-08-07T09:00:00Z",
-      basis_cutoff: null, status: "pending", version: 3,
-    }]);
     setResearchClient(adapter);
   });
   afterEach(() => resetResearchClient());
@@ -27,7 +22,7 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(screen.getByRole("button", { name: "采纳" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "需要更多材料" }));
     expect(reviewProposal).toHaveBeenCalledWith("proposal-event-tsm", expect.objectContaining({
-      outcome: "rejected", expected_version: 3,
+      outcome: "rejected", expected_version: 1,
     }));
     expect(await screen.findByText("已记录：系统会围绕该缺口继续检索。")).toBeVisible();
   });

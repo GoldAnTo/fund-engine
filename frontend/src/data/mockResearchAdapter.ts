@@ -2943,6 +2943,7 @@ export class MockResearchAdapter implements ResearchClient {
   private queue: ReviewQueueItem[];
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
+  private eventTsmProposalPending = true;
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2953,6 +2954,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.scenario = scenario;
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.decisions = [];
+    this.eventTsmProposalPending = true;
   }
 
   getDecisions() {
@@ -3644,8 +3646,17 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listReviewProposals(caseId?: string): Promise<ProposalReviewItem[]> {
     this.throwIfOffline();
+    const eventProposal: ProposalReviewItem[] = caseId === "event-tsm" && this.eventTsmProposalPending
+      ? [{
+          id: "proposal-event-tsm", kind: "evidence_link",
+          payload: { source_statement_id: "event-tsm-statement", role: "supports", reason: "资本开支与现金流担忧的原始披露" },
+          target_context: { thesis_id: "event-tsm-factor-1" }, proposed_by_type: "ai",
+          proposed_by_ref: "mock-auto-research", proposed_at: "2026-08-07T09:00:00Z",
+          basis_cutoff: null, status: "pending", version: 1,
+        }]
+      : [];
     return simulateLatency(
-      MOCK_RESEARCH_RUNS.flatMap((run) =>
+      [...eventProposal, ...MOCK_RESEARCH_RUNS.flatMap((run) =>
         !caseId || run.case_id === caseId
           ? run.pending_proposals
               .filter((proposal) => proposal.status === "pending")
@@ -3662,12 +3673,13 @@ export class MockResearchAdapter implements ResearchClient {
                 version: 1,
               }))
           : [],
-      ),
+      )],
     );
   }
 
   async reviewProposal(proposalId: string, _payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
+    if (proposalId === "proposal-event-tsm") this.eventTsmProposalPending = false;
     for (const run of MOCK_RESEARCH_RUNS) {
       for (const item of run.pending_proposals) {
         if (item.id === proposalId) item.status = "decided";
