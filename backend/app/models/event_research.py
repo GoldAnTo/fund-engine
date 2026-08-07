@@ -57,6 +57,44 @@ class EventResearchFactorDraft(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class EventResearchScopeVersion(Base):
+    """An immutable, ordered snapshot of an event case's active factors."""
+
+    __tablename__ = "event_research_scope_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id", "version", name="uq_event_research_scope_versions_case_version"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    change_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventResearchScopeFactor(Base):
+    """One ordered factor in an immutable :class:`EventResearchScopeVersion`."""
+
+    __tablename__ = "event_research_scope_factors"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_version_id", "position", name="uq_event_research_scope_factors_position"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=False, index=True
+    )
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class EventResearchConclusion(Base):
     """Append-only conclusion drafts and human-published successors.
 

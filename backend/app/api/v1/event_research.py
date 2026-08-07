@@ -18,12 +18,15 @@ from app.schemas.v1.event_research import (
     EventWorkbenchDTO,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
+    UpdateEventResearchScopeRequest,
+    UpdateEventResearchScopeResponse,
 )
 from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.event_research_scope import EventResearchScopeService
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -71,6 +74,24 @@ def create_event_research(
             current_gap=lifecycle.current_gap,
             next_human_action=lifecycle.next_human_action,
         ),
+    )
+
+
+@router.put("/{case_id}/scope", response_model=UpdateEventResearchScopeResponse)
+def update_event_research_scope(
+    case_id: uuid.UUID,
+    payload: UpdateEventResearchScopeRequest,
+    db: Session = Depends(get_db),
+) -> UpdateEventResearchScopeResponse:
+    updated = EventResearchScopeService(db).update(
+        case_id, factors=payload.factors, changed_by=payload.changed_by
+    )
+    db.commit()
+    return UpdateEventResearchScopeResponse(
+        version=updated.version,
+        factors=updated.factors,
+        reclassified_evidence_count=updated.reclassified_evidence_count,
+        unmapped_evidence_count=updated.unmapped_evidence_count,
     )
 
 

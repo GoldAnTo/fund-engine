@@ -6,7 +6,12 @@ import hashlib
 
 from sqlalchemy import select
 
-from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchFactorDraft,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
@@ -141,6 +146,20 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert cmd_session.get(ResearchRun, uuid.UUID(body["lifecycle"]["active_run_id"]))
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == parsed_case_id,
+            EventResearchScopeVersion.version == 1,
+        )
+    )
+    assert scope is not None
+    assert list(
+        cmd_session.scalars(
+            select(EventResearchScopeFactor.statement)
+            .where(EventResearchScopeFactor.scope_version_id == scope.id)
+            .order_by(EventResearchScopeFactor.position)
+        )
+    ) == _confirmed_event()["candidate_factors"]
 
 
 def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_session) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.schemas.v1.common import V1Model
 from app.services.source_admission import SourceStatus
@@ -55,6 +55,28 @@ class CreateEventResearchResponse(V1Model):
     case_id: str
     brief_id: str
     lifecycle: EventResearchLifecycleDTO
+
+
+class UpdateEventResearchScopeRequest(V1Model):
+    factors: list[str] = Field(min_length=3, max_length=5)
+    changed_by: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_factors(self) -> "UpdateEventResearchScopeRequest":
+        normalized = [factor.strip() for factor in self.factors]
+        if any(not factor for factor in normalized):
+            raise ValueError("factors must not be blank")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("factors must be unique after trimming whitespace")
+        self.factors = normalized
+        return self
+
+
+class UpdateEventResearchScopeResponse(V1Model):
+    version: int
+    factors: list[str]
+    reclassified_evidence_count: int
+    unmapped_evidence_count: int
 
 
 class EventResearchListItemDTO(V1Model):

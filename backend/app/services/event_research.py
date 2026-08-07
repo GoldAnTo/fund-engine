@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchFactorDraft,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
 from app.models.operational import EventResearchLifecycle
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
@@ -72,8 +77,24 @@ class EventResearchService:
             created_at=now,
         )
         self._session.add(brief)
+        scope = EventResearchScopeVersion(
+            research_case_id=case.id,
+            version=1,
+            changed_by=payload.created_by,
+            change_summary="Initial event research factors",
+            created_at=now,
+        )
+        self._session.add(scope)
+        self._session.flush()
         for position, factor in enumerate(payload.candidate_factors, start=1):
             statement = factor.strip()
+            self._session.add(
+                EventResearchScopeFactor(
+                    scope_version_id=scope.id,
+                    statement=statement,
+                    position=position,
+                )
+            )
             self._session.add(
                 EventResearchFactorDraft(
                     research_case_id=case.id,
