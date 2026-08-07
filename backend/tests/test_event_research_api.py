@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import select
+
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
-from app.models.ledger import Thesis
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 
 
@@ -59,6 +61,33 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert cmd_session.get(ResearchRun, uuid.UUID(body["lifecycle"]["active_run_id"]))
+
+
+def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    response = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert response.status_code == 201
+    case_id = uuid.UUID(response.json()["case_id"])
+    documents = cmd_session.execute(
+        select(DocumentVersion)
+        .join(
+            CaseDocumentVersion,
+            CaseDocumentVersion.document_version_id == DocumentVersion.id,
+        )
+        .where(CaseDocumentVersion.research_case_id == case_id)
+    ).scalars().all()
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.source_url == payload["source_url"]
+    assert document.parser_version == "user-pasted-v1"
+    assert document.parse_state == "partial"
+    spans = cmd_session.scalars(
+        select(SourceSpan).where(SourceSpan.document_version_id == document.id)
+    ).all()
+    assert len(spans) == 1
+    assert spans[0].locator == {"kind": "user_pasted_news"}
+    assert spans[0].verbatim_text == payload["raw_input"]
 
 
 def test_create_event_requires_confirmed_question_and_three_to_five_factors(cmd_client) -> None:

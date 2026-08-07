@@ -125,9 +125,17 @@ def _add_statement_with_text(document_service, research_service, doc, text):
     )
 
 
+def _attach_document_to_thesis_case(document_service, thesis, document):
+    document_service.attach_to_case(
+        research_case_id=thesis.research_case_id,
+        document_version_id=document.id,
+    )
+
+
 def test_recall_ranks_relevant_first(
     session, document_service, research_service, thesis, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     relevant = _add_statement_with_text(
         document_service, research_service, document, "GPU demand 增长 强劲"
     )
@@ -146,6 +154,7 @@ def test_recall_ranks_relevant_first(
 def test_recall_excludes_future_documents(
     session, research_service, thesis, document_service, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     visible = _add_statement_with_text(
         document_service, research_service, document, "GPU demand 增长"
     )
@@ -160,6 +169,7 @@ def test_recall_excludes_future_documents(
         parser_version="test",
         supersedes_id=None,
     )
+    _attach_document_to_thesis_case(document_service, thesis, future_doc)
     _add_statement_with_text(
         document_service, research_service, future_doc, "GPU demand 爆发"
     )
@@ -173,8 +183,9 @@ def test_recall_excludes_future_documents(
 
 
 def test_recall_excludes_already_linked_statements(
-    session, research_service, thesis, statement
+    session, document_service, research_service, thesis, statement, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     research_service.link_evidence(
         thesis.id,
         statement.id,
@@ -199,6 +210,7 @@ def test_recall_hybrid_recovers_dense_only_candidate(
     zh_thesis = research_service.add_thesis(
         case.id, statement="云厂商资本开支高增长将驱动算力需求", created_by="tester"
     )
+    _attach_document_to_thesis_case(document_service, zh_thesis, document)
     dense_only = _add_statement_with_text(
         document_service,
         research_service,
@@ -210,6 +222,52 @@ def test_recall_hybrid_recovers_dense_only_candidate(
     hybrid = RecallService(session).for_thesis(zh_thesis, cutoff=now, mode="hybrid")
     assert dense_only.id not in {s.id for s in baseline}
     assert dense_only.id in {s.id for s in hybrid}
+
+
+def test_recall_only_uses_documents_attached_to_thesis_case(
+    session, document_service, research_service
+):
+    event_case = research_service.add_case(
+        title="event A", industry_topic="event", created_by="tester"
+    )
+    thesis = research_service.add_thesis(
+        event_case.id,
+        statement="capex outlook causes stock price decline",
+        created_by="tester",
+    )
+    event_document = document_service.freeze(
+        raw=b"event A pasted news", source_url="event://pasted-news/a"
+    )
+    _attach_document_to_thesis_case(document_service, thesis, event_document)
+    own_statement = _add_statement_with_text(
+        document_service,
+        research_service,
+        event_document,
+        "capex outlook increased and stock price declined",
+    )
+
+    other_case = research_service.add_case(
+        title="event B", industry_topic="event", created_by="tester"
+    )
+    other_document = document_service.freeze(
+        raw=b"event B pasted news", source_url="event://pasted-news/b"
+    )
+    document_service.attach_to_case(
+        research_case_id=other_case.id,
+        document_version_id=other_document.id,
+    )
+    other_statement = _add_statement_with_text(
+        document_service,
+        research_service,
+        other_document,
+        "capex outlook increased and stock price declined sharply",
+    )
+
+    recalled = RecallService(session).for_thesis(thesis, cutoff=datetime.now(UTC))
+
+    recalled_ids = {statement.id for statement in recalled}
+    assert own_statement.id in recalled_ids
+    assert other_statement.id not in recalled_ids
 
 
 def test_recall_invalid_mode_rejected(session, thesis):
@@ -290,6 +348,7 @@ def test_recall_no_per_thesis_dip_vs_bm25():
 def test_proposer_uses_recall_scope_and_records_cutoff(
     session, document_service, research_service, thesis, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     relevant = _add_statement_with_text(
         document_service, research_service, document, "GPU demand 预计 增长"
     )
@@ -314,6 +373,7 @@ def test_proposer_uses_recall_scope_and_records_cutoff(
 def test_proposer_excludes_irrelevant_statements(
     session, document_service, research_service, thesis, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     _add_statement_with_text(
         document_service, research_service, document, "白酒 消费 疲软 库存"
     )
@@ -329,6 +389,7 @@ def test_proposer_excludes_irrelevant_statements(
 def test_proposer_derives_scope_from_case_when_llm_omits_it(
     session, document_service, research_service, thesis, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     relevant = _add_statement_with_text(
         document_service, research_service, document, "GPU demand 预计 增长"
     )
@@ -356,6 +417,7 @@ def test_proposer_derives_scope_from_case_when_llm_omits_it(
 def test_proposer_rerun_creates_no_duplicate_links(
     session, document_service, research_service, thesis, document
 ):
+    _attach_document_to_thesis_case(document_service, thesis, document)
     _add_statement_with_text(
         document_service, research_service, document, "GPU demand 预计 增长"
     )

@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import (
+    CaseDocumentVersion,
     DocumentVersion,
     EvidenceLink,
     ResearchCase,
@@ -308,6 +309,11 @@ class RecallService:
                 DocumentVersion,
                 SourceSpan.document_version_id == DocumentVersion.id,
             )
+            .join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.document_version_id == DocumentVersion.id,
+            )
+            .where(CaseDocumentVersion.research_case_id == thesis.research_case_id)
         ).all()
 
         linked_statement_ids: set = set()

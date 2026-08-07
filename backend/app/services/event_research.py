@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
 from app.models.operational import EventResearchLifecycle
+from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.auto_research import AutoResearchService
+from app.services.ingest import DocumentService
 from app.services.research import ResearchService
 
 
@@ -39,6 +41,21 @@ class EventResearchService:
             phenomenon=payload.market_reaction,
             core_question=payload.research_question,
             evidence_cutoff=payload.event_at.date() if payload.event_at else None,
+        )
+        document_service = DocumentService(DocumentRepository(self._session))
+        document = document_service.freeze(
+            raw=payload.raw_input.encode("utf-8"),
+            source_url=payload.source_url or "event://pasted-news",
+            parser_version="user-pasted-v1",
+            parse_state="partial",
+        )
+        document_service.attach_to_case(
+            research_case_id=case.id, document_version_id=document.id
+        )
+        document_service.add_span(
+            document_version_id=document.id,
+            locator={"kind": "user_pasted_news"},
+            verbatim_text=payload.raw_input,
         )
         now = _utcnow()
         brief = EventResearchBrief(
