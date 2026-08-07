@@ -27,7 +27,7 @@ function factorLabel(item: EventReviewQueueItem): string {
 function displaySourceTitle(sourceTitle: string | null): string {
   const title = sourceTitle?.trim();
   if (!title) return "未提供来源标题";
-  if (/example\.(?:com|test)\b/i.test(title) || /^https?:\/\//i.test(title) || /^source\s+for\b/i.test(title)) {
+  if (/\bexample\.[a-z0-9-]+\b/i.test(title) || /^https?:\/\//i.test(title) || /^source\s+for\b/i.test(title)) {
     return "来源待核验";
   }
   return title;

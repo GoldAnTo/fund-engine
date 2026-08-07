@@ -71,16 +71,17 @@ describe("KeyEvidenceReviewScreen", () => {
         ...queue,
         items: queue.items.map((item, index) => index === 2 ? {
           ...item,
-          sourceTitle: "Source for https://example.test/unverified",
+          sourceTitle: "Market report from example.org",
+          documentSourceUrl: "https://example.org/unverified",
         } : item),
       };
     });
     renderScreen();
 
     await user.click(await screen.findByRole("button", { name: /来源待核验/ }));
-    expect(screen.queryByText("Source for https://example.test/unverified")).not.toBeInTheDocument();
+    expect(screen.queryByText("Market report from example.org")).not.toBeInTheDocument();
     expect(screen.getAllByText("来源待核验").length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "https://example.test/unverified" })).toHaveAttribute("href", "https://example.test/unverified");
+    expect(screen.getByRole("link", { name: "https://example.org/unverified" })).toHaveAttribute("href", "https://example.org/unverified");
     expect(screen.getAllByText("无效来源")[0]).toBeVisible();
   });
 
