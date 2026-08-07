@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from ipaddress import ip_address
 from urllib.parse import urlparse
 
 
@@ -32,7 +33,11 @@ def classify_source(
     if not source_url or not source_url.strip():
         return SourceAdmission(SourceStatus.INVALID, "缺少来源 URL。", False)
 
-    parsed = urlparse(source_url)
+    try:
+        parsed = urlparse(source_url)
+    except ValueError:
+        return SourceAdmission(SourceStatus.INVALID, "来源 URL 格式无效。", False)
+
     if parsed.scheme.lower() not in {"http", "https"}:
         return SourceAdmission(
             SourceStatus.INVALID,
@@ -40,7 +45,12 @@ def classify_source(
             False,
         )
 
-    hostname = parsed.hostname
+    try:
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError:
+        return SourceAdmission(SourceStatus.INVALID, "来源 URL 格式无效。", False)
+
     if not hostname:
         return SourceAdmission(SourceStatus.INVALID, "来源 URL 缺少主机名。", False)
 
@@ -52,7 +62,14 @@ def classify_source(
             False,
         )
 
-    if parser_version == "user-pasted-v1":
+    if _is_local_or_single_label_host(normalized_host):
+        return SourceAdmission(
+            SourceStatus.INVALID,
+            "来源主机为本地、私网或单标签地址，不能作为有效证据来源。",
+            False,
+        )
+
+    if parser_version.startswith("user-pasted-v"):
         return SourceAdmission(
             SourceStatus.PASTED_UNVERIFIED,
             "来源由用户粘贴解析，尚未完成内容验证。",
@@ -71,3 +88,16 @@ def classify_source(
         "来源链接可访问且内容已验证。",
         True,
     )
+
+
+def _is_local_or_single_label_host(hostname: str) -> bool:
+    """Return whether a hostname cannot represent a public evidence source."""
+    if hostname == "localhost" or "." not in hostname:
+        return True
+
+    try:
+        address = ip_address(hostname)
+    except ValueError:
+        return False
+
+    return address.is_loopback or address.is_private
