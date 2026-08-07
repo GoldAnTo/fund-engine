@@ -15,6 +15,7 @@ from app.models.event_research import (
 )
 from app.models.ledger import EvidenceLink, Thesis
 from app.services.event_research_scope_evidence import (
+    has_current_scope_evidence_coverage,
     current_mapped_evidence_ids,
     lock_event_research_lifecycle,
 )
@@ -40,6 +41,10 @@ class EventConclusionService:
         # Scope, reviewed evidence, and the draft must come from one locked
         # event snapshot; scope updates take this same case -> lifecycle lock.
         lock_event_research_lifecycle(self._session, case_id)
+        if not has_current_scope_evidence_coverage(self._session, case_id):
+            raise ValidationFailedError(
+                "current scope lacks sufficient reviewed mapped evidence for a conclusion draft"
+            )
         scope = self._session.scalar(
             select(EventResearchScopeVersion)
             .where(EventResearchScopeVersion.research_case_id == case_id)

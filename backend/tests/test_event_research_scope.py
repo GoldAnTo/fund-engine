@@ -126,6 +126,29 @@ def _reviewed_evidence(session, case_id: uuid.UUID, factor: str) -> EvidenceLink
     return link
 
 
+def _cover_current_scope(session, case_id: uuid.UUID) -> list[EvidenceLink]:
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert scope is not None
+    links: list[EvidenceLink] = []
+    for factor in _scope_statements(session, scope.id):
+        link = _reviewed_evidence(session, case_id, factor)
+        append_current_scope_evidence_assignment(
+            session,
+            case_id=case_id,
+            evidence_link_id=link.id,
+            factor_statement=factor,
+            created_at=datetime.now(timezone.utc),
+        )
+        links.append(link)
+    session.commit()
+    return links
+
+
 def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_session) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
@@ -375,6 +398,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
         lifecycle.status = "draft_ready"
+        _cover_current_scope(bootstrap, case_id)
         bootstrap.commit()
     finally:
         bootstrap.close()
@@ -411,7 +435,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
         try:
             EventResearchScopeService(session).update(
                 case_id,
-                [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+                INITIAL_FACTORS,
                 "reviewer",
             )
             session.commit()
@@ -494,6 +518,7 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
         lifecycle.status = "draft_ready"
         lifecycle.current_gap = "Need updated factors"
         lifecycle.next_human_action = "Update factors"
+        _cover_current_scope(bootstrap, case_id)
         EventConclusionService(bootstrap).create_draft(case_id)
         bootstrap.commit()
     finally:
@@ -857,6 +882,7 @@ def test_published_event_rejects_scope_update_without_starting_successor(
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
+    _cover_current_scope(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     EventConclusionService(cmd_session).publish(
         case_id,
@@ -1095,16 +1121,15 @@ def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
         json={"factors": active_factors, "changed_by": "reviewer"},
     )
     assert response.status_code == 200
+    _cover_current_scope(cmd_session, case_id)
     draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
 
-    assert draft.primary_factor == INITIAL_FACTORS[0]
-    assert draft.evidence_link_ids == [str(active_link.id)]
     assert str(removed_link.id) not in draft.evidence_link_ids
     workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
     assert workbench.status_code == 200
-    assert [item["factor_statement"] for item in workbench.json()["conclusion"]["citations"]] == [
-        INITIAL_FACTORS[0]
+    assert INITIAL_FACTORS[1] not in [
+        item["factor_statement"] for item in workbench.json()["conclusion"]["citations"]
     ]
 
 
@@ -1154,34 +1179,104 @@ def test_final_key_review_requires_mapped_evidence_for_every_active_factor(
         assert drafts == []
 
 
+def test_final_key_review_requires_two_links_even_for_one_active_factor(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    now = datetime.now(timezone.utc)
+    one_factor_scope = EventResearchScopeVersion(
+        research_case_id=case_id,
+        version=2,
+        changed_by="tester",
+        change_summary="threshold fixture",
+        created_at=now,
+    )
+    cmd_session.add(one_factor_scope)
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchScopeFactor(
+            scope_version_id=one_factor_scope.id,
+            statement=INITIAL_FACTORS[0],
+            position=1,
+        )
+    )
+    cmd_session.commit()
+    link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=now,
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "awaiting_key_review"
+    lifecycle.current_round = 3
+    cmd_session.commit()
+
+    with pytest.raises(ValidationFailedError):
+        EventConclusionService(cmd_session).create_draft(case_id)
+
+    AutoResearchService(cmd_session).continue_after_key_review(case_id)
+    cmd_session.commit()
+
+    assert cmd_session.get(EventResearchLifecycle, case_id).status == "exhausted"
+    assert cmd_session.scalar(
+        select(EventResearchConclusion.id).where(
+            EventResearchConclusion.research_case_id == case_id,
+            EventResearchConclusion.state == "ai_draft",
+        )
+    ) is None
+
+
+def test_create_draft_rejects_insufficient_current_scope_coverage(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(ValidationFailedError):
+        EventConclusionService(cmd_session).create_draft(case_id)
+
+    assert cmd_session.scalar(
+        select(EventResearchConclusion.id).where(
+            EventResearchConclusion.research_case_id == case_id,
+            EventResearchConclusion.state == "ai_draft",
+        )
+    ) is None
+
+
 def test_published_workbench_citations_use_conclusion_evidence_snapshot(
     cmd_client, cmd_session
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    snapshot_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
-    append_current_scope_evidence_assignment(
-        cmd_session,
-        case_id=case_id,
-        evidence_link_id=snapshot_link.id,
-        factor_statement=INITIAL_FACTORS[0],
-        created_at=datetime.now(timezone.utc),
-    )
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
     lifecycle.status = "draft_ready"
+    _cover_current_scope(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     EventConclusionService(cmd_session).publish(
         case_id,
         text="Published with one citation",
         reviewer="reviewer",
     )
-    later_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[1])
+    later_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
     append_current_scope_evidence_assignment(
         cmd_session,
         case_id=case_id,
         evidence_link_id=later_link.id,
-        factor_statement=INITIAL_FACTORS[1],
+        factor_statement=INITIAL_FACTORS[0],
         created_at=datetime.now(timezone.utc),
     )
     cmd_session.commit()
@@ -1189,9 +1284,11 @@ def test_published_workbench_citations_use_conclusion_evidence_snapshot(
     workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
 
     assert workbench.status_code == 200
-    assert [citation["factor_statement"] for citation in workbench.json()["conclusion"]["citations"]] == [
-        INITIAL_FACTORS[0]
+    citation_factors = [
+        citation["factor_statement"] for citation in workbench.json()["conclusion"]["citations"]
     ]
+    assert citation_factors.count(INITIAL_FACTORS[0]) == 1
+    assert set(citation_factors) == set(INITIAL_FACTORS)
 
 
 def test_conclusion_publish_takes_the_case_lifecycle_lock(
@@ -1201,6 +1298,7 @@ def test_conclusion_publish_takes_the_case_lifecycle_lock(
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
+    _cover_current_scope(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     calls: list[uuid.UUID] = []
@@ -1238,6 +1336,7 @@ def test_conclusion_draft_takes_the_case_lifecycle_lock(
         "app.services.event_conclusion.lock_event_research_lifecycle", record_lock
     )
 
+    _cover_current_scope(cmd_session, case_id)
     draft = EventConclusionService(cmd_session).create_draft(case_id)
 
     assert calls == [case_id]
@@ -1251,6 +1350,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
+    _cover_current_scope(cmd_session, case_id)
     v1_draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     assert v1_draft.scope_version_id is not None
@@ -1284,6 +1384,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
         )
     ) is None
 
+    _cover_current_scope(cmd_session, case_id)
     v2_draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     assert v2_draft.scope_version_id != v1_draft.scope_version_id

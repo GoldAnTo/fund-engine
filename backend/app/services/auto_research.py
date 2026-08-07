@@ -13,6 +13,7 @@ from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
+from app.errors import ValidationFailedError
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 from app.models.proposals import Proposal
 from app.models.operational import ResearchTask, TaskItem
@@ -23,7 +24,6 @@ from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope_evidence import (
-    has_current_scope_evidence_coverage,
     lock_event_research_lifecycle,
 )
 
@@ -296,7 +296,11 @@ class AutoResearchService:
             return
         active_run = self.repo.get_run(lifecycle.active_run_id) if lifecycle.active_run_id else None
         if lifecycle.current_round >= 3:
-            if not has_current_scope_evidence_coverage(self.session, case_id):
+            from app.services.event_conclusion import EventConclusionService
+
+            try:
+                EventConclusionService(self.session).create_draft(case_id)
+            except ValidationFailedError:
                 lifecycle_repo.update(
                     lifecycle,
                     status="exhausted",
@@ -306,9 +310,6 @@ class AutoResearchService:
                     next_human_action="补充来源或调整研究范围",
                 )
                 return
-            from app.services.event_conclusion import EventConclusionService
-
-            EventConclusionService(self.session).create_draft(case_id)
             lifecycle_repo.update(
                 lifecycle,
                 status="draft_ready",

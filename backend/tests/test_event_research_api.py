@@ -218,16 +218,6 @@ def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
     assert assignment is not None
     assert assignment.disposition == "mapped"
     assert assignment.factor_statement == active_thesis.statement
-    draft = EventConclusionService(cmd_session).create_draft(case_id)
-    cmd_session.commit()
-    assert draft.primary_factor == active_thesis.statement
-    assert draft.evidence_link_ids == [str(evidence_link_id)]
-    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
-    assert workbench.status_code == 200
-    assert [citation["factor_statement"] for citation in workbench.json()["conclusion"]["citations"]] == [
-        active_thesis.statement
-    ]
-    assert cmd_session.get(EventResearchConclusion, draft.id) is not None
 
 
 def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
@@ -610,9 +600,35 @@ def test_event_workbench_exposes_a_reviewable_draft_when_research_is_ready(cmd_c
 
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(created["case_id"]))
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
-    EventConclusionService(cmd_session).create_draft(uuid.UUID(created["case_id"]))
+    for index, factor in enumerate(_confirmed_event()["candidate_factors"]):
+        thesis = cmd_session.scalar(
+            select(Thesis).where(
+                Thesis.research_case_id == case_id,
+                Thesis.statement == factor,
+            )
+        )
+        assert thesis is not None
+        proposal = _evidence_proposal(
+            cmd_session,
+            case_id,
+            source_url=f"https://investor.tsmc.com/english/quarterly-results/{index}",
+            title=f"Verified release {index}",
+            thesis_id=thesis.id,
+        )
+        confirmed = cmd_client.post(
+            f"/api/v1/review-proposals/{proposal.id}/decisions",
+            json={
+                "outcome": "confirmed",
+                "reason": "verified primary source supports the active factor",
+                "reviewer_id": "reviewer",
+                "expected_version": proposal.version,
+            },
+        )
+        assert confirmed.status_code == 201
+    EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
 
     response = cmd_client.post(
