@@ -15,7 +15,7 @@ from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 from app.models.proposals import Proposal
-from app.models.operational import TaskItem
+from app.models.operational import ResearchTask, TaskItem
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
@@ -461,25 +461,16 @@ class AutoResearchService:
             return None
         if run.scope_thesis_ids is not None:
             return [uuid.UUID(value) for value in run.scope_thesis_ids]
-        from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
-
-        scope = self.session.scalar(
-            select(EventResearchScopeVersion)
-            .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
-            .order_by(EventResearchScopeVersion.version.desc())
-            .limit(1)
+        task_thesis_ids = list(
+            self.session.scalars(
+                select(ResearchTask.thesis_id)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.thesis_id.is_not(None))
+                .distinct()
+            )
         )
-        if scope is not None:
-            active_statements = select(EventResearchScopeFactor.statement).where(
-                EventResearchScopeFactor.scope_version_id == scope.id
-            )
-            return list(
-                self.session.scalars(
-                    select(Thesis.id)
-                    .where(Thesis.research_case_id == run.research_case_id)
-                    .where(Thesis.statement.in_(active_statements))
-                )
-            )
+        if task_thesis_ids:
+            return task_thesis_ids
         return None
 
     def _run_theses(self, run) -> list[Thesis]:

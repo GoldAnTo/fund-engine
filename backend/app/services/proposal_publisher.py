@@ -22,12 +22,15 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import EvidenceLink
+from app.models.ledger import EvidenceLink, Thesis
 from app.models.proposals import Proposal, ProposalReviewDecision
 from app.models.versions import EvidenceLinkVersion
 from app.repositories.outbox import emit_event
 from app.repositories.proposals import ProposalRepository
 from app.repositories.research import ResearchRepository
+from app.services.event_research_scope_evidence import (
+    append_current_scope_evidence_assignment,
+)
 
 
 def final_evidence_payload(
@@ -109,6 +112,15 @@ class ProposalPublisher:
         )
         self._session.add(legacy)
         self._session.flush()
+        thesis = self._session.get(Thesis, thesis_id)
+        if thesis is not None:
+            append_current_scope_evidence_assignment(
+                self._session,
+                case_id=thesis.research_case_id,
+                evidence_link_id=legacy.id,
+                factor_statement=thesis.statement,
+                created_at=now,
+            )
 
         # Durable versioned edge.  Persist the parent row first: PostgreSQL
         # enforces this FK (unlike SQLite's default test configuration).

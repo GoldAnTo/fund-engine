@@ -222,6 +222,62 @@ def test_scope_service_backfills_legacy_drafts_before_appending_an_update(cmd_se
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
 
 
+def test_legacy_run_scope_falls_back_to_its_own_tasks_not_latest_scope(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    legacy_thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == INITIAL_FACTORS[1],
+        )
+    )
+    assert legacy_thesis is not None
+    now = datetime.now(timezone.utc)
+    legacy_run = ResearchRun(
+        research_case_id=case_id,
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=3,
+        budget=100,
+        budget_used=0,
+        stop_reason=None,
+        scope_thesis_ids=None,
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_session.add(legacy_run)
+    cmd_session.flush()
+    cmd_session.add(
+        ResearchTask(
+            run_id=legacy_run.id,
+            research_case_id=case_id,
+            thesis_id=legacy_thesis.id,
+            task_type="support",
+            query="legacy task",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    cmd_session.commit()
+    update = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[2],
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    assert update.status_code == 200
+
+    assert AutoResearchService(cmd_session)._run_thesis_ids(legacy_run) == [legacy_thesis.id]
+
+
 def test_scope_update_keeps_removed_factor_evidence_and_reports_mapping_counts(
     cmd_client, cmd_session
 ) -> None:

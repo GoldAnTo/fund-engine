@@ -8,7 +8,9 @@ from sqlalchemy import select
 
 from app.models.event_research import (
     EventResearchBrief,
+    EventResearchConclusion,
     EventResearchFactorDraft,
+    EventResearchScopeEvidenceAssignment,
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
@@ -23,6 +25,7 @@ from app.models.ledger import (
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
 from app.repositories.operational import TaskRepository
+from app.services.event_conclusion import EventConclusionService
 
 
 def _confirmed_event() -> dict:
@@ -51,14 +54,16 @@ def _evidence_proposal(
     title: str,
     document_case_id: uuid.UUID | None = None,
     thesis_case_id: uuid.UUID | None = None,
+    thesis_id: uuid.UUID | None = None,
 ) -> Proposal:
     now = datetime.now(timezone.utc)
-    thesis = Thesis(
+    thesis = cmd_session.get(Thesis, thesis_id) if thesis_id is not None else Thesis(
         research_case_id=thesis_case_id or case_id,
         statement=f"evidence from {title}",
         created_by="tester",
         created_at=now,
     )
+    assert thesis is not None
     document = DocumentVersion(
         content_sha256=hashlib.sha256(source_url.encode()).hexdigest(),
         source_url=source_url,
@@ -68,7 +73,9 @@ def _evidence_proposal(
         parser_version="html-v1",
         parse_state="success",
     )
-    cmd_session.add_all([thesis, document])
+    if thesis_id is None:
+        cmd_session.add(thesis)
+    cmd_session.add(document)
     cmd_session.flush()
     cmd_session.add(
         CaseDocumentVersion(
@@ -169,6 +176,58 @@ def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cm
     response = cmd_client.post("/api/v1/event-research", json=payload)
 
     assert response.status_code == 422
+
+
+def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    active_thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == _confirmed_event()["candidate_factors"][0],
+        )
+    )
+    assert active_thesis is not None
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Verified investor relations release",
+        thesis_id=active_thesis.id,
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "verified primary source supports the active factor",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 201
+    evidence_link_id = uuid.UUID(response.json()["published_entity_id"])
+    assignment = cmd_session.scalar(
+        select(EventResearchScopeEvidenceAssignment).where(
+            EventResearchScopeEvidenceAssignment.evidence_link_id == evidence_link_id
+        )
+    )
+    assert assignment is not None
+    assert assignment.disposition == "mapped"
+    assert assignment.factor_statement == active_thesis.statement
+    draft = EventConclusionService(cmd_session).create_draft(case_id)
+    cmd_session.commit()
+    assert draft.primary_factor == active_thesis.statement
+    assert draft.evidence_link_ids == [str(evidence_link_id)]
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert workbench.status_code == 200
+    assert [citation["factor_statement"] for citation in workbench.json()["conclusion"]["citations"]] == [
+        active_thesis.statement
+    ]
+    assert cmd_session.get(EventResearchConclusion, draft.id) is not None
 
 
 def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_session) -> None:

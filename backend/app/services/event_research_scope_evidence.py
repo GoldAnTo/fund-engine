@@ -42,3 +42,51 @@ def current_mapped_evidence_ids(session: Session, case_id: uuid.UUID) -> list[uu
             .where(EvidenceLink.review_state == "reviewed")
         )
     )
+
+
+def append_current_scope_evidence_assignment(
+    session: Session,
+    *,
+    case_id: uuid.UUID,
+    evidence_link_id: uuid.UUID,
+    factor_statement: str,
+    created_at,
+) -> EventResearchScopeEvidenceAssignment | None:
+    """Append the current scope's classification for a newly reviewed link.
+
+    Evidence publication is retried through a command-idempotency boundary, so
+    the scope/link uniqueness check keeps this append-only projection safe when
+    the publisher is invoked more than once in one transaction.
+    """
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    if scope is None:
+        return None
+    assignment = session.scalar(
+        select(EventResearchScopeEvidenceAssignment).where(
+            EventResearchScopeEvidenceAssignment.scope_version_id == scope.id,
+            EventResearchScopeEvidenceAssignment.evidence_link_id == evidence_link_id,
+        )
+    )
+    if assignment is not None:
+        return assignment
+    is_active = session.scalar(
+        select(EventResearchScopeFactor.id).where(
+            EventResearchScopeFactor.scope_version_id == scope.id,
+            EventResearchScopeFactor.statement == factor_statement,
+        )
+    ) is not None
+    assignment = EventResearchScopeEvidenceAssignment(
+        scope_version_id=scope.id,
+        evidence_link_id=evidence_link_id,
+        factor_statement=factor_statement if is_active else None,
+        disposition="mapped" if is_active else "unmapped",
+        created_at=created_at,
+    )
+    session.add(assignment)
+    session.flush()
+    return assignment

@@ -176,7 +176,7 @@ def test_scope_migration_skips_postgres_triggers_on_sqlite() -> None:
 
 def test_research_run_scope_migration_persists_selected_thesis_ids() -> None:
     migration = _load_migration("run_scope_migration", RUN_SCOPE_MIGRATION_PATH)
-    operations = _OperationsRecorder("sqlite")
+    operations = _OperationsRecorder("postgresql")
     migration.op = operations
 
     migration.upgrade()
@@ -188,3 +188,8 @@ def test_research_run_scope_migration_persists_selected_thesis_ids() -> None:
     assert column.name == "scope_thesis_ids"
     assert isinstance(column.type, sa.JSON)
     assert column.nullable is True
+    assert len(operations.executed) == 1
+    backfill_sql = operations.executed[0]
+    assert "UPDATE research_runs" in backfill_sql
+    assert "json_agg(DISTINCT research_tasks.thesis_id)" in backfill_sql
+    assert "GROUP BY research_tasks.run_id" in backfill_sql

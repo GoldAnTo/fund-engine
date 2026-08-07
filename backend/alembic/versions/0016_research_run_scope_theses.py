@@ -17,6 +17,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("research_runs", sa.Column("scope_thesis_ids", sa.JSON(), nullable=True))
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            UPDATE research_runs
+            SET scope_thesis_ids = scoped.thesis_ids
+            FROM (
+                SELECT research_tasks.run_id, json_agg(DISTINCT research_tasks.thesis_id) AS thesis_ids
+                FROM research_tasks
+                WHERE research_tasks.thesis_id IS NOT NULL
+                GROUP BY research_tasks.run_id
+            ) AS scoped
+            WHERE research_runs.id = scoped.run_id
+            """
+        )
 
 
 def downgrade() -> None:
