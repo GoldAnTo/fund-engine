@@ -3764,6 +3764,7 @@ export class MockResearchAdapter implements ResearchClient {
       : baseEvent;
     const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
+    const activeFactorStatements = saved?.scope.factors ?? factorStatements;
     const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
     const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
       ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
@@ -3781,7 +3782,7 @@ export class MockResearchAdapter implements ResearchClient {
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
-      factors: factorStatements.map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap })),
+      factors: activeFactorStatements.map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap: lifecycle.currentGap })),
       evidence,
       progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: factorStatements, unmappedEvidenceCount: 0 },

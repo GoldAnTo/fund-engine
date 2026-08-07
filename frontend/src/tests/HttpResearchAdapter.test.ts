@@ -1136,6 +1136,15 @@ describe("HttpResearchAdapter", () => {
       factors,
       unmappedEvidenceCount: 0,
     });
+    expect(view.factors.map((factor) => ({
+      statement: factor.statement,
+      position: factor.position,
+      currentGap: factor.currentGap,
+    }))).toEqual([
+      { statement: "新因素甲", position: 1, currentGap: "缺少能区分主要解释的反证" },
+      { statement: "新因素乙", position: 2, currentGap: "缺少能区分主要解释的反证" },
+      { statement: "新因素丙", position: 3, currentGap: "缺少能区分主要解释的反证" },
+    ]);
     expect(view.lifecycle).toMatchObject({
       status: "continuing",
       nextHumanAction: null,
