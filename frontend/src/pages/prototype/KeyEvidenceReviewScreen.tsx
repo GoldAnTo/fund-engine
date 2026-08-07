@@ -16,12 +16,21 @@ const roleLabel = {
   contextualizes: "补充背景",
 } as const;
 
+const objectHasOwn = (Object as typeof Object & {
+  hasOwn(object: object, property: PropertyKey): boolean;
+}).hasOwn;
+
 function displayDate(value: string | null): string {
   return value ? new Date(value).toLocaleString("zh-CN") : "未记录";
 }
 
 function factorLabel(item: EventReviewQueueItem): string {
   return item.thesisStatement || "未归属因素";
+}
+
+function relationshipLabel(aiRole: string | null): string {
+  if (aiRole && objectHasOwn(roleLabel, aiRole)) return roleLabel[aiRole as keyof typeof roleLabel];
+  return aiRole || "关联";
 }
 
 function nextAction(summary: EventReviewQueue["summary"]): string {
@@ -145,7 +154,7 @@ export function KeyEvidenceReviewScreen() {
           {queue.items.map((queued, index) => <li key={queued.proposalId}>
             <button aria-current={index === position ? "true" : undefined} className={index === position ? "is-selected" : ""} onClick={() => setPosition(index)} type="button">
               <span className="evidence-review-queue-index">{index + 1}</span>
-              <span><strong>{factorLabel(queued)}</strong><small>{queued.sourceTitle || "未标明来源标题"}</small><small>AI 关系：{queued.aiRole && queued.aiRole in roleLabel ? roleLabel[queued.aiRole as keyof typeof roleLabel] : queued.aiRole || "未说明"}</small></span>
+              <span><strong>{factorLabel(queued)}</strong><small>{queued.sourceTitle || "未标明来源标题"}</small><small>AI 关系：{relationshipLabel(queued.aiRole)}</small></span>
               <span className={`evidence-source-status evidence-source-status--${queued.sourceStatus}`}>{sourceStatusLabel[queued.sourceStatus]}</span>
             </button>
           </li>)}
@@ -160,7 +169,7 @@ export function KeyEvidenceReviewScreen() {
         <article className="prototype-paper evidence-original">
           <p className="section-kicker">证据原文</p>
           <blockquote>{item.verbatimText || "该来源未提供可审核的冻结原文。"}</blockquote>
-          <div className="evidence-review-rationale"><p><strong>支持的因素</strong>{factorLabel(item)}</p><p><strong>AI 理由</strong>{item.aiReason || item.proposalReason || "未提供"}</p></div>
+          <div className="evidence-review-rationale"><p><strong>{relationshipLabel(item.aiRole)}的因素</strong>{factorLabel(item)}</p><p><strong>AI 理由</strong>{item.aiReason || item.proposalReason || "未提供"}</p></div>
           <dl className="evidence-review-metadata">
             <div><dt>来源标题</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{sourceTitle}</a> : sourceTitle}</dd></div>
             <div><dt>原始 URL</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{item.documentSourceUrl}</a> : "未提供"}</dd></div>

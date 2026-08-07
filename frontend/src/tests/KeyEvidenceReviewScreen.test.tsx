@@ -41,6 +41,7 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(source).toHaveAttribute("target", "_blank");
     expect(source).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getAllByText("AI 关系：支持")[0]).toBeVisible();
+    expect(screen.getByText("支持的因素")).toBeVisible();
     expect(screen.getByText("发布日期")).toBeVisible();
     const rawUrl = screen.getByRole("link", { name: "https://investor.tsmc.com/english/quarterly-results/2026/q2" });
     expect(rawUrl).toHaveAttribute("target", "_blank");
@@ -59,6 +60,32 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(screen.getByText("此来源仅供审计，不能计入结论。")).toBeVisible();
     expect(screen.getByRole("button", { name: "不采纳，不计入结论" })).toBeVisible();
     expect(screen.getByRole("button", { name: "退回并继续找真实来源" })).toBeVisible();
+  });
+
+  it("describes the selected factor with the queue item's AI relationship", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+
+    await user.click(await screen.findByRole("button", { name: /用户粘贴的市场报道/ }));
+
+    expect(screen.getByText("补充背景的因素")).toBeVisible();
+    expect(screen.queryByText("支持的因素")).not.toBeInTheDocument();
+  });
+
+  it("renders a contradictory relationship without treating it as support", async () => {
+    const originalGetQueue = adapter.getEventReviewQueue.bind(adapter);
+    vi.spyOn(adapter, "getEventReviewQueue").mockImplementation(async (caseId) => {
+      const queue = await originalGetQueue(caseId);
+      return {
+        ...queue,
+        items: queue.items.map((item, index) => index === 0 ? { ...item, aiRole: "contradicts" } : item),
+      };
+    });
+    renderScreen();
+
+    expect(await screen.findByText("反驳的因素")).toBeVisible();
+    expect(screen.getByText("AI 关系：反驳")).toBeVisible();
+    expect(screen.queryByText("支持的因素")).not.toBeInTheDocument();
   });
 
   it("refreshes the event queue after accepting and names the factor, remaining work, and next action", async () => {
