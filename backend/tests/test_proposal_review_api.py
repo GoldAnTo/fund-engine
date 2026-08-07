@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.ledger import (
+    CaseDocumentVersion,
     DocumentVersion,
     EvidenceLink,
     ResearchCase,
@@ -75,6 +76,13 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add_all([thesis, document])
     cmd_session.flush()
+    cmd_session.add(
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=now,
+        )
+    )
     span = SourceSpan(
         document_version_id=document.id,
         locator={"page": 1},

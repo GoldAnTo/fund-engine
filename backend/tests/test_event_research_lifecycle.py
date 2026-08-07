@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
 from app.models.ledger import (
+    CaseDocumentVersion,
     DocumentVersion,
     ImmutableLedgerError,
     ResearchCase,
@@ -59,6 +60,13 @@ def _evidence_proposal(
     )
     session.add_all([thesis, document])
     session.flush()
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=now,
+        )
+    )
     span = SourceSpan(
         document_version_id=document.id,
         verbatim_text="Frozen evidence excerpt",

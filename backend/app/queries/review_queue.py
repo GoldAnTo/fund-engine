@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import (
+    CaseDocumentVersion,
     DocumentVersion,
     EvidenceLink,
     EvidenceReview,
@@ -28,7 +29,7 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.proposals import Proposal
-from app.services.source_admission import SourceAdmission, classify_source
+from app.services.source_admission import SourceAdmission, SourceStatus, classify_source
 from app.schemas.v1.commands import ReviewQueueItemDTO, ReviewQueueResponse
 
 
@@ -67,6 +68,29 @@ def proposal_evidence_context(
     document = (
         session.get(DocumentVersion, span.document_version_id) if span else None
     )
+    if (
+        document is not None
+        and proposal.research_case_id is not None
+        and session.scalar(
+            select(CaseDocumentVersion.id)
+            .where(CaseDocumentVersion.research_case_id == proposal.research_case_id)
+            .where(CaseDocumentVersion.document_version_id == document.id)
+            .limit(1)
+        )
+        is None
+    ):
+        return ProposalEvidenceContext(
+            proposal=proposal,
+            thesis=thesis,
+            statement=None,
+            span=None,
+            document=None,
+            admission=SourceAdmission(
+                SourceStatus.INVALID,
+                "来源文档未绑定到当前研究事件，不能作为有效证据来源。",
+                False,
+            ),
+        )
     admission = classify_source(
         document.source_url if document else None,
         document.parser_version if document else "",
@@ -157,19 +181,16 @@ class ReviewQueueQueries:
         return list(self._db.scalars(query))
 
     def _proposal_item(self, proposal: Proposal) -> ReviewQueueItemDTO | None:
-        payload = proposal.payload
-        statement_id = uuid.UUID(payload["source_statement_id"])
-        thesis_id = uuid.UUID(proposal.target_context["thesis_id"])
-        statement = self._db.get(SourceStatement, statement_id)
-        thesis = self._db.get(Thesis, thesis_id)
+        context = proposal_evidence_context(self._db, proposal)
+        statement, thesis, span, version = (
+            context.statement,
+            context.thesis,
+            context.span,
+            context.document,
+        )
         if statement is None or thesis is None:
             return None
-        span = self._db.get(SourceSpan, statement.source_span_id)
-        version = (
-            self._db.get(DocumentVersion, span.document_version_id)
-            if span is not None
-            else None
-        )
+        payload = proposal.payload
         return ReviewQueueItemDTO(
             link_id=str(proposal.id),
             thesis_id=str(thesis.id),

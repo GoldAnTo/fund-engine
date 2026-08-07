@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.models.events import DomainEvent
 from app.models.ledger import (
+    CaseDocumentVersion,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
@@ -51,6 +52,13 @@ def _seed_evidence_proposal(
     )
     session.add_all([thesis, document])
     session.flush()
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=proposed_at,
+        )
+    )
     span = SourceSpan(
         document_version_id=document.id,
         verbatim_text="Evidence excerpt",

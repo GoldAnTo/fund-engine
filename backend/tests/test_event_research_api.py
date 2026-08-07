@@ -39,7 +39,12 @@ def _confirmed_event() -> dict:
 
 
 def _evidence_proposal(
-    cmd_session, case_id: uuid.UUID, *, source_url: str, title: str
+    cmd_session,
+    case_id: uuid.UUID,
+    *,
+    source_url: str,
+    title: str,
+    document_case_id: uuid.UUID | None = None,
 ) -> Proposal:
     now = datetime.now(timezone.utc)
     thesis = Thesis(
@@ -59,6 +64,13 @@ def _evidence_proposal(
     )
     cmd_session.add_all([thesis, document])
     cmd_session.flush()
+    cmd_session.add(
+        CaseDocumentVersion(
+            research_case_id=document_case_id or case_id,
+            document_version_id=document.id,
+            linked_at=now,
+        )
+    )
     span = SourceSpan(
         document_version_id=document.id,
         verbatim_text="Fixture evidence excerpt",
@@ -193,6 +205,54 @@ def test_invalid_fixture_evidence_is_auditable_but_cannot_publish_formal_link(
     assert cmd_session.scalar(
         select(EvidenceLink.id).where(
             EvidenceLink.thesis_id == uuid.UUID(proposal.target_context["thesis_id"])
+        )
+    ) is None
+
+
+def test_event_evidence_cannot_use_document_bound_to_another_case(
+    cmd_client, cmd_session
+) -> None:
+    current = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    other_payload = _confirmed_event()
+    other_payload["event_title"] = "另一独立事件"
+    other_payload["research_question"] = "另一事件需要什么证据？"
+    other = cmd_client.post("/api/v1/event-research", json=other_payload).json()
+    proposal = _evidence_proposal(
+        cmd_session,
+        uuid.UUID(current["case_id"]),
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Another case's verified source",
+        document_case_id=uuid.UUID(other["case_id"]),
+    )
+
+    queue = cmd_client.get(
+        f"/api/v1/event-research/{current['case_id']}/review-queue"
+    )
+    assert queue.status_code == 200
+    item = next(
+        item for item in queue.json()["items"] if item["proposal_id"] == str(proposal.id)
+    )
+    assert item["source_status"] == "invalid"
+    assert item["can_accept"] is False
+    assert item["document_source_url"] is None
+    assert item["verbatim_text"] is None
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "cross-case source must not publish",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 422
+    assert cmd_session.get(Proposal, proposal.id).status == "pending"
+    assert cmd_session.scalar(
+        select(EvidenceLink.id).where(
+            EvidenceLink.source_statement_id
+            == uuid.UUID(proposal.payload["source_statement_id"])
         )
     ) is None
 
