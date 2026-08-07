@@ -2,9 +2,9 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
-from app.models.operational import ResearchRun, ResearchTask, Job, TaskItem
+from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent, TaskItem
 
 
 def _utcnow() -> datetime:
@@ -32,6 +32,68 @@ class AutoResearchRepository:
         self._session.add(run)
         self._session.flush()
         return run
+
+    def enqueue_run_job(self, run: ResearchRun) -> Job:
+        """Persist the worker handoff in the operational jobs table."""
+        job = Job(
+            kind="research_run",
+            status="queued",
+            target_type="research_run",
+            target_id=run.id,
+            research_case_id=run.research_case_id,
+            created_at=_utcnow(),
+        )
+        self._session.add(job)
+        self._session.flush()
+        self._append_job_event(job, status="queued", step="planning", message="research run queued")
+        return job
+
+    def job_for_run(self, run_id: uuid.UUID) -> Job | None:
+        return self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run_id)
+            .order_by(Job.created_at.desc())
+            .limit(1)
+        )
+
+    def claim_next_run_job(self) -> Job | None:
+        """Claim one queued job atomically; PostgreSQL workers skip each other."""
+        stmt = (
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.status == "queued")
+            .order_by(Job.created_at, Job.id)
+        )
+        if self._session.bind is not None and self._session.bind.dialect.name == "postgresql":
+            stmt = stmt.with_for_update(skip_locked=True)
+        job = self._session.scalar(stmt.limit(1))
+        if job is None:
+            return None
+        job.status = "running"
+        job.step = "extract"
+        job.started_at = job.started_at or _utcnow()
+        self._append_job_event(job, status="running", step="extract", message="worker claimed run")
+        return job
+
+    def recover_stale_run_jobs(self, *, before: datetime) -> int:
+        """Requeue jobs abandoned by a dead worker after a conservative timeout."""
+        jobs = list(
+            self._session.scalars(
+                select(Job)
+                .where(Job.kind == "research_run")
+                .where(Job.status == "running")
+                .where(Job.started_at.is_not(None))
+                .where(Job.started_at < before)
+            )
+        )
+        for job in jobs:
+            job.status = "queued"
+            job.step = "recovered"
+            job.error = "worker lease expired; requeued"
+            self._append_job_event(job, status="queued", step="recovered", message=job.error)
+        return len(jobs)
 
     def get_run(self, run_id: uuid.UUID) -> ResearchRun | None:
         return self._session.get(ResearchRun, run_id)
@@ -64,7 +126,33 @@ class AutoResearchRepository:
         if run.stop_reason is None:
             run.stop_reason = "cancelled"
         run.updated_at = _utcnow()
+        job = self.job_for_run(run.id)
+        if job is not None and job.status not in {"succeeded", "failed", "cancelled"}:
+            job.cancel_requested = True
+            job.status = "cancelled"
+            job.finished_at = _utcnow()
+            self._append_job_event(job, status="cancelled", step="stopped", message="cancel requested")
         return True
+
+    def record_job_completion(self, job: Job, *, status: str, step: str, error: str | None = None) -> None:
+        job.status = status
+        job.step = step
+        job.error = error
+        job.finished_at = _utcnow()
+        self._append_job_event(job, status=status, step=step, message=error or "worker finished")
+
+    def _append_job_event(self, job: Job, *, status: str, step: str, message: str) -> None:
+        previous = self._session.scalar(
+            select(func.max(JobEvent.seq)).where(JobEvent.job_id == job.id)
+        )
+        self._session.add(JobEvent(
+            job_id=job.id,
+            seq=int(previous or 0) + 1,
+            status=status,
+            step=step,
+            message=message,
+            created_at=_utcnow(),
+        ))
 
     def update_run(
         self,

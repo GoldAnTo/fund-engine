@@ -1,4 +1,4 @@
-"""Synchronous automatic research orchestration."""
+"""Persistent automatic research orchestration executed by a worker."""
 from __future__ import annotations
 
 import hashlib
@@ -35,7 +35,7 @@ class AutoResearchService:
         *,
         max_rounds: int = 3,
         budget: int = 100,
-        auto_execute: bool = True,
+        auto_execute: bool = False,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -62,30 +62,26 @@ class AutoResearchService:
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
                 )
-        # Persist the queued run and its initial tasks before any potentially
-        # long-running provider work. This keeps the run queryable even when a
-        # synchronous execution is interrupted or the provider fails.
+        self.repo.enqueue_run_job(run)
+        # HTTP commands only persist a run + job.  A separately supervised
+        # worker claims the job, so a provider timeout cannot hold an API
+        # request open or lose the work on process restart.
         self.session.commit()
-        if auto_execute:
-            try:
-                self.execute(run)
-            except Exception as exc:
-                self.repo.update_run(
-                    run,
-                    status="failed",
-                    stage="failed",
-                    stop_reason="execution_failed",
-                )
-                self.session.commit()
-                raise RuntimeError(f"automatic research execution failed: {exc}") from exc
+        # Kept as a wire-compatible argument while callers migrate.  Inline
+        # execution is intentionally disabled even when an old client sends
+        # auto_execute=true.
+        del auto_execute
         return run
 
     def execute(self, run):
         self.repo.update_run(run, status="running", stage="extract")
+        self.session.commit()
         used = run.budget_used or 0
-        previous = self._evidence_count(run.research_case_id)
+        previous = self._case_evidence_count(run.research_case_id)
         failed = False
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
+            if self._is_cancelled(run):
+                break
             run.round = current_round
             if used >= run.budget:
                 self.repo.update_run(
@@ -96,7 +92,9 @@ class AutoResearchService:
                     stop_reason="budget_exhausted",
                 )
                 break
-            for version in _pending_versions(self.session):
+            for version in _pending_versions(self.session, run.research_case_id):
+                if self._is_cancelled(run):
+                    break
                 if used >= run.budget:
                     break
                 try:
@@ -105,6 +103,7 @@ class AutoResearchService:
                     used += 1
                 except Exception:
                     used += 1
+                self.session.commit()
             theses = list(
                 self.session.scalars(
                     select(Thesis).where(Thesis.research_case_id == run.research_case_id)
@@ -112,6 +111,8 @@ class AutoResearchService:
             )
             proposer, generator = EvidenceProposer(self.client), AssessmentGenerator(self.client)
             for task in self.repo.queued_tasks_for_run(run.id, current_round):
+                if self._is_cancelled(run):
+                    break
                 if used >= run.budget:
                     break
                 task.status, task.stage = "running", "research"
@@ -154,9 +155,13 @@ class AutoResearchService:
                 finally:
                     task.updated_at = datetime.now(timezone.utc)
                     used += 1
+                    self.session.commit()
+
+            if run.status == "cancelled":
+                break
 
             self._create_balance_gaps(run, current_round)
-            now = self._evidence_count(run.research_case_id)
+            now = self._case_evidence_count(run.research_case_id)
             self.repo.update_run(run, budget_used=used, round=current_round)
             if used >= run.budget:
                 self.repo.update_run(run, status="waiting_for_review", stage="stopped", stop_reason="budget_exhausted")
@@ -175,6 +180,18 @@ class AutoResearchService:
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)
         self.session.flush()
+
+    def _is_cancelled(self, run) -> bool:
+        """Observe a cancel request at task boundaries without interrupting a call."""
+        self.session.refresh(run)
+        if run.status == "cancelled":
+            return True
+        job = self.repo.job_for_run(run.id)
+        if job is not None and job.cancel_requested:
+            self.repo.cancel_run(run)
+            self.session.commit()
+            return True
+        return False
 
     def _handoff_for_review(self, run) -> None:
         """Create idempotent home-page tasks for this run's reviewable outputs."""
@@ -288,6 +305,16 @@ class AutoResearchService:
             self.session.scalar(
                 select(func.count(func.distinct(EvidenceLink.id)))
                 .where(EvidenceLink.thesis_id == thesis_id)
+            )
+            or 0
+        )
+
+    def _case_evidence_count(self, research_case_id: uuid.UUID) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count(func.distinct(EvidenceLink.id)))
+                .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+                .where(Thesis.research_case_id == research_case_id)
             )
             or 0
         )

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import DocumentVersion, SourceSpan
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
 
 
 class DocumentRepository:
@@ -98,6 +98,27 @@ class DocumentRepository:
         self._session.add(span)
         self._session.flush()
         return span
+
+    def attach_to_case(
+        self, *, research_case_id: uuid.UUID, document_version_id: uuid.UUID
+    ) -> CaseDocumentVersion:
+        """Append an idempotent case-to-document provenance relationship."""
+        existing = self._session.scalar(
+            select(CaseDocumentVersion).where(
+                CaseDocumentVersion.research_case_id == research_case_id,
+                CaseDocumentVersion.document_version_id == document_version_id,
+            )
+        )
+        if existing is not None:
+            return existing
+        link = CaseDocumentVersion(
+            research_case_id=research_case_id,
+            document_version_id=document_version_id,
+            linked_at=datetime.now(timezone.utc),
+        )
+        self._session.add(link)
+        self._session.flush()
+        return link
 
     # ------------------------------------------------------------------ readers
 

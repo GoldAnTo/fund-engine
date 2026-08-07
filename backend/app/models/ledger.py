@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, event
+from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -41,6 +41,7 @@ AIRunStatus = Literal["success", "failed"]
 IMMUTABLE_TABLES = frozenset(
     {
         "document_versions",
+        "case_document_versions",
         "source_spans",
         "research_cases",
         "theses",
@@ -156,6 +157,32 @@ class DocumentVersion(Base):
     parse_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="success"
     )
+
+
+class CaseDocumentVersion(Base):
+    """Append-only ownership of an input document by a research case.
+
+    A document can inform more than one case, but an automatic run must only
+    consume versions explicitly attached to its own case.  This relationship
+    is deliberately a ledger fact rather than a mutable label on the document:
+    it preserves provenance and avoids moving a shared source between cases.
+    """
+
+    __tablename__ = "case_document_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id", "document_version_id", name="uq_case_document_versions"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class SourceSpan(Base):

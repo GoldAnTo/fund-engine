@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 import type {
   ReviewOutcome,
@@ -8,6 +8,7 @@ import type {
   CaseWorkbenchRebuttal,
   CaseSummaryItem,
   NewResearchView,
+  ProposalReviewItem,
   ReviewQueueViewItem,
 } from "../../domain/prototypeTypes";
 
@@ -65,11 +66,12 @@ function mapQueueItem(item: ReviewQueueViewItem): PendingItem {
 }
 
 export function ReviewWorkbenchScreen() {
+  const location = useLocation();
   const [state, setState] = useState<PageState>({ kind: "loading" });
   const [view, setView] = useState<NewResearchView | null>(null);
   const [queueItems, setQueueItems] = useState<ReviewQueueViewItem[]>([]);
   const [cases, setCases] = useState<CaseSummaryItem[]>([]);
-  const [caseFilter, setCaseFilter] = useState<string>("");
+  const [caseFilter, setCaseFilter] = useState<string>(() => new URLSearchParams(location.search).get("caseId") ?? "");
   const [selectedId, setSelectedId] = useState<string>("");
   const [decision, setDecision] = useState<ReviewOutcome>("confirmed");
   const [relationChoice, setRelationChoice] = useState<"支持" | "反驳" | "背景" | "证据缺口">(
@@ -224,6 +226,7 @@ export function ReviewWorkbenchScreen() {
             </>
           ) : null}
         </p>
+        <ProposalReviewPanel caseId={caseFilter || undefined} />
       </div>
     );
   }
@@ -583,6 +586,45 @@ export function ReviewWorkbenchScreen() {
           </form>
         </aside>
       </div>
+      <ProposalReviewPanel caseId={caseFilter || undefined} />
     </div>
   );
+}
+
+function ProposalReviewPanel({ caseId }: { caseId?: string }) {
+  const [items, setItems] = useState<ProposalReviewItem[]>([]);
+  const [reviewer, setReviewer] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState<string | null>(null);
+  const load = useCallback(() => researchClient.listReviewProposals(caseId).then(setItems), [caseId]);
+
+  useEffect(() => { load().catch((err: Error) => setError(err.message)); }, [load]);
+  const decide = (item: ProposalReviewItem, outcome: "confirmed" | "rejected") => {
+    if (submitting) return;
+    setSubmitting(item.id); setError("");
+    researchClient.reviewProposal(item.id, {
+      outcome,
+      reason: reason || (outcome === "confirmed" ? "人工核验后发布" : "人工审核拒绝"),
+      expected_version: item.version,
+      reviewer_id: reviewer || "审核人",
+    }).then(load).catch((err: Error) => setError(err.message || "提案审核写入失败"))
+      .finally(() => setSubmitting(null));
+  };
+
+  return <section className="prototype-paper workspace-block" data-testid="proposal-review-panel">
+    <h2>自动研究提案发布</h2>
+    <p>只有在这里确认的 AI 提案才会成为正式证据关系；临时 AI 输出不会自动写入结论。</p>
+    <label>审核人 <input aria-label="提案审核人" value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="你的名字" /></label>{" "}
+    <label>审核理由 <input aria-label="提案审核理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="核验依据或拒绝原因" /></label>
+    {error && <p className="form-error">{error}</p>}
+    {items.length === 0 ? <p>当前案例没有待发布的 AI 提案。</p> : <ul>
+      {items.map((item) => <li key={item.id} style={{ margin: "12px 0" }}>
+        <strong>{item.kind}</strong> · {item.proposed_by_ref} · {item.proposed_at}
+        <pre>{JSON.stringify({ payload: item.payload, target_context: item.target_context }, null, 2)}</pre>
+        <button type="button" className="prototype-button" disabled={submitting !== null} onClick={() => decide(item, "confirmed")}>确认并发布</button>{" "}
+        <button type="button" disabled={submitting !== null} onClick={() => decide(item, "rejected")}>拒绝提案</button>
+      </li>)}
+    </ul>}
+  </section>;
 }

@@ -75,6 +75,7 @@ export const researchClient: ResearchClient = {
   getResearchRun: (runId) => _client.getResearchRun(runId),
   startResearchRun: (caseId, options) => _client.startResearchRun(caseId, options),
   cancelResearchRun: (runId) => _client.cancelResearchRun(runId),
+  listReviewProposals: (caseId) => _client.listReviewProposals(caseId),
   reviewProposal: (proposalId, payload) => _client.reviewProposal(proposalId, payload),
 };
 

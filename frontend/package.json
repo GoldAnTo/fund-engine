@@ -3,12 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js",
+    "dev:live": "node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js",
+    "dev:mock": "VITE_RESEARCH_CLIENT=mock node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "e2e": "playwright test",
+    "e2e": "node scripts/with-project-node.mjs ./node_modules/@playwright/test/cli.js test",
     "gen:contract": "openapi-typescript openapi.json -o src/contracts/v1.ts"
   },
   "dependencies": {

@@ -1037,6 +1037,19 @@ export interface ResearchRunSummary {
   next_action: string;
 }
 
+export interface ProposalReviewItem {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  target_context: Record<string, unknown>;
+  proposed_by_type: string;
+  proposed_by_ref: string;
+  proposed_at: string;
+  basis_cutoff: string | null;
+  status: string;
+  version: number;
+}
+
 export interface ResearchRunTask {
   id: string;
   status: string;
@@ -1077,6 +1090,7 @@ export interface AutoResearchClient {
   getResearchRun(runId: string): Promise<ResearchRunDetail>;
   startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail>;
   cancelResearchRun(runId: string): Promise<ResearchRunSummary>;
+  listReviewProposals(caseId?: string): Promise<ProposalReviewItem[]>;
   reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void>;
 }
 

@@ -285,6 +285,10 @@ def ingest(
                 title=report.get("title", ""),
                 natural_key=None,
             )
+            if resolved_case_id is not None:
+                document_service.attach_to_case(
+                    research_case_id=resolved_case_id, document_version_id=version.id
+                )
             document_service.add_span(
                 document_version_id=version.id,
                 locator={
@@ -316,6 +320,10 @@ def ingest(
             title=ann.get("title", ""),
             natural_key=None,
         )
+        if resolved_case_id is not None:
+            document_service.attach_to_case(
+                research_case_id=resolved_case_id, document_version_id=version.id
+            )
         document_service.add_span(
             document_version_id=version.id,
             locator={
@@ -347,6 +355,10 @@ def ingest(
             title=news.get("title", ""),
             natural_key=None,
         )
+        if resolved_case_id is not None:
+            document_service.attach_to_case(
+                research_case_id=resolved_case_id, document_version_id=version.id
+            )
         document_service.add_span(
             document_version_id=version.id,
             locator={
@@ -405,6 +417,10 @@ def ingest(
             title=title,
             natural_key=None,
         )
+        if resolved_case_id is not None:
+            document_service.attach_to_case(
+                research_case_id=resolved_case_id, document_version_id=version.id
+            )
         # Each metric group becomes its own span so extract can pin facts
         # to that metric without ambiguity.
         for metric_name, items in by_metric.items():
