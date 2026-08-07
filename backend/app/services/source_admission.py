@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from ipaddress import ip_address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from urllib.parse import urlparse
 
 
@@ -62,10 +62,18 @@ def classify_source(
             False,
         )
 
-    if _is_local_or_single_label_host(normalized_host):
+    address = _parse_ip_address(normalized_host)
+    if _is_non_public_ip_or_local_host(normalized_host, address):
         return SourceAdmission(
             SourceStatus.INVALID,
-            "来源主机为本地、私网或单标签地址，不能作为有效证据来源。",
+            "来源主机为本地、私网、保留或单标签地址，不能作为有效证据来源。",
+            False,
+        )
+
+    if address is None and not _is_valid_domain_hostname(normalized_host):
+        return SourceAdmission(
+            SourceStatus.INVALID,
+            "来源主机名格式无效。",
             False,
         )
 
@@ -90,14 +98,56 @@ def classify_source(
     )
 
 
-def _is_local_or_single_label_host(hostname: str) -> bool:
+def _parse_ip_address(hostname: str) -> IPv4Address | IPv6Address | None:
+    """Return a parsed IP address, or ``None`` when hostname is a domain."""
+    try:
+        return ip_address(hostname)
+    except ValueError:
+        return None
+
+
+def _is_non_public_ip_or_local_host(
+    hostname: str,
+    address: IPv4Address | IPv6Address | None,
+) -> bool:
     """Return whether a hostname cannot represent a public evidence source."""
-    if hostname == "localhost" or "." not in hostname:
+    if address is not None:
+        return not address.is_global
+
+    if _is_abbreviated_loopback_ipv4(hostname):
         return True
 
+    return hostname == "localhost" or "." not in hostname
+
+
+def _is_abbreviated_loopback_ipv4(hostname: str) -> bool:
+    """Recognize legacy numeric forms such as ``127.1`` as loopback."""
+    labels = hostname.split(".")
+    return (
+        2 <= len(labels) <= 4
+        and labels[0] == "127"
+        and all(label.isdecimal() for label in labels)
+    )
+
+
+def _is_valid_domain_hostname(hostname: str) -> bool:
+    """Validate domain syntax locally, without resolving the hostname."""
     try:
-        address = ip_address(hostname)
-    except ValueError:
+        ascii_hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError:
         return False
 
-    return address.is_loopback or address.is_private
+    if len(ascii_hostname) > 253:
+        return False
+
+    return all(_is_valid_domain_label(label) for label in ascii_hostname.split("."))
+
+
+def _is_valid_domain_label(label: str) -> bool:
+    """Return whether a single IDNA-normalized domain label is syntactically valid."""
+    return (
+        1 <= len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(character.isalnum() or character == "-" for character in label)
+    )

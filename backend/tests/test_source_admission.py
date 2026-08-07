@@ -107,6 +107,47 @@ def test_local_and_single_label_hosts_are_rejected(source_url: str):
     assert result.can_accept is False
 
 
+def test_abbreviated_loopback_ipv4_is_rejected():
+    result = classify_source(
+        source_url="https://127.1/report.pdf",
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://bad host.example/report.pdf",
+        "https://-leading-hyphen.example/report.pdf",
+        "https://trailing-hyphen-.example/report.pdf",
+    ],
+)
+def test_malformed_domain_hostnames_are_rejected(source_url: str):
+    result = classify_source(
+        source_url=source_url,
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+def test_valid_public_ipv6_source_is_accessible():
+    result = classify_source(
+        source_url="https://[2606:4700:4700::1111]/report.pdf",
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.ACCESSIBLE
+    assert result.can_accept is True
+
+
 def test_valid_verified_source_is_accessible():
     result = classify_source(
         source_url="https://www.cninfo.com.cn/report.pdf",
