@@ -122,7 +122,11 @@ def research_case(research_service):
 
 
 @pytest.fixture
-def thesis(research_service, research_case):
+def thesis(research_service, research_case, document_service, document):
+    document_service.attach_to_case(
+        research_case_id=research_case.id,
+        document_version_id=document.id,
+    )
     return research_service.add_thesis(
         research_case.id, statement="GPU demand will grow", created_by="tester"
     )

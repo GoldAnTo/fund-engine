@@ -486,6 +486,10 @@ def seed(session: Session) -> None:
         industry_topic="ai_compute",
         created_by=CREATED_BY,
     )
+    for version in versions.values():
+        document_service.attach_to_case(
+            research_case_id=case.id, document_version_id=version.id
+        )
     theses: dict[str, object] = {}
     for key, statement in THESIS_STATEMENTS.items():
         theses[key] = research_service.add_thesis(

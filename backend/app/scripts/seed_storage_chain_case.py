@@ -426,6 +426,7 @@ def seed(session: Session) -> None:
 
     # 1. Freeze every fixture into a DocumentVersion + SourceSpans.
     span_index: dict[tuple[str, int, int], object] = {}
+    versions: list[object] = []
     for path in sorted(FIXTURES_DIR.glob("*.txt")):
         meta, raw, spans = _parse_txt_fixture(path)
         file_key = meta.get("FILE", path.stem)
@@ -435,6 +436,7 @@ def seed(session: Session) -> None:
         version = document_service.freeze(
             raw=raw, source_url=source_url, published_at=_published_at(meta)
         )
+        versions.append(version)
         for locator, verbatim in spans:
             span = document_service.add_span(
                 document_version_id=version.id,
@@ -453,6 +455,7 @@ def seed(session: Session) -> None:
             published_at=_published_at({"PUBLISHED_AT": meta["published_at"]}),
             parser_version=PDF_PARSER_VERSION,
         )
+        versions.append(version)
         for locator, verbatim in pdf_extract_spans(raw):
             span = document_service.add_span(
                 document_version_id=version.id,
@@ -467,6 +470,10 @@ def seed(session: Session) -> None:
         industry_topic="storage_chain",
         created_by=CREATED_BY,
     )
+    for version in versions:
+        document_service.attach_to_case(
+            research_case_id=case.id, document_version_id=version.id
+        )
     theses: dict[str, object] = {}
     for key, statement in THESIS_STATEMENTS.items():
         theses[key] = research_service.add_thesis(
