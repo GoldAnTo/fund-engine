@@ -9,11 +9,21 @@ Key guarantees:
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
+from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import select
 
-from app.models.ledger import EvidenceLink
+from app.models.ledger import (
+    DocumentVersion,
+    EvidenceLink,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
 from app.models.proposals import Proposal, ProposalReviewDecision
 from app.models.versions import EvidenceLinkVersion
 from app.repositories.operational import TaskRepository
@@ -35,6 +45,64 @@ def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
         proposed_by_type="ai",
         proposed_by_ref="mock",
         research_case_id=research_case_id,
+    )
+
+
+def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="event evidence admission",
+        industry_topic="event",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="event factor",
+        created_by="tester",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(source_url.encode()).hexdigest(),
+        source_url=source_url,
+        title="event source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    cmd_session.add_all([thesis, document])
+    cmd_session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="event evidence",
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="event evidence statement",
+        created_at=now,
+    )
+    cmd_session.add(statement)
+    cmd_session.flush()
+    return Proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(statement.id),
+            "role": "supports",
+            "reason": "event evidence supports the factor",
+            "scope": {"period": "event"},
+        },
+        target_context={"thesis_id": str(thesis.id), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="mock",
+        proposed_at=now,
+        research_case_id=case.id,
     )
 
 
@@ -71,6 +139,100 @@ def test_confirmed_proposal_publishes_evidence_link_version(
     # enforce foreign keys by default, so this assertion protects the same
     # integrity guarantee that PostgreSQL rejected in the live review flow.
     assert version.evidence_link_id == legacy.id
+
+
+@pytest.mark.parametrize("outcome", ["confirmed", "modified"])
+def test_invalid_event_source_decision_is_rejected_without_publication(
+    cmd_client, cmd_session, outcome
+):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://example.com/invalid"
+    )
+    cmd_session.add(proposal)
+    cmd_session.flush()
+    task = TaskRepository(cmd_session).add_task(
+        title="Review invalid event evidence",
+        task_type="review_proposal",
+        status="open",
+        ref_type="proposal",
+        ref_id=proposal.id,
+    )
+    cmd_session.commit()
+
+    decision = {
+        "outcome": outcome,
+        "reason": "looks correct",
+        "expected_version": 1,
+        "reviewer_id": "human:alice",
+    }
+    if outcome == "modified":
+        decision["replacement_payload"] = {
+            **proposal.payload,
+            "reason": "narrowed event evidence",
+        }
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json=decision,
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
+    cmd_session.refresh(proposal)
+    cmd_session.refresh(task)
+    assert proposal.status == "pending"
+    assert proposal.version == 1
+    assert task.status == "open"
+    assert cmd_session.scalars(select(ProposalReviewDecision)).all() == []
+    assert cmd_session.scalars(select(EvidenceLink)).all() == []
+    assert cmd_session.scalars(select(EvidenceLinkVersion)).all() == []
+
+
+def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_session):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://news.example.org/valid"
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "looks correct",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert cmd_session.scalars(select(EvidenceLink)).one().thesis_id == uuid.UUID(
+        proposal.target_context["thesis_id"]
+    )
+    assert cmd_session.scalars(select(EvidenceLinkVersion)).one().proposal_id == proposal.id
+
+
+def test_invalid_event_source_can_be_rejected(cmd_client, cmd_session):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://example.com/invalid"
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "rejected",
+            "reason": "source is invalid",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_session.refresh(proposal)
+    assert proposal.status == "decided"
+    assert cmd_session.scalars(select(EvidenceLink)).all() == []
+    assert cmd_session.scalars(select(EvidenceLinkVersion)).all() == []
 
 
 def test_modified_proposal_publishes_replacement(cmd_client, cmd_session):

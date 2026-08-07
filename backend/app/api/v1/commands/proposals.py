@@ -24,8 +24,10 @@ from app.api.v1.commands.common import (
 )
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError
+from app.models.ledger import ValidationError
 from app.models.proposals import ProposalReviewDecision
 from app.queries.review_queue import ReviewQueueQueries
+from app.queries.review_queue import proposal_evidence_context
 from app.repositories.operational import ReviewAssignmentRepository, TaskRepository
 from app.repositories.proposals import ProposalRepository
 from app.services.auto_research import AutoResearchService
@@ -146,6 +148,16 @@ def _decide(
     proposal_id: uuid.UUID, payload: ReviewDecisionRequest, db: Session
 ):
     proposal = ProposalRepository(db).get_proposal(proposal_id)
+    if (
+        proposal is not None
+        and proposal.research_case_id is not None
+        and proposal.kind == "evidence_link"
+        and payload.outcome in {"confirmed", "modified"}
+        and not proposal_evidence_context(db, proposal).admission.can_accept
+    ):
+        raise ValidationError(
+            "event evidence source cannot be accepted for formal publication"
+        )
     actor = resolve_actor_plain(proposal_id)
     try:
         decision = ProposalService(db).decide(
