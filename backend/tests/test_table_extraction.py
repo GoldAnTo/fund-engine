@@ -8,6 +8,7 @@ numbers, noisy dimensions, cumulative figures).
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 from sqlalchemy import select
 
@@ -152,6 +153,38 @@ def test_extractor_routes_table_spans_to_rules(
 
     run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
     assert "rule-based" in run.output_summary
+
+
+def test_extractor_commits_rule_fallback_before_narrative_provider(
+    session, document_service, document
+):
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text=TABLE_SNIPPET,
+    )
+    narrative_span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 2},
+        verbatim_text="管理层表示订单能见度良好",
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    def provider(*_args, **_kwargs):
+        assert not session.in_transaction()
+        return {
+            "statements": [
+                {
+                    "span_id": str(narrative_span.id),
+                    "normalized_text": "管理层表示订单能见度良好。",
+                    "kind": "management_attribution",
+                }
+            ]
+        }
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        statements = StatementExtractor(client).extract(document.id, session)
+    assert any(statement.source_span_id == narrative_span.id for statement in statements)
 
 
 def test_extractor_skips_llm_when_all_spans_are_tables(

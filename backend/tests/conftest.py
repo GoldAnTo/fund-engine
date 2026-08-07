@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -78,8 +79,10 @@ def document_service(session):
 @pytest.fixture
 def document(document_service):
     """A frozen document version available now."""
+    suffix = uuid.uuid4().hex
     return document_service.freeze(
-        raw=b"page one", source_url="https://example.test/a"
+        raw=f"page one {suffix}".encode(),
+        source_url=f"https://example.test/a/{suffix}",
     )
 
 

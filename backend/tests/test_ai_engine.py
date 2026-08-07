@@ -62,6 +62,26 @@ def test_extraction_creates_statements_and_airun(session, span):
     assert "extracted" in run.output_summary
 
 
+def test_extractor_releases_read_transaction_before_llm_provider(session, span):
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    def provider(*_args, **_kwargs):
+        assert not session.in_transaction()
+        return {
+            "statements": [
+                {
+                    "span_id": str(span.id),
+                    "normalized_text": "Management disclosed a material operating update.",
+                    "kind": "disclosed_fact",
+                }
+            ]
+        }
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        statements = StatementExtractor(client).extract(span.document_version_id, session)
+    assert len(statements) == 1
+
+
 def test_extraction_records_no_spans(session, document_service):
     version = document_service.freeze(
         raw=b"empty doc", source_url="https://example.test/empty"

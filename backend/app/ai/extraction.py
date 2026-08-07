@@ -91,6 +91,9 @@ class StatementExtractor:
             created: list[SourceStatement] = list(rule_based)
             llm_spans = [s for s in spans if str(s.id) not in handled_span_ids]
             if llm_spans:
+                span_ids_by_text_id = {
+                    str(span.id): span.id for span in llm_spans
+                }
                 user_data = {
                     "spans": [
                         {"span_id": str(span.id), "verbatim_text": span.verbatim_text}
@@ -101,18 +104,22 @@ class StatementExtractor:
                     {"role": "system", "content": EXTRACT_SYSTEM},
                     {"role": "user", "content": json.dumps(user_data, ensure_ascii=False)},
                 ]
+                # The initial span query and the deterministic table pass may
+                # have opened a read/write transaction.  Publish that small
+                # unit before the external provider call so a slow LLM does
+                # not retain a database connection or block scope updates.
+                session.commit()
                 result = self._client.chat_json(messages, schema_hint="extract")
                 statements_data = result.get("statements", [])
 
-                span_map = {str(span.id): span for span in llm_spans}
                 for stmt_data in statements_data:
                     span_id = stmt_data.get("span_id", "")
-                    span = span_map.get(span_id)
-                    if span is None:
+                    source_span_id = span_ids_by_text_id.get(span_id)
+                    if source_span_id is None:
                         continue
                     observed_period = stmt_data.get("observed_period")
                     statement = research.add_statement(
-                        span.id,
+                        source_span_id,
                         stmt_data["normalized_text"],
                         kind=stmt_data["kind"],
                         observed_period=_parse_period(observed_period),
