@@ -139,7 +139,7 @@ git commit -m "feat: add event research lifecycle ledger"
 - Create: `backend/tests/test_event_extraction.py`
 - Create: `backend/tests/test_event_research_api.py`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 ```python
 def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_client, fake_event_llm):
@@ -163,13 +163,13 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
     assert body["lifecycle"]["active_run_id"]
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/pytest backend/tests/test_event_extraction.py backend/tests/test_event_research_api.py -q`
 
 Expected: FAIL with 404 routes and missing service classes.
 
-- [ ] **Step 3: Implement extraction and create commands**
+- [x] **Step 3: Implement extraction and create commands**
 
 ```python
 # The service accepts parsed JSON only after validating every populated field
@@ -207,7 +207,7 @@ def create_event_research(payload: CreateEventResearchRequest) -> EventResearchC
 
 Require `raw_input`, `event_title`, `research_question`, `created_by`, and 3–5 selected factors at creation. Treat company, ticker, event time, market reaction, and URL as editable optional values. Return the case id plus a natural-language lifecycle object; do not return run internals as the primary payload.
 
-- [ ] **Step 4: Run API tests**
+- [x] **Step 4: Run API tests**
 
 Run: `.venv/bin/pytest backend/tests/test_event_extraction.py backend/tests/test_event_research_api.py -q`
 
