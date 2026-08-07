@@ -193,10 +193,18 @@ const VALID_EVENT_SOURCE_STATUSES: readonly EventSourceStatus[] = [
   "invalid",
 ];
 
-function mapEventSourceStatus(value: string): EventSourceStatus {
-  return VALID_EVENT_SOURCE_STATUSES.includes(value as EventSourceStatus)
-    ? value as EventSourceStatus
-    : "invalid";
+function isEventSourceStatus(value: string): value is EventSourceStatus {
+  return VALID_EVENT_SOURCE_STATUSES.includes(value as EventSourceStatus);
+}
+
+function mapEventSourceAdmission(
+  sourceStatus: string,
+  canAccept: boolean,
+): Pick<EventReviewQueueItem, "sourceStatus" | "canAccept"> {
+  if (!isEventSourceStatus(sourceStatus)) {
+    return { sourceStatus: "invalid", canAccept: false };
+  }
+  return { sourceStatus, canAccept };
 }
 
 // Backend search deep_link paths are prefixed with /research-cases/... but
@@ -2859,33 +2867,32 @@ export class HttpResearchAdapter implements ResearchClient {
         nextAction: dto.summary.next_action ?? null,
       },
       items: (dto.items ?? []).map((item): EventReviewQueueItem => ({
-        proposalId: item.proposal_id,
-        status: item.status,
-        proposedAt: item.proposed_at,
-        linkId: item.link_id,
-        caseId: item.case_id,
-        thesisId: item.thesis_id ?? null,
-        thesisStatement: item.thesis_statement ?? null,
-        aiRole: item.ai_role ?? null,
-        aiReason: item.ai_reason ?? null,
-        aiScope: item.ai_scope ?? {},
-        statementId: item.statement_id ?? null,
-        statementText: item.statement_text ?? null,
-        statementKind: item.statement_kind ?? null,
-        spanId: item.span_id ?? null,
-        verbatimText: item.verbatim_text ?? null,
-        locator: item.locator ?? {},
-        documentVersionId: item.document_version_id ?? null,
-        documentSourceUrl: item.document_source_url ?? null,
-        documentPublishedAt: item.document_published_at ?? null,
-        availableAt: item.available_at ?? null,
-        sourceTitle: item.source_title ?? null,
-        sourceStatus: mapEventSourceStatus(item.source_status),
-        sourceStatusReason: item.source_status_reason,
-        canAccept: item.can_accept,
-        proposalReason: item.proposal_reason,
-        position: item.position ?? null,
-      })),
+          proposalId: item.proposal_id,
+          status: item.status,
+          proposedAt: item.proposed_at,
+          linkId: item.link_id,
+          caseId: item.case_id,
+          thesisId: item.thesis_id ?? null,
+          thesisStatement: item.thesis_statement ?? null,
+          aiRole: item.ai_role ?? null,
+          aiReason: item.ai_reason ?? null,
+          aiScope: item.ai_scope ?? {},
+          statementId: item.statement_id ?? null,
+          statementText: item.statement_text ?? null,
+          statementKind: item.statement_kind ?? null,
+          spanId: item.span_id ?? null,
+          verbatimText: item.verbatim_text ?? null,
+          locator: item.locator ?? {},
+          documentVersionId: item.document_version_id ?? null,
+          documentSourceUrl: item.document_source_url ?? null,
+          documentPublishedAt: item.document_published_at ?? null,
+          availableAt: item.available_at ?? null,
+          sourceTitle: item.source_title ?? null,
+          ...mapEventSourceAdmission(item.source_status, item.can_accept),
+          sourceStatusReason: item.source_status_reason,
+          proposalReason: item.proposal_reason,
+          position: item.position ?? null,
+        })),
     };
   }
 

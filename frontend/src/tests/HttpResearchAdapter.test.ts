@@ -1004,6 +1004,7 @@ describe("HttpResearchAdapter", () => {
     expect(queue.items[0]).toMatchObject({
       sourceStatus: "invalid",
       sourceStatusReason: "服务端返回了已废弃状态",
+      canAccept: false,
     });
   });
 
