@@ -216,6 +216,26 @@ def test_valid_public_ipv6_source_is_accessible():
     assert result.can_accept is True
 
 
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://[::192.168.1.1]/report.pdf",
+        "https://[::127.0.0.1]/report.pdf",
+        "https://[::10.0.0.1]/report.pdf",
+        "https://[::ffff:192.168.1.1]/report.pdf",
+    ],
+)
+def test_ipv4_compatible_ipv6_private_addresses_are_rejected(source_url: str):
+    result = classify_source(
+        source_url=source_url,
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
 def test_valid_verified_source_is_accessible():
     result = classify_source(
         source_url="https://www.cninfo.com.cn/report.pdf",

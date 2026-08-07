@@ -148,9 +148,26 @@ def _is_non_public_ip_or_local_host(
 ) -> bool:
     """Return whether a hostname cannot represent a public evidence source."""
     if address is not None:
+        embedded_ipv4 = _embedded_ipv4_address(address)
+        if embedded_ipv4 is not None:
+            return not embedded_ipv4.is_global
         return not address.is_global
 
     return hostname == "localhost" or "." not in hostname
+
+
+def _embedded_ipv4_address(address: IPv4Address | IPv6Address) -> IPv4Address | None:
+    """Return an IPv6-mapped or IPv4-compatible address's embedded IPv4 value."""
+    if not isinstance(address, IPv6Address):
+        return None
+
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+
+    if int(address) <= 0xFFFFFFFF:
+        return IPv4Address(int(address))
+
+    return None
 
 
 def _parse_historical_ipv4(hostname: str) -> IPv4Address | None:
