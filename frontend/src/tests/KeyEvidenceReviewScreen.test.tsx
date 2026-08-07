@@ -62,6 +62,32 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(screen.getByRole("button", { name: "退回并继续找真实来源" })).toBeVisible();
   });
 
+  it.each(["javascript:alert(1)", "data:text/html,unsafe", "   "])(
+    "renders an invalid source URL as audit text instead of a link: %s",
+    async (sourceUrl) => {
+      const originalGetQueue = adapter.getEventReviewQueue.bind(adapter);
+      vi.spyOn(adapter, "getEventReviewQueue").mockImplementation(async (caseId) => {
+        const queue = await originalGetQueue(caseId);
+        return {
+          ...queue,
+          items: queue.items.map((item, index) => index === 0 ? {
+            ...item,
+            sourceTitle: "Unsafe source audit",
+            documentSourceUrl: sourceUrl,
+          } : item),
+        };
+      });
+      renderScreen();
+
+      await screen.findAllByText("Unsafe source audit");
+      expect(screen.queryByRole("link", { name: "Unsafe source audit" })).not.toBeInTheDocument();
+      if (sourceUrl.trim()) {
+        expect(screen.queryByRole("link", { name: sourceUrl })).not.toBeInTheDocument();
+        expect(screen.getByText(sourceUrl)).toBeVisible();
+      }
+    },
+  );
+
   it("replaces a test-domain source title while preserving the invalid source audit link", async () => {
     const user = userEvent.setup();
     const originalGetQueue = adapter.getEventReviewQueue.bind(adapter);

@@ -45,10 +45,11 @@ def _evidence_proposal(
     source_url: str,
     title: str,
     document_case_id: uuid.UUID | None = None,
+    thesis_case_id: uuid.UUID | None = None,
 ) -> Proposal:
     now = datetime.now(timezone.utc)
     thesis = Thesis(
-        research_case_id=case_id,
+        research_case_id=thesis_case_id or case_id,
         statement=f"evidence from {title}",
         created_by="tester",
         created_at=now,
@@ -242,6 +243,52 @@ def test_event_evidence_cannot_use_document_bound_to_another_case(
         json={
             "outcome": "confirmed",
             "reason": "cross-case source must not publish",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 422
+    assert cmd_session.get(Proposal, proposal.id).status == "pending"
+    assert cmd_session.scalar(
+        select(EvidenceLink.id).where(
+            EvidenceLink.source_statement_id
+            == uuid.UUID(proposal.payload["source_statement_id"])
+        )
+    ) is None
+
+
+def test_event_evidence_cannot_target_thesis_from_another_case(
+    cmd_client, cmd_session
+) -> None:
+    current = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    other_payload = _confirmed_event()
+    other_payload["event_title"] = "另一独立命题事件"
+    other_payload["research_question"] = "另一事件需要什么证据？"
+    other = cmd_client.post("/api/v1/event-research", json=other_payload).json()
+    proposal = _evidence_proposal(
+        cmd_session,
+        uuid.UUID(current["case_id"]),
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Current case verified source",
+        thesis_case_id=uuid.UUID(other["case_id"]),
+    )
+
+    queue = cmd_client.get(
+        f"/api/v1/event-research/{current['case_id']}/review-queue"
+    )
+    assert queue.status_code == 200
+    item = next(
+        item for item in queue.json()["items"] if item["proposal_id"] == str(proposal.id)
+    )
+    assert item["source_status"] == "invalid"
+    assert item["can_accept"] is False
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "cross-case thesis must not publish",
             "reviewer_id": "reviewer",
             "expected_version": proposal.version,
         },

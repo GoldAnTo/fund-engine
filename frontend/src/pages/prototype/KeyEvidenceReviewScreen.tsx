@@ -33,6 +33,17 @@ function displaySourceTitle(sourceTitle: string | null): string {
   return title;
 }
 
+function safeHttpUrl(sourceUrl: string | null): string | null {
+  const value = sourceUrl?.trim();
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function hasOwnKey(object: object, property: PropertyKey): boolean {
   const objectHasOwn = (Object as typeof Object & {
     hasOwn?: (target: object, key: PropertyKey) => boolean;
@@ -153,6 +164,8 @@ export function KeyEvidenceReviewScreen() {
   if (!item) return null;
 
   const sourceTitle = displaySourceTitle(item.sourceTitle);
+  const sourceUrl = safeHttpUrl(item.documentSourceUrl);
+  const sourceAuditText = item.documentSourceUrl?.trim() || "未提供";
 
   return <main className="prototype-screen evidence-review-screen">
     {header}
@@ -185,8 +198,8 @@ export function KeyEvidenceReviewScreen() {
           <blockquote>{item.verbatimText || "该来源未提供可审核的冻结原文。"}</blockquote>
           <div className="evidence-review-rationale"><p><strong>{relationshipLabel(item.aiRole)}的因素</strong>{factorLabel(item)}</p><p><strong>AI 理由</strong>{item.aiReason || item.proposalReason || "未提供"}</p></div>
           <dl className="evidence-review-metadata">
-            <div><dt>来源标题</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{sourceTitle}</a> : sourceTitle}</dd></div>
-            <div><dt>原始 URL</dt><dd>{item.documentSourceUrl ? <a href={item.documentSourceUrl} rel="noopener noreferrer" target="_blank">{item.documentSourceUrl}</a> : "未提供"}</dd></div>
+            <div><dt>来源标题</dt><dd>{sourceUrl ? <a href={sourceUrl} rel="noopener noreferrer" target="_blank">{sourceTitle}</a> : sourceTitle}</dd></div>
+            <div><dt>原始 URL</dt><dd>{sourceUrl ? <a href={sourceUrl} rel="noopener noreferrer" target="_blank">{sourceUrl}</a> : sourceAuditText}</dd></div>
             <div><dt>定位</dt><dd>{Object.keys(item.locator).length ? JSON.stringify(item.locator) : "未提供"}</dd></div>
             <div><dt>发布日期</dt><dd>{displayDate(item.documentPublishedAt)}</dd></div>
             <div><dt>可用时间</dt><dd>{displayDate(item.availableAt)}</dd></div>

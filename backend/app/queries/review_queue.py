@@ -64,6 +64,14 @@ def proposal_evidence_context(
         session, SourceStatement, payload.get("source_statement_id")
     )
     thesis = _get_by_uuid(session, Thesis, target_context.get("thesis_id"))
+    if (
+        proposal.research_case_id is not None
+        and (thesis is None or thesis.research_case_id != proposal.research_case_id)
+    ):
+        return _invalid_evidence_context(
+            proposal,
+            "证据目标命题未绑定到当前研究事件，不能作为有效证据来源。",
+        )
     span = session.get(SourceSpan, statement.source_span_id) if statement else None
     document = (
         session.get(DocumentVersion, span.document_version_id) if span else None
@@ -79,17 +87,9 @@ def proposal_evidence_context(
         )
         is None
     ):
-        return ProposalEvidenceContext(
-            proposal=proposal,
-            thesis=thesis,
-            statement=None,
-            span=None,
-            document=None,
-            admission=SourceAdmission(
-                SourceStatus.INVALID,
-                "来源文档未绑定到当前研究事件，不能作为有效证据来源。",
-                False,
-            ),
+        return _invalid_evidence_context(
+            proposal,
+            "来源文档未绑定到当前研究事件，不能作为有效证据来源。",
         )
     admission = classify_source(
         document.source_url if document else None,
@@ -103,6 +103,19 @@ def proposal_evidence_context(
         span=span,
         document=document,
         admission=admission,
+    )
+
+
+def _invalid_evidence_context(
+    proposal: Proposal, reason: str
+) -> ProposalEvidenceContext:
+    return ProposalEvidenceContext(
+        proposal=proposal,
+        thesis=None,
+        statement=None,
+        span=None,
+        document=None,
+        admission=SourceAdmission(SourceStatus.INVALID, reason, False),
     )
 
 
