@@ -1,6 +1,8 @@
 """Event-research creation commands and extraction endpoint."""
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
@@ -11,12 +13,22 @@ from app.schemas.v1.event_research import (
     EventResearchLifecycleDTO,
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
+    EventResearchListResponse,
+    EventWorkbenchDTO,
 )
+from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
+
+
+@router.get("", response_model=EventResearchListResponse)
+def list_event_research(
+    status: str | None = None, db: Session = Depends(get_db)
+) -> EventResearchListResponse:
+    return EventResearchQueries(db).list(status=status)
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
@@ -55,3 +67,10 @@ def create_event_research(
             next_human_action=lifecycle.next_human_action,
         ),
     )
+
+
+@router.get("/{case_id}/workbench", response_model=EventWorkbenchDTO)
+def event_research_workbench(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> EventWorkbenchDTO:
+    return EventResearchQueries(db).workbench(case_id)

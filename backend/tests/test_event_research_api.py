@@ -67,3 +67,47 @@ def test_create_event_requires_confirmed_question_and_three_to_five_factors(cmd_
 
     response = cmd_client.post("/api/v1/event-research", json=payload)
     assert response.status_code == 422
+
+
+def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_session) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    second_payload = _confirmed_event()
+    second_payload["event_title"] = "台积电上调 CoWoS 指引后下跌"
+    second_payload["ticker"] = "TSM"
+    second_payload["research_question"] = "产能扩张是否是价格反应的主要因素？"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
+
+    first_lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(first["case_id"]))
+    second_lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(second["case_id"]))
+    second_lifecycle.updated_at = first_lifecycle.updated_at.replace(year=first_lifecycle.updated_at.year + 1)
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/event-research", params={"status": "researching"})
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["case_id"] for item in body["items"]] == [second["case_id"], first["case_id"]]
+    assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
+    assert body["items"][0]["ticker"] == "TSM"
+    assert body["items"][0]["lifecycle_status"] == "researching"
+    assert body["items"][0]["next_human_action"] is None
+
+
+def test_event_workbench_never_surfaces_another_case_factors_or_lifecycle(cmd_client) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    second_payload = _confirmed_event()
+    second_payload["event_title"] = "另一独立新闻事件"
+    second_payload["research_question"] = "另一事件的主要因素是什么？"
+    second_payload["candidate_factors"] = ["因素甲", "因素乙", "因素丙"]
+    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
+
+    first_view = cmd_client.get(f"/api/v1/event-research/{first['case_id']}/workbench")
+    second_view = cmd_client.get(f"/api/v1/event-research/{second['case_id']}/workbench")
+
+    assert first_view.status_code == 200
+    assert first_view.json()["event"]["event_title"] == "Alphabet 财报后股价下跌"
+    assert {item["statement"] for item in first_view.json()["factors"]} == set(
+        _confirmed_event()["candidate_factors"]
+    )
+    assert second_view.json()["event"]["event_title"] == "另一独立新闻事件"
+    assert {item["statement"] for item in second_view.json()["factors"]} == {"因素甲", "因素乙", "因素丙"}
+    assert all(item["case_id"] == first["case_id"] for item in first_view.json()["evidence"])

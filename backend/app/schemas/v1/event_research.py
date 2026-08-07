@@ -54,3 +54,60 @@ class CreateEventResearchResponse(V1Model):
     case_id: str
     brief_id: str
     lifecycle: EventResearchLifecycleDTO
+
+
+class EventResearchListItemDTO(V1Model):
+    case_id: str
+    event_title: str
+    company_name: str | None
+    ticker: str | None
+    event_at: datetime | None
+    lifecycle_status: str
+    status_summary: str
+    next_human_action: str | None
+    updated_at: datetime
+
+
+class EventResearchListResponse(V1Model):
+    items: list[EventResearchListItemDTO]
+
+
+class EventResearchFactorDTO(V1Model):
+    statement: str
+    position: int
+    reviewed_support_count: int
+    reviewed_contradiction_count: int
+    current_gap: str | None
+
+
+class EventKeyEvidenceDTO(V1Model):
+    case_id: str
+    factor_statement: str
+    role: str
+    review_state: str
+    source_title: str | None
+    source_url: str | None
+    excerpt: str
+    locator: dict
+    available_at: datetime
+
+
+class EventConclusionDraftDTO(V1Model):
+    state: str
+    text: str
+    citations: list[EventKeyEvidenceDTO]
+
+
+class EventNextActionDTO(V1Model):
+    kind: str
+    label: str
+    count: int | None = None
+
+
+class EventWorkbenchDTO(V1Model):
+    event: EventResearchListItemDTO
+    lifecycle: EventResearchLifecycleDTO
+    conclusion: EventConclusionDraftDTO
+    factors: list[EventResearchFactorDTO]
+    evidence: list[EventKeyEvidenceDTO]
+    next_action: EventNextActionDTO
