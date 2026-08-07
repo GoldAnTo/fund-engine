@@ -26,7 +26,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
+from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_research_scope import EventResearchScopeService
@@ -1010,8 +1010,8 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
         removed_link.id: (INITIAL_FACTORS[1], "mapped"),
     }
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle.status == "researching"
-    assert lifecycle.status_summary == "已更新因素，正在重新归类证据"
+    assert lifecycle.status == "continuing"
+    assert lifecycle.status_summary == "已更新因素，正在重新归类证据并继续检索"
     assert lifecycle.current_gap == "已更新因素，正在重新归类证据"
     assert lifecycle.next_human_action is None
 
@@ -1101,6 +1101,73 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
         )
     ) is None
     assert workbench.json()["conclusion"]["state"] == "cannot_conclude"
+
+
+@pytest.mark.parametrize("old_status", ["queued", "running"])
+def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
+    cmd_client, cmd_session, old_status: str
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    old_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    old_run = cmd_session.get(ResearchRun, old_run_id)
+    assert old_run is not None
+    old_run.status = old_status
+    cmd_session.commit()
+    old_task_ids = list(
+        cmd_session.scalars(
+            select(ResearchTask.id).where(ResearchTask.run_id == old_run_id)
+        )
+    )
+    latest_factors = [
+        INITIAL_FACTORS[0],
+        "广告业务增长弱于市场预期",
+        "AI 投入回报周期可能拉长",
+    ]
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={"factors": latest_factors, "changed_by": "reviewer"},
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(old_run)
+    assert old_run.status == "cancelled"
+    assert old_run.stop_reason == "cancelled"
+    old_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == old_run_id)
+    )
+    assert old_job is not None
+    assert old_job.status == "cancelled"
+    assert old_job.cancel_requested is True
+    old_tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask).where(ResearchTask.id.in_(old_task_ids))
+        )
+    )
+    assert old_tasks
+    assert {task.status for task in old_tasks} == {"cancelled"}
+
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.status == "continuing"
+    assert lifecycle.active_run_id != old_run_id
+    successor = cmd_session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    successor_task_factors = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert successor_task_factors == set(latest_factors)
+    assert INITIAL_FACTORS[1] not in successor_task_factors
+
+    old_run.status = "waiting_for_review"
+    old_run.stop_reason = "max_rounds_reached"
+    AutoResearchService(cmd_session).refresh_event_lifecycle(old_run)
+    assert cmd_session.get(EventResearchLifecycle, case_id).active_run_id == successor.id
 
 
 def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(

@@ -128,6 +128,14 @@ class AutoResearchRepository:
         if run.stop_reason is None:
             run.stop_reason = "cancelled"
         run.updated_at = _utcnow()
+        for task in self._session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.status == "queued")
+        ):
+            task.status = "cancelled"
+            task.stage = "stopped"
+            task.updated_at = _utcnow()
         job = self.job_for_run(run.id)
         if job is not None and job.status not in {"succeeded", "failed", "cancelled"}:
             job.cancel_requested = True

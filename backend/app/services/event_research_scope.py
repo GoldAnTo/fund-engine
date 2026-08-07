@@ -204,28 +204,22 @@ class EventResearchScopeService:
             if lifecycle.active_run_id is not None
             else None
         )
-        should_start_successor = (
-            lifecycle.status in {"awaiting_scope", "exhausted"}
-            or current_run is None
-            or current_run.status not in {"queued", "running"}
+        auto_research = AutoResearchService(self._session)
+        if current_run is not None and current_run.status in {"queued", "running"}:
+            # Preserve the old run and its task/job audit trail, but prevent a
+            # worker from continuing to research the superseded thesis set.
+            auto_research.repo.cancel_run(current_run)
+        successor = auto_research.start(
+            lifecycle.research_case_id,
+            max_rounds=current_run.max_rounds if current_run is not None else 3,
+            budget=current_run.budget if current_run is not None else 100,
+            commit=False,
+            thesis_ids=[thesis.id for thesis in active_theses],
         )
-        if should_start_successor:
-            successor = AutoResearchService(self._session).start(
-                lifecycle.research_case_id,
-                max_rounds=current_run.max_rounds if current_run is not None else 3,
-                budget=current_run.budget if current_run is not None else 100,
-                commit=False,
-                thesis_ids=[thesis.id for thesis in active_theses],
-            )
-            lifecycle.status = "continuing"
-            lifecycle.active_run_id = successor.id
-            lifecycle.current_round = min(lifecycle.current_round + 1, 3)
-            lifecycle.status_summary = "已更新因素，正在重新归类证据并继续检索"
-            lifecycle.current_gap = "已更新因素，正在重新归类证据"
-            lifecycle.next_human_action = None
-            lifecycle.updated_at = now
-            return
-        lifecycle.status_summary = "已更新因素，正在重新归类证据"
+        lifecycle.status = "continuing"
+        lifecycle.active_run_id = successor.id
+        lifecycle.current_round = min(lifecycle.current_round + 1, 3)
+        lifecycle.status_summary = "已更新因素，正在重新归类证据并继续检索"
         lifecycle.current_gap = "已更新因素，正在重新归类证据"
         lifecycle.next_human_action = None
         lifecycle.updated_at = now
