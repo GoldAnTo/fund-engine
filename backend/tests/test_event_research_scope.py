@@ -26,6 +26,10 @@ from app.models.operational import EventResearchLifecycle, ResearchRun, Research
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_research_scope import EventResearchScopeService
+from app.services.event_research_scope_evidence import (
+    append_current_scope_evidence_assignment,
+    lock_event_scope_case,
+)
 
 
 INITIAL_FACTORS = [
@@ -131,6 +135,22 @@ def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_sessi
     assert versions[0].version == 1
     assert versions[0].changed_by == "tester"
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
+
+
+def test_scope_case_lock_requests_a_for_update_lifecycle_row() -> None:
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.statement = None
+
+        def scalar(self, statement):
+            self.statement = statement
+            return object()
+
+    session = RecordingSession()
+
+    lock_event_scope_case(session, uuid.uuid4())
+
+    assert session.statement._for_update_arg is not None
 
 
 def test_scope_update_appends_v2_without_rewriting_v1(cmd_client, cmd_session) -> None:
@@ -304,6 +324,55 @@ def test_scope_update_keeps_removed_factor_evidence_and_reports_mapping_counts(
     assert cmd_session.get(EvidenceLink, retained_link.id) is not None
     assert cmd_session.get(EvidenceLink, removed_link.id) is not None
     assert cmd_session.get(EvidenceLink, removed_link.id).review_state == "reviewed"
+
+
+def test_publish_resume_after_scope_snapshot_keeps_one_latest_assignment(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                "广告业务增长弱于市场预期",
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    assert response.status_code == 200
+    # Simulate a publisher that had written the formal link before waiting on
+    # the case lock and only now resumes its idempotent assignment append.
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.commit()
+
+    assignments = list(
+        cmd_session.scalars(
+            select(EventResearchScopeEvidenceAssignment)
+            .join(
+                EventResearchScopeVersion,
+                EventResearchScopeVersion.id
+                == EventResearchScopeEvidenceAssignment.scope_version_id,
+            )
+            .where(
+                EventResearchScopeEvidenceAssignment.evidence_link_id == link.id,
+                EventResearchScopeVersion.research_case_id == case_id,
+                EventResearchScopeVersion.version == 2,
+            )
+        )
+    )
+    assert len(assignments) == 1
+    assert assignments[0].disposition == "mapped"
 
 
 def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecycle(

@@ -230,6 +230,71 @@ def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
     assert cmd_session.get(EventResearchConclusion, draft.id) is not None
 
 
+def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    active_thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == _confirmed_event()["candidate_factors"][0],
+        )
+    )
+    assert active_thesis is not None
+    scope = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                active_thesis.statement,
+                "广告业务增长弱于市场预期",
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    assert scope.status_code == 200
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Verified release after scope update",
+        thesis_id=active_thesis.id,
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "publish after scope update",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 201
+    assignment = cmd_session.scalar(
+        select(EventResearchScopeEvidenceAssignment)
+        .join(
+            EventResearchScopeVersion,
+            EventResearchScopeVersion.id
+            == EventResearchScopeEvidenceAssignment.scope_version_id,
+        )
+        .where(
+            EventResearchScopeEvidenceAssignment.evidence_link_id
+            == uuid.UUID(response.json()["published_entity_id"]),
+            EventResearchScopeVersion.research_case_id == case_id,
+        )
+    )
+    assert assignment is not None
+    assert assignment.disposition == "mapped"
+    assert cmd_session.scalar(
+        select(EventResearchScopeVersion.version).where(
+            EventResearchScopeVersion.id == assignment.scope_version_id
+        )
+    ) == 2
+
+
 def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_session) -> None:
     payload = _confirmed_event()
     response = cmd_client.post("/api/v1/event-research", json=payload)
