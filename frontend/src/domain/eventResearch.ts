@@ -82,6 +82,11 @@ export interface EventReviewQueueSummary {
   nextAction: string | null;
 }
 
+export type EventSourceStatus =
+  | "accessible"
+  | "pasted_unverified"
+  | "invalid";
+
 /** A proposal and its frozen-source context for event evidence review. */
 export interface EventReviewQueueItem {
   proposalId: string;
@@ -105,7 +110,7 @@ export interface EventReviewQueueItem {
   documentPublishedAt: string | null;
   availableAt: string | null;
   sourceTitle: string | null;
-  sourceStatus: string;
+  sourceStatus: EventSourceStatus;
   sourceStatusReason: string;
   canAccept: boolean;
   proposalReason: string;

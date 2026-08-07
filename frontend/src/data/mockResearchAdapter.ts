@@ -3734,7 +3734,7 @@ export class MockResearchAdapter implements ResearchClient {
     const isTsm = caseId === "event-tsm";
     return simulateLatency({
       summary: {
-        total: isTsm ? 2 : 0,
+        total: isTsm ? 3 : 0,
         reviewed: 0,
         pending: isTsm ? 1 : 0,
         invalidSource: isTsm ? 1 : 0,
@@ -3748,6 +3748,13 @@ export class MockResearchAdapter implements ResearchClient {
           statementId: "statement-event-tsm", statementText: "资本开支指引上调", statementKind: "management_attribution", spanId: "span-event-tsm", verbatimText: "全年资本开支预计上调。", locator: { page: 12 },
           documentVersionId: "document-event-tsm", documentSourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentPublishedAt: "2026-08-07T00:00:00Z", availableAt: "2026-08-07T09:00:00Z",
           sourceTitle: "台积电季度财报与电话会", sourceStatus: "accessible", sourceStatusReason: "公司投资者关系页面可验证且已冻结", canAccept: true, proposalReason: "自由现金流承压", position: 1,
+        },
+        {
+          proposalId: "proposal-event-tsm-pasted", status: "pending", proposedAt: "2026-08-07T09:00:30Z", linkId: "link-event-tsm-pasted", thesisId: "thesis-event-tsm", caseId,
+          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "contextualizes", aiReason: "来源尚未完成内容验证", aiScope: {},
+          statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
+          documentVersionId: null, documentSourceUrl: "https://www.reuters.com/technology/tsmc", documentPublishedAt: null, availableAt: null,
+          sourceTitle: "用户粘贴的市场报道", sourceStatus: "pasted_unverified", sourceStatusReason: "来源由用户粘贴解析，尚未完成内容验证", canAccept: false, proposalReason: "来源尚未完成内容验证", position: null,
         },
         {
           proposalId: "proposal-event-tsm-invalid", status: "pending", proposedAt: "2026-08-07T09:01:00Z", linkId: "link-event-tsm-invalid", thesisId: "thesis-event-tsm", caseId,

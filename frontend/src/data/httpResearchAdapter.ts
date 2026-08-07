@@ -34,6 +34,7 @@ import type {
   EventResearchListItem,
   EventReviewQueue,
   EventReviewQueueItem,
+  EventSourceStatus,
   EventWorkbench,
 } from "../domain/eventResearch";
 import type { ResearchClient } from "../domain/prototypeTypes";
@@ -2834,7 +2835,7 @@ export class HttpResearchAdapter implements ResearchClient {
         thesis_id?: string | null; thesis_statement?: string | null; ai_role?: string | null; ai_reason?: string | null; ai_scope?: Record<string, unknown> | null;
         statement_id?: string | null; statement_text?: string | null; statement_kind?: string | null; span_id?: string | null; verbatim_text?: string | null; locator?: Record<string, unknown> | null;
         document_version_id?: string | null; document_source_url?: string | null; document_published_at?: string | null; available_at?: string | null;
-        source_title?: string | null; source_status: string; source_status_reason: string; can_accept: boolean; proposal_reason: string; position?: number | null;
+        source_title?: string | null; source_status: EventSourceStatus; source_status_reason: string; can_accept: boolean; proposal_reason: string; position?: number | null;
       }>;
     }>(`/event-research/${encodeURIComponent(caseId)}/review-queue`);
     return {

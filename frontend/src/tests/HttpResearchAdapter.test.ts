@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { HttpResearchAdapter } from "../data/httpResearchAdapter";
+import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { PageStateError } from "../domain/types";
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
@@ -915,6 +916,17 @@ describe("HttpResearchAdapter", () => {
           proposal_reason: "自由现金流承压",
           position: 2,
         },
+        {
+          proposal_id: "proposal-2",
+          status: "pending",
+          proposed_at: "2026-08-07T09:01:00Z",
+          link_id: "link-2",
+          case_id: "event-1",
+          source_status: "accessible",
+          source_status_reason: "来源链接可访问且内容已验证",
+          can_accept: true,
+          proposal_reason: "",
+        },
       ],
     };
     const fetchMock = vi.fn<
@@ -946,6 +958,10 @@ describe("HttpResearchAdapter", () => {
       position: 2,
       documentSourceUrl: "https://ir.example.org/report",
     });
+    expect(queue.items[1]).toMatchObject({
+      sourceStatus: "accessible",
+      canAccept: true,
+    });
   });
 
   it("defaults omitted optional event review evidence fields", async () => {
@@ -953,7 +969,7 @@ describe("HttpResearchAdapter", () => {
       "fetch",
       vi.fn(async () => jsonResponse({
         summary: { total: 0, reviewed: 0, pending: 0, invalid_source: 0, current_round: 0, next_action: null },
-        items: [{ proposal_id: "proposal-2", status: "pending", proposed_at: "2026-08-07T09:00:00Z", link_id: "link-2", case_id: "event-2", source_status: "unknown", source_status_reason: "尚未取得来源元数据", can_accept: false, proposal_reason: "" }],
+        items: [{ proposal_id: "proposal-3", status: "pending", proposed_at: "2026-08-07T09:00:00Z", link_id: "link-3", case_id: "event-2", source_status: "pasted_unverified", source_status_reason: "来源内容尚未验证", can_accept: false, proposal_reason: "" }],
       })),
     );
 
@@ -967,7 +983,21 @@ describe("HttpResearchAdapter", () => {
       statementText: null,
       documentSourceUrl: null,
       sourceTitle: null,
+      sourceStatus: "pasted_unverified",
+      canAccept: false,
       position: null,
     });
+  });
+
+  it("mock event review queue covers all source admission states", async () => {
+    const queue = await new MockResearchAdapter().getEventReviewQueue("event-tsm");
+
+    expect(queue.summary).toMatchObject({ total: 3, pending: 1, invalidSource: 1 });
+    expect(queue.items.map((item) => item.sourceStatus)).toEqual([
+      "accessible",
+      "pasted_unverified",
+      "invalid",
+    ]);
+    expect(queue.items.filter((item) => !item.canAccept)).toHaveLength(2);
   });
 });
