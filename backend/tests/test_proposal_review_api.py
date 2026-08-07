@@ -219,6 +219,39 @@ def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_sessi
     assert cmd_session.scalars(select(EvidenceLinkVersion)).one().proposal_id == proposal.id
 
 
+def test_event_evidence_publish_takes_the_case_lifecycle_lock(
+    cmd_client, cmd_session, monkeypatch
+):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://investor.tsmc.com/english/quarterly-results/lock"
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+    locked_case_ids: list[uuid.UUID] = []
+
+    def record_lifecycle_lock(session, case_id):
+        locked_case_ids.append(case_id)
+        return None
+
+    monkeypatch.setattr(
+        "app.services.proposal_publisher.lock_event_research_lifecycle",
+        record_lifecycle_lock,
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "looks correct",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert locked_case_ids == [proposal.research_case_id]
+
+
 def test_modified_event_proposal_with_empty_replacement_uses_original_source(
     cmd_client, cmd_session
 ):
