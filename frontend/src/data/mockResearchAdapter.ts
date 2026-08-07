@@ -56,6 +56,8 @@ import type {
   ThemeWorkbenchView,
   ResearchRunDetail,
   ResearchRunSummary,
+  StartResearchRunOptions,
+  ProposalReviewPayload,
   TopicListItem,
   TopicPathNode,
   TopicThesisView,
@@ -3613,6 +3615,31 @@ export class MockResearchAdapter implements ResearchClient {
     const run = MOCK_RESEARCH_RUNS.find((item) => item.id === runId);
     if (!run) throw new PageStateError("parse_failed", "研究运行不存在");
     return simulateLatency(run);
+  }
+
+  async startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail> {
+    this.throwIfOffline();
+    const run = { ...MOCK_RESEARCH_RUNS[0], id: `run-${Date.now()}`, case_id: caseId, status: options.auto_execute ? "waiting_for_review" : "queued", round: 0 };
+    MOCK_RESEARCH_RUNS.push(run);
+    return simulateLatency(run);
+  }
+
+  async cancelResearchRun(runId: string): Promise<ResearchRunSummary> {
+    this.throwIfOffline();
+    const run = MOCK_RESEARCH_RUNS.find((item) => item.id === runId);
+    if (!run) throw new PageStateError("parse_failed", "研究运行不存在");
+    run.status = "cancelled";
+    return simulateLatency({ id: run.id, status: run.status, stage: run.stage, round: run.round, stop_reason: "cancelled", created_at: run.created_at, next_action: "查看取消前进度" });
+  }
+
+  async reviewProposal(proposalId: string, _payload: ProposalReviewPayload): Promise<void> {
+    this.throwIfOffline();
+    for (const run of MOCK_RESEARCH_RUNS) {
+      for (const item of run.pending_proposals) {
+        if (item.id === proposalId) item.status = "decided";
+      }
+    }
+    return simulateLatency(undefined);
   }
 
   async getConclusionView(

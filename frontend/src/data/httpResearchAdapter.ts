@@ -75,6 +75,8 @@ import type {
   ConclusionView,
   ResearchRunDetail,
   ResearchRunSummary,
+  StartResearchRunOptions,
+  ProposalReviewPayload,
 } from "../domain/prototypeTypes";
 
 type Schemas = components["schemas"];
@@ -2736,6 +2738,18 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getResearchRun(runId: string): Promise<ResearchRunDetail> {
     return this.get<ResearchRunDetail>(`/research-runs/${encodeURIComponent(runId)}`);
+  }
+
+  async startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail> {
+    return this.post<ResearchRunDetail>(`/research-cases/${encodeURIComponent(caseId)}/runs`, options);
+  }
+
+  async cancelResearchRun(runId: string): Promise<ResearchRunSummary> {
+    return this.post<ResearchRunSummary>(`/research-runs/${encodeURIComponent(runId)}/cancel`, {});
+  }
+
+  async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
+    await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
   }
 
   async getConclusionView(

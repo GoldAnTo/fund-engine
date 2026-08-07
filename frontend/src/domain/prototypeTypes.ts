@@ -1058,9 +1058,26 @@ export interface ResearchRunDetail extends ResearchRunSummary {
   failed_tasks: ResearchRunTask[];
 }
 
+export interface StartResearchRunOptions {
+  max_rounds: number;
+  budget: number;
+  auto_execute: boolean;
+}
+
+export interface ProposalReviewPayload {
+  outcome: "confirmed" | "rejected" | "modified";
+  reason: string;
+  expected_version: number;
+  reviewer_id: string;
+  replacement_payload?: Record<string, unknown>;
+}
+
 export interface AutoResearchClient {
   listResearchRuns(caseId: string): Promise<ResearchRunSummary[]>;
   getResearchRun(runId: string): Promise<ResearchRunDetail>;
+  startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail>;
+  cancelResearchRun(runId: string): Promise<ResearchRunSummary>;
+  reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void>;
 }
 
 export interface PrototypeClient {
