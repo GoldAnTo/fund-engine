@@ -204,7 +204,10 @@ function mapEventSourceAdmission(
   if (!isEventSourceStatus(sourceStatus)) {
     return { sourceStatus: "invalid", canAccept: false };
   }
-  return { sourceStatus, canAccept };
+  return {
+    sourceStatus,
+    canAccept: sourceStatus === "accessible" && canAccept,
+  };
 }
 
 // Backend search deep_link paths are prefixed with /research-cases/... but

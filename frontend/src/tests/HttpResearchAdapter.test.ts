@@ -1008,6 +1008,24 @@ describe("HttpResearchAdapter", () => {
     });
   });
 
+  it("allows acceptance only for an accessible source", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        summary: { total: 2, reviewed: 0, pending: 2, invalid_source: 1, current_round: 1, next_action: null },
+        items: [
+          { proposal_id: "proposal-invalid", status: "pending", proposed_at: "2026-08-07T09:00:00Z", link_id: "link-invalid", case_id: "event-1", source_status: "invalid", source_status_reason: "invalid source", can_accept: true, proposal_reason: "" },
+          { proposal_id: "proposal-pasted", status: "pending", proposed_at: "2026-08-07T09:01:00Z", link_id: "link-pasted", case_id: "event-1", source_status: "pasted_unverified", source_status_reason: "unverified source", can_accept: true, proposal_reason: "" },
+        ],
+      })),
+    );
+
+    const queue = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .getEventReviewQueue("event-1");
+
+    expect(queue.items.map((item) => item.canAccept)).toEqual([false, false]);
+  });
+
   it("mock event review queue covers all source admission states", async () => {
     const queue = await new MockResearchAdapter().getEventReviewQueue("event-tsm");
 
