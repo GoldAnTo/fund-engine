@@ -18,8 +18,10 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.events import DomainEvent
 from app.models.ledger import (
     AIAssessment,
+    CaseDocumentVersion,
     DocumentVersion,
     EvidenceLink,
     EvidenceSnapshot,
@@ -32,6 +34,7 @@ from app.models.operational import EventResearchLifecycle, Job, ResearchRun, Res
 from app.models.proposals import Proposal
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
+from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.event_research_scope_evidence import (
     append_current_scope_evidence_assignment,
@@ -39,6 +42,8 @@ from app.services.event_research_scope_evidence import (
     lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
+from app.repositories.event_research import EventResearchLifecycleRepository
+from app.repositories.operational import TaskRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 
 
@@ -1350,6 +1355,120 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     AutoResearchService(cmd_session).refresh_event_lifecycle(old_run)
     assert cmd_session.get(EventResearchLifecycle, case_id).active_run_id == successor.id
 
+
+def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(session) -> None:
+    created = EventResearchService(session).create(
+        CreateEventResearchRequest(
+            raw_input="Event input",
+            event_title="Remove stale review",
+            research_question="What explains the event?",
+            candidate_factors=INITIAL_FACTORS,
+            created_by="tester",
+        )
+    )
+    case_id = uuid.UUID(created.case_id)
+    removed_thesis = session.scalar(
+        select(Thesis)
+        .where(Thesis.research_case_id == case_id)
+        .where(Thesis.statement == INITIAL_FACTORS[0])
+    )
+    assert removed_thesis is not None
+    now = datetime.now(timezone.utc)
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Admissible release",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    session.add(document)
+    session.flush()
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=case_id,
+            document_version_id=document.id,
+            linked_at=now,
+        )
+    )
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="Source evidence for a factor removed from the next scope.",
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="disclosed_fact",
+        normalized_text="The source supports the original factor.",
+        created_at=now,
+    )
+    session.add(statement)
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(statement.id),
+            "role": "supports",
+            "reason": "pending before the scope changed",
+            "scope": {"period": "event"},
+        },
+        target_context={"thesis_id": str(removed_thesis.id), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="test",
+        proposed_at=now,
+        research_case_id=case_id,
+        status="pending",
+    )
+    session.add(proposal)
+    session.flush()
+    task = TaskRepository(session).add_task(
+        title="Review stale factor evidence",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=proposal.id,
+        research_case_id=case_id,
+    )
+    session.commit()
+
+    EventResearchScopeService(session).update(
+        case_id,
+        [INITIAL_FACTORS[1], "New factor two", "New factor three"],
+        "reviewer",
+    )
+    session.commit()
+    session.refresh(task)
+    assert task.status == "done"
+
+    lifecycle = session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    successor = session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    successor.status = "waiting_for_review"
+    successor.stage = "stopped"
+    successor.stop_reason = "max_rounds_reached"
+    successor.max_rounds = 1
+    session.commit()
+    AutoResearchService(session).refresh_event_lifecycle(successor)
+    session.commit()
+
+    session.refresh(task)
+    session.refresh(lifecycle)
+    assert task.status == "done"
+    assert proposal.status == "pending"
+    assert session.scalar(
+        select(DomainEvent.id).where(
+            DomainEvent.type == "event_evidence_out_of_scope",
+            DomainEvent.aggregate_id == str(proposal.id),
+        )
+    ) is not None
+    assert EventResearchLifecycleRepository(session).pending_key_review_count(case_id) == 0
+    queue = EventReviewQueueService(session).review_queue(case_id)
+    assert queue.items == []
+    assert queue.summary.pending == 0
+    assert lifecycle.status != "awaiting_key_review"
 
 def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
     cmd_client, cmd_session

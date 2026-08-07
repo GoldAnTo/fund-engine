@@ -24,6 +24,7 @@ from app.services.event_research_factors import (
     normalize_event_research_scope_factors,
 )
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
+from app.services.event_review_queue import EventReviewQueueService
 
 
 def _utcnow() -> datetime:
@@ -129,6 +130,10 @@ class EventResearchScopeService:
                     created_at=now,
                 )
             )
+        # Pending proposals for factors removed from this just-created scope
+        # remain immutable audit records, but their review tasks must no
+        # longer appear actionable while the successor run is pending.
+        EventReviewQueueService(self._session).reconcile_event_review_queue(case_id)
         if lifecycle is not None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()

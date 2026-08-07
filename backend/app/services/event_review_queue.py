@@ -27,6 +27,7 @@ from app.schemas.v1.event_research import (
     EventReviewQueueSummaryDTO,
 )
 from app.services.source_admission import SourceStatus, classify_source
+from app.services.event_research_scope_evidence import current_scope_thesis_ids
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class EventReviewQueueService:
         self._session = session
 
     def review_queue(self, case_id: uuid.UUID) -> EventReviewQueueResponse:
+        active_thesis_ids = current_scope_thesis_ids(self._session, case_id)
         proposals = list(
             self._session.scalars(
                 select(Proposal)
@@ -51,7 +53,15 @@ class EventReviewQueueService:
             proposal_evidence_context(self._session, proposal) for proposal in proposals
         ]
         pending_contexts = [
-            context for context in contexts if context.proposal.status == "pending"
+            context
+            for context in contexts
+            if context.proposal.status == "pending"
+            and (
+                context.admission.status == SourceStatus.INVALID
+                or self._is_current_scope_proposal(
+                    context.proposal, active_thesis_ids
+                )
+            )
         ]
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
         return EventReviewQueueResponse(
@@ -85,7 +95,12 @@ class EventReviewQueueService:
             )
         )
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
-        pending = [proposal for proposal in proposals if proposal.status == "pending"]
+        active_thesis_ids = current_scope_thesis_ids(self._session, case_id)
+        pending = [
+            proposal
+            for proposal in proposals
+            if proposal.status == "pending"
+        ]
         statement_ids = {
             statement_id
             for proposal in pending
@@ -126,6 +141,9 @@ class EventReviewQueueService:
             thesis = theses.get(_payload_uuid(proposal.target_context, "thesis_id"))
             span = spans.get(statement.source_span_id) if statement else None
             document = documents.get(span.document_version_id) if span else None
+            is_current_scope = self._is_current_scope_proposal(
+                proposal, active_thesis_ids
+            )
             if thesis is None or thesis.research_case_id != case_id:
                 invalid_pending += 1
                 continue
@@ -137,6 +155,11 @@ class EventReviewQueueService:
                 document.parser_version if document else "",
                 bool(document and document.parse_state in {"success", "parsed"}),
             )
+            # Invalid/cross-case proposals must remain visible to reviewers
+            # for provenance audit.  A valid proposal for a removed factor is
+            # historical, so it no longer contributes any actionable count.
+            if not is_current_scope and admission.status != SourceStatus.INVALID:
+                continue
             if admission.can_accept:
                 admissible_pending += 1
             if admission.status == SourceStatus.INVALID:
@@ -169,29 +192,46 @@ class EventReviewQueueService:
             .order_by(Proposal.proposed_at, Proposal.id)
         )
         invalid_ids: list[uuid.UUID] = []
+        active_thesis_ids = current_scope_thesis_ids(self._session, case_id)
         task_repo = TaskRepository(self._session)
         for proposal in proposals:
             context = proposal_evidence_context(self._session, proposal)
-            if context.admission.status != SourceStatus.INVALID:
+            if context.admission.status == SourceStatus.INVALID:
+                invalid_ids.append(proposal.id)
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
+                if not self._has_admission_audit(proposal.id):
+                    emit_event(
+                        self._session,
+                        type="event_evidence_source_invalid",
+                        aggregate_type="proposal",
+                        aggregate_id=proposal.id,
+                        ref_type="research_case",
+                        ref_id=case_id,
+                        origin="operational",
+                        payload={
+                            "research_case_id": str(case_id),
+                            "source_status": str(context.admission.status),
+                            "admission_reason": context.admission.reason,
+                            "can_accept": context.admission.can_accept,
+                        },
+                    )
                 continue
-            invalid_ids.append(proposal.id)
-            task_repo.close_review_task("review_proposal", "proposal", proposal.id)
-            if not self._has_admission_audit(proposal.id):
-                emit_event(
-                    self._session,
-                    type="event_evidence_source_invalid",
-                    aggregate_type="proposal",
-                    aggregate_id=proposal.id,
-                    ref_type="research_case",
-                    ref_id=case_id,
-                    origin="operational",
-                    payload={
-                        "research_case_id": str(case_id),
-                        "source_status": str(context.admission.status),
-                        "admission_reason": context.admission.reason,
-                        "can_accept": context.admission.can_accept,
-                    },
-                )
+            if not self._is_current_scope_proposal(proposal, active_thesis_ids):
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
+                if not self._has_out_of_scope_audit(proposal.id):
+                    emit_event(
+                        self._session,
+                        type="event_evidence_out_of_scope",
+                        aggregate_type="proposal",
+                        aggregate_id=proposal.id,
+                        ref_type="research_case",
+                        ref_id=case_id,
+                        origin="operational",
+                        payload={
+                            "research_case_id": str(case_id),
+                            "reason": "proposal thesis is not active in the latest scope",
+                        },
+                    )
         return EventReviewQueueReconciliation(invalid_source_proposal_ids=invalid_ids)
 
     def _item(
@@ -254,6 +294,23 @@ class EventReviewQueueService:
             .where(DomainEvent.aggregate_id == str(proposal_id))
             .limit(1)
         ) is not None
+
+    def _has_out_of_scope_audit(self, proposal_id: uuid.UUID) -> bool:
+        return self._session.scalar(
+            select(DomainEvent.id)
+            .where(DomainEvent.type == "event_evidence_out_of_scope")
+            .where(DomainEvent.aggregate_type == "proposal")
+            .where(DomainEvent.aggregate_id == str(proposal_id))
+            .limit(1)
+        ) is not None
+
+    @staticmethod
+    def _is_current_scope_proposal(
+        proposal: Proposal, active_thesis_ids: set[uuid.UUID] | None
+    ) -> bool:
+        if active_thesis_ids is None:
+            return True
+        return _payload_uuid(proposal.target_context, "thesis_id") in active_thesis_ids
 
 
 def _payload_uuid(payload: object, key: str) -> uuid.UUID | None:

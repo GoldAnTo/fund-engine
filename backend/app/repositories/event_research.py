@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.operational import EventResearchLifecycle, TaskItem
 from app.models.proposals import Proposal
 from app.queries.review_queue import proposal_evidence_context
+from app.services.event_research_scope_evidence import current_scope_thesis_ids
 
 
 def _utcnow() -> datetime:
@@ -24,6 +25,7 @@ class EventResearchLifecycleRepository:
         return self._session.get(EventResearchLifecycle, case_id)
 
     def pending_key_review_count(self, case_id: uuid.UUID) -> int:
+        active_thesis_ids = current_scope_thesis_ids(self._session, case_id)
         tasks = self._session.scalars(
             select(TaskItem)
             .where(TaskItem.research_case_id == case_id)
@@ -38,15 +40,19 @@ class EventResearchLifecycleRepository:
                 count += 1
                 continue
             proposal = self._session.get(Proposal, task.ref_id)
+            proposal_thesis_id = _proposal_thesis_id(proposal)
             if (
                 proposal is not None
                 and proposal.kind == "evidence_link"
                 and proposal.status == "pending"
+                and (
+                    active_thesis_ids is None
+                    or proposal_thesis_id in active_thesis_ids
+                )
                 and proposal_evidence_context(self._session, proposal).admission.can_accept
             ):
                 count += 1
         return count
-
     def update(
         self,
         lifecycle: EventResearchLifecycle,
@@ -68,3 +74,12 @@ class EventResearchLifecycleRepository:
         lifecycle.updated_at = _utcnow()
         self._session.flush()
         return lifecycle
+
+
+def _proposal_thesis_id(proposal: Proposal | None) -> uuid.UUID | None:
+    if proposal is None or not isinstance(proposal.target_context, dict):
+        return None
+    try:
+        return uuid.UUID(str(proposal.target_context.get("thesis_id")))
+    except (TypeError, ValueError):
+        return None

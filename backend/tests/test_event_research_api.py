@@ -58,12 +58,24 @@ def _evidence_proposal(
     thesis_id: uuid.UUID | None = None,
 ) -> Proposal:
     now = datetime.now(timezone.utc)
-    thesis = cmd_session.get(Thesis, thesis_id) if thesis_id is not None else Thesis(
-        research_case_id=thesis_case_id or case_id,
-        statement=f"evidence from {title}",
-        created_by="tester",
-        created_at=now,
-    )
+    if thesis_id is not None:
+        thesis = cmd_session.get(Thesis, thesis_id)
+    elif thesis_case_id is not None:
+        thesis = Thesis(
+            research_case_id=thesis_case_id,
+            statement=f"evidence from {title}",
+            created_by="tester",
+            created_at=now,
+        )
+    else:
+        # Event evidence must target an active current-scope factor.  Tests
+        # that exercise cross-case handling opt in through thesis_case_id.
+        thesis = cmd_session.scalar(
+            select(Thesis)
+            .where(Thesis.research_case_id == case_id)
+            .order_by(Thesis.created_at, Thesis.id)
+            .limit(1)
+        )
     assert thesis is not None
     document = DocumentVersion(
         content_sha256=hashlib.sha256(source_url.encode()).hexdigest(),
@@ -74,7 +86,7 @@ def _evidence_proposal(
         parser_version="html-v1",
         parse_state="success",
     )
-    if thesis_id is None:
+    if thesis_id is None and thesis_case_id is not None:
         cmd_session.add(thesis)
     cmd_session.add(document)
     cmd_session.flush()

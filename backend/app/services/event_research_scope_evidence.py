@@ -46,6 +46,41 @@ def lock_event_research_lifecycle(
     )
 
 
+def current_scope_thesis_ids(
+    session: Session, case_id: uuid.UUID
+) -> set[uuid.UUID] | None:
+    """Return the latest event scope's active thesis IDs.
+
+    ``None`` preserves legacy non-versioned event behavior; an empty set is a
+    real (albeit invalid for new commands) versioned scope with no active
+    factors.  Callers use this distinction to avoid hiding pre-scope history.
+    """
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    if scope is None:
+        return None
+    active_statements = select(EventResearchScopeFactor.statement).where(
+        EventResearchScopeFactor.scope_version_id == scope.id
+    )
+    theses = session.scalars(
+        select(Thesis)
+        .where(Thesis.research_case_id == case_id)
+        .where(Thesis.statement.in_(active_statements))
+        .order_by(Thesis.statement, Thesis.created_at, Thesis.id)
+    )
+    # Scope synchronization reuses the earliest thesis for each factor
+    # statement.  Mirror that canonicalization here so a duplicate historical
+    # thesis with identical wording cannot make an obsolete proposal current.
+    canonical: dict[str, uuid.UUID] = {}
+    for thesis in theses:
+        canonical.setdefault(thesis.statement, thesis.id)
+    return set(canonical.values())
+
+
 def current_mapped_evidence_ids(session: Session, case_id: uuid.UUID) -> list[uuid.UUID]:
     scope = session.scalar(
         select(EventResearchScopeVersion)
