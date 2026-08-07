@@ -16,10 +16,6 @@ const roleLabel = {
   contextualizes: "补充背景",
 } as const;
 
-const objectHasOwn = (Object as typeof Object & {
-  hasOwn(object: object, property: PropertyKey): boolean;
-}).hasOwn;
-
 function displayDate(value: string | null): string {
   return value ? new Date(value).toLocaleString("zh-CN") : "未记录";
 }
@@ -28,8 +24,17 @@ function factorLabel(item: EventReviewQueueItem): string {
   return item.thesisStatement || "未归属因素";
 }
 
+export function hasOwnKey(object: object, property: PropertyKey): boolean {
+  const objectHasOwn = (Object as typeof Object & {
+    hasOwn?: (target: object, key: PropertyKey) => boolean;
+  }).hasOwn;
+  return typeof objectHasOwn === "function"
+    ? objectHasOwn(object, property)
+    : Object.prototype.hasOwnProperty.call(object, property);
+}
+
 function relationshipLabel(aiRole: string | null): string {
-  if (aiRole && objectHasOwn(roleLabel, aiRole)) return roleLabel[aiRole as keyof typeof roleLabel];
+  if (aiRole && hasOwnKey(roleLabel, aiRole)) return roleLabel[aiRole as keyof typeof roleLabel];
   return aiRole || "关联";
 }
 

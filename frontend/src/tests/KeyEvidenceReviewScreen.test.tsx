@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
-import { KeyEvidenceReviewScreen } from "../pages/prototype/KeyEvidenceReviewScreen";
+import { hasOwnKey, KeyEvidenceReviewScreen } from "../pages/prototype/KeyEvidenceReviewScreen";
 
 describe("KeyEvidenceReviewScreen", () => {
   let adapter: MockResearchAdapter;
@@ -86,6 +86,29 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(await screen.findByText("反驳的因素")).toBeVisible();
     expect(screen.getByText("AI 关系：反驳")).toBeVisible();
     expect(screen.queryByText("支持的因素")).not.toBeInTheDocument();
+  });
+
+  it("falls back safely when Object.hasOwn is unavailable and the AI relationship is unknown", async () => {
+    const originalGetQueue = adapter.getEventReviewQueue.bind(adapter);
+    vi.spyOn(adapter, "getEventReviewQueue").mockImplementation(async (caseId) => {
+      const queue = await originalGetQueue(caseId);
+      return {
+        ...queue,
+        items: queue.items.map((item, index) => index === 0 ? { ...item, aiRole: "toString" } : item),
+      };
+    });
+    const objectConstructor = Object as typeof Object & { hasOwn?: typeof Object.prototype.hasOwnProperty };
+    const originalObjectHasOwn = objectConstructor.hasOwn;
+    objectConstructor.hasOwn = undefined;
+    try {
+      expect(hasOwnKey({ supports: "支持" }, "toString")).toBe(false);
+    } finally {
+      objectConstructor.hasOwn = originalObjectHasOwn;
+    }
+
+    renderScreen();
+    expect(await screen.findByText("toString的因素")).toBeVisible();
+    expect(screen.getByText("AI 关系：toString")).toBeVisible();
   });
 
   it("refreshes the event queue after accepting and names the factor, remaining work, and next action", async () => {
