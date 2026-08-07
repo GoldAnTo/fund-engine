@@ -238,32 +238,39 @@ class EventResearchQueries:
                     .order_by(EventResearchFactorDraft.position)
                 )
             )
+        counts_by_factor: dict[str, dict[str, int]] = {}
+        if scope is not None:
+            rows = self._session.execute(
+                select(
+                    EventResearchScopeEvidenceAssignment.factor_statement,
+                    EvidenceLink.role,
+                    func.count(),
+                )
+                .join(
+                    EvidenceLink,
+                    EventResearchScopeEvidenceAssignment.evidence_link_id
+                    == EvidenceLink.id,
+                )
+                .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+                .where(
+                    EventResearchScopeEvidenceAssignment.scope_version_id == scope.id,
+                    EventResearchScopeEvidenceAssignment.disposition == "mapped",
+                    EventResearchScopeEvidenceAssignment.factor_statement
+                    == Thesis.statement,
+                    Thesis.research_case_id == case_id,
+                    EvidenceLink.review_state == "reviewed",
+                )
+                .group_by(
+                    EventResearchScopeEvidenceAssignment.factor_statement,
+                    EvidenceLink.role,
+                )
+            )
+            for statement, role, count in rows:
+                if statement is not None:
+                    counts_by_factor.setdefault(statement, {})[role] = int(count)
         result: list[EventResearchFactorDTO] = []
         for factor in factors[:5]:
-            counts: dict[str, int] = {}
-            if scope is not None:
-                counts = dict(
-                    self._session.execute(
-                        select(EvidenceLink.role, func.count())
-                        .join(
-                            EventResearchScopeEvidenceAssignment,
-                            EventResearchScopeEvidenceAssignment.evidence_link_id
-                            == EvidenceLink.id,
-                        )
-                        .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
-                        .where(
-                            EventResearchScopeEvidenceAssignment.scope_version_id
-                            == scope.id,
-                            EventResearchScopeEvidenceAssignment.disposition == "mapped",
-                            EventResearchScopeEvidenceAssignment.factor_statement
-                            == factor.statement,
-                            Thesis.research_case_id == case_id,
-                            Thesis.statement == factor.statement,
-                            EvidenceLink.review_state == "reviewed",
-                        )
-                        .group_by(EvidenceLink.role)
-                    ).all()
-                )
+            counts = counts_by_factor.get(factor.statement, {})
             result.append(
                 EventResearchFactorDTO(
                     statement=factor.statement,

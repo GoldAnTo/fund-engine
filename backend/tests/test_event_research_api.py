@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 import hashlib
 
-from sqlalchemy import select
+from sqlalchemy import event as sqlalchemy_event, select
 
 from app.models.event_research import (
     EventResearchBrief,
@@ -758,6 +758,46 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
+
+
+def test_event_workbench_factor_statistics_use_a_fixed_query_count(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = created["case_id"]
+    engine = cmd_session.get_bind()
+
+    def workbench_select_count() -> int:
+        statements: list[str] = []
+
+        def record(_conn, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        sqlalchemy_event.listen(engine, "before_cursor_execute", record)
+        try:
+            response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+            assert response.status_code == 200
+        finally:
+            sqlalchemy_event.remove(engine, "before_cursor_execute", record)
+        return len(statements)
+
+    three_factor_count = workbench_select_count()
+    updated = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                *_confirmed_event()["candidate_factors"],
+                "竞争对手定价变化可能影响市场反应",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    assert updated.status_code == 200
+
+    four_factor_count = workbench_select_count()
+
+    assert four_factor_count == three_factor_count
 
 
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:
