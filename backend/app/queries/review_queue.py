@@ -14,6 +14,7 @@ output flows through Proposals only.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,7 +28,58 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.proposals import Proposal
+from app.services.source_admission import SourceAdmission, classify_source
 from app.schemas.v1.commands import ReviewQueueItemDTO, ReviewQueueResponse
+
+
+@dataclass(frozen=True)
+class ProposalEvidenceContext:
+    """Resolved evidence provenance plus its source-admission decision."""
+
+    proposal: Proposal
+    thesis: Thesis | None
+    statement: SourceStatement | None
+    span: SourceSpan | None
+    document: DocumentVersion | None
+    admission: SourceAdmission
+
+
+def proposal_evidence_context(
+    session: Session, proposal: Proposal
+) -> ProposalEvidenceContext:
+    """Resolve a proposal's frozen source and classify it without network I/O."""
+    payload = proposal.payload if isinstance(proposal.payload, dict) else {}
+    target_context = (
+        proposal.target_context if isinstance(proposal.target_context, dict) else {}
+    )
+    statement = _get_by_uuid(
+        session, SourceStatement, payload.get("source_statement_id")
+    )
+    thesis = _get_by_uuid(session, Thesis, target_context.get("thesis_id"))
+    span = session.get(SourceSpan, statement.source_span_id) if statement else None
+    document = (
+        session.get(DocumentVersion, span.document_version_id) if span else None
+    )
+    admission = classify_source(
+        document.source_url if document else None,
+        document.parser_version if document else "",
+        bool(document and document.parse_state in {"success", "parsed"}),
+    )
+    return ProposalEvidenceContext(
+        proposal=proposal,
+        thesis=thesis,
+        statement=statement,
+        span=span,
+        document=document,
+        admission=admission,
+    )
+
+
+def _get_by_uuid(session: Session, model, raw_id: object):
+    try:
+        return session.get(model, uuid.UUID(str(raw_id)))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 class ReviewQueueQueries:

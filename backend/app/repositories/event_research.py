@@ -4,10 +4,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.operational import EventResearchLifecycle, TaskItem
+from app.models.proposals import Proposal
+from app.queries.review_queue import proposal_evidence_context
 
 
 def _utcnow() -> datetime:
@@ -22,16 +24,28 @@ class EventResearchLifecycleRepository:
         return self._session.get(EventResearchLifecycle, case_id)
 
     def pending_key_review_count(self, case_id: uuid.UUID) -> int:
-        return int(
-            self._session.scalar(
-                select(func.count())
-                .select_from(TaskItem)
-                .where(TaskItem.research_case_id == case_id)
-                .where(TaskItem.task_type == "review_proposal")
-                .where(TaskItem.status.in_(("open", "in_progress")))
-            )
-            or 0
+        tasks = self._session.scalars(
+            select(TaskItem)
+            .where(TaskItem.research_case_id == case_id)
+            .where(TaskItem.task_type == "review_proposal")
+            .where(TaskItem.status.in_(("open", "in_progress")))
         )
+        count = 0
+        for task in tasks:
+            # Keep legacy unlinked task rows visible until their producer is
+            # migrated.  New event review tasks always refer to a Proposal.
+            if task.ref_type != "proposal" or task.ref_id is None:
+                count += 1
+                continue
+            proposal = self._session.get(Proposal, task.ref_id)
+            if (
+                proposal is not None
+                and proposal.kind == "evidence_link"
+                and proposal.status == "pending"
+                and proposal_evidence_context(self._session, proposal).admission.can_accept
+            ):
+                count += 1
+        return count
 
     def update(
         self,

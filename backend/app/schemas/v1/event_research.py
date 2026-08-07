@@ -72,6 +72,51 @@ class EventResearchListResponse(V1Model):
     items: list[EventResearchListItemDTO]
 
 
+class EventReviewQueueItemDTO(V1Model):
+    """A pending event-evidence proposal, including source admission context."""
+
+    proposal_id: str
+    status: str
+    proposed_at: datetime
+    link_id: str
+    thesis_id: str | None
+    case_id: str
+    thesis_statement: str | None
+    ai_role: str
+    ai_reason: str
+    ai_scope: dict
+    statement_id: str | None
+    statement_text: str | None
+    statement_kind: str | None
+    span_id: str | None
+    verbatim_text: str | None
+    locator: dict
+    document_version_id: str | None
+    document_source_url: str | None
+    document_published_at: datetime | None
+    available_at: datetime | None
+    source_title: str | None
+    source_status: str
+    source_status_reason: str
+    can_accept: bool
+    proposal_reason: str
+    position: int | None
+
+
+class EventReviewQueueSummaryDTO(V1Model):
+    total: int
+    reviewed: int
+    pending: int
+    invalid_source: int
+    current_round: int
+    next_action: str | None
+
+
+class EventReviewQueueResponse(V1Model):
+    items: list[EventReviewQueueItemDTO]
+    summary: EventReviewQueueSummaryDTO
+
+
 class EventResearchFactorDTO(V1Model):
     statement: str
     position: int

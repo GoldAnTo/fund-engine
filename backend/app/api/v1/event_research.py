@@ -14,6 +14,7 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
     EventResearchListResponse,
+    EventReviewQueueResponse,
     EventWorkbenchDTO,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
@@ -22,6 +23,7 @@ from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
 from app.services.event_conclusion import EventConclusionService
+from app.services.event_review_queue import EventReviewQueueService
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -77,6 +79,13 @@ def event_research_workbench(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> EventWorkbenchDTO:
     return EventResearchQueries(db).workbench(case_id)
+
+
+@router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)
+def event_review_queue(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> EventReviewQueueResponse:
+    return EventReviewQueueService(db).review_queue(case_id)
 
 
 @router.post("/{case_id}/conclusion/publish", response_model=PublishEventConclusionResponse, status_code=status.HTTP_201_CREATED)
