@@ -34,6 +34,7 @@ import type {
   EventLifecycle,
   EventLifecycleStatus,
   EventResearchListItem,
+  EventReviewQueue,
   EventWorkbench,
 } from "../domain/eventResearch";
 import type {
@@ -3718,13 +3719,44 @@ export class MockResearchAdapter implements ResearchClient {
   async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
     const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
     const lifecycle: EventLifecycle = { status: event.status, activeRunId: "run-mock", currentRound: 1, summary: event.statusSummary, currentGap: null, nextHumanAction: event.nextHumanAction };
-    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://example.com/earnings", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
+    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     return simulateLatency({
       event, lifecycle,
       conclusion: { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
       factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
       evidence,
       nextAction: event.status === "awaiting_key_review" ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 } : { kind: "wait", label: "系统继续处理" },
+    });
+  }
+
+  async getEventReviewQueue(caseId: string): Promise<EventReviewQueue> {
+    this.throwIfOffline();
+    const isTsm = caseId === "event-tsm";
+    return simulateLatency({
+      summary: {
+        total: isTsm ? 2 : 0,
+        reviewed: 0,
+        pending: isTsm ? 1 : 0,
+        invalidSource: isTsm ? 1 : 0,
+        currentRound: isTsm ? 1 : 0,
+        nextAction: isTsm ? "审核 1 条关键证据" : null,
+      },
+      items: isTsm ? [
+        {
+          proposalId: "proposal-event-tsm", status: "pending", proposedAt: "2026-08-07T09:00:00Z", linkId: "link-event-tsm", thesisId: "thesis-event-tsm", caseId,
+          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "自由现金流承压", aiScope: { period: "2026Q2" },
+          statementId: "statement-event-tsm", statementText: "资本开支指引上调", statementKind: "management_attribution", spanId: "span-event-tsm", verbatimText: "全年资本开支预计上调。", locator: { page: 12 },
+          documentVersionId: "document-event-tsm", documentSourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentPublishedAt: "2026-08-07T00:00:00Z", availableAt: "2026-08-07T09:00:00Z",
+          sourceTitle: "台积电季度财报与电话会", sourceStatus: "accessible", sourceStatusReason: "公司投资者关系页面可验证且已冻结", canAccept: true, proposalReason: "自由现金流承压", position: 1,
+        },
+        {
+          proposalId: "proposal-event-tsm-invalid", status: "pending", proposedAt: "2026-08-07T09:01:00Z", linkId: "link-event-tsm-invalid", thesisId: "thesis-event-tsm", caseId,
+          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "来源不可验证", aiScope: {},
+          statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
+          documentVersionId: null, documentSourceUrl: "https://example.test/unverified", documentPublishedAt: null, availableAt: null,
+          sourceTitle: "未验证测试来源", sourceStatus: "invalid", sourceStatusReason: "测试域名不能作为正式证据来源", canAccept: false, proposalReason: "来源不可验证", position: null,
+        },
+      ] : [],
     });
   }
 

@@ -875,4 +875,99 @@ describe("HttpResearchAdapter", () => {
       disclosureIds: ["hd-1"],
     });
   });
+
+  it("maps an event review queue summary and source admission fields", async () => {
+    const queueDto = {
+      summary: {
+        total: 3,
+        reviewed: 1,
+        pending: 1,
+        invalid_source: 1,
+        current_round: 2,
+        next_action: "审核 1 条关键证据",
+      },
+      items: [
+        {
+          proposal_id: "proposal-1",
+          status: "pending",
+          proposed_at: "2026-08-07T09:00:00Z",
+          link_id: "link-1",
+          thesis_id: "thesis-1",
+          case_id: "event-1",
+          thesis_statement: "资本开支担忧",
+          ai_role: "supports",
+          ai_reason: "自由现金流承压",
+          ai_scope: { period: "2026Q2" },
+          statement_id: "statement-1",
+          statement_text: "资本开支上调",
+          statement_kind: "disclosed_fact",
+          span_id: "span-1",
+          verbatim_text: "资本开支预计为...",
+          locator: { page: 12 },
+          document_version_id: "document-1",
+          document_source_url: "https://ir.example.org/report",
+          document_published_at: "2026-08-01T00:00:00Z",
+          available_at: "2026-08-01T00:00:00Z",
+          source_title: "公司季度财报",
+          source_status: "invalid",
+          source_status_reason: "测试域名不能作为正式证据来源",
+          can_accept: false,
+          proposal_reason: "自由现金流承压",
+          position: 2,
+        },
+      ],
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse(queueDto));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const queue = await adapter.getEventReviewQueue("event-1");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "http://api.test/api/v1/event-research/event-1/review-queue",
+    );
+    expect(queue.summary).toEqual({
+      total: 3,
+      reviewed: 1,
+      pending: 1,
+      invalidSource: 1,
+      currentRound: 2,
+      nextAction: "审核 1 条关键证据",
+    });
+    expect(queue.items[0]).toMatchObject({
+      proposalId: "proposal-1",
+      sourceTitle: "公司季度财报",
+      sourceStatus: "invalid",
+      sourceStatusReason: "测试域名不能作为正式证据来源",
+      canAccept: false,
+      proposalReason: "自由现金流承压",
+      position: 2,
+      documentSourceUrl: "https://ir.example.org/report",
+    });
+  });
+
+  it("defaults omitted optional event review evidence fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        summary: { total: 0, reviewed: 0, pending: 0, invalid_source: 0, current_round: 0, next_action: null },
+        items: [{ proposal_id: "proposal-2", status: "pending", proposed_at: "2026-08-07T09:00:00Z", link_id: "link-2", case_id: "event-2", source_status: "unknown", source_status_reason: "尚未取得来源元数据", can_accept: false, proposal_reason: "" }],
+      })),
+    );
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const queue = await adapter.getEventReviewQueue("event-2");
+
+    expect(queue.items[0]).toMatchObject({
+      thesisId: null,
+      aiScope: {},
+      locator: {},
+      statementText: null,
+      documentSourceUrl: null,
+      sourceTitle: null,
+      position: null,
+    });
+  });
 });

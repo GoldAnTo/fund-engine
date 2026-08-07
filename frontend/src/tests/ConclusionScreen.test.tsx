@@ -129,6 +129,7 @@ class StubAdapter implements ResearchClient {
   createEventResearch = vi.fn();
   listEventResearch = vi.fn();
   getEventWorkbench = vi.fn();
+  getEventReviewQueue = vi.fn();
   publishEventConclusion = vi.fn();
   getConclusionView = vi.fn().mockResolvedValue(sampleView);
   getOverview = vi.fn();

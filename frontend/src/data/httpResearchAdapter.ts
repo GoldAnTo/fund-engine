@@ -32,6 +32,8 @@ import type {
   EventLifecycle,
   EventLifecycleStatus,
   EventResearchListItem,
+  EventReviewQueue,
+  EventReviewQueueItem,
   EventWorkbench,
 } from "../domain/eventResearch";
 import type { ResearchClient } from "../domain/prototypeTypes";
@@ -2821,6 +2823,57 @@ export class HttpResearchAdapter implements ResearchClient {
       factors: dto.factors.map((factor) => ({ statement: factor.statement, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, currentGap: factor.current_gap })),
       evidence,
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
+    };
+  }
+
+  async getEventReviewQueue(caseId: string): Promise<EventReviewQueue> {
+    const dto = await this.get<{
+      summary: { total: number; reviewed: number; pending: number; invalid_source: number; current_round: number; next_action?: string | null };
+      items?: Array<{
+        proposal_id: string; status: string; proposed_at: string; link_id: string; case_id: string;
+        thesis_id?: string | null; thesis_statement?: string | null; ai_role?: string | null; ai_reason?: string | null; ai_scope?: Record<string, unknown> | null;
+        statement_id?: string | null; statement_text?: string | null; statement_kind?: string | null; span_id?: string | null; verbatim_text?: string | null; locator?: Record<string, unknown> | null;
+        document_version_id?: string | null; document_source_url?: string | null; document_published_at?: string | null; available_at?: string | null;
+        source_title?: string | null; source_status: string; source_status_reason: string; can_accept: boolean; proposal_reason: string; position?: number | null;
+      }>;
+    }>(`/event-research/${encodeURIComponent(caseId)}/review-queue`);
+    return {
+      summary: {
+        total: dto.summary.total,
+        reviewed: dto.summary.reviewed,
+        pending: dto.summary.pending,
+        invalidSource: dto.summary.invalid_source,
+        currentRound: dto.summary.current_round,
+        nextAction: dto.summary.next_action ?? null,
+      },
+      items: (dto.items ?? []).map((item): EventReviewQueueItem => ({
+        proposalId: item.proposal_id,
+        status: item.status,
+        proposedAt: item.proposed_at,
+        linkId: item.link_id,
+        caseId: item.case_id,
+        thesisId: item.thesis_id ?? null,
+        thesisStatement: item.thesis_statement ?? null,
+        aiRole: item.ai_role ?? null,
+        aiReason: item.ai_reason ?? null,
+        aiScope: item.ai_scope ?? {},
+        statementId: item.statement_id ?? null,
+        statementText: item.statement_text ?? null,
+        statementKind: item.statement_kind ?? null,
+        spanId: item.span_id ?? null,
+        verbatimText: item.verbatim_text ?? null,
+        locator: item.locator ?? {},
+        documentVersionId: item.document_version_id ?? null,
+        documentSourceUrl: item.document_source_url ?? null,
+        documentPublishedAt: item.document_published_at ?? null,
+        availableAt: item.available_at ?? null,
+        sourceTitle: item.source_title ?? null,
+        sourceStatus: item.source_status,
+        sourceStatusReason: item.source_status_reason,
+        canAccept: item.can_accept,
+        proposalReason: item.proposal_reason,
+        position: item.position ?? null,
+      })),
     };
   }
 
