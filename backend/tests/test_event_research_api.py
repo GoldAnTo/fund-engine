@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+import hashlib
 
 from sqlalchemy import select
 
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, Thesis
+from app.models.ledger import (
+    CaseDocumentVersion,
+    DocumentVersion,
+    EvidenceLink,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
 from app.models.operational import EventResearchLifecycle, ResearchRun
+from app.models.proposals import Proposal
 
 
 def _confirmed_event() -> dict:
@@ -25,6 +35,60 @@ def _confirmed_event() -> dict:
         ],
         "created_by": "xiongjiali",
     }
+
+
+def _invalid_evidence_proposal(cmd_session, case_id: uuid.UUID) -> Proposal:
+    now = datetime.now(timezone.utc)
+    thesis = Thesis(
+        research_case_id=case_id,
+        statement="fixture evidence must not publish",
+        created_by="tester",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"https://example.com/fixture").hexdigest(),
+        source_url="https://example.com/fixture",
+        title="Fixture article",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    cmd_session.add_all([thesis, document])
+    cmd_session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        verbatim_text="Fixture evidence excerpt",
+        locator={"kind": "fixture"},
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="Fixture evidence statement",
+        created_at=now,
+    )
+    cmd_session.add(statement)
+    cmd_session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(statement.id),
+            "role": "supports",
+            "reason": "fixture cannot be formal evidence",
+            "scope": {"period": "event"},
+        },
+        target_context={"thesis_id": str(thesis.id), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="test",
+        proposed_at=now,
+        research_case_id=case_id,
+        status="pending",
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+    return proposal
 
 
 def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_client) -> None:
@@ -88,6 +152,41 @@ def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_sess
     assert len(spans) == 1
     assert spans[0].locator == {"kind": "user_pasted_news"}
     assert spans[0].verbatim_text == payload["raw_input"]
+
+
+def test_invalid_fixture_evidence_is_auditable_but_cannot_publish_formal_link(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    proposal = _invalid_evidence_proposal(cmd_session, uuid.UUID(created["case_id"]))
+
+    queue = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/review-queue"
+    )
+    assert queue.status_code == 200
+    item = next(
+        item for item in queue.json()["items"] if item["proposal_id"] == str(proposal.id)
+    )
+    assert item["source_status"] == "invalid"
+    assert item["can_accept"] is False
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "attempt to publish a fixture",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 422
+    assert cmd_session.get(Proposal, proposal.id).status == "pending"
+    assert cmd_session.scalar(
+        select(EvidenceLink.id).where(
+            EvidenceLink.thesis_id == uuid.UUID(proposal.target_context["thesis_id"])
+        )
+    ) is None
 
 
 def test_create_event_requires_confirmed_question_and_three_to_five_factors(cmd_client) -> None:

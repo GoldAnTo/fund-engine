@@ -150,7 +150,7 @@ def test_event_review_queue_summarizes_pending_invalid_and_reviewed_items(
         cmd_session,
         case=case,
         proposed_at=now,
-        source_url="https://news.example.org/valid",
+        source_url="https://investor.tsmc.com/english/quarterly-results/valid",
     )
     invalid = _seed_evidence_proposal(
         cmd_session,
@@ -162,7 +162,7 @@ def test_event_review_queue_summarizes_pending_invalid_and_reviewed_items(
         cmd_session,
         case=case,
         proposed_at=now + timedelta(seconds=2),
-        source_url="https://news.example.org/reviewed",
+        source_url="https://investor.tsmc.com/english/quarterly-results/reviewed",
         status="decided",
     )
     cmd_session.commit()
@@ -203,7 +203,7 @@ def test_reconcile_invalid_source_closes_only_its_task_and_lifecycle_counts_vali
         session,
         case=case,
         proposed_at=now,
-        source_url="https://news.example.org/valid",
+        source_url="https://investor.tsmc.com/english/quarterly-results/valid",
     )
     invalid = _seed_evidence_proposal(
         session,

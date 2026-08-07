@@ -289,7 +289,14 @@ def test_real_api_human_loop_from_queued_run_to_published_proposal(cmd_client, c
     case = ResearchCase(title="API loop", industry_topic="semis", created_by="e2e", created_at=now)
     cmd_session.add(case); cmd_session.flush()
     thesis = Thesis(research_case_id=case.id, statement="订单增长将改善收入", created_by="e2e", created_at=now)
-    document = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://example.com/e2e", available_at=now, acquired_at=now, parser_version="test")
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
     cmd_session.add_all([thesis, document]); cmd_session.flush()
     span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="公司公告显示数据中心订单持续增长，预计下一报告期收入会相应改善。")
     cmd_session.add_all([span, CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now)])

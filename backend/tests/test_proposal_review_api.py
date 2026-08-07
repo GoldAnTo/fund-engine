@@ -189,7 +189,7 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
 
 def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_session):
     proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url="https://news.example.org/valid"
+        cmd_session, source_url="https://investor.tsmc.com/english/quarterly-results/valid"
     )
     cmd_session.add(proposal)
     cmd_session.commit()
@@ -215,7 +215,7 @@ def test_modified_event_proposal_with_empty_replacement_uses_original_source(
     cmd_client, cmd_session
 ):
     proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url="https://news.example.org/valid"
+        cmd_session, source_url="https://investor.tsmc.com/english/quarterly-results/valid"
     )
     cmd_session.add(proposal)
     cmd_session.commit()
@@ -242,7 +242,7 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
     cmd_client, cmd_session
 ):
     proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url="https://news.example.org/valid"
+        cmd_session, source_url="https://investor.tsmc.com/english/quarterly-results/valid"
     )
     now = datetime.now(timezone.utc)
     invalid_document = DocumentVersion(

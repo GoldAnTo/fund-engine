@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
@@ -7,9 +8,18 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
-from app.models.ledger import ImmutableLedgerError, ResearchCase
+from app.models.ledger import (
+    DocumentVersion,
+    ImmutableLedgerError,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.operational import TaskItem
+from app.models.proposals import Proposal
+from app.repositories.operational import TaskRepository
 from app.services.auto_research import AutoResearchService
 
 
@@ -23,6 +33,65 @@ def _case(session, title: str) -> ResearchCase:
     session.add(case)
     session.flush()
     return case
+
+
+def _evidence_proposal(
+    session,
+    *,
+    case: ResearchCase,
+    source_url: str,
+) -> Proposal:
+    now = datetime.now(timezone.utc)
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement=f"evidence for {source_url}",
+        created_by="tester",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(source_url.encode()).hexdigest(),
+        source_url=source_url,
+        title="Frozen source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    session.add_all([thesis, document])
+    session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        verbatim_text="Frozen evidence excerpt",
+        locator={"page": 1},
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="Frozen evidence statement",
+        created_at=now,
+    )
+    session.add(statement)
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(statement.id),
+            "role": "supports",
+            "reason": "test evidence",
+            "scope": {"period": "event"},
+        },
+        target_context={"thesis_id": str(thesis.id), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="test",
+        proposed_at=now,
+        research_case_id=case.id,
+        status="pending",
+    )
+    session.add(proposal)
+    session.flush()
+    return proposal
 
 
 def test_event_brief_is_case_scoped_and_append_only(session) -> None:
@@ -274,3 +343,67 @@ def test_completed_key_review_returns_control_to_automatic_research(session) -> 
     assert lifecycle.status == "continuing"
     assert lifecycle.current_round == 2
     assert lifecycle.active_run_id != run.id
+
+
+def test_invalid_fixture_review_task_does_not_block_eligible_event_evidence(session) -> None:
+    """A fixture source stays auditable but cannot prevent a real source handoff."""
+    case = _case(session, "真实来源与 fixture 来源并存的事件")
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=3,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    lifecycle = EventResearchLifecycle(
+        research_case_id=case.id,
+        status="researching",
+        active_run_id=run.id,
+        current_round=1,
+        status_summary="正在研究",
+        updated_at=now,
+    )
+    valid = _evidence_proposal(
+        session,
+        case=case,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+    )
+    invalid = _evidence_proposal(
+        session, case=case, source_url="https://example.com/fixture-news"
+    )
+    tasks = TaskRepository(session)
+    valid_task = tasks.add_task(
+        title="review real source",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=valid.id,
+        research_case_id=case.id,
+    )
+    invalid_task = tasks.add_task(
+        title="review fixture source",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=invalid.id,
+        research_case_id=case.id,
+    )
+    session.add(lifecycle)
+    session.commit()
+
+    AutoResearchService(session).refresh_event_lifecycle(run)
+    session.commit()
+
+    session.refresh(lifecycle)
+    session.refresh(valid_task)
+    session.refresh(invalid_task)
+    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.next_human_action == "审核 1 条关键证据"
+    assert valid_task.status == "open"
+    assert invalid_task.status == "done"
