@@ -35,6 +35,9 @@ import { ConclusionScreen } from "./pages/prototype/ConclusionScreen";
 import { CompanyListPage } from "./pages/prototype/CompanyListPage";
 import { AutoResearchRunsScreen } from "./pages/prototype/AutoResearchRunsScreen";
 import { TopicListPage } from "./pages/prototype/TopicListPage";
+import { EventResearchCreateScreen } from "./pages/prototype/EventResearchCreateScreen";
+import { EventResearchListScreen } from "./pages/prototype/EventResearchListScreen";
+import { EventResearchWorkbenchScreen } from "./pages/prototype/EventResearchWorkbenchScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -43,7 +46,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <Routes>
         <Route element={<PrototypeShell />}>
-          <Route index element={<Navigate to="/workspace" replace />} />
+          <Route index element={<Navigate to="/events" replace />} />
+          <Route path="events" element={<EventResearchListScreen />} />
+          <Route path="events/new" element={<EventResearchCreateScreen />} />
+          <Route path="events/:caseId" element={<EventResearchWorkbenchScreen />} />
           <Route path="themes" element={<ThemeIndexScreen />} />
           <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
           <Route path="workspace" element={<OverviewScreen />} />
@@ -79,7 +85,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             path="topics/:tag"
             element={<TopicViewRedirect />}
           />
-          <Route path="*" element={<Navigate to="/themes" replace />} />
+          <Route path="*" element={<Navigate to="/events" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
