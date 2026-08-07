@@ -78,7 +78,9 @@ class EventResearchService:
         # This queues one durable worker job.  The request never waits for
         # collection or model calls, but the workbench immediately tells the
         # user that the system has started research.
-        run = AutoResearchService(self._session).start(case.id, max_rounds=3, budget=100)
+        run = AutoResearchService(self._session).start(
+            case.id, max_rounds=3, budget=100, commit=False
+        )
         lifecycle = EventResearchLifecycle(
             research_case_id=case.id,
             status="researching",

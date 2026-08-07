@@ -28,6 +28,7 @@ from app.models.proposals import ProposalReviewDecision
 from app.queries.review_queue import ReviewQueueQueries
 from app.repositories.operational import ReviewAssignmentRepository, TaskRepository
 from app.repositories.proposals import ProposalRepository
+from app.services.auto_research import AutoResearchService
 from app.schemas.v1.operational import (
     ActivityItemDTO,
     ClaimResponse,
@@ -144,6 +145,7 @@ def decide_proposal(
 def _decide(
     proposal_id: uuid.UUID, payload: ReviewDecisionRequest, db: Session
 ):
+    proposal = ProposalRepository(db).get_proposal(proposal_id)
     actor = resolve_actor_plain(proposal_id)
     try:
         decision = ProposalService(db).decide(
@@ -171,6 +173,18 @@ def _decide(
         ref_type="proposal",
         ref_id=proposal_id,
     )
+    if proposal is not None:
+        raw_thesis_id = (proposal.target_context or {}).get("thesis_id")
+        try:
+            thesis_id = uuid.UUID(str(raw_thesis_id))
+        except (TypeError, ValueError):
+            thesis_id = None
+        if thesis_id is not None:
+            from app.models.ledger import Thesis
+
+            thesis = db.get(Thesis, thesis_id)
+            if thesis is not None:
+                AutoResearchService(db).continue_after_key_review(thesis.research_case_id)
     return decision, published_id
 
 

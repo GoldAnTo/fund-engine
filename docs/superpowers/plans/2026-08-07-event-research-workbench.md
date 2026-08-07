@@ -231,7 +231,7 @@ git commit -m "feat: create event research with AI extraction"
 - Modify: `backend/tests/test_event_research_lifecycle.py`
 - Modify: `backend/tests/test_auto_research_api.py`
 
-- [ ] **Step 1: Write failing continuation and isolation tests**
+- [x] **Step 1: Write failing continuation and isolation tests**
 
 ```python
 def test_no_key_evidence_starts_the_next_bounded_round_and_preserves_prior_links(session):
@@ -252,13 +252,13 @@ def test_event_workbench_never_surfaces_another_case_run_or_evidence(cmd_client)
     assert all(item["case_id"] == first for item in first_view["evidence"])
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/pytest backend/tests/test_event_research_lifecycle.py backend/tests/test_auto_research_api.py -q`
 
 Expected: FAIL because completed runs do not update the lifecycle or enqueue a successor run.
 
-- [ ] **Step 3: Update lifecycle after each worker terminal decision**
+- [x] **Step 3: Update lifecycle after each worker terminal decision**
 
 ```python
 def refresh_event_lifecycle(case_id: uuid.UUID, run: ResearchRun) -> None:
@@ -276,7 +276,7 @@ def refresh_event_lifecycle(case_id: uuid.UUID, run: ResearchRun) -> None:
 
 Invoke this projection updater from worker completion and after review decisions. Bound continuation with an explicit per-case policy (`max_automatic_cycles=3`) and do not start a successor while a key-evidence review is pending. The public workbench API exposes `status`, `summary`, `current_gap`, `next_human_action`, and `round_label`; detailed jobs, JSON, budget, and task ids remain only in the existing diagnostic deep link.
 
-- [ ] **Step 4: Run lifecycle and existing auto-research tests**
+- [x] **Step 4: Run lifecycle and existing auto-research tests**
 
 Run: `.venv/bin/pytest backend/tests/test_event_research_lifecycle.py backend/tests/test_auto_research_api.py -q`
 

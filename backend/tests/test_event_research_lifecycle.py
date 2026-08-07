@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from app.models.event_research import EventResearchBrief, EventResearchFactorDraft
 from app.models.ledger import ImmutableLedgerError, ResearchCase
 from app.models.operational import EventResearchLifecycle, ResearchRun
+from app.models.operational import TaskItem
+from app.services.auto_research import AutoResearchService
 
 
 def _case(session, title: str) -> ResearchCase:
@@ -163,3 +165,112 @@ def test_lifecycle_rejects_unknown_state(session) -> None:
     )
     with pytest.raises(IntegrityError, match="ck_event_research_lifecycle_status"):
         session.flush()
+
+
+def test_no_key_evidence_starts_the_next_bounded_research_cycle(session) -> None:
+    case = _case(session, "尚未找到关键材料的事件")
+    first = AutoResearchService(session).start(case.id, max_rounds=1, budget=10)
+    lifecycle = EventResearchLifecycle(
+        research_case_id=case.id,
+        status="researching",
+        active_run_id=first.id,
+        current_round=1,
+        status_summary="正在建立第一轮证据检索",
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(lifecycle)
+    session.commit()
+
+    AutoResearchService(session).execute(first)
+    session.commit()
+    session.refresh(lifecycle)
+
+    assert lifecycle.status == "continuing"
+    assert lifecycle.current_round == 2
+    assert lifecycle.active_run_id != first.id
+    assert session.get(ResearchRun, lifecycle.active_run_id).research_case_id == case.id
+
+
+def test_pending_key_evidence_pauses_automatic_expansion_for_human_review(session) -> None:
+    case = _case(session, "存在待审核证据的事件")
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(run)
+    session.flush()
+    lifecycle = EventResearchLifecycle(
+        research_case_id=case.id,
+        status="researching",
+        active_run_id=run.id,
+        current_round=1,
+        status_summary="正在研究",
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add_all(
+        [
+            lifecycle,
+            TaskItem(
+                title="审核自动研究提出的证据",
+                task_type="review_proposal",
+                ref_type="proposal",
+                status="open",
+                research_case_id=case.id,
+                created_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    session.commit()
+
+    AutoResearchService(session).refresh_event_lifecycle(run)
+    session.commit()
+    session.refresh(lifecycle)
+
+    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.active_run_id == run.id
+    assert lifecycle.next_human_action == "审核 1 条关键证据"
+
+
+def test_completed_key_review_returns_control_to_automatic_research(session) -> None:
+    case = _case(session, "审核后继续研究的事件")
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(run)
+    session.flush()
+    lifecycle = EventResearchLifecycle(
+        research_case_id=case.id,
+        status="awaiting_key_review",
+        active_run_id=run.id,
+        current_round=1,
+        status_summary="已筛出 1 条关键证据，等待审核",
+        next_human_action="审核 1 条关键证据",
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(lifecycle)
+    session.commit()
+
+    AutoResearchService(session).continue_after_key_review(case.id)
+    session.commit()
+    session.refresh(lifecycle)
+
+    assert lifecycle.status == "continuing"
+    assert lifecycle.current_round == 2
+    assert lifecycle.active_run_id != run.id
