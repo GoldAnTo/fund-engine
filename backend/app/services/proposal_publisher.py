@@ -77,31 +77,13 @@ class ProposalPublisher:
         thesis_id = uuid.UUID(proposal.target_context["thesis_id"])
         statement_id = uuid.UUID(payload["source_statement_id"])
         now = datetime.now(timezone.utc)
-
-        # Durable versioned edge.
-        version = EvidenceLinkVersion(
-            evidence_link_id=uuid.uuid4(),  # new logical id for the published edge
-            version=1,
-            thesis_id=thesis_id,
-            source_statement_id=statement_id,
-            role=payload["role"],
-            reason=payload["reason"],
-            scope=payload.get("scope", {}),
-            available_at=now,
-            proposal_id=proposal.id,
-            review_decision_id=decision.id,
-            model_version=(
-                proposal.proposed_by_ref
-                if proposal.proposed_by_type == "ai"
-                else None
-            ),
-            created_at=now,
+        model_version = (
+            proposal.proposed_by_ref if proposal.proposed_by_type == "ai" else None
         )
-        self._session.add(version)
-        self._session.flush()
 
         # Transition-window compatibility: also write the legacy row so the
-        # existing graph/dossier read paths resolve the reviewed link.
+        # existing graph/dossier read paths resolve the reviewed link.  The
+        # row is also the parent identity required by EvidenceLinkVersion.
         legacy = EvidenceLink(
             thesis_id=thesis_id,
             source_statement_id=statement_id,
@@ -111,10 +93,29 @@ class ProposalPublisher:
             available_at=now,
             creator_type="human",
             review_state="reviewed",
-            model_version=version.model_version,
+            model_version=model_version,
             created_at=now,
         )
         self._session.add(legacy)
+        self._session.flush()
+
+        # Durable versioned edge.  Persist the parent row first: PostgreSQL
+        # enforces this FK (unlike SQLite's default test configuration).
+        version = EvidenceLinkVersion(
+            evidence_link_id=legacy.id,
+            version=1,
+            thesis_id=thesis_id,
+            source_statement_id=statement_id,
+            role=payload["role"],
+            reason=payload["reason"],
+            scope=payload.get("scope", {}),
+            available_at=now,
+            proposal_id=proposal.id,
+            review_decision_id=decision.id,
+            model_version=model_version,
+            created_at=now,
+        )
+        self._session.add(version)
         self._session.flush()
 
         emit_event(

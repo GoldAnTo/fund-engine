@@ -67,6 +67,10 @@ def test_confirmed_proposal_publishes_evidence_link_version(
     legacy = cmd_session.scalars(select(EvidenceLink)).first()
     assert legacy is not None
     assert legacy.review_state == "reviewed"
+    # The version must point to the actual formal edge.  SQLite does not
+    # enforce foreign keys by default, so this assertion protects the same
+    # integrity guarantee that PostgreSQL rejected in the live review flow.
+    assert version.evidence_link_id == legacy.id
 
 
 def test_modified_proposal_publishes_replacement(cmd_client, cmd_session):
