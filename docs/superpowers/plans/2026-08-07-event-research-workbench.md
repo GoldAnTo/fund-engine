@@ -24,6 +24,21 @@
 | Shell/routing | `frontend/src/components/PrototypeShell.tsx`, `frontend/src/main.tsx`, `frontend/src/styles-prototype.css` | Restrict primary navigation to the approved five destinations and keep technical/legacy pages as deep links only. |
 | Frontend tests | `frontend/src/tests/EventResearch*.test.tsx`, `frontend/src/tests/eventResearchAdapter.test.ts` | Cover editable extraction, case switching, status transitions, review actions, draft publication, and accessibility semantics. |
 
+## Surface migration matrix
+
+| Existing surface | Target surface | Delivery task |
+| --- | --- | --- |
+| `OverviewScreen` | `EventResearchListScreen` | Task 7 |
+| `NewResearchScreen` | `EventResearchCreateScreen` | Task 7 |
+| `CaseWorkbenchScreen` + `ConclusionScreen` | `EventResearchWorkbenchScreen` | Task 8 |
+| `ReviewWorkbenchScreen` | `KeyEvidenceReviewScreen` and `/events?attention=1` | Tasks 6 and 8 |
+| `LibraryScreen` | Event-contextual source library | Task 10 |
+| `VersionsScreen` | Event monitoring and conclusion-change history | Task 10 |
+| `RelationshipCanvasScreen` | Collapsed `研究依据` graph/list drill-down | Task 10 |
+| `CompanyListPage` + `DataCenterScreen` | Event-contextual object/data drill-down | Task 10 |
+| `ThemeIndexScreen` + `ThemeWorkbenchScreen` + `TopicListPage` | Event archive and cross-event observation | Task 10 |
+| `AutoResearchRunsScreen` + `ResearchPlanScreen` | Diagnostic links within research basis | Task 9 |
+
 ## Task 1: Persist immutable event framing and operational lifecycle state
 
 **Files:**
@@ -667,8 +682,112 @@ git add -A frontend backend docs/superpowers/specs/2026-08-07-event-driven-concl
 git commit -m "refactor: retire legacy research navigation"
 ```
 
+## Task 10: Rework every retained support page around an event context
+
+**Files:**
+- Create: `frontend/src/pages/prototype/EventEvidenceLibraryScreen.tsx`
+- Create: `frontend/src/pages/prototype/EventMonitoringScreen.tsx`
+- Create: `frontend/src/pages/prototype/EventResearchBasisScreen.tsx`
+- Modify: `frontend/src/pages/prototype/LibraryScreen.tsx`
+- Modify: `frontend/src/pages/prototype/VersionsScreen.tsx`
+- Modify: `frontend/src/pages/prototype/RelationshipCanvasScreen.tsx`
+- Modify: `frontend/src/pages/prototype/CompanyListPage.tsx`
+- Modify: `frontend/src/pages/prototype/DataCenterScreen.tsx`
+- Modify: `frontend/src/pages/prototype/ThemeIndexScreen.tsx`
+- Modify: `frontend/src/pages/prototype/ThemeWorkbenchScreen.tsx`
+- Modify: `frontend/src/pages/prototype/TopicListPage.tsx`
+- Modify: `frontend/src/domain/eventResearch.ts`
+- Modify: `frontend/src/data/eventResearchAdapter.ts`
+- Modify: `frontend/src/styles-prototype.css`
+- Create: `frontend/src/tests/EventEvidenceLibraryScreen.test.tsx`
+- Create: `frontend/src/tests/EventMonitoringScreen.test.tsx`
+- Create: `frontend/src/tests/EventResearchBasisScreen.test.tsx`
+- Create: `frontend/src/tests/SupportSurfaceContext.test.tsx`
+
+- [ ] **Step 1: Write failing event-context tests for all retained support pages**
+
+```tsx
+it("shows each evidence row with its event, factor, source, and review state", async () => {
+  renderAt("/events/case-a/evidence");
+  expect(await screen.findByText("Alphabet 财报超预期后股价下跌")).toBeVisible();
+  expect(screen.getByText("资本开支 / 自由现金流担忧")).toBeVisible();
+  expect(screen.getByRole("link", { name: "返回结论工作台" })).toHaveAttribute("href", "/events/case-a");
+});
+
+it("explains whether a monitored material changed the event conclusion", async () => {
+  renderAt("/events/case-a/monitoring");
+  expect(await screen.findByRole("heading", { name: "是什么改变了结论" })).toBeVisible();
+  expect(screen.getByText("目前无需重新研究")).toBeVisible();
+  expect(screen.getByText("资本开支 / 自由现金流担忧")).toBeVisible();
+});
+
+it.each(["/relationships/case-a", "/companies?caseId=case-a", "/data?caseId=case-a"]) (
+  "keeps the event breadcrumb and links back to its workbench for %s",
+  async (route) => {
+    renderAt(route);
+    expect(await screen.findByLabelText("所属事件")).toHaveTextContent("Alphabet 财报超预期后股价下跌");
+    expect(screen.getByRole("link", { name: "返回结论工作台" })).toBeVisible();
+  },
+);
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npm test -- EventEvidenceLibraryScreen.test.tsx EventMonitoringScreen.test.tsx EventResearchBasisScreen.test.tsx SupportSurfaceContext.test.tsx`
+
+Expected: FAIL because retained pages have no mandatory event context or return link.
+
+- [ ] **Step 3: Implement the evidence library and research-basis drill-down**
+
+Add an `EventResearchBasis` adapter response containing the event title, current conclusion, focused factor, sources, source excerpts, review state, and contextual deep links. Build `/events/:caseId/evidence` as the primary source page: filters are `全部来源`, `已审核`, `待审核`, and `反证`; every result names the event and the factor it affects; the selected original excerpt shows frozen locator, publisher, publication time, available time, evidence quality, and the human/AI decision boundary.
+
+Replace the standalone graph entry with a collapsed `研究依据` section in the workbench. Its explicit links can open graph, company/valuation, or run diagnostics, but each destination must receive `caseId` and show the same event context strip. Provide a structured factor-to-evidence list alongside any graph so the relationship visual is never the only way to understand evidence.
+
+- [ ] **Step 4: Implement monitoring and conclusion-change history**
+
+Use the existing append-only snapshots, assessments, reviews, and activity events to form an event-specific monitoring response. The page order is: `是什么改变了结论` timeline; current monitoring judgement by factor; conclusion versions with a readable before/after summary; watch conditions that name documents, data revisions, and abnormal market movement. A material update calls the event lifecycle continuation endpoint; it changes the event to `researching` and creates a durable successor run before showing any human action.
+
+```ts
+export interface EventMonitoringView {
+  event: Pick<EventResearchListItem, "id" | "title" | "ticker">;
+  conclusion: { state: "published" | "ai_draft" | "cannot_conclude"; latestVersion: string };
+  changes: Array<{ id: string; occurredAt: string; sourceLabel: string; factor: string; effect: "supports" | "weakens" | "no_change"; summary: string }>;
+  currentJudgement: Array<{ factor: string; state: string; rationale: string }>;
+  reResearch: { required: boolean; reason: string | null };
+  watchConditions: Array<{ label: string; condition: string }>;
+}
+```
+
+- [ ] **Step 5: Convert old object, data, and theme pages to subordinate context**
+
+Keep company and data pages only as event-contextual drill-downs. They must explain which event factor selected the company/metric, show source/as-of dates, and provide the return link. Convert theme pages to an archive/observation index of event rows grouped by tag; remove every theme-level conclusion, research-plan action, and direct `AI 提议` action. If a user enters an old theme URL without a case id, show an event archive list and require selection of an event before presenting any evidence or company detail.
+
+- [ ] **Step 6: Run support-surface tests**
+
+Run: `npm test -- EventEvidenceLibraryScreen.test.tsx EventMonitoringScreen.test.tsx EventResearchBasisScreen.test.tsx SupportSurfaceContext.test.tsx`
+
+Expected: PASS.
+
+- [ ] **Step 7: Verify accessible page structure and remove residual standalone copy**
+
+Run:
+
+```bash
+npx impeccable --json frontend/src/pages/prototype frontend/src/components
+rg -n "主题驱动|主题级结论|启动自动研究|运行列表|研究计划预览|示例 · 非目标范围" frontend/src/pages/prototype frontend/src/components
+```
+
+Expected: detector output contains no newly introduced warnings; the text search returns only explicit legacy deep-link compatibility notices, never user-facing primary page copy. Fix each remaining primary-path match before committing.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add frontend/src/pages/prototype frontend/src/domain/eventResearch.ts frontend/src/data/eventResearchAdapter.ts frontend/src/styles-prototype.css frontend/src/tests/EventEvidenceLibraryScreen.test.tsx frontend/src/tests/EventMonitoringScreen.test.tsx frontend/src/tests/EventResearchBasisScreen.test.tsx frontend/src/tests/SupportSurfaceContext.test.tsx
+git commit -m "feat: contextualize research support surfaces"
+```
+
 ## Plan self-review
 
-- **Spec coverage:** Tasks 1–4 implement independent event records, AI extraction, automatic creation, repeated bounded research, evidence isolation, review gates, and formal conclusion. Tasks 5–8 implement the approved event list, creation, automatic progress, event switching, conclusion-first workbench, and contextual human actions. Task 9 removes legacy primary-path UI and verifies the complete loop.
+- **Spec coverage:** Tasks 1–4 implement independent event records, AI extraction, automatic creation, repeated bounded research, evidence isolation, review gates, and formal conclusion. Tasks 5–8 implement the approved event list, creation, automatic progress, event switching, conclusion-first workbench, and contextual human actions. Tasks 9–10 remove legacy primary-path UI and move every retained research page into explicit event context.
 - **Completeness:** Every task has exact paths, a failing test, a command, implementation detail, verification, and commit; no step defers implementation work.
 - **Type consistency:** `EventLifecycleStatus`, `EventWorkbench`, `EventResearchBrief`, `EventResearchLifecycle`, and the event API are introduced before the screens that consume them. Existing immutable review and assessment writes remain the sole publication mechanism.
