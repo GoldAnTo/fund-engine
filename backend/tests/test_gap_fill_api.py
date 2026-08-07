@@ -42,7 +42,9 @@ def test_provider_runs_empty(cmd_client, cmd_session):
 def test_case_snapshots_lists_frozen_snapshots(api_client, seeded_session):
     from app.models.ledger import ResearchCase
 
-    case = seeded_session.scalar(select(ResearchCase))
+    case = seeded_session.scalar(
+        select(ResearchCase).where(ResearchCase.title == "AI 算力链")
+    )
     response = api_client.get(f"/api/v1/research-cases/{case.id}/snapshots")
     assert response.status_code == 200
     snapshots = response.json()["snapshots"]
@@ -66,7 +68,9 @@ def test_case_snapshots_404(api_client, seeded_session):
 def test_knowledge_layer_lists_statements_with_links(api_client, seeded_session):
     from app.models.ledger import ResearchCase
 
-    case = seeded_session.scalar(select(ResearchCase))
+    case = seeded_session.scalar(
+        select(ResearchCase).where(ResearchCase.title == "AI 算力链")
+    )
     response = api_client.get("/api/v1/knowledge", params={"case_id": str(case.id)})
     assert response.status_code == 200
     items = response.json()["items"]

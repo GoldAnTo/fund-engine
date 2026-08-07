@@ -11,26 +11,17 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/workspace", label: "研究总览", icon: "⌂", group: "primary" },
-  { to: "/auto-research/runs", label: "自动研究运行", icon: "▶", group: "primary" },
-  { to: "/new-research", label: "开始研究", icon: "＋", group: "primary" },
-  { to: "/themes", label: "主题库", icon: "⏚", group: "primary" },
-  { to: "/topics", label: "主题研究", icon: "✦", group: "primary" },
-  { to: "/relationships", label: "证据图谱", icon: "⧉", group: "primary" },
-  { to: "/companies", label: "公司研究", icon: "◉", group: "primary" },
-  { to: "/conclusion", label: "结论与关键因素", icon: "✱", group: "primary" },
-  { to: "/plan", label: "研究计划", icon: "▤", group: "industry" },
-  { to: "/library", label: "资料与知识", icon: "▦", group: "industry" },
-  { to: "/data", label: "数据中心", icon: "⌖", group: "knowledge" },
-  { to: "/review", label: "审核中心", icon: "✓", group: "knowledge" },
-  { to: "/versions", label: "监测与更新", icon: "↻", group: "knowledge" },
+  { to: "/events", label: "事件研究", icon: "▤", group: "primary" },
+  { to: "/library", label: "资料库", icon: "▦", group: "primary" },
+  { to: "/events?attention=1", label: "待我处理", icon: "✓", group: "primary" },
+  { to: "/versions", label: "监测与更新", icon: "↻", group: "primary" },
 ];
 
 // 左侧导航分组标题（与设计原型 1/10/11 视觉一致）
 const NAV_GROUP_LABELS: Record<"primary" | "industry" | "knowledge", string> = {
-  primary: "行业研究",
-  industry: "资料与知识",
-  knowledge: "数据中心",
+  primary: "研究工作台",
+  industry: "",
+  knowledge: "",
 };
 
 const SHELL_CONTEXT: Record<string, [string, string]> = {
@@ -56,6 +47,7 @@ interface ActivePath {
 }
 
 function resolveActive(pathname: string): ActivePath {
+  if (pathname.startsWith("/events")) return { primary: "/events", label: "事件研究", module: "事件研究", page: pathname.endsWith("/new") ? "创建研究" : "事件列表" };
   if (pathname.startsWith("/themes")) return { primary: "/themes", label: "主题", module: "主题驱动", page: "主题列表" };
   if (pathname.startsWith("/topics")) return { primary: "/topics", label: "主题研究", module: "主题研究", page: "横切主题" };
   if (pathname.startsWith("/auto-research")) return { primary: "/auto-research/runs", label: "自动研究运行", module: "自动研究", page: "运行列表" };
@@ -64,11 +56,11 @@ function resolveActive(pathname: string): ActivePath {
   if (pathname.startsWith("/plan")) return { primary: "/plan", label: "研究计划", module: "主题驱动", page: "研究计划" };
   if (pathname.startsWith("/relationships")) return { primary: "/relationships", label: "证据图谱", module: "主题驱动", page: "证据图谱" };
   if (pathname.startsWith("/companies")) return { primary: "/companies", label: "公司研究", module: "公司研究", page: "公司深度" };
-  if (pathname.startsWith("/library")) return { primary: "/library", label: "资料与知识", module: "资料与知识", page: "来源资料" };
+  if (pathname.startsWith("/library")) return { primary: "/library", label: "资料库", module: "事件研究", page: "事件证据库" };
   if (pathname.startsWith("/data")) return { primary: "/data", label: "数据中心", module: "数据中心", page: "时点数据" };
   if (pathname.startsWith("/review")) return { primary: "/review", label: "审核中心", module: "审核中心", page: "关系审核" };
-  if (pathname.startsWith("/versions")) return { primary: "/versions", label: "监测与更新", module: "监测与更新", page: "版本比较" };
-  return { primary: "/themes", label: "主题", module: "主题驱动", page: "主题列表" };
+  if (pathname.startsWith("/versions")) return { primary: "/versions", label: "监测与更新", module: "事件研究", page: "事件监测" };
+  return { primary: "/events", label: "事件研究", module: "事件研究", page: "事件列表" };
 }
 
 export interface PrototypeShellProps {
@@ -146,7 +138,7 @@ export function PrototypeShell(_props: PrototypeShellProps) {
           </div>
         </div>
         <nav className="nav-list" aria-label="主导航">
-          {(["primary", "industry", "knowledge"] as const).map((group) => (
+          {(["primary"] as const).map((group) => (
             <div key={group} className="nav-group" data-group={group}>
               <div className="nav-group__title">{NAV_GROUP_LABELS[group]}</div>
               {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
@@ -229,7 +221,7 @@ export function PrototypeShell(_props: PrototypeShellProps) {
       <details className="mobile-nav">
         <summary>导航</summary>
         <nav className="mobile-nav-links" aria-label="移动端主导航">
-          {(["primary", "industry", "knowledge"] as const).map((group) => (
+          {(["primary"] as const).map((group) => (
             <div key={group} className="nav-group">
               <div className="nav-group__title">{NAV_GROUP_LABELS[group]}</div>
               {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
@@ -254,18 +246,14 @@ export function PrototypeShell(_props: PrototypeShellProps) {
       </div>
 
       <nav className="prototype-bottom-nav" aria-label="底部快捷导航">
-        <Link to="/review" className="prototype-bottom-nav__tile">
-          <strong>审核中心</strong>
-        </Link>
+        <Link to="/events" className="prototype-bottom-nav__tile"><strong>事件研究</strong></Link>
         <Link to="/versions" className="prototype-bottom-nav__tile">
           <strong>监测与更新</strong>
         </Link>
         <Link to="/library" className="prototype-bottom-nav__tile">
           <strong>资料库</strong>
         </Link>
-        <Link to="/data" className="prototype-bottom-nav__tile">
-          <strong>数据中心</strong>
-        </Link>
+        <Link to="/events?attention=1" className="prototype-bottom-nav__tile"><strong>待我处理</strong></Link>
       </nav>
     </div>
   );

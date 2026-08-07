@@ -29,6 +29,14 @@ import type {
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
 import type {
+  CreateEventResearchInput,
+  EventExtraction,
+  EventLifecycle,
+  EventLifecycleStatus,
+  EventResearchListItem,
+  EventWorkbench,
+} from "../domain/eventResearch";
+import type {
   AssessmentReviewPayload,
   AssessmentReviewResult,
   CaseSummaryItem,
@@ -2935,6 +2943,7 @@ export class MockResearchAdapter implements ResearchClient {
   private queue: ReviewQueueItem[];
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
+  private eventTsmProposalPending = true;
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2945,6 +2954,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.scenario = scenario;
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.decisions = [];
+    this.eventTsmProposalPending = true;
   }
 
   getDecisions() {
@@ -3437,6 +3447,7 @@ export class MockResearchAdapter implements ResearchClient {
           statementText: st?.text ?? item.task,
           statementKind: "disclosed_fact",
           verbatimText: link?.sourceSpan ?? item.sourceSpan,
+          locator: {},
           documentVersionId: link?.sourceVersion ?? item.sourceVersion,
           documentSourceUrl: st?.documentId ?? "",
           documentPublishedAt: st?.publishedAt ?? item.publishedAt,
@@ -3635,8 +3646,17 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listReviewProposals(caseId?: string): Promise<ProposalReviewItem[]> {
     this.throwIfOffline();
+    const eventProposal: ProposalReviewItem[] = caseId === "event-tsm" && this.eventTsmProposalPending
+      ? [{
+          id: "proposal-event-tsm", kind: "evidence_link",
+          payload: { source_statement_id: "event-tsm-statement", role: "supports", reason: "资本开支与现金流担忧的原始披露" },
+          target_context: { thesis_id: "event-tsm-factor-1" }, proposed_by_type: "ai",
+          proposed_by_ref: "mock-auto-research", proposed_at: "2026-08-07T09:00:00Z",
+          basis_cutoff: null, status: "pending", version: 1,
+        }]
+      : [];
     return simulateLatency(
-      MOCK_RESEARCH_RUNS.flatMap((run) =>
+      [...eventProposal, ...MOCK_RESEARCH_RUNS.flatMap((run) =>
         !caseId || run.case_id === caseId
           ? run.pending_proposals
               .filter((proposal) => proposal.status === "pending")
@@ -3653,18 +3673,65 @@ export class MockResearchAdapter implements ResearchClient {
                 version: 1,
               }))
           : [],
-      ),
+      )],
     );
   }
 
   async reviewProposal(proposalId: string, _payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
+    if (proposalId === "proposal-event-tsm") this.eventTsmProposalPending = false;
     for (const run of MOCK_RESEARCH_RUNS) {
       for (const item of run.pending_proposals) {
         if (item.id === proposalId) item.status = "decided";
       }
     }
     return simulateLatency(undefined);
+  }
+
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+    this.throwIfOffline();
+    return simulateLatency({
+      eventTitle: input.rawInput.trim().slice(0, 80) || null,
+      companyName: null, ticker: null, eventAt: null, marketReaction: "盘后下跌",
+      summary: null, researchQuestion: "这次市场反应的主要可验证因素是什么？",
+      candidateFactors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"],
+      confirmationRequired: true,
+    });
+  }
+
+  async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    this.throwIfOffline();
+    return simulateLatency({
+      caseId: "event-created", briefId: "brief-created",
+      lifecycle: { status: "researching", activeRunId: "run-created", currentRound: 1, summary: "正在建立第一轮证据检索", currentGap: null, nextHumanAction: null },
+    });
+  }
+
+  async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
+    this.throwIfOffline();
+    return simulateLatency([
+      { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
+      { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: "awaiting_key_review", statusSummary: "已筛出 2 条关键证据，等待审核", nextHumanAction: "审核 2 条关键证据", updatedAt: "2026-08-07T09:00:00Z" },
+    ]);
+  }
+
+  async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
+    const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
+    const lifecycle: EventLifecycle = { status: event.status, activeRunId: "run-mock", currentRound: 1, summary: event.statusSummary, currentGap: null, nextHumanAction: event.nextHumanAction };
+    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://example.com/earnings", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
+    return simulateLatency({
+      event, lifecycle,
+      conclusion: { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
+      factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
+      evidence,
+      nextAction: event.status === "awaiting_key_review" ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 } : { kind: "wait", label: "系统继续处理" },
+    });
+  }
+
+  async publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }> {
+    this.throwIfOffline();
+    void input;
+    return simulateLatency({ conclusionId: "event-conclusion-mock", state: "published" });
   }
 
   async getConclusionView(

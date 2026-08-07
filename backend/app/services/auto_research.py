@@ -18,6 +18,7 @@ from app.models.proposals import Proposal
 from app.models.operational import TaskItem
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
+from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 
@@ -36,6 +37,7 @@ class AutoResearchService:
         max_rounds: int = 3,
         budget: int = 100,
         auto_execute: bool = False,
+        commit: bool = True,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -66,7 +68,10 @@ class AutoResearchService:
         # HTTP commands only persist a run + job.  A separately supervised
         # worker claims the job, so a provider timeout cannot hold an API
         # request open or lose the work on process restart.
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
         # Kept as a wire-compatible argument while callers migrate.  Inline
         # execution is intentionally disabled even when an old client sends
         # auto_execute=true.
@@ -179,7 +184,132 @@ class AutoResearchService:
         self.session.flush()
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)
+        self.refresh_event_lifecycle(run)
         self.session.flush()
+
+    def refresh_event_lifecycle(self, run) -> None:
+        """Project one terminal event-run into its next user-facing state.
+
+        This intentionally does nothing for legacy research cases.  Event
+        cases continue automatically when no key evidence is awaiting a human
+        decision; the cycle cap prevents an empty source universe from
+        producing an unbounded queue.
+        """
+        lifecycle_repo = EventResearchLifecycleRepository(self.session)
+        lifecycle = lifecycle_repo.get(run.research_case_id)
+        if lifecycle is None or lifecycle.active_run_id != run.id:
+            return
+
+        review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
+        if review_count:
+            lifecycle_repo.update(
+                lifecycle,
+                status="awaiting_key_review",
+                active_run_id=run.id,
+                summary=f"已筛出 {review_count} 条关键证据，等待审核",
+                current_gap=None,
+                next_human_action=f"审核 {review_count} 条关键证据",
+            )
+            return
+
+        if run.stop_reason == "budget_exhausted":
+            lifecycle_repo.update(
+                lifecycle,
+                status="exhausted",
+                active_run_id=run.id,
+                summary="已覆盖本轮允许的检索预算，尚未找到足以形成结论的关键材料",
+                current_gap="需要补充更直接的原始来源或调整研究范围",
+                next_human_action="补充来源或调整研究范围",
+            )
+            return
+
+        if run.stop_reason == "task_failed":
+            lifecycle_repo.update(
+                lifecycle,
+                status="awaiting_scope",
+                active_run_id=run.id,
+                summary="自动研究遇到无法完成的检索任务，已暂停自动扩展",
+                current_gap="需要检查失败来源或补充可访问材料",
+                next_human_action="补充来源或调整研究范围",
+            )
+            return
+
+        if run.stop_reason in {"max_rounds_reached", "no_new_evidence"}:
+            if lifecycle.current_round < 3:
+                next_round = lifecycle.current_round + 1
+                successor = self.start(
+                    run.research_case_id,
+                    max_rounds=run.max_rounds,
+                    budget=run.budget,
+                    commit=False,
+                )
+                lifecycle_repo.update(
+                    lifecycle,
+                    status="continuing",
+                    active_run_id=successor.id,
+                    current_round=next_round,
+                    summary=f"未找到关键证据，正在自动扩展检索 · 第 {next_round} 轮",
+                    current_gap="尚缺少能直接区分主要因素的高质量证据",
+                    next_human_action=None,
+                )
+                return
+            lifecycle_repo.update(
+                lifecycle,
+                status="exhausted",
+                active_run_id=run.id,
+                summary="已完成 3 轮自动扩展，仍缺少足以形成结论的关键材料",
+                current_gap="尚缺少能直接区分主要因素的高质量证据",
+                next_human_action="补充来源或调整研究范围",
+            )
+            return
+
+    def continue_after_key_review(self, case_id: uuid.UUID) -> None:
+        """Resume a bounded automatic cycle once all key evidence is decided."""
+        lifecycle_repo = EventResearchLifecycleRepository(self.session)
+        lifecycle = lifecycle_repo.get(case_id)
+        if lifecycle is None or lifecycle.status != "awaiting_key_review":
+            return
+        review_count = lifecycle_repo.pending_key_review_count(case_id)
+        if review_count:
+            lifecycle_repo.update(
+                lifecycle,
+                status="awaiting_key_review",
+                active_run_id=lifecycle.active_run_id,
+                summary=f"仍有 {review_count} 条关键证据等待审核",
+                current_gap=None,
+                next_human_action=f"审核 {review_count} 条关键证据",
+            )
+            return
+        active_run = self.repo.get_run(lifecycle.active_run_id) if lifecycle.active_run_id else None
+        if lifecycle.current_round >= 3:
+            from app.services.event_conclusion import EventConclusionService
+
+            EventConclusionService(self.session).create_draft(case_id)
+            lifecycle_repo.update(
+                lifecycle,
+                status="draft_ready",
+                active_run_id=lifecycle.active_run_id,
+                summary="关键证据已审核，AI 正在基于已确认材料整理结论草案",
+                current_gap=None,
+                next_human_action="审核结论草案",
+            )
+            return
+        successor = self.start(
+            case_id,
+            max_rounds=active_run.max_rounds if active_run else 1,
+            budget=active_run.budget if active_run else 100,
+            commit=False,
+        )
+        next_round = lifecycle.current_round + 1
+        lifecycle_repo.update(
+            lifecycle,
+            status="continuing",
+            active_run_id=successor.id,
+            current_round=next_round,
+            summary=f"关键证据已审核，系统继续核验其他解释 · 第 {next_round} 轮",
+            current_gap=None,
+            next_human_action=None,
+        )
 
     def _is_cancelled(self, run) -> bool:
         """Observe a cancel request at task boundaries without interrupting a call."""

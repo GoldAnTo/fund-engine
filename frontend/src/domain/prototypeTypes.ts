@@ -876,6 +876,7 @@ export interface ThemeWorkbenchView {
 // ── Adapter extensions ───────────────────────────────────────────────────
 
 import type { ResearchClient as BaseResearchClient } from "./types";
+import type { EventResearchClient } from "./eventResearch";
 
 /** Payload for POST /research-cases (screen 2 · 新建研究 submit). */
 export interface CreateCaseInput {
@@ -1124,6 +1125,7 @@ export interface PrototypeClient {
 }
 
 export type ResearchClient = BaseResearchClient &
+  EventResearchClient &
   AutoResearchClient &
   PrototypeClient &
   ReviewQueueClient &
@@ -1147,6 +1149,7 @@ export interface ReviewQueueViewItem {
   statementText: string;
   statementKind: string;
   verbatimText: string;
+  locator: Record<string, unknown>;
   documentVersionId: string;
   documentSourceUrl: string;
   documentPublishedAt: string | null;

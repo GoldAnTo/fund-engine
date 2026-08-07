@@ -24,6 +24,11 @@ export function resetResearchClient(): void {
 }
 
 export const researchClient: ResearchClient = {
+  extractEventResearch: (input) => _client.extractEventResearch(input),
+  createEventResearch: (input) => _client.createEventResearch(input),
+  listEventResearch: (status) => _client.listEventResearch(status),
+  getEventWorkbench: (caseId) => _client.getEventWorkbench(caseId),
+  publishEventConclusion: (input) => _client.publishEventConclusion(input),
   getOverview: (q) => _client.getOverview(q),
   getCaseDossier: (id, q) => _client.getCaseDossier(id, q),
   getRelationshipGraph: (id, q) => _client.getRelationshipGraph(id, q),
