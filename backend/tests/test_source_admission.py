@@ -121,6 +121,26 @@ def test_abbreviated_loopback_ipv4_is_rejected():
 @pytest.mark.parametrize(
     "source_url",
     [
+        "https://0x7f.0.0.1/report.pdf",
+        "https://127.0x0.0.1/report.pdf",
+        "https://0x0a.0.0.1/report.pdf",
+        "https://0177.0.0.1/report.pdf",
+    ],
+)
+def test_legacy_non_decimal_private_ipv4_literals_are_rejected(source_url: str):
+    result = classify_source(
+        source_url=source_url,
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
         "https://bad host.example/report.pdf",
         "https://-leading-hyphen.example/report.pdf",
         "https://trailing-hyphen-.example/report.pdf",

@@ -103,7 +103,7 @@ def _parse_ip_address(hostname: str) -> IPv4Address | IPv6Address | None:
     try:
         return ip_address(hostname)
     except ValueError:
-        return None
+        return _parse_historical_ipv4(hostname)
 
 
 def _is_non_public_ip_or_local_host(
@@ -114,20 +114,59 @@ def _is_non_public_ip_or_local_host(
     if address is not None:
         return not address.is_global
 
-    if _is_abbreviated_loopback_ipv4(hostname):
-        return True
-
     return hostname == "localhost" or "." not in hostname
 
 
-def _is_abbreviated_loopback_ipv4(hostname: str) -> bool:
-    """Recognize legacy numeric forms such as ``127.1`` as loopback."""
+def _parse_historical_ipv4(hostname: str) -> IPv4Address | None:
+    """Parse legacy URL IPv4 literals with decimal, octal, or hexadecimal parts."""
     labels = hostname.split(".")
-    return (
-        2 <= len(labels) <= 4
-        and labels[0] == "127"
-        and all(label.isdecimal() for label in labels)
-    )
+    if not 1 <= len(labels) <= 4:
+        return None
+
+    try:
+        parts = [_parse_historical_ipv4_part(label) for label in labels]
+        value = _historical_ipv4_value(parts)
+    except ValueError:
+        return None
+
+    return IPv4Address(value)
+
+
+def _parse_historical_ipv4_part(value: str) -> int:
+    """Parse one URL IPv4 part according to the historical base-prefix rules."""
+    if value.startswith("0x"):
+        digits = value[2:]
+        if not digits or any(character not in "0123456789abcdef" for character in digits):
+            raise ValueError("invalid hexadecimal IPv4 part")
+        return int(digits, 16)
+
+    if len(value) > 1 and value.startswith("0"):
+        if any(character not in "01234567" for character in value):
+            raise ValueError("invalid octal IPv4 part")
+        return int(value, 8)
+
+    if not value.isascii() or not value.isdecimal():
+        raise ValueError("invalid decimal IPv4 part")
+    return int(value, 10)
+
+
+def _historical_ipv4_value(parts: list[int]) -> int:
+    """Combine one to four historical IPv4 parts into an unsigned 32-bit value."""
+    if len(parts) == 1 and parts[0] <= 0xFFFFFFFF:
+        return parts[0]
+    if len(parts) == 2 and parts[0] <= 0xFF and parts[1] <= 0xFFFFFF:
+        return (parts[0] << 24) | parts[1]
+    if len(parts) == 3 and parts[0] <= 0xFF and parts[1] <= 0xFF and parts[2] <= 0xFFFF:
+        return (parts[0] << 24) | (parts[1] << 16) | parts[2]
+    if len(parts) == 4 and all(part <= 0xFF for part in parts):
+        return (
+            (parts[0] << 24)
+            | (parts[1] << 16)
+            | (parts[2] << 8)
+            | parts[3]
+        )
+
+    raise ValueError("historical IPv4 parts exceed their permitted range")
 
 
 def _is_valid_domain_hostname(hostname: str) -> bool:
