@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv6Address, ip_address
+from unicodedata import normalize
 from urllib.parse import urlparse
 
 
@@ -61,7 +62,10 @@ def classify_source(
     if not hostname:
         return SourceAdmission(SourceStatus.INVALID, "来源 URL 缺少主机名。", False)
 
-    normalized_host = hostname.lower().rstrip(".")
+    normalized_host = _normalize_hostname(hostname)
+    if not normalized_host:
+        return SourceAdmission(SourceStatus.INVALID, "来源主机名格式无效。", False)
+
     if normalized_host == "example.com" or normalized_host.endswith(".test"):
         return SourceAdmission(
             SourceStatus.INVALID,
@@ -114,6 +118,20 @@ def _has_browser_ambiguous_characters(source_url: str) -> bool:
         or 127 <= ord(character) <= 159
         for character in source_url
     )
+
+
+def _normalize_hostname(hostname: str) -> str | None:
+    """Normalize a host with NFKC then IDNA before applying source rules."""
+    try:
+        return (
+            normalize("NFKC", hostname)
+            .encode("idna")
+            .decode("ascii")
+            .lower()
+            .rstrip(".")
+        )
+    except UnicodeError:
+        return None
 
 
 def _parse_ip_address(hostname: str) -> IPv4Address | IPv6Address | None:
@@ -188,16 +206,11 @@ def _historical_ipv4_value(parts: list[int]) -> int:
 
 
 def _is_valid_domain_hostname(hostname: str) -> bool:
-    """Validate domain syntax locally, without resolving the hostname."""
-    try:
-        ascii_hostname = hostname.encode("idna").decode("ascii")
-    except UnicodeError:
+    """Validate an NFKC and IDNA-normalized domain without resolving it."""
+    if len(hostname) > 253:
         return False
 
-    if len(ascii_hostname) > 253:
-        return False
-
-    return all(_is_valid_domain_label(label) for label in ascii_hostname.split("."))
+    return all(_is_valid_domain_label(label) for label in hostname.split("."))
 
 
 def _is_valid_domain_label(label: str) -> bool:

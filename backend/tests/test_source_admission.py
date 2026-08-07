@@ -141,6 +141,36 @@ def test_legacy_non_decimal_private_ipv4_literals_are_rejected(source_url: str):
 @pytest.mark.parametrize(
     "source_url",
     [
+        "https://０x7f.0.0.1/report.pdf",
+        "https://ｅxample.com/report.pdf",
+        "https://www.ｔest/report.pdf",
+    ],
+)
+def test_nfkc_equivalent_blocked_hosts_are_rejected(source_url: str):
+    result = classify_source(
+        source_url=source_url,
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+def test_valid_unicode_idn_source_is_accessible():
+    result = classify_source(
+        source_url="https://例子.公司.cn/report.pdf",
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.ACCESSIBLE
+    assert result.can_accept is True
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
         r"https://127.0.0.1\@www.cninfo.com.cn/report.pdf",
         "https://www.cninfo.com.cn/report.pdf\t",
     ],
