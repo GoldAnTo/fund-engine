@@ -16,7 +16,7 @@ from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 from app.models.proposals import Proposal
-from app.models.operational import ResearchTask, TaskItem
+from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
@@ -24,6 +24,7 @@ from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope_evidence import (
+    lock_event_scope_case,
     lock_event_research_lifecycle,
 )
 
@@ -124,6 +125,11 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 task.status, task.stage = "running", "research"
+                # A provider call can take seconds.  Persist and end this
+                # short task-state transaction before it starts, otherwise
+                # PostgreSQL holds the ResearchTask row lock and prevents a
+                # concurrent scope replacement from cancelling the run.
+                self.session.commit()
                 cancelled_during_task = False
                 try:
                     if task.task_type in {"support", "contradict", "alternative"}:
@@ -389,6 +395,44 @@ class AutoResearchService:
             return True
         return False
 
+    def _claim_task_output_slot(self, run, task) -> bool:
+        """Serialize post-provider persistence with a scope replacement.
+
+        The provider itself runs without any write transaction or row lock.
+        Only once it has returned do we take the stable case lock (the same
+        one used by scope replacement), then lock the run/task rows and
+        confirm that this task still owns an active run.  The caller keeps
+        this short transaction through proposal/result persistence.
+        """
+        lock_event_scope_case(self.session, run.research_case_id)
+        with self.session.no_autoflush:
+            current_run = self.session.scalar(
+                select(ResearchRun)
+                .where(ResearchRun.id == run.id)
+                .with_for_update()
+            )
+            current_task = self.session.scalar(
+                select(ResearchTask)
+                .where(ResearchTask.id == task.id)
+                .with_for_update()
+            )
+            job = self.session.scalar(
+                select(Job)
+                .where(Job.kind == "research_run")
+                .where(Job.target_type == "research_run")
+                .where(Job.target_id == run.id)
+                .order_by(Job.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+        return bool(
+            current_run is not None
+            and current_run.status != "cancelled"
+            and current_task is not None
+            and current_task.status != "cancelled"
+            and (job is None or not job.cancel_requested)
+        )
+
     def _handoff_for_review(self, run) -> None:
         """Create idempotent home-page tasks for this run's reviewable outputs."""
         if run.status != "waiting_for_review":
@@ -444,7 +488,7 @@ class AutoResearchService:
         proposed_ids = proposer.propose(
             task.thesis_id,
             self.session,
-            before_persist=lambda: not self._is_cancelled(run, task),
+            before_persist=lambda: self._claim_task_output_slot(run, task),
         )
         unique: list[uuid.UUID] = []
         seen: set[str] = set()

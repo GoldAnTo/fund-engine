@@ -422,12 +422,15 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
     finally:
         bootstrap.close()
 
-    provider_returned, release_provider = Event(), Event()
-    errors: list[BaseException] = []
+    provider_entered, allow_provider_return = Event(), Event()
+    scope_completed = Event()
+    worker_errors: list[BaseException] = []
+    scope_errors: list[BaseException] = []
 
     def blocked_propose(self, thesis_id, session, *, before_persist=None):
-        provider_returned.set()
-        assert release_provider.wait(timeout=5)
+        provider_entered.set()
+        if not allow_provider_return.wait(timeout=5):
+            raise RuntimeError("test did not release blocked provider")
         if before_persist is not None and not before_persist():
             return []
         proposal = Proposal(
@@ -454,28 +457,45 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             AutoResearchService(session).execute(run)
             session.commit()
         except BaseException as exc:  # surfaced in the test thread
-            errors.append(exc)
+            worker_errors.append(exc)
             session.rollback()
         finally:
             session.close()
 
     worker = Thread(target=execute_old_run)
     worker.start()
-    assert provider_returned.wait(timeout=5)
-    replacement = SessionLocal()
+    assert provider_entered.wait(timeout=5)
+
+    def replace_scope() -> None:
+        replacement = SessionLocal()
+        try:
+            EventResearchScopeService(replacement).update(
+                case_id,
+                [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+                "reviewer",
+            )
+            replacement.commit()
+            scope_completed.set()
+        except BaseException as exc:  # surfaced in the test thread
+            scope_errors.append(exc)
+            replacement.rollback()
+        finally:
+            replacement.close()
+
+    replacement_worker = Thread(target=replace_scope)
+    replacement_worker.start()
     try:
-        EventResearchScopeService(replacement).update(
-            case_id,
-            [INITIAL_FACTORS[0], "New factor two", "New factor three"],
-            "reviewer",
+        assert scope_completed.wait(timeout=5), (
+            "scope replacement must commit while provider call is blocked"
         )
-        replacement.commit()
+        assert not scope_errors
     finally:
-        replacement.close()
-    release_provider.set()
-    worker.join(timeout=5)
+        allow_provider_return.set()
+        replacement_worker.join(timeout=5)
+        worker.join(timeout=5)
+    assert not replacement_worker.is_alive()
     assert not worker.is_alive()
-    assert not errors
+    assert not worker_errors
 
     verify = SessionLocal()
     try:
@@ -485,6 +505,13 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         assert old_run is not None and old_run.status == "cancelled"
         assert old_task is not None and old_task.status == "cancelled"
         assert old_task.result is None
+        old_job = verify.scalar(
+            select(Job).where(
+                Job.target_type == "research_run", Job.target_id == old_run_id
+            )
+        )
+        assert old_job is not None and old_job.status == "cancelled"
+        assert old_job.cancel_requested is True
         assert verify.scalar(
             select(Proposal.id).where(Proposal.research_case_id == case_id)
         ) is None
