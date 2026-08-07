@@ -141,6 +141,24 @@ def test_legacy_non_decimal_private_ipv4_literals_are_rejected(source_url: str):
 @pytest.mark.parametrize(
     "source_url",
     [
+        r"https://127.0.0.1\@www.cninfo.com.cn/report.pdf",
+        "https://www.cninfo.com.cn/report.pdf\t",
+    ],
+)
+def test_urls_with_browser_ambiguous_characters_are_rejected(source_url: str):
+    result = classify_source(
+        source_url=source_url,
+        parser_version="docling-v2",
+        content_verified=True,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
         "https://bad host.example/report.pdf",
         "https://-leading-hyphen.example/report.pdf",
         "https://trailing-hyphen-.example/report.pdf",

@@ -33,6 +33,13 @@ def classify_source(
     if not source_url or not source_url.strip():
         return SourceAdmission(SourceStatus.INVALID, "缺少来源 URL。", False)
 
+    if _has_browser_ambiguous_characters(source_url):
+        return SourceAdmission(
+            SourceStatus.INVALID,
+            "来源 URL 包含不安全字符。",
+            False,
+        )
+
     try:
         parsed = urlparse(source_url)
     except ValueError:
@@ -95,6 +102,17 @@ def classify_source(
         SourceStatus.ACCESSIBLE,
         "来源链接可访问且内容已验证。",
         True,
+    )
+
+
+def _has_browser_ambiguous_characters(source_url: str) -> bool:
+    """Reject raw characters whose URL interpretation differs between parsers."""
+    return any(
+        character == "\\"
+        or character.isspace()
+        or ord(character) < 32
+        or 127 <= ord(character) <= 159
+        for character in source_url
     )
 
 
