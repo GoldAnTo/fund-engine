@@ -76,29 +76,53 @@ class EventResearchQueries:
         lifecycle: EventResearchLifecycle,
         evidence: list[EventKeyEvidenceDTO],
     ) -> EventConclusionDraftDTO:
+        reviewed = self._formal_evidence(case_id)
+        if lifecycle.status == "published":
+            record = self._session.scalar(
+                select(EventResearchConclusion)
+                .where(EventResearchConclusion.research_case_id == case_id)
+                .where(EventResearchConclusion.state == "published")
+                .order_by(EventResearchConclusion.created_at.desc())
+                .limit(1)
+            )
+            if record is not None:
+                return EventConclusionDraftDTO(
+                    state=record.state, text=record.text, citations=reviewed
+                )
+            return EventConclusionDraftDTO(
+                state="published", text="结论已发布，正在载入可复核证据。", citations=reviewed
+            )
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
         record = self._session.scalar(
             select(EventResearchConclusion)
             .where(EventResearchConclusion.research_case_id == case_id)
+            .where(EventResearchConclusion.state == "ai_draft")
             .order_by(EventResearchConclusion.created_at.desc())
             .limit(1)
         )
-        reviewed = self._formal_evidence(case_id)
-        if record is not None:
+        if record is not None and scope is not None and record.scope_version_id == scope.id:
             # The compact API DTO intentionally has no link id; the record's
             # immutable link-id snapshot is retained for audit, while the
             # visible citations remain limited to human-reviewed material.
             return EventConclusionDraftDTO(
                 state=record.state, text=record.text, citations=reviewed
             )
+        if record is not None:
+            return EventConclusionDraftDTO(
+                state="cannot_conclude",
+                text="研究范围已更新，先前结论草案不再适用于当前因素。",
+                citations=reviewed,
+            )
         if lifecycle.status == "draft_ready":
             return EventConclusionDraftDTO(
                 state="ai_draft",
                 text="当前已进入结论复核：尚无足以支持主要因素判断的已审核证据；本研究不能给出因果结论。",
                 citations=reviewed,
-            )
-        if lifecycle.status == "published":
-            return EventConclusionDraftDTO(
-                state="published", text="结论已发布，正在载入可复核证据。", citations=reviewed
             )
         return EventConclusionDraftDTO(
             state="cannot_conclude",

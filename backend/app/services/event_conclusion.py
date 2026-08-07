@@ -37,6 +37,9 @@ class EventConclusionService:
         )
 
     def create_draft(self, case_id: uuid.UUID) -> EventResearchConclusion:
+        # Scope, reviewed evidence, and the draft must come from one locked
+        # event snapshot; scope updates take this same case -> lifecycle lock.
+        lock_event_research_lifecycle(self._session, case_id)
         scope = self._session.scalar(
             select(EventResearchScopeVersion)
             .where(EventResearchScopeVersion.research_case_id == case_id)

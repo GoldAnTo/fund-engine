@@ -358,6 +358,120 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
 
 
 @pytest.mark.pg_only
+def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        created = EventResearchService(bootstrap).create(
+            CreateEventResearchRequest(
+                raw_input="Event input",
+                event_title="Draft snapshot concurrency",
+                research_question="What explains the event?",
+                candidate_factors=INITIAL_FACTORS,
+                created_by="tester",
+            )
+        )
+        case_id = uuid.UUID(created.case_id)
+        lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
+        assert lifecycle is not None
+        lifecycle.status = "draft_ready"
+        bootstrap.commit()
+    finally:
+        bootstrap.close()
+
+    scope_has_lock, release_scope = Event(), Event()
+    draft_lock_attempted, draft_finished = Event(), Event()
+    errors: list[BaseException] = []
+    draft_ids: list[uuid.UUID] = []
+    draft_thread_id: list[int] = []
+    original_continue = EventResearchScopeService._continue_research_if_needed
+
+    def pause_scope(service, lifecycle, active_theses, now) -> None:
+        scope_has_lock.set()
+        assert release_scope.wait(timeout=5)
+        original_continue(service, lifecycle, active_theses, now)
+
+    def observe_draft_lock(
+        _conn, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if (
+            draft_thread_id
+            and get_ident() == draft_thread_id[0]
+            and "research_cases" in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            draft_lock_attempted.set()
+
+    monkeypatch.setattr(
+        EventResearchScopeService, "_continue_research_if_needed", pause_scope
+    )
+
+    def update_scope() -> None:
+        session = SessionLocal()
+        try:
+            EventResearchScopeService(session).update(
+                case_id,
+                [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+                "reviewer",
+            )
+            session.commit()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    def create_draft() -> None:
+        session = SessionLocal()
+        try:
+            draft_thread_id.append(get_ident())
+            draft = EventConclusionService(session).create_draft(case_id)
+            draft_ids.append(draft.id)
+            session.commit()
+            draft_finished.set()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    scope_thread = Thread(target=update_scope)
+    draft_thread = Thread(target=create_draft)
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_draft_lock)
+    try:
+        scope_thread.start()
+        assert scope_has_lock.wait(timeout=5)
+        draft_thread.start()
+        assert draft_lock_attempted.wait(timeout=5)
+        assert not draft_finished.is_set()
+        release_scope.set()
+        scope_thread.join(timeout=5)
+        draft_thread.join(timeout=5)
+        assert not scope_thread.is_alive()
+        assert not draft_thread.is_alive()
+        assert not errors
+    finally:
+        release_scope.set()
+        scope_thread.join(timeout=5)
+        draft_thread.join(timeout=5)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_draft_lock)
+
+    verify = SessionLocal()
+    try:
+        draft = verify.get(EventResearchConclusion, draft_ids[0])
+        assert draft is not None
+        scope = verify.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .where(EventResearchScopeVersion.version == 2)
+        )
+        assert scope is not None
+        assert draft.scope_version_id == scope.id
+    finally:
+        verify.close()
+
+
+@pytest.mark.pg_only
 def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     engine, monkeypatch
 ) -> None:
@@ -1023,6 +1137,27 @@ def test_conclusion_publish_takes_the_case_lifecycle_lock(
     assert published.state == "published"
 
 
+def test_conclusion_draft_takes_the_case_lifecycle_lock(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    calls: list[uuid.UUID] = []
+
+    def record_lock(session, locked_case_id):
+        calls.append(locked_case_id)
+        return session.get(EventResearchLifecycle, locked_case_id)
+
+    monkeypatch.setattr(
+        "app.services.event_conclusion.lock_event_research_lifecycle", record_lock
+    )
+
+    draft = EventConclusionService(cmd_session).create_draft(case_id)
+
+    assert calls == [case_id]
+    assert draft.scope_version_id is not None
+
+
 def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     cmd_client, cmd_session
 ) -> None:
@@ -1046,6 +1181,9 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
         },
     )
     assert scope.status_code == 200
+    stale_view = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert stale_view.status_code == 200
+    assert stale_view.json()["conclusion"]["state"] == "cannot_conclude"
 
     stale_publish = cmd_client.post(
         f"/api/v1/event-research/{case_id}/conclusion/publish",
