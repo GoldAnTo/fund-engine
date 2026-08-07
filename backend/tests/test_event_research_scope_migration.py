@@ -19,6 +19,12 @@ RUN_SCOPE_MIGRATION_PATH = (
     / "versions"
     / "0016_research_run_scope_theses.py"
 )
+CONCLUSION_SCOPE_MIGRATION_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0017_event_research_conclusion_scope.py"
+)
 
 
 class _OperationsRecorder:
@@ -27,6 +33,7 @@ class _OperationsRecorder:
         self.tables: list[tuple] = []
         self.indexes: list[tuple] = []
         self.columns: list[tuple] = []
+        self.foreign_keys: list[tuple] = []
         self.executed: list[str] = []
 
     def get_bind(self):
@@ -38,8 +45,17 @@ class _OperationsRecorder:
     def create_index(self, *args) -> None:
         self.indexes.append(args)
 
+    def create_foreign_key(self, *args) -> None:
+        self.foreign_keys.append(args)
+
     def add_column(self, *args) -> None:
         self.columns.append(args)
+
+    def drop_constraint(self, *args, **kwargs) -> None:
+        pass
+
+    def drop_column(self, *args) -> None:
+        pass
 
     def execute(self, statement: str) -> None:
         self.executed.append(statement)
@@ -193,3 +209,33 @@ def test_research_run_scope_migration_persists_selected_thesis_ids() -> None:
     assert "UPDATE research_runs" in backfill_sql
     assert "json_agg(DISTINCT research_tasks.thesis_id)" in backfill_sql
     assert "GROUP BY research_tasks.run_id" in backfill_sql
+
+
+def test_conclusion_scope_migration_preserves_legacy_rows_as_unpublishable() -> None:
+    migration = _load_migration(
+        "conclusion_scope_migration", CONCLUSION_SCOPE_MIGRATION_PATH
+    )
+    operations = _OperationsRecorder("postgresql")
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0017"
+    assert migration.down_revision == "0016"
+    assert operations.columns[0][0] == "event_research_conclusions"
+    column = operations.columns[0][1]
+    assert column.name == "scope_version_id"
+    assert column.nullable is True
+    assert operations.foreign_keys == [
+        (
+            "fk_event_research_conclusions_scope_version",
+            "event_research_conclusions",
+            "event_research_scope_versions",
+            ["scope_version_id"],
+            ["id"],
+        )
+    ]
+    assert operations.indexes[0][0] == "ix_event_research_conclusions_scope_version"
+    # Existing draft rows have no reliable historical scope.  They remain for
+    # audit with NULL and the service refuses to publish them until regenerated.
+    assert operations.executed == []

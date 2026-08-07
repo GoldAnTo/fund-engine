@@ -9,6 +9,7 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
+from app.errors import ValidationFailedError
 from app.models.event_research import (
     EventResearchBrief,
     EventResearchConclusion,
@@ -357,10 +358,10 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
 
 
 @pytest.mark.pg_only
-def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
+def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     engine, monkeypatch
 ) -> None:
-    """A scope's stale lifecycle object must not overwrite ``published``."""
+    """A scope change rejects a draft that was queued to publish concurrently."""
     SessionLocal = sessionmaker(bind=engine, future=True)
     bootstrap = SessionLocal()
     try:
@@ -376,7 +377,7 @@ def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
         case_id = uuid.UUID(created.case_id)
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
-        lifecycle.status = "awaiting_scope"
+        lifecycle.status = "draft_ready"
         lifecycle.current_gap = "Need updated factors"
         lifecycle.next_human_action = "Update factors"
         EventConclusionService(bootstrap).create_draft(case_id)
@@ -385,7 +386,7 @@ def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
         bootstrap.close()
 
     scope_has_lifecycle, allow_scope_continue = Event(), Event()
-    publish_lock_attempted, publish_finished = Event(), Event()
+    publish_lock_attempted, stale_publish_rejected = Event(), Event()
     errors: list[BaseException] = []
     publisher_thread_id: list[int] = []
     original_continue = EventResearchScopeService._continue_research_if_needed
@@ -437,7 +438,9 @@ def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
                 reviewer="reviewer",
             )
             session.commit()
-            publish_finished.set()
+        except ValidationFailedError:
+            stale_publish_rejected.set()
+            session.rollback()
         except BaseException as exc:  # surfaced in the test thread
             errors.append(exc)
             session.rollback()
@@ -452,15 +455,16 @@ def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
         assert scope_has_lifecycle.wait(timeout=5)
         publish_thread.start()
         # Publish reached the same root-lock request but cannot pass the scope
-        # transaction until the test releases its lifecycle projection.
+        # transaction until the test releases its scope projection.
         assert publish_lock_attempted.wait(timeout=5)
-        assert not publish_finished.is_set()
+        assert not stale_publish_rejected.is_set()
         allow_scope_continue.set()
         scope_thread.join(timeout=5)
         publish_thread.join(timeout=5)
         assert not scope_thread.is_alive()
         assert not publish_thread.is_alive()
         assert not errors
+        assert stale_publish_rejected.is_set()
     finally:
         allow_scope_continue.set()
         scope_thread.join(timeout=5)
@@ -471,8 +475,13 @@ def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
     try:
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
-        assert lifecycle.status == "published"
-        assert lifecycle.next_human_action is None
+        assert lifecycle.status == "draft_ready"
+        assert verify.scalar(
+            select(EventResearchConclusion.id).where(
+                EventResearchConclusion.research_case_id == case_id,
+                EventResearchConclusion.state == "published",
+            )
+        ) is None
     finally:
         verify.close()
 
@@ -732,6 +741,8 @@ def test_published_event_rejects_scope_update_without_starting_successor(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    lifecycle.status = "draft_ready"
     EventConclusionService(cmd_session).create_draft(case_id)
     EventConclusionService(cmd_session).publish(
         case_id,
@@ -988,6 +999,8 @@ def test_conclusion_publish_takes_the_case_lifecycle_lock(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    lifecycle.status = "draft_ready"
     EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     calls: list[uuid.UUID] = []
@@ -1008,6 +1021,63 @@ def test_conclusion_publish_takes_the_case_lifecycle_lock(
 
     assert calls == [case_id]
     assert published.state == "published"
+
+
+def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    lifecycle.status = "draft_ready"
+    v1_draft = EventConclusionService(cmd_session).create_draft(case_id)
+    cmd_session.commit()
+    assert v1_draft.scope_version_id is not None
+
+    scope = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                "广告业务增长弱于市场预期",
+                "AI 投入回报周期可能拉长",
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+    assert scope.status_code == 200
+
+    stale_publish = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/conclusion/publish",
+        json={"text": "stale draft", "reviewer": "reviewer"},
+    )
+    assert stale_publish.status_code == 422
+    assert cmd_session.get(EventResearchConclusion, v1_draft.id) is not None
+    assert cmd_session.scalar(
+        select(EventResearchConclusion.id).where(
+            EventResearchConclusion.research_case_id == case_id,
+            EventResearchConclusion.state == "published",
+        )
+    ) is None
+
+    v2_draft = EventConclusionService(cmd_session).create_draft(case_id)
+    cmd_session.commit()
+    assert v2_draft.scope_version_id != v1_draft.scope_version_id
+    current_lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    current_lifecycle.status = "draft_ready"
+    cmd_session.commit()
+
+    current_publish = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/conclusion/publish",
+        json={"text": "current draft", "reviewer": "reviewer"},
+    )
+    assert current_publish.status_code == 201
+    published = cmd_session.get(
+        EventResearchConclusion, uuid.UUID(current_publish.json()["conclusion_id"])
+    )
+    assert published is not None
+    assert published.based_on_conclusion_id == v2_draft.id
+    assert published.scope_version_id == v2_draft.scope_version_id
 
 
 @pytest.mark.parametrize(

@@ -612,6 +612,7 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     lifecycle = cmd_session.get(EventResearchLifecycle, uuid.UUID(created["case_id"]))
     lifecycle.status = "draft_ready"
+    EventConclusionService(cmd_session).create_draft(uuid.UUID(created["case_id"]))
     cmd_session.commit()
 
     response = cmd_client.post(

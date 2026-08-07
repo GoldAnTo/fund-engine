@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.event_research import EventResearchConclusion
+from app.errors import ValidationFailedError
+from app.models.event_research import (
+    EventResearchConclusion,
+    EventResearchScopeVersion,
+)
 from app.models.ledger import EvidenceLink, Thesis
 from app.services.event_research_scope_evidence import (
     current_mapped_evidence_ids,
@@ -33,6 +37,12 @@ class EventConclusionService:
         )
 
     def create_draft(self, case_id: uuid.UUID) -> EventResearchConclusion:
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
         mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
         evidence = list(
             self._session.execute(
@@ -60,6 +70,7 @@ class EventConclusionService:
             )
         draft = EventResearchConclusion(
             research_case_id=case_id,
+            scope_version_id=scope.id if scope is not None else None,
             state="ai_draft",
             text=text,
             primary_factor=primary_factor,
@@ -78,11 +89,33 @@ class EventConclusionService:
         # Serialize with scope updates and worker lifecycle projections before
         # reading a draft or mutating the lifecycle row.
         lifecycle = lock_event_research_lifecycle(self._session, case_id)
-        draft = self.latest(case_id)
-        if draft is None or draft.state != "ai_draft":
-            draft = self.create_draft(case_id)
+        if lifecycle is None or lifecycle.status != "draft_ready":
+            raise ValidationFailedError("event conclusion is not ready to publish")
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        draft = (
+            self._session.scalar(
+                select(EventResearchConclusion)
+                .where(EventResearchConclusion.research_case_id == case_id)
+                .where(EventResearchConclusion.state == "ai_draft")
+                .where(EventResearchConclusion.scope_version_id == scope.id)
+                .order_by(EventResearchConclusion.created_at.desc())
+                .limit(1)
+            )
+            if scope is not None
+            else None
+        )
+        if draft is None:
+            raise ValidationFailedError(
+                "event conclusion draft is not for the current scope"
+            )
         published = EventResearchConclusion(
             research_case_id=case_id,
+            scope_version_id=draft.scope_version_id,
             state="published",
             text=text,
             primary_factor=draft.primary_factor,

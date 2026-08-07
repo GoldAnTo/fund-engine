@@ -147,6 +147,14 @@ class EventResearchConclusion(Base):
     research_case_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("research_cases.id"), nullable=False, index=True
     )
+    # NULL is retained only for conclusions created before scope versions were
+    # introduced. Those legacy drafts are audit records and cannot publish.
+    scope_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("event_research_scope_versions.id"),
+        nullable=True,
+        index=True,
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     primary_factor: Mapped[str | None] = mapped_column(Text, nullable=True)
