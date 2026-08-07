@@ -11,32 +11,20 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.ledger import EvidenceLink, Thesis
-from app.models.operational import EventResearchLifecycle
+from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 
 
 def lock_event_scope_case(
     session: Session, case_id: uuid.UUID
-) -> EventResearchLifecycle | EventResearchScopeVersion | None:
+) -> ResearchCase | None:
     """Serialize scope rewrites and evidence publication for one event case.
 
     PostgreSQL holds this ``FOR UPDATE`` lock until the caller's outer command
     transaction commits.  SQLite accepts the clause as a no-op, preserving the
     same service API for local tests.
     """
-    lifecycle = session.scalar(
-        select(EventResearchLifecycle)
-        .where(EventResearchLifecycle.research_case_id == case_id)
-        .with_for_update()
-    )
-    if lifecycle is not None:
-        return lifecycle
     return session.scalar(
-        select(EventResearchScopeVersion)
-        .where(EventResearchScopeVersion.research_case_id == case_id)
-        .order_by(EventResearchScopeVersion.version.desc())
-        .limit(1)
-        .with_for_update()
+        select(ResearchCase).where(ResearchCase.id == case_id).with_for_update()
     )
 
 

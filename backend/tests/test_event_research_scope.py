@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from threading import Event, Thread
+from time import sleep
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.models.event_research import (
     EventResearchBrief,
@@ -30,6 +33,8 @@ from app.services.event_research_scope_evidence import (
     append_current_scope_evidence_assignment,
     lock_event_scope_case,
 )
+from app.services.event_research import EventResearchService
+from app.schemas.v1.event_research import CreateEventResearchRequest
 
 
 INITIAL_FACTORS = [
@@ -137,7 +142,7 @@ def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_sessi
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
 
 
-def test_scope_case_lock_requests_a_for_update_lifecycle_row() -> None:
+def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:
     class RecordingSession:
         def __init__(self) -> None:
             self.statement = None
@@ -151,6 +156,157 @@ def test_scope_case_lock_requests_a_for_update_lifecycle_row() -> None:
     lock_event_scope_case(session, uuid.uuid4())
 
     assert session.statement._for_update_arg is not None
+    assert session.statement.get_final_froms()[0].name == "research_cases"
+
+
+@pytest.mark.pg_only
+def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(engine) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        created = EventResearchService(bootstrap).create(
+            CreateEventResearchRequest(
+                raw_input="Event input",
+                event_title="Concurrent event",
+                research_question="What explains the event?",
+                candidate_factors=INITIAL_FACTORS,
+                created_by="tester",
+            )
+        )
+        case_id = uuid.UUID(created.case_id)
+        thesis = bootstrap.scalar(
+            select(Thesis).where(
+                Thesis.research_case_id == case_id,
+                Thesis.statement == INITIAL_FACTORS[0],
+            )
+        )
+        assert thesis is not None
+        now = datetime.now(timezone.utc)
+        document = DocumentVersion(
+            content_sha256=uuid.uuid4().hex,
+            source_url="https://investor.tsmc.com/english/quarterly-results",
+            available_at=now,
+            acquired_at=now,
+            parser_version="fixture",
+        )
+        bootstrap.add(document)
+        bootstrap.flush()
+        span = SourceSpan(
+            document_version_id=document.id,
+            verbatim_text="Concurrent reviewed evidence",
+            locator={"kind": "fixture"},
+        )
+        bootstrap.add(span)
+        bootstrap.flush()
+        statement = SourceStatement(
+            source_span_id=span.id,
+            kind="fact",
+            normalized_text="Concurrent evidence statement",
+            created_at=now,
+        )
+        bootstrap.add(statement)
+        bootstrap.commit()
+        statement_id = statement.id
+        thesis_id = thesis.id
+    finally:
+        bootstrap.close()
+
+    publish_locked, release_publish, scope_started, scope_finished = (
+        Event(),
+        Event(),
+        Event(),
+        Event(),
+    )
+    errors: list[BaseException] = []
+    published_link_id: list[uuid.UUID] = []
+
+    def publish() -> None:
+        session = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            link = EvidenceLink(
+                thesis_id=thesis_id,
+                source_statement_id=statement_id,
+                role="supports",
+                reason="concurrent publish",
+                scope={"period": "event"},
+                available_at=now,
+                creator_type="human",
+                review_state="reviewed",
+                created_at=now,
+            )
+            session.add(link)
+            session.flush()
+            lock_event_scope_case(session, case_id)
+            published_link_id.append(link.id)
+            publish_locked.set()
+            assert release_publish.wait(timeout=5)
+            append_current_scope_evidence_assignment(
+                session,
+                case_id=case_id,
+                evidence_link_id=link.id,
+                factor_statement=INITIAL_FACTORS[0],
+                created_at=now,
+            )
+            session.commit()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    def update_scope() -> None:
+        session = SessionLocal()
+        try:
+            scope_started.set()
+            EventResearchScopeService(session).update(
+                case_id,
+                [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+                "reviewer",
+            )
+            session.commit()
+            scope_finished.set()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    publisher = Thread(target=publish)
+    updater = Thread(target=update_scope)
+    publisher.start()
+    assert publish_locked.wait(timeout=5)
+    updater.start()
+    assert scope_started.wait(timeout=5)
+    sleep(0.2)
+    assert not scope_finished.is_set()
+    release_publish.set()
+    publisher.join(timeout=5)
+    updater.join(timeout=5)
+    assert not publisher.is_alive()
+    assert not updater.is_alive()
+    assert not errors
+
+    verify = SessionLocal()
+    try:
+        assignment = verify.scalar(
+            select(EventResearchScopeEvidenceAssignment)
+            .join(
+                EventResearchScopeVersion,
+                EventResearchScopeVersion.id
+                == EventResearchScopeEvidenceAssignment.scope_version_id,
+            )
+            .where(
+                EventResearchScopeEvidenceAssignment.evidence_link_id
+                == published_link_id[0],
+                EventResearchScopeVersion.research_case_id == case_id,
+                EventResearchScopeVersion.version == 2,
+            )
+        )
+        assert assignment is not None
+        assert assignment.disposition == "mapped"
+    finally:
+        verify.close()
 
 
 def test_scope_update_appends_v2_without_rewriting_v1(cmd_client, cmd_session) -> None:

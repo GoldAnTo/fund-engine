@@ -56,7 +56,10 @@ class EventResearchScopeService:
             raise NotFoundError("event research case not found")
         # Held to the route's commit together with the scope snapshot and its
         # reviewed-evidence assignments; proposal publication uses this lock too.
-        lifecycle = lock_event_scope_case(self._session, case_id)
+        # ResearchCase is the stable, always-present lock anchor.  Acquire it
+        # before reading or backfilling scope data so legacy cases cannot race
+        # with a concurrent evidence publication.
+        lock_event_scope_case(self._session, case_id)
 
         previous = self._session.scalar(
             select(EventResearchScopeVersion)
@@ -111,7 +114,8 @@ class EventResearchScopeService:
                     created_at=now,
                 )
             )
-        if isinstance(lifecycle, EventResearchLifecycle):
+        lifecycle = self._session.get(EventResearchLifecycle, case_id)
+        if lifecycle is not None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()
         return UpdatedEventResearchScope(
