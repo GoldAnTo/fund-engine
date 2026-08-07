@@ -21,6 +21,7 @@ from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
+from app.services.event_review_queue import EventReviewQueueService
 
 
 class AutoResearchService:
@@ -200,6 +201,12 @@ class AutoResearchService:
         if lifecycle is None or lifecycle.active_run_id != run.id:
             return
 
+        # This is the production handoff immediately after review tasks are
+        # created.  It closes only invalid-source operational tasks and writes
+        # its audit event in this lifecycle transaction; proposals stay intact.
+        EventReviewQueueService(self.session).reconcile_event_review_queue(
+            run.research_case_id
+        )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
         if review_count:
             lifecycle_repo.update(

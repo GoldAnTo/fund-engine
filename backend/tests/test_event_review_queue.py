@@ -13,11 +13,12 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle
+from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.operational import TaskRepository
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.auto_research import AutoResearchService
 
 
 def _seed_evidence_proposal(
@@ -209,3 +210,48 @@ def test_reconcile_invalid_source_closes_only_its_task_and_lifecycle_counts_vali
     assert audit.payload["admission_reason"] == (
         "来源为测试域名，不能作为有效证据来源。"
     )
+
+
+def test_lifecycle_refresh_reconciles_invalid_source_review_tasks(session) -> None:
+    case = _case(session)
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=2,
+        max_rounds=3,
+        budget=10,
+        budget_used=1,
+        stop_reason="budget_exhausted",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    lifecycle = session.get(EventResearchLifecycle, case.id)
+    lifecycle.active_run_id = run.id
+    invalid = _seed_evidence_proposal(
+        session,
+        case=case,
+        proposed_at=now,
+        source_url=f"https://example.com/invalid-{case.id}",
+    )
+    task = TaskRepository(session).add_task(
+        title="review invalid",
+        task_type="review_proposal",
+        ref_type="proposal",
+        ref_id=invalid.id,
+        research_case_id=case.id,
+    )
+    session.commit()
+
+    AutoResearchService(session).refresh_event_lifecycle(run)
+    session.commit()
+
+    session.refresh(task)
+    assert task.status == "done"
+    audit = session.scalar(
+        select(DomainEvent).where(DomainEvent.aggregate_id == str(invalid.id))
+    )
+    assert audit is not None
