@@ -13,6 +13,12 @@ MIGRATION_PATH = (
     / "versions"
     / "0015_event_research_scope_versions.py"
 )
+RUN_SCOPE_MIGRATION_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0016_research_run_scope_theses.py"
+)
 
 
 class _OperationsRecorder:
@@ -20,6 +26,7 @@ class _OperationsRecorder:
         self._dialect = dialect
         self.tables: list[tuple] = []
         self.indexes: list[tuple] = []
+        self.columns: list[tuple] = []
         self.executed: list[str] = []
 
     def get_bind(self):
@@ -30,6 +37,9 @@ class _OperationsRecorder:
 
     def create_index(self, *args) -> None:
         self.indexes.append(args)
+
+    def add_column(self, *args) -> None:
+        self.columns.append(args)
 
     def execute(self, statement: str) -> None:
         self.executed.append(statement)
@@ -42,7 +52,11 @@ class _OperationsRecorder:
 
 
 def _migration_module():
-    spec = importlib.util.spec_from_file_location("scope_migration", MIGRATION_PATH)
+    return _load_migration("scope_migration", MIGRATION_PATH)
+
+
+def _load_migration(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -158,3 +172,19 @@ def test_scope_migration_skips_postgres_triggers_on_sqlite() -> None:
 
     assert len(operations.tables) == 3
     assert len(operations.executed) == 3
+
+
+def test_research_run_scope_migration_persists_selected_thesis_ids() -> None:
+    migration = _load_migration("run_scope_migration", RUN_SCOPE_MIGRATION_PATH)
+    operations = _OperationsRecorder("sqlite")
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0016"
+    assert migration.down_revision == "0015"
+    assert operations.columns[0][0] == "research_runs"
+    column = operations.columns[0][1]
+    assert column.name == "scope_thesis_ids"
+    assert isinstance(column.type, sa.JSON)
+    assert column.nullable is True

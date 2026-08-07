@@ -16,6 +16,7 @@ from app.models.event_research import (
 )
 from app.models.ledger import DocumentVersion, EvidenceLink, SourceSpan, SourceStatement, Thesis
 from app.models.operational import EventResearchLifecycle
+from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 from app.schemas.v1.event_research import (
     EventConclusionDraftDTO,
     EventKeyEvidenceDTO,
@@ -81,7 +82,7 @@ class EventResearchQueries:
             .order_by(EventResearchConclusion.created_at.desc())
             .limit(1)
         )
-        reviewed = [item for item in evidence if item.review_state == "reviewed"]
+        reviewed = self._formal_evidence(case_id)
         if record is not None:
             # The compact API DTO intentionally has no link id; the record's
             # immutable link-id snapshot is retained for audit, while the
@@ -190,6 +191,35 @@ class EventResearchQueries:
             .where(Thesis.research_case_id == case_id)
             .order_by(EvidenceLink.available_at.desc())
             .limit(50)
+        )
+        return [
+            EventKeyEvidenceDTO(
+                case_id=str(case_id),
+                factor_statement=thesis.statement,
+                role=link.role,
+                review_state=link.review_state,
+                source_title=document.title,
+                source_url=document.source_url,
+                excerpt=span.verbatim_text,
+                locator=span.locator,
+                available_at=link.available_at,
+            )
+            for link, thesis, statement, span, document in rows
+        ]
+
+    def _formal_evidence(self, case_id: uuid.UUID) -> list[EventKeyEvidenceDTO]:
+        mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
+        if not mapped_evidence_ids:
+            return []
+        rows = self._session.execute(
+            select(EvidenceLink, Thesis, SourceStatement, SourceSpan, DocumentVersion)
+            .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+            .join(SourceStatement, SourceStatement.id == EvidenceLink.source_statement_id)
+            .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
+            .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+            .where(EvidenceLink.id.in_(mapped_evidence_ids))
+            .where(EvidenceLink.review_state == "reviewed")
+            .order_by(EvidenceLink.available_at.desc())
         )
         return [
             EventKeyEvidenceDTO(

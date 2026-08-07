@@ -44,15 +44,16 @@ class AutoResearchService:
         case = self.session.get(ResearchCase, case_id)
         if case is None:
             raise ValueError(f"research case {case_id} not found")
-        run = self.repo.create_run(
-            research_case_id=case_id,
-            max_rounds=max(1, min(max_rounds, 3)),
-            budget=max(1, budget),
-        )
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
+        run = self.repo.create_run(
+            research_case_id=case_id,
+            max_rounds=max(1, min(max_rounds, 3)),
+            budget=max(1, budget),
+            scope_thesis_ids=[str(thesis.id) for thesis in theses],
+        )
         for thesis in theses:
             for task_type, label in (
                 ("support", "寻找支持证据"),
@@ -85,7 +86,7 @@ class AutoResearchService:
         self.repo.update_run(run, status="running", stage="extract")
         self.session.commit()
         used = run.budget_used or 0
-        previous = self._case_evidence_count(run.research_case_id)
+        previous = self._run_evidence_count(run)
         failed = False
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
@@ -112,11 +113,6 @@ class AutoResearchService:
                 except Exception:
                     used += 1
                 self.session.commit()
-            theses = list(
-                self.session.scalars(
-                    select(Thesis).where(Thesis.research_case_id == run.research_case_id)
-                )
-            )
             proposer, generator = EvidenceProposer(self.client), AssessmentGenerator(self.client)
             for task in self.repo.queued_tasks_for_run(run.id, current_round):
                 if self._is_cancelled(run):
@@ -169,7 +165,7 @@ class AutoResearchService:
                 break
 
             self._create_balance_gaps(run, current_round)
-            now = self._case_evidence_count(run.research_case_id)
+            now = self._run_evidence_count(run)
             self.repo.update_run(run, budget_used=used, round=current_round)
             if used >= run.budget:
                 self.repo.update_run(run, status="waiting_for_review", stage="stopped", stop_reason="budget_exhausted")
@@ -251,6 +247,7 @@ class AutoResearchService:
                     max_rounds=run.max_rounds,
                     budget=run.budget,
                     commit=False,
+                    thesis_ids=self._run_thesis_ids(run),
                 )
                 lifecycle_repo.update(
                     lifecycle,
@@ -308,6 +305,7 @@ class AutoResearchService:
             max_rounds=active_run.max_rounds if active_run else 1,
             budget=active_run.budget if active_run else 100,
             commit=False,
+            thesis_ids=self._run_thesis_ids(active_run) if active_run else None,
         )
         next_round = lifecycle.current_round + 1
         lifecycle_repo.update(
@@ -423,7 +421,7 @@ class AutoResearchService:
 
     def _create_balance_gaps(self, run, current_round):
         counts = self.repo.evidence_link_counts_by_thesis(run.research_case_id)
-        theses = list(self.session.scalars(select(Thesis).where(Thesis.research_case_id == run.research_case_id)))
+        theses = self._run_theses(run)
         for thesis in theses:
             current = counts.get(str(thesis.id), {})
             missing = [role for role in ("support", "contradict") if not current.get(role, 0)]
@@ -457,6 +455,50 @@ class AutoResearchService:
             )
             or 0
         )
+
+    def _run_thesis_ids(self, run) -> list[uuid.UUID] | None:
+        if run is None:
+            return None
+        if run.scope_thesis_ids is not None:
+            return [uuid.UUID(value) for value in run.scope_thesis_ids]
+        from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
+
+        scope = self.session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if scope is not None:
+            active_statements = select(EventResearchScopeFactor.statement).where(
+                EventResearchScopeFactor.scope_version_id == scope.id
+            )
+            return list(
+                self.session.scalars(
+                    select(Thesis.id)
+                    .where(Thesis.research_case_id == run.research_case_id)
+                    .where(Thesis.statement.in_(active_statements))
+                )
+            )
+        return None
+
+    def _run_theses(self, run) -> list[Thesis]:
+        thesis_ids = self._run_thesis_ids(run)
+        stmt = select(Thesis).where(Thesis.research_case_id == run.research_case_id)
+        if thesis_ids is not None:
+            stmt = stmt.where(Thesis.id.in_(thesis_ids))
+        return list(self.session.scalars(stmt))
+
+    def _run_evidence_count(self, run) -> int:
+        thesis_ids = self._run_thesis_ids(run)
+        if thesis_ids is not None and not thesis_ids:
+            return 0
+        stmt = select(func.count(func.distinct(EvidenceLink.id))).join(
+            Thesis, Thesis.id == EvidenceLink.thesis_id
+        ).where(Thesis.research_case_id == run.research_case_id)
+        if thesis_ids is not None:
+            stmt = stmt.where(EvidenceLink.thesis_id.in_(thesis_ids))
+        return int(self.session.scalar(stmt) or 0)
     
     def list_runs(
         self,
@@ -552,6 +594,7 @@ class AutoResearchService:
             "budget": run.budget,
             "budget_used": run.budget_used,
             "stop_reason": run.stop_reason,
+            "scope_thesis_ids": list(run.scope_thesis_ids or []),
             "progress": {"total": len(tasks), "completed": sum(t.status == "done" for t in tasks)},
             "evidence": {
                 "support": sum(item.get("support", 0) for item in by_thesis.values()),
@@ -579,6 +622,7 @@ class AutoResearchService:
             "budget": run.budget,
             "budget_used": run.budget_used,
             "stop_reason": run.stop_reason,
+            "scope_thesis_ids": list(run.scope_thesis_ids or []),
             "created_at": run.created_at.isoformat(),
             "updated_at": run.updated_at.isoformat(),
             "next_action": detail["next_action"] if detail else "继续执行",

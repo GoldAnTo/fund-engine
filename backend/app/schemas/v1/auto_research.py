@@ -13,6 +13,7 @@ class RunSummaryDTO(V1Model):
     budget: int
     budget_used: int
     stop_reason: str | None
+    scope_thesis_ids: list[str]
     created_at: str
     updated_at: str
     next_action: str
@@ -84,6 +85,7 @@ class ResearchRunResponse(V1Model):
     budget: int
     budget_used: int
     stop_reason: str | None
+    scope_thesis_ids: list[str]
     progress: dict[str, int]
     evidence: dict[str, int]
     by_thesis: dict[str, dict[str, int]]

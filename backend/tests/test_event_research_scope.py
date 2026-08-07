@@ -23,6 +23,8 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
+from app.services.auto_research import AutoResearchService
+from app.services.event_conclusion import EventConclusionService
 from app.services.event_research_scope import EventResearchScopeService
 
 
@@ -369,6 +371,40 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
         )
     )
     assert task_statements == set(active_factors)
+    assert set(successor.scope_thesis_ids) == {
+        str(thesis_id)
+        for thesis_id in cmd_session.scalars(
+            select(Thesis.id).where(
+                Thesis.research_case_id == case_id,
+                Thesis.statement.in_(active_factors),
+            )
+        )
+    }
+    AutoResearchService(cmd_session)._create_balance_gaps(successor, current_round=1)
+    cmd_session.flush()
+    all_successor_task_statements = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert all_successor_task_statements == set(active_factors)
+    successor.status = "waiting_for_review"
+    successor.stop_reason = "max_rounds_reached"
+    AutoResearchService(cmd_session).refresh_event_lifecycle(successor)
+    next_successor = cmd_session.get(
+        ResearchRun, cmd_session.get(EventResearchLifecycle, case_id).active_run_id
+    )
+    assert next_successor is not None
+    assert next_successor.id != successor.id
+    assert set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == next_successor.id)
+        )
+    ) == set(active_factors)
     workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
     assert workbench.status_code == 200
     assert [item["statement"] for item in workbench.json()["factors"]] == active_factors
@@ -379,6 +415,37 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
         )
     ) is None
     assert workbench.json()["conclusion"]["state"] == "cannot_conclude"
+
+
+def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    active_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    removed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[1])
+    active_factors = [
+        INITIAL_FACTORS[0],
+        INITIAL_FACTORS[2],
+        "AI 投入回报周期可能拉长",
+    ]
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={"factors": active_factors, "changed_by": "reviewer"},
+    )
+    assert response.status_code == 200
+    draft = EventConclusionService(cmd_session).create_draft(case_id)
+    cmd_session.commit()
+
+    assert draft.primary_factor == INITIAL_FACTORS[0]
+    assert draft.evidence_link_ids == [str(active_link.id)]
+    assert str(removed_link.id) not in draft.evidence_link_ids
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert workbench.status_code == 200
+    assert [item["factor_statement"] for item in workbench.json()["conclusion"]["citations"]] == [
+        INITIAL_FACTORS[0]
+    ]
 
 
 @pytest.mark.parametrize(

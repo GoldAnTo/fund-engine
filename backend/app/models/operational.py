@@ -263,6 +263,9 @@ class ResearchRun(Base):
     budget: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     budget_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     stop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The exact thesis set selected when this run was created.  Later scope
+    # revisions must not silently expand an in-flight run back to all case theses.
+    scope_thesis_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

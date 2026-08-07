@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.event_research import EventResearchConclusion
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle
+from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 
 
 def _utcnow() -> datetime:
@@ -30,12 +31,14 @@ class EventConclusionService:
         )
 
     def create_draft(self, case_id: uuid.UUID) -> EventResearchConclusion:
+        mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
         evidence = list(
             self._session.execute(
                 select(EvidenceLink, Thesis)
                 .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
                 .where(Thesis.research_case_id == case_id)
                 .where(EvidenceLink.review_state == "reviewed")
+                .where(EvidenceLink.id.in_(mapped_evidence_ids))
                 .order_by(EvidenceLink.available_at.desc())
             )
         )
