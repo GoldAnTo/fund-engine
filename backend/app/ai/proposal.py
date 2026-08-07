@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -41,7 +42,11 @@ class EvidenceProposer:
         self._client = client
 
     def propose(
-        self, thesis_id: uuid.UUID, session: Session
+        self,
+        thesis_id: uuid.UUID,
+        session: Session,
+        *,
+        before_persist: Callable[[], bool] | None = None,
     ) -> list[uuid.UUID]:
         started_at = datetime.now(timezone.utc)
         research = ResearchService(ResearchRepository(session))
@@ -91,6 +96,12 @@ class EvidenceProposer:
         try:
             result = self._client.chat_json(messages, schema_hint="propose")
             links_data = result.get("links", [])
+
+            # The automatic run may have been superseded while the provider
+            # call was in flight. Check before creating any Proposal, outbox
+            # event, or audit row in this worker transaction.
+            if before_persist is not None and not before_persist():
+                return []
 
             stmt_map = {str(s.id): s for s in statements}
             case = session.get(ResearchCase, thesis.research_case_id)

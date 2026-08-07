@@ -131,7 +131,7 @@ class AutoResearchRepository:
         for task in self._session.scalars(
             select(ResearchTask)
             .where(ResearchTask.run_id == run.id)
-            .where(ResearchTask.status == "queued")
+            .where(ResearchTask.status.in_(("queued", "running")))
         ):
             task.status = "cancelled"
             task.stage = "stopped"

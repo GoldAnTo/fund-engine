@@ -27,6 +27,7 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
+from app.models.proposals import Proposal
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_research_scope import EventResearchScopeService
@@ -376,6 +377,120 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
         )
         assert assignment is not None
         assert assignment.disposition == "mapped"
+    finally:
+        verify.close()
+
+
+@pytest.mark.pg_only
+def test_postgres_scope_replacement_discards_inflight_old_run_output(
+    engine, monkeypatch
+) -> None:
+    """A provider return after replacement cannot persist an old-run proposal."""
+    from app.ai.proposal import EvidenceProposer
+
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        created = EventResearchService(bootstrap).create(
+            CreateEventResearchRequest(
+                raw_input="Event input",
+                event_title="In-flight replacement",
+                research_question="What explains the event?",
+                candidate_factors=INITIAL_FACTORS,
+                created_by="tester",
+            )
+        )
+        case_id = uuid.UUID(created.case_id)
+        old_run_id = uuid.UUID(created.lifecycle.active_run_id)
+        old_run = bootstrap.get(ResearchRun, old_run_id)
+        assert old_run is not None
+        old_run.max_rounds = 1
+        tasks = list(
+            bootstrap.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == old_run_id)
+                .order_by(ResearchTask.created_at)
+            )
+        )
+        target_task = next(task for task in tasks if task.task_type == "support")
+        for task in tasks:
+            if task.id != target_task.id:
+                task.status = "cancelled"
+                task.stage = "stopped"
+        bootstrap.commit()
+        target_task_id = target_task.id
+    finally:
+        bootstrap.close()
+
+    provider_returned, release_provider = Event(), Event()
+    errors: list[BaseException] = []
+
+    def blocked_propose(self, thesis_id, session, *, before_persist=None):
+        provider_returned.set()
+        assert release_provider.wait(timeout=5)
+        if before_persist is not None and not before_persist():
+            return []
+        proposal = Proposal(
+            kind="evidence_link",
+            payload={"source_statement_id": str(uuid.uuid4()), "role": "supports", "reason": "late"},
+            target_context={"thesis_id": str(thesis_id), "entity_type": "evidence_link"},
+            proposed_by_type="ai",
+            proposed_by_ref="blocked-test",
+            proposed_at=datetime.now(timezone.utc),
+            research_case_id=case_id,
+        )
+        session.add(proposal)
+        session.flush()
+        return [proposal.id]
+
+    monkeypatch.setattr(EvidenceProposer, "propose", blocked_propose)
+    monkeypatch.setattr("app.services.auto_research._pending_versions", lambda *_: [])
+
+    def execute_old_run() -> None:
+        session = SessionLocal()
+        try:
+            run = session.get(ResearchRun, old_run_id)
+            assert run is not None
+            AutoResearchService(session).execute(run)
+            session.commit()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    worker = Thread(target=execute_old_run)
+    worker.start()
+    assert provider_returned.wait(timeout=5)
+    replacement = SessionLocal()
+    try:
+        EventResearchScopeService(replacement).update(
+            case_id,
+            [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+            "reviewer",
+        )
+        replacement.commit()
+    finally:
+        replacement.close()
+    release_provider.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert not errors
+
+    verify = SessionLocal()
+    try:
+        old_run = verify.get(ResearchRun, old_run_id)
+        old_task = verify.get(ResearchTask, target_task_id)
+        lifecycle = verify.get(EventResearchLifecycle, case_id)
+        assert old_run is not None and old_run.status == "cancelled"
+        assert old_task is not None and old_task.status == "cancelled"
+        assert old_task.result is None
+        assert verify.scalar(
+            select(Proposal.id).where(Proposal.research_case_id == case_id)
+        ) is None
+        assert lifecycle is not None
+        assert lifecycle.status == "continuing"
+        assert lifecycle.active_run_id != old_run_id
     finally:
         verify.close()
 
@@ -1113,12 +1228,17 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     old_run = cmd_session.get(ResearchRun, old_run_id)
     assert old_run is not None
     old_run.status = old_status
-    cmd_session.commit()
     old_task_ids = list(
         cmd_session.scalars(
             select(ResearchTask.id).where(ResearchTask.run_id == old_run_id)
         )
     )
+    if old_status == "running":
+        running_task = cmd_session.get(ResearchTask, old_task_ids[0])
+        assert running_task is not None
+        running_task.status = "running"
+        running_task.stage = "research"
+    cmd_session.commit()
     latest_factors = [
         INITIAL_FACTORS[0],
         "广告业务增长弱于市场预期",

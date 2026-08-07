@@ -124,18 +124,26 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 task.status, task.stage = "running", "research"
+                cancelled_during_task = False
                 try:
                     if task.task_type in {"support", "contradict", "alternative"}:
-                        proposed_ids = self._propose_for_task(proposer, task)
+                        proposed_ids = self._propose_for_task(proposer, task, run)
+                    else:
+                        assessment = generator.generate(
+                            task.thesis_id, datetime.now(timezone.utc), self.session
+                        )
+                    # Providers may return after their run was superseded.
+                    # Do not flush their proposals/assessments or overwrite a
+                    # task that the scope update has already cancelled.
+                    if self._is_cancelled(run, task):
+                        cancelled_during_task = True
+                    elif task.task_type in {"support", "contradict", "alternative"}:
                         task.result = {
                             "task_type": task.task_type,
                             "proposed_proposal_ids": [str(item) for item in proposed_ids],
                         }
                         task.evidence_count = self._evidence_count(task.thesis_id)
                     else:
-                        assessment = generator.generate(
-                            task.thesis_id, datetime.now(timezone.utc), self.session
-                        )
                         task.result = {
                             "task_type": task.task_type,
                             "assessment_id": str(assessment.id),
@@ -151,16 +159,32 @@ class AutoResearchService:
                                 current_round + 1,
                                 "assessment_gap",
                             )
-                    task.status, task.stage = "done", "completed"
+                    if not cancelled_during_task:
+                        task.status, task.stage = "done", "completed"
                 except ComplianceRefusedError as exc:
-                    task.status, task.stage = "failed", "failed"
-                    task.result = {"task_type": task.task_type, "error": str(exc), "error_type": "compliance_refused"}
-                    failed = True
+                    if self._is_cancelled(run, task):
+                        cancelled_during_task = True
+                    else:
+                        task.status, task.stage = "failed", "failed"
+                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": "compliance_refused"}
+                        failed = True
                 except Exception as exc:
-                    task.status, task.stage = "failed", "failed"
-                    task.result = {"task_type": task.task_type, "error": str(exc), "error_type": type(exc).__name__}
-                    failed = True
+                    if self._is_cancelled(run, task):
+                        cancelled_during_task = True
+                    else:
+                        task.status, task.stage = "failed", "failed"
+                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": type(exc).__name__}
+                        failed = True
                 finally:
+                    # Re-read both the run and task at the final write
+                    # boundary.  A scope replacement can land after the
+                    # provider returned but before this worker commits.
+                    if cancelled_during_task or self._is_cancelled(run, task):
+                        # Roll back any provider side effects from this worker
+                        # transaction.  The replacement command committed the
+                        # durable cancelled run/task/job audit state.
+                        self.session.rollback()
+                        break
                     task.updated_at = datetime.now(timezone.utc)
                     used += 1
                     self.session.commit()
@@ -337,10 +361,26 @@ class AutoResearchService:
             next_human_action=None,
         )
 
-    def _is_cancelled(self, run) -> bool:
+    def _is_cancelled(self, run, task=None) -> bool:
         """Observe a cancel request at task boundaries without interrupting a call."""
-        self.session.refresh(run)
+        # Avoid autoflushing provider output before we can observe that a
+        # concurrent scope update cancelled this run; cancellation then rolls
+        # that uncommitted output back instead of publishing it.
+        task_status = None
+        with self.session.no_autoflush:
+            self.session.refresh(run)
+            if task is not None:
+                # Do not refresh the identity-mapped task: it may contain the
+                # worker's uncommitted provider result.  Query the committed
+                # row instead, so a concurrent replacement is observable
+                # without discarding output before the caller can decide to
+                # commit or roll it back.
+                task_status = self.session.scalar(
+                    select(ResearchTask.status).where(ResearchTask.id == task.id)
+                )
         if run.status == "cancelled":
+            return True
+        if task_status == "cancelled":
             return True
         job = self.repo.job_for_run(run.id)
         if job is not None and job.cancel_requested:
@@ -396,10 +436,16 @@ class AutoResearchService:
                 research_case_id=run.research_case_id,
             )
 
-    def _propose_for_task(self, proposer: EvidenceProposer, task) -> list[uuid.UUID]:
+    def _propose_for_task(
+        self, proposer: EvidenceProposer, task, run
+    ) -> list[uuid.UUID]:
         """Call proposer once per task and avoid duplicate pending proposal hashes."""
         existing_before = self.repo.pending_proposal_hashes_for_thesis(task.thesis_id)
-        proposed_ids = proposer.propose(task.thesis_id, self.session)
+        proposed_ids = proposer.propose(
+            task.thesis_id,
+            self.session,
+            before_persist=lambda: not self._is_cancelled(run, task),
+        )
         unique: list[uuid.UUID] = []
         seen: set[str] = set()
         for proposal_id in proposed_ids:
