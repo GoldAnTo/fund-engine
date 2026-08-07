@@ -22,7 +22,10 @@ from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
-from app.services.event_research_scope_evidence import lock_event_research_lifecycle
+from app.services.event_research_scope_evidence import (
+    has_current_scope_evidence_coverage,
+    lock_event_research_lifecycle,
+)
 
 
 class AutoResearchService:
@@ -293,6 +296,16 @@ class AutoResearchService:
             return
         active_run = self.repo.get_run(lifecycle.active_run_id) if lifecycle.active_run_id else None
         if lifecycle.current_round >= 3:
+            if not has_current_scope_evidence_coverage(self.session, case_id):
+                lifecycle_repo.update(
+                    lifecycle,
+                    status="exhausted",
+                    active_run_id=lifecycle.active_run_id,
+                    summary="已审核证据尚未覆盖所有当前因素，不能生成结论草案",
+                    current_gap="每个当前因素均需至少一条已审核映射证据",
+                    next_human_action="补充来源或调整研究范围",
+                )
+                return
             from app.services.event_conclusion import EventConclusionService
 
             EventConclusionService(self.session).create_draft(case_id)

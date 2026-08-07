@@ -1108,6 +1108,92 @@ def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
     ]
 
 
+@pytest.mark.parametrize(
+    ("evidence_factors", "expects_draft"),
+    [([], False), ([INITIAL_FACTORS[0]], False), (INITIAL_FACTORS, True)],
+    ids=["no-evidence", "one-factor-only", "all-active-factors"],
+)
+def test_final_key_review_requires_mapped_evidence_for_every_active_factor(
+    cmd_client, cmd_session, evidence_factors: list[str], expects_draft: bool
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "awaiting_key_review"
+    lifecycle.current_round = 3
+    for factor in evidence_factors:
+        link = _reviewed_evidence(cmd_session, case_id, factor)
+        append_current_scope_evidence_assignment(
+            cmd_session,
+            case_id=case_id,
+            evidence_link_id=link.id,
+            factor_statement=factor,
+            created_at=datetime.now(timezone.utc),
+        )
+    cmd_session.commit()
+
+    AutoResearchService(cmd_session).continue_after_key_review(case_id)
+    cmd_session.commit()
+
+    drafts = list(
+        cmd_session.scalars(
+            select(EventResearchConclusion).where(
+                EventResearchConclusion.research_case_id == case_id,
+                EventResearchConclusion.state == "ai_draft",
+            )
+        )
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    if expects_draft:
+        assert lifecycle.status == "draft_ready"
+        assert len(drafts) == 1
+    else:
+        assert lifecycle.status == "exhausted"
+        assert drafts == []
+
+
+def test_published_workbench_citations_use_conclusion_evidence_snapshot(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    snapshot_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=snapshot_link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "draft_ready"
+    EventConclusionService(cmd_session).create_draft(case_id)
+    EventConclusionService(cmd_session).publish(
+        case_id,
+        text="Published with one citation",
+        reviewer="reviewer",
+    )
+    later_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[1])
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=later_link.id,
+        factor_statement=INITIAL_FACTORS[1],
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.commit()
+
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+
+    assert workbench.status_code == 200
+    assert [citation["factor_statement"] for citation in workbench.json()["conclusion"]["citations"]] == [
+        INITIAL_FACTORS[0]
+    ]
+
+
 def test_conclusion_publish_takes_the_case_lifecycle_lock(
     cmd_client, cmd_session, monkeypatch
 ) -> None:

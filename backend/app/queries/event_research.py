@@ -76,7 +76,6 @@ class EventResearchQueries:
         lifecycle: EventResearchLifecycle,
         evidence: list[EventKeyEvidenceDTO],
     ) -> EventConclusionDraftDTO:
-        reviewed = self._formal_evidence(case_id)
         if lifecycle.status == "published":
             record = self._session.scalar(
                 select(EventResearchConclusion)
@@ -87,10 +86,14 @@ class EventResearchQueries:
             )
             if record is not None:
                 return EventConclusionDraftDTO(
-                    state=record.state, text=record.text, citations=reviewed
+                    state=record.state,
+                    text=record.text,
+                    citations=self._formal_evidence(case_id, record.evidence_link_ids),
                 )
             return EventConclusionDraftDTO(
-                state="published", text="结论已发布，正在载入可复核证据。", citations=reviewed
+                state="published",
+                text="结论已发布，正在载入可复核证据。",
+                citations=self._formal_evidence(case_id),
             )
         scope = self._session.scalar(
             select(EventResearchScopeVersion)
@@ -105,6 +108,7 @@ class EventResearchQueries:
             .order_by(EventResearchConclusion.created_at.desc())
             .limit(1)
         )
+        reviewed = self._formal_evidence(case_id)
         if record is not None and scope is not None and record.scope_version_id == scope.id:
             # The compact API DTO intentionally has no link id; the record's
             # immutable link-id snapshot is retained for audit, while the
@@ -231,8 +235,17 @@ class EventResearchQueries:
             for link, thesis, statement, span, document in rows
         ]
 
-    def _formal_evidence(self, case_id: uuid.UUID) -> list[EventKeyEvidenceDTO]:
+    def _formal_evidence(
+        self, case_id: uuid.UUID, evidence_link_ids: list[str] | None = None
+    ) -> list[EventKeyEvidenceDTO]:
         mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
+        if evidence_link_ids is not None:
+            snapshot_ids = set(evidence_link_ids)
+            mapped_evidence_ids = [
+                evidence_id
+                for evidence_id in mapped_evidence_ids
+                if str(evidence_id) in snapshot_ids
+            ]
         if not mapped_evidence_ids:
             return []
         rows = self._session.execute(
