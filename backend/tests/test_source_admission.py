@@ -19,6 +19,8 @@ from app.services.source_admission import (
         ("https://example.com/source", "测试"),
         ("https://example.org/source", "测试"),
         ("https://example.net/source", "测试"),
+        ("https://www.example.com/source", "测试"),
+        ("https://evil.example.com/source", "测试"),
         (None, "URL"),
         ("ftp://publisher.example/report", "HTTP"),
     ],

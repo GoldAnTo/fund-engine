@@ -66,11 +66,7 @@ def classify_source(
     if not normalized_host:
         return SourceAdmission(SourceStatus.INVALID, "来源主机名格式无效。", False)
 
-    if (
-        normalized_host == "example"
-        or normalized_host.startswith("example.")
-        or normalized_host.endswith(".test")
-    ):
+    if "example" in normalized_host.split(".") or normalized_host.endswith(".test"):
         return SourceAdmission(
             SourceStatus.INVALID,
             "来源为测试域名，不能作为有效证据来源。",
