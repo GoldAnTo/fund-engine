@@ -38,6 +38,7 @@ import { TopicListPage } from "./pages/prototype/TopicListPage";
 import { EventResearchCreateScreen } from "./pages/prototype/EventResearchCreateScreen";
 import { EventResearchListScreen } from "./pages/prototype/EventResearchListScreen";
 import { EventResearchWorkbenchScreen } from "./pages/prototype/EventResearchWorkbenchScreen";
+import { KeyEvidenceReviewScreen } from "./pages/prototype/KeyEvidenceReviewScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -50,6 +51,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="events" element={<EventResearchListScreen />} />
           <Route path="events/new" element={<EventResearchCreateScreen />} />
           <Route path="events/:caseId" element={<EventResearchWorkbenchScreen />} />
+          <Route path="events/:caseId/review" element={<KeyEvidenceReviewScreen />} />
           <Route path="themes" element={<ThemeIndexScreen />} />
           <Route path="themes/:themeId" element={<ThemeWorkbenchScreen />} />
           <Route path="workspace" element={<OverviewScreen />} />

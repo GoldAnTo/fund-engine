@@ -3705,11 +3705,12 @@ export class MockResearchAdapter implements ResearchClient {
   async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
     const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
     const lifecycle: EventLifecycle = { status: event.status, activeRunId: "run-mock", currentRound: 1, summary: event.statusSummary, currentGap: null, nextHumanAction: event.nextHumanAction };
+    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://example.com/earnings", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     return simulateLatency({
       event, lifecycle,
       conclusion: { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
       factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
-      evidence: [],
+      evidence,
       nextAction: event.status === "awaiting_key_review" ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 } : { kind: "wait", label: "系统继续处理" },
     });
   }
