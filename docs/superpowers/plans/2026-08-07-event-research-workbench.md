@@ -380,7 +380,7 @@ git commit -m "feat: expose event research workbench"
 - Modify: `frontend/src/domain/prototypeTypes.ts`
 - Create: `frontend/src/tests/eventResearchAdapter.test.ts`
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 ```ts
 it("maps an extracted event without inventing optional fields", async () => {
@@ -400,13 +400,13 @@ it("returns separate case rows and an actionable lifecycle", async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npm test -- eventResearchAdapter.test.ts`
 
 Expected: FAIL because `eventResearchClient` and its types do not exist.
 
-- [ ] **Step 3: Implement a dedicated frontend contract**
+- [x] **Step 3: Implement a dedicated frontend contract**
 
 ```ts
 export type EventLifecycleStatus =
@@ -425,7 +425,7 @@ export interface EventWorkbench {
 
 Keep this contract separate from the large legacy `prototypeTypes.ts`; extend the shared `ResearchClient` only with an `eventResearch` facade. HTTP maps snake case to camel case once; mock data must include at least automatic first round, multi-round continuation, evidence review, draft-ready, published, and exhausted states.
 
-- [ ] **Step 4: Run adapter tests**
+- [x] **Step 4: Run adapter tests**
 
 Run: `npm test -- eventResearchAdapter.test.ts`
 

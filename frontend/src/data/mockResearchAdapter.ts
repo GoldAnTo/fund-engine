@@ -29,6 +29,14 @@ import type {
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
 import type {
+  CreateEventResearchInput,
+  EventExtraction,
+  EventLifecycle,
+  EventLifecycleStatus,
+  EventResearchListItem,
+  EventWorkbench,
+} from "../domain/eventResearch";
+import type {
   AssessmentReviewPayload,
   AssessmentReviewResult,
   CaseSummaryItem,
@@ -3665,6 +3673,45 @@ export class MockResearchAdapter implements ResearchClient {
       }
     }
     return simulateLatency(undefined);
+  }
+
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+    this.throwIfOffline();
+    return simulateLatency({
+      eventTitle: input.rawInput.trim().slice(0, 80) || null,
+      companyName: null, ticker: null, eventAt: null, marketReaction: "盘后下跌",
+      summary: null, researchQuestion: "这次市场反应的主要可验证因素是什么？",
+      candidateFactors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"],
+      confirmationRequired: true,
+    });
+  }
+
+  async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    this.throwIfOffline();
+    return simulateLatency({
+      caseId: "event-created", briefId: "brief-created",
+      lifecycle: { status: "researching", activeRunId: "run-created", currentRound: 1, summary: "正在建立第一轮证据检索", currentGap: null, nextHumanAction: null },
+    });
+  }
+
+  async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
+    this.throwIfOffline();
+    return simulateLatency([
+      { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
+      { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: "awaiting_key_review", statusSummary: "已筛出 2 条关键证据，等待审核", nextHumanAction: "审核 2 条关键证据", updatedAt: "2026-08-07T09:00:00Z" },
+    ]);
+  }
+
+  async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
+    const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
+    const lifecycle: EventLifecycle = { status: event.status, activeRunId: "run-mock", currentRound: 1, summary: event.statusSummary, currentGap: null, nextHumanAction: event.nextHumanAction };
+    return simulateLatency({
+      event, lifecycle,
+      conclusion: { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
+      factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: 0, reviewedContradictionCount: 0, currentGap: null })),
+      evidence: [],
+      nextAction: event.status === "awaiting_key_review" ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 } : { kind: "wait", label: "系统继续处理" },
+    });
   }
 
   async getConclusionView(

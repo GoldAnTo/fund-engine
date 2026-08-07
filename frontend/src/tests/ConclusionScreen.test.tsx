@@ -125,6 +125,10 @@ const sampleView: ConclusionView = {
 };
 
 class StubAdapter implements ResearchClient {
+  extractEventResearch = vi.fn();
+  createEventResearch = vi.fn();
+  listEventResearch = vi.fn();
+  getEventWorkbench = vi.fn();
   getConclusionView = vi.fn().mockResolvedValue(sampleView);
   getOverview = vi.fn();
   getCaseDossier = vi.fn();

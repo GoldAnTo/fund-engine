@@ -26,6 +26,14 @@ import type {
   WorkspaceOverview,
 } from "../domain/types";
 import { PageStateError } from "../domain/types";
+import type {
+  CreateEventResearchInput,
+  EventExtraction,
+  EventLifecycle,
+  EventLifecycleStatus,
+  EventResearchListItem,
+  EventWorkbench,
+} from "../domain/eventResearch";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
   AssessmentReviewPayload,
@@ -2757,6 +2765,70 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
     await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
+  }
+
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+    const dto = await this.post<{
+      event_title: string | null; company_name: string | null; ticker: string | null;
+      event_at: string | null; market_reaction: string | null; summary: string | null;
+      research_question: string; candidate_factors: string[]; confirmation_required: boolean;
+    }>("/event-research/extract", { raw_input: input.rawInput, source_url: input.sourceUrl || null });
+    return {
+      eventTitle: dto.event_title, companyName: dto.company_name, ticker: dto.ticker,
+      eventAt: dto.event_at, marketReaction: dto.market_reaction, summary: dto.summary,
+      researchQuestion: dto.research_question, candidateFactors: dto.candidate_factors,
+      confirmationRequired: dto.confirmation_required,
+    };
+  }
+
+  async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    const dto = await this.post<{ case_id: string; brief_id: string; lifecycle: {
+      status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
+      status_summary: string; current_gap: string | null; next_human_action: string | null;
+    } }>("/event-research", {
+      raw_input: input.rawInput, source_url: input.sourceUrl || null,
+      event_title: input.eventTitle, company_name: input.companyName, ticker: input.ticker,
+      event_at: input.eventAt, market_reaction: input.marketReaction,
+      research_question: input.researchQuestion, candidate_factors: input.candidateFactors,
+      created_by: input.createdBy,
+    });
+    return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
+  async listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
+    const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+    const dto = await this.get<{ items: Array<{
+      case_id: string; event_title: string; company_name: string | null; ticker: string | null;
+      event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string;
+      next_human_action: string | null; updated_at: string;
+    }> }>(`/event-research${suffix}`);
+    return dto.items.map((item) => this.mapEventListItem(item));
+  }
+
+  async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
+    const dto = await this.get<{
+      event: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string };
+      lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
+      conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; citations: unknown[] };
+      factors: Array<{ statement: string; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; current_gap: string | null }>;
+      evidence: unknown[]; next_action: { kind: "wait" | "review_evidence" | "review_conclusion" | "supply_scope"; label: string; count?: number | null };
+    }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
+    const evidence = dto.evidence as EventWorkbench["evidence"];
+    return {
+      event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
+      conclusion: { ...dto.conclusion, citations: dto.conclusion.citations as EventWorkbench["conclusion"]["citations"] },
+      factors: dto.factors.map((factor) => ({ statement: factor.statement, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, currentGap: factor.current_gap })),
+      evidence,
+      nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
+    };
+  }
+
+  private mapEventLifecycle(value: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null }): EventLifecycle {
+    return { status: value.status, activeRunId: value.active_run_id, currentRound: value.current_round, summary: value.status_summary, currentGap: value.current_gap, nextHumanAction: value.next_human_action };
+  }
+
+  private mapEventListItem(value: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string }): EventResearchListItem {
+    return { id: value.case_id, eventTitle: value.event_title, companyName: value.company_name, ticker: value.ticker, eventAt: value.event_at, status: value.lifecycle_status, statusSummary: value.status_summary, nextHumanAction: value.next_human_action, updatedAt: value.updated_at };
   }
 
   async getConclusionView(
