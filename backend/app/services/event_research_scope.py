@@ -19,7 +19,10 @@ from app.models.event_research import (
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.services.auto_research import AutoResearchService
-from app.services.event_research_factors import normalize_event_research_factors
+from app.services.event_research_factors import (
+    EventResearchScopeFactorValue,
+    normalize_event_research_scope_factors,
+)
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 
 
@@ -30,7 +33,7 @@ def _utcnow() -> datetime:
 @dataclass(frozen=True)
 class UpdatedEventResearchScope:
     version: int
-    factors: list[str]
+    factors: list[EventResearchScopeFactorValue]
     reclassified_evidence_count: int
     unmapped_evidence_count: int
 
@@ -40,10 +43,17 @@ class EventResearchScopeService:
         self._session = session
 
     def update(
-        self, case_id: uuid.UUID, factors: list[str], changed_by: str
+        self, case_id: uuid.UUID, factors: list[object], changed_by: str
     ) -> UpdatedEventResearchScope:
         try:
-            normalized = normalize_event_research_factors(factors)
+            normalized = normalize_event_research_scope_factors([
+                factor if isinstance(factor, (str, EventResearchScopeFactorValue))
+                else EventResearchScopeFactorValue(
+                    statement=getattr(factor, "statement"),
+                    description=getattr(factor, "description", None),
+                )
+                for factor in factors
+            ])
         except ValueError as exc:
             raise ValidationFailedError(str(exc)) from exc
         if not changed_by.strip():
@@ -73,8 +83,9 @@ class EventResearchScopeService:
         if previous is None:
             previous = self._backfill_legacy_scope(case_id)
         previous_factors = self._factors_for(previous.id) if previous else []
-        retained = set(previous_factors).intersection(normalized)
-        removed = set(previous_factors).difference(normalized)
+        active_statements = [factor.statement for factor in normalized]
+        retained = set(previous_factors).intersection(active_statements)
+        removed = set(previous_factors).difference(active_statements)
         now = _utcnow()
         scope = EventResearchScopeVersion(
             research_case_id=case_id,
@@ -85,17 +96,18 @@ class EventResearchScopeService:
         )
         self._session.add(scope)
         self._session.flush()
-        for position, statement in enumerate(normalized, start=1):
+        for position, factor in enumerate(normalized, start=1):
             self._session.add(
                 EventResearchScopeFactor(
                     scope_version_id=scope.id,
-                    statement=statement,
+                    statement=factor.statement,
+                    description=factor.description,
                     position=position,
                 )
             )
         self._session.flush()
         active_theses = self._sync_active_factor_theses(
-            case_id, normalized, changed_by.strip(), now
+            case_id, active_statements, changed_by.strip(), now
         )
         reviewed_evidence = list(
             self._session.execute(
@@ -105,7 +117,7 @@ class EventResearchScopeService:
                 .where(EvidenceLink.review_state == "reviewed")
             )
         )
-        active_factors = set(normalized)
+        active_factors = set(active_statements)
         for link, thesis in reviewed_evidence:
             is_mapped = thesis.statement in active_factors
             self._session.add(
@@ -157,6 +169,7 @@ class EventResearchScopeService:
                 EventResearchScopeFactor(
                     scope_version_id=scope.id,
                     statement=draft.statement,
+                    description=None,
                     position=draft.position,
                 )
             )

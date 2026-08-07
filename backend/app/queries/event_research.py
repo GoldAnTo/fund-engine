@@ -180,9 +180,9 @@ class EventResearchQueries:
         self, scope: EventResearchScopeVersion | None, case_id: uuid.UUID
     ) -> EventResearchScopeDTO:
         if scope is not None:
-            factors = list(
+            factor_rows = list(
                 self._session.scalars(
-                    select(EventResearchScopeFactor.statement)
+                    select(EventResearchScopeFactor)
                     .where(EventResearchScopeFactor.scope_version_id == scope.id)
                     .order_by(EventResearchScopeFactor.position)
                 )
@@ -198,7 +198,10 @@ class EventResearchQueries:
             )
             return EventResearchScopeDTO(
                 version=scope.version,
-                factors=factors,
+                factors=[
+                    {"statement": factor.statement, "description": factor.description}
+                    for factor in factor_rows
+                ],
                 unmapped_evidence_count=unmapped_evidence_count,
             )
         # Only pre-scope migrations can reach this branch. New event cases
@@ -212,7 +215,7 @@ class EventResearchQueries:
         )
         return EventResearchScopeDTO(
             version=0,
-            factors=factors,
+            factors=[{"statement": factor, "description": None} for factor in factors],
             unmapped_evidence_count=0,
         )
 
@@ -274,6 +277,7 @@ class EventResearchQueries:
             result.append(
                 EventResearchFactorDTO(
                     statement=factor.statement,
+                    description=getattr(factor, "description", None),
                     position=factor.position,
                     reviewed_support_count=int(counts.get("supports", 0)),
                     reviewed_contradiction_count=int(counts.get("contradicts", 0)),

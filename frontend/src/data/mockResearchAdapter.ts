@@ -34,6 +34,8 @@ import type {
   EventLifecycle,
   EventLifecycleStatus,
   EventResearchListItem,
+  EventResearchScopeFactor,
+  EventResearchScopeFactorInput,
   EventReviewQueue,
   EventWorkbench,
 } from "../domain/eventResearch";
@@ -2947,7 +2949,7 @@ export class MockResearchAdapter implements ResearchClient {
   private eventTsmProposalPending = true;
   private eventStates = new Map<string, {
     lifecycle: EventLifecycle;
-    scope: { version: number; factors: string[]; unmappedEvidenceCount: number };
+    scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
   }>();
 
   constructor(opts: { scenario?: MockScenario } = {}) {
@@ -3764,7 +3766,7 @@ export class MockResearchAdapter implements ResearchClient {
       : baseEvent;
     const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
-    const activeFactorStatements = saved?.scope.factors ?? factorStatements;
+    const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
     const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
       ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
@@ -3782,15 +3784,15 @@ export class MockResearchAdapter implements ResearchClient {
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
-      factors: activeFactorStatements.map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap: lifecycle.currentGap })),
+      factors: activeFactors.map((factor, index) => ({ statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap: lifecycle.currentGap })),
       evidence,
       progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
-      scope: saved?.scope ?? { version: 1, factors: factorStatements, unmappedEvidenceCount: 0 },
+      scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },
       nextAction,
     });
   }
 
-  async updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<{ version: number; factors: string[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
+  async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
     const event = this.eventResearchItems().find((item) => item.id === input.caseId)
       ?? this.eventResearchItems()[0];
@@ -3799,7 +3801,7 @@ export class MockResearchAdapter implements ResearchClient {
       ?? (event.status === "exhausted" ? "缺少能区分主要解释的反证" : null);
     const scope = {
       version: (previous?.scope.version ?? 1) + 1,
-      factors: [...input.factors],
+      factors: input.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : { ...factor }),
       unmappedEvidenceCount: 0,
     };
     this.eventStates.set(event.id, {

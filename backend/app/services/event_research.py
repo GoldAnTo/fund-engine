@@ -92,6 +92,7 @@ class EventResearchService:
                 EventResearchScopeFactor(
                     scope_version_id=scope.id,
                     statement=statement,
+                    description=None,
                     position=position,
                 )
             )

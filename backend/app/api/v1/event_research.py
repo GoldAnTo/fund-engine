@@ -89,7 +89,10 @@ def update_event_research_scope(
     db.commit()
     return UpdateEventResearchScopeResponse(
         version=updated.version,
-        factors=updated.factors,
+        factors=[
+            {"statement": factor.statement, "description": factor.description}
+            for factor in updated.factors
+        ],
         reclassified_evidence_count=updated.reclassified_evidence_count,
         unmapped_evidence_count=updated.unmapped_evidence_count,
     )

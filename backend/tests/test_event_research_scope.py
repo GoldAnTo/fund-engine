@@ -818,7 +818,7 @@ def test_scope_update_appends_v2_without_rewriting_v1(cmd_client, cmd_session) -
     assert response.status_code == 200
     assert response.json() == {
         "version": 2,
-        "factors": updated_factors,
+        "factors": [{"statement": statement, "description": None} for statement in updated_factors],
         "reclassified_evidence_count": 0,
         "unmapped_evidence_count": 0,
     }

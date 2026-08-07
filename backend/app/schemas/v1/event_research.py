@@ -5,7 +5,11 @@ from datetime import datetime
 from pydantic import Field, model_validator
 
 from app.schemas.v1.common import V1Model
-from app.services.event_research_factors import normalize_event_research_factors
+from app.services.event_research_factors import (
+    EventResearchScopeFactorValue,
+    normalize_event_research_factors,
+    normalize_event_research_scope_factors,
+)
 from app.services.source_admission import SourceStatus
 
 
@@ -59,19 +63,35 @@ class CreateEventResearchResponse(V1Model):
     lifecycle: EventResearchLifecycleDTO
 
 
+class EventResearchScopeFactorDTO(V1Model):
+    statement: str = Field(min_length=1)
+    description: str | None = None
+
+
 class UpdateEventResearchScopeRequest(V1Model):
-    factors: list[str] = Field(min_length=3, max_length=5)
+    factors: list[str | EventResearchScopeFactorDTO] = Field(min_length=3, max_length=5)
     changed_by: str = Field(min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_factors(self) -> "UpdateEventResearchScopeRequest":
-        self.factors = normalize_event_research_factors(self.factors)
+        values = normalize_event_research_scope_factors([
+            factor if isinstance(factor, str) else EventResearchScopeFactorValue(
+                statement=factor.statement, description=factor.description
+            )
+            for factor in self.factors
+        ])
+        self.factors = [
+            EventResearchScopeFactorDTO(
+                statement=factor.statement, description=factor.description
+            )
+            for factor in values
+        ]
         return self
 
 
 class UpdateEventResearchScopeResponse(V1Model):
     version: int
-    factors: list[str]
+    factors: list[EventResearchScopeFactorDTO]
     reclassified_evidence_count: int
     unmapped_evidence_count: int
 
@@ -139,6 +159,7 @@ class EventReviewQueueResponse(V1Model):
 
 class EventResearchFactorDTO(V1Model):
     statement: str
+    description: str | None = None
     position: int
     reviewed_support_count: int
     reviewed_contradiction_count: int
@@ -188,7 +209,7 @@ class EventWorkbenchProgressDTO(V1Model):
 
 class EventResearchScopeDTO(V1Model):
     version: int
-    factors: list[str]
+    factors: list[EventResearchScopeFactorDTO]
     unmapped_evidence_count: int
 
 

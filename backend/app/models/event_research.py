@@ -102,6 +102,7 @@ class EventResearchScopeFactor(Base):
         Uuid, ForeignKey("event_research_scope_versions.id"), nullable=False, index=True
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

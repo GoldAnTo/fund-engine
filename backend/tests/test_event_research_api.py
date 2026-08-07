@@ -670,7 +670,10 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     }
     assert body["scope"] == {
         "version": 1,
-        "factors": _confirmed_event()["candidate_factors"],
+        "factors": [
+            {"statement": statement, "description": None}
+            for statement in _confirmed_event()["candidate_factors"]
+        ],
         "unmapped_evidence_count": 0,
     }
     assert body["next_action"] == {
@@ -702,6 +705,7 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     assert exhausted["progress"]["verified"] == 1
     assert exhausted["factors"][0] == {
         "statement": first_factor,
+        "description": None,
         "position": 1,
         "reviewed_support_count": 1,
         "reviewed_contradiction_count": 0,
@@ -726,14 +730,14 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     assert updated.status_code == 200
     assert updated.json() == {
         "version": 2,
-        "factors": factors,
+        "factors": [{"statement": statement, "description": None} for statement in factors],
         "reclassified_evidence_count": 1,
         "unmapped_evidence_count": 0,
     }
     refreshed = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
     assert refreshed["scope"] == {
         "version": 2,
-        "factors": factors,
+        "factors": [{"statement": statement, "description": None} for statement in factors],
         "unmapped_evidence_count": 0,
     }
 
@@ -758,6 +762,47 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
+
+
+def test_scope_update_persists_optional_factor_descriptions_and_accepts_legacy_strings(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                {"statement": "资本开支压力", "description": "关注自由现金流与投入回收期"},
+                "盈利预期变化",
+                {"statement": "估值重定价", "description": None},
+            ],
+            "changed_by": "reviewer",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["factors"] == [
+        {"statement": "资本开支压力", "description": "关注自由现金流与投入回收期"},
+        {"statement": "盈利预期变化", "description": None},
+        {"statement": "估值重定价", "description": None},
+    ]
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+    assert workbench["scope"]["factors"] == response.json()["factors"]
+    saved = list(
+        cmd_session.scalars(
+            select(EventResearchScopeFactor)
+            .where(EventResearchScopeFactor.scope_version_id == cmd_session.scalar(
+                select(EventResearchScopeVersion.id)
+                .where(EventResearchScopeVersion.research_case_id == case_id)
+                .order_by(EventResearchScopeVersion.version.desc())
+                .limit(1)
+            ))
+            .order_by(EventResearchScopeFactor.position)
+        )
+    )
+    assert [factor.description for factor in saved] == ["关注自由现金流与投入回收期", None, None]
 
 
 def test_event_workbench_factor_statistics_use_a_fixed_query_count(

@@ -25,6 +25,12 @@ CONCLUSION_SCOPE_MIGRATION_PATH = (
     / "versions"
     / "0017_event_research_conclusion_scope.py"
 )
+SCOPE_FACTOR_DESCRIPTION_MIGRATION_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0018_event_research_scope_factor_descriptions.py"
+)
 
 
 class _OperationsRecorder:
@@ -69,6 +75,23 @@ class _OperationsRecorder:
 
 def _migration_module():
     return _load_migration("scope_migration", MIGRATION_PATH)
+
+
+def test_scope_factor_description_migration_keeps_historical_rows_nullable() -> None:
+    migration = _load_migration(
+        "scope_factor_description_migration", SCOPE_FACTOR_DESCRIPTION_MIGRATION_PATH
+    )
+    operations = _OperationsRecorder("sqlite")
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0018"
+    assert migration.down_revision == "0017"
+    table, column = operations.columns[0]
+    assert table == "event_research_scope_factors"
+    assert column.name == "description"
+    assert column.nullable is True
 
 
 def _load_migration(name: str, path: Path):

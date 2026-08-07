@@ -55,6 +55,7 @@ export interface EventResearchListItem {
 
 export interface EventFactor {
   statement: string;
+  description?: string | null;
   position: number;
   reviewedSupportCount: number;
   reviewedContradictionCount: number;
@@ -70,9 +71,16 @@ export interface WorkbenchProgress {
 
 export interface EventResearchScope {
   version: number;
-  factors: string[];
+  factors: EventResearchScopeFactor[];
   unmappedEvidenceCount: number;
 }
+
+export interface EventResearchScopeFactor {
+  statement: string;
+  description?: string | null;
+}
+
+export type EventResearchScopeFactorInput = EventResearchScopeFactor | string;
 
 export interface EventEvidenceCitation {
   caseId: string;
@@ -151,7 +159,7 @@ export interface EventResearchClient {
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
-  updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
+  updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
 }

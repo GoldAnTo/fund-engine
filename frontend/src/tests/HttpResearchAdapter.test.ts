@@ -1055,7 +1055,7 @@ describe("HttpResearchAdapter", () => {
       .getEventWorkbench("event-1");
 
     expect(view.progress).toEqual({ verified: 3, pending: 2, invalidSource: 1, currentGap: "缺少反证" });
-    expect(view.scope).toEqual({ version: 4, factors: ["资本开支担忧", "盈利预期变化", "估值重定价"], unmappedEvidenceCount: 2 });
+    expect(view.scope).toEqual({ version: 4, factors: [{ statement: "资本开支担忧", description: null }, { statement: "盈利预期变化", description: null }, { statement: "估值重定价", description: null }], unmappedEvidenceCount: 2 });
     expect(view.factors[0]).toMatchObject({
       statement: "资本开支担忧",
       position: 1,
@@ -1071,7 +1071,7 @@ describe("HttpResearchAdapter", () => {
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
     >(async () => jsonResponse({
       version: 2,
-      factors: ["因素甲", "因素乙", "因素丙"],
+      factors: [{ statement: "因素甲", description: null }, { statement: "因素乙", description: null }, { statement: "因素丙", description: null }],
       reclassified_evidence_count: 1,
       unmapped_evidence_count: 2,
     }));
@@ -1096,7 +1096,7 @@ describe("HttpResearchAdapter", () => {
     });
     expect(scope).toEqual({
       version: 2,
-      factors: ["因素甲", "因素乙", "因素丙"],
+      factors: [{ statement: "因素甲", description: null }, { statement: "因素乙", description: null }, { statement: "因素丙", description: null }],
       reclassifiedEvidenceCount: 1,
       unmappedEvidenceCount: 2,
     });
@@ -1120,20 +1120,20 @@ describe("HttpResearchAdapter", () => {
 
     const updated = await adapter.updateEventResearchScope({
       caseId: "event-exhausted",
-      factors,
+      factors: factors.map((statement) => ({ statement, description: null })),
       changedBy: "reviewer",
     });
     const view = await adapter.getEventWorkbench("event-exhausted");
 
     expect(updated).toEqual({
       version: 2,
-      factors,
+      factors: factors.map((statement) => ({ statement, description: null })),
       reclassifiedEvidenceCount: 0,
       unmappedEvidenceCount: 0,
     });
     expect(view.scope).toEqual({
       version: 2,
-      factors,
+      factors: factors.map((statement) => ({ statement, description: null })),
       unmappedEvidenceCount: 0,
     });
     expect(view.factors.map((factor) => ({
