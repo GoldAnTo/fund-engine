@@ -153,7 +153,13 @@ def _decide(
         and proposal.research_case_id is not None
         and proposal.kind == "evidence_link"
         and payload.outcome in {"confirmed", "modified"}
-        and not proposal_evidence_context(db, proposal).admission.can_accept
+        and not proposal_evidence_context(
+            db,
+            proposal,
+            evidence_payload=(
+                payload.replacement_payload if payload.outcome == "modified" else None
+            ),
+        ).admission.can_accept
     ):
         raise ValidationError(
             "event evidence source cannot be accepted for formal publication"

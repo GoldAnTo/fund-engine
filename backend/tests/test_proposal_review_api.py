@@ -211,6 +211,74 @@ def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_sessi
     assert cmd_session.scalars(select(EvidenceLinkVersion)).one().proposal_id == proposal.id
 
 
+def test_modified_event_proposal_rejects_invalid_replacement_source(
+    cmd_client, cmd_session
+):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session, source_url="https://news.example.org/valid"
+    )
+    now = datetime.now(timezone.utc)
+    invalid_document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"invalid replacement").hexdigest(),
+        source_url="https://example.com/invalid-replacement",
+        title="invalid replacement source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    cmd_session.add_all([proposal, invalid_document])
+    cmd_session.flush()
+    invalid_span = SourceSpan(
+        document_version_id=invalid_document.id,
+        locator={"page": 1},
+        verbatim_text="invalid replacement evidence",
+    )
+    cmd_session.add(invalid_span)
+    cmd_session.flush()
+    invalid_statement = SourceStatement(
+        source_span_id=invalid_span.id,
+        kind="fact",
+        normalized_text="invalid replacement statement",
+        created_at=now,
+    )
+    cmd_session.add(invalid_statement)
+    cmd_session.flush()
+    task = TaskRepository(cmd_session).add_task(
+        title="Review replacement source",
+        task_type="review_proposal",
+        status="open",
+        ref_type="proposal",
+        ref_id=proposal.id,
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "modified",
+            "reason": "change source",
+            "expected_version": 1,
+            "reviewer_id": "human:alice",
+            "replacement_payload": {
+                **proposal.payload,
+                "source_statement_id": str(invalid_statement.id),
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "validation_failed"
+    cmd_session.refresh(proposal)
+    cmd_session.refresh(task)
+    assert proposal.status == "pending"
+    assert proposal.version == 1
+    assert task.status == "open"
+    assert cmd_session.scalars(select(ProposalReviewDecision)).all() == []
+    assert cmd_session.scalars(select(EvidenceLink)).all() == []
+    assert cmd_session.scalars(select(EvidenceLinkVersion)).all() == []
+
+
 def test_invalid_event_source_can_be_rejected(cmd_client, cmd_session):
     proposal = _seed_event_evidence_proposal(
         cmd_session, source_url="https://example.com/invalid"

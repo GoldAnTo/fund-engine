@@ -45,10 +45,17 @@ class ProposalEvidenceContext:
 
 
 def proposal_evidence_context(
-    session: Session, proposal: Proposal
+    session: Session,
+    proposal: Proposal,
+    *,
+    evidence_payload: dict | None = None,
 ) -> ProposalEvidenceContext:
     """Resolve a proposal's frozen source and classify it without network I/O."""
-    payload = proposal.payload if isinstance(proposal.payload, dict) else {}
+    payload = (
+        evidence_payload
+        if isinstance(evidence_payload, dict)
+        else (proposal.payload if isinstance(proposal.payload, dict) else {})
+    )
     target_context = (
         proposal.target_context if isinstance(proposal.target_context, dict) else {}
     )
