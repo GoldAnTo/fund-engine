@@ -50,6 +50,8 @@ def engine():
 
 @pytest.fixture
 def session(engine) -> Session:
+    from app.models.ledger import Base
+
     SessionLocal = sessionmaker(bind=engine, future=True)
     db = SessionLocal()
     try:
@@ -57,6 +59,14 @@ def session(engine) -> Session:
     finally:
         db.rollback()
         db.close()
+        # Services legitimately commit at external-provider boundaries.  A
+        # rollback cannot undo those writes on the session-scoped SQLite
+        # StaticPool, so rebuild its disposable schema between tests.  The
+        # PostgreSQL fixture deliberately keeps Alembic-managed tables and
+        # append-only triggers intact.
+        if not USE_PG:
+            Base.metadata.drop_all(engine)
+            Base.metadata.create_all(engine)
 
 
 @pytest.fixture
