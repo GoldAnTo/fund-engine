@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.models.event_research import EventResearchConclusion
 from app.models.ledger import EvidenceLink, Thesis
-from app.models.operational import EventResearchLifecycle
-from app.services.event_research_scope_evidence import current_mapped_evidence_ids
+from app.services.event_research_scope_evidence import (
+    current_mapped_evidence_ids,
+    lock_event_research_lifecycle,
+)
 
 
 def _utcnow() -> datetime:
@@ -73,6 +75,9 @@ class EventConclusionService:
     def publish(
         self, case_id: uuid.UUID, *, text: str, reviewer: str
     ) -> EventResearchConclusion:
+        # Serialize with scope updates and worker lifecycle projections before
+        # reading a draft or mutating the lifecycle row.
+        lifecycle = lock_event_research_lifecycle(self._session, case_id)
         draft = self.latest(case_id)
         if draft is None or draft.state != "ai_draft":
             draft = self.create_draft(case_id)
@@ -87,7 +92,6 @@ class EventConclusionService:
             created_at=_utcnow(),
         )
         self._session.add(published)
-        lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if lifecycle is not None:
             lifecycle.status = "published"
             lifecycle.status_summary = "研究结论已人工确认并发布"

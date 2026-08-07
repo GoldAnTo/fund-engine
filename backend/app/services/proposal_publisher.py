@@ -30,6 +30,7 @@ from app.repositories.proposals import ProposalRepository
 from app.repositories.research import ResearchRepository
 from app.services.event_research_scope_evidence import (
     append_current_scope_evidence_assignment,
+    lock_event_scope_case,
 )
 
 
@@ -91,6 +92,11 @@ class ProposalPublisher:
         thesis_id = uuid.UUID(proposal.target_context["thesis_id"])
         statement_id = uuid.UUID(payload["source_statement_id"])
         now = datetime.now(timezone.utc)
+        thesis = self._session.get(Thesis, thesis_id)
+        if thesis is not None:
+            # Take the same root lock before writing the reviewed link.  The
+            # later assignment call reuses this transaction lock.
+            lock_event_scope_case(self._session, thesis.research_case_id)
         model_version = (
             proposal.proposed_by_ref if proposal.proposed_by_type == "ai" else None
         )
@@ -112,7 +118,6 @@ class ProposalPublisher:
         )
         self._session.add(legacy)
         self._session.flush()
-        thesis = self._session.get(Thesis, thesis_id)
         if thesis is not None:
             append_current_scope_evidence_assignment(
                 self._session,

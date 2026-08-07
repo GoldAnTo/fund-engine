@@ -20,7 +20,7 @@ from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.services.auto_research import AutoResearchService
 from app.services.event_research_factors import normalize_event_research_factors
-from app.services.event_research_scope_evidence import lock_event_scope_case
+from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 
 
 def _utcnow() -> datetime:
@@ -56,10 +56,9 @@ class EventResearchScopeService:
             raise NotFoundError("event research case not found")
         # Held to the route's commit together with the scope snapshot and its
         # reviewed-evidence assignments; proposal publication uses this lock too.
-        # ResearchCase is the stable, always-present lock anchor.  Acquire it
-        # before reading or backfilling scope data so legacy cases cannot race
-        # with a concurrent evidence publication.
-        lock_event_scope_case(self._session, case_id)
+        # This takes ResearchCase before lifecycle.  Keep it ahead of every
+        # scope read/backfill so legacy cases cannot race with publication.
+        lifecycle = lock_event_research_lifecycle(self._session, case_id)
 
         previous = self._session.scalar(
             select(EventResearchScopeVersion)
@@ -114,7 +113,6 @@ class EventResearchScopeService:
                     created_at=now,
                 )
             )
-        lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if lifecycle is not None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()

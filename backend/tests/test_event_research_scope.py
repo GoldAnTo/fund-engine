@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from threading import Event, Thread
-from time import sleep
+from threading import Event, Thread, get_ident
 
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
@@ -32,6 +32,7 @@ from app.services.event_research_scope import EventResearchScopeService
 from app.services.event_research_scope_evidence import (
     append_current_scope_evidence_assignment,
     lock_event_scope_case,
+    lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
 from app.schemas.v1.event_research import CreateEventResearchRequest
@@ -159,6 +160,26 @@ def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:
     assert session.statement.get_final_froms()[0].name == "research_cases"
 
 
+def test_lifecycle_lock_uses_case_then_lifecycle_rows() -> None:
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.statements = []
+
+        def scalar(self, statement):
+            self.statements.append(statement)
+            return object()
+
+    session = RecordingSession()
+
+    lock_event_research_lifecycle(session, uuid.uuid4())
+
+    assert [statement.get_final_froms()[0].name for statement in session.statements] == [
+        "research_cases",
+        "event_research_lifecycles",
+    ]
+    assert all(statement._for_update_arg is not None for statement in session.statements)
+
+
 @pytest.mark.pg_only
 def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(engine) -> None:
     SessionLocal = sessionmaker(bind=engine, future=True)
@@ -211,7 +232,8 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
     finally:
         bootstrap.close()
 
-    publish_locked, release_publish, scope_started, scope_finished = (
+    publish_locked, release_publish, scope_started, scope_lock_attempted, scope_finished = (
+        Event(),
         Event(),
         Event(),
         Event(),
@@ -219,11 +241,26 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
     )
     errors: list[BaseException] = []
     published_link_id: list[uuid.UUID] = []
+    scope_thread_id: list[int] = []
+
+    def observe_scope_lock(
+        _conn, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if (
+            scope_thread_id
+            and get_ident() == scope_thread_id[0]
+            and "research_cases" in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            scope_lock_attempted.set()
 
     def publish() -> None:
         session = SessionLocal()
         try:
             now = datetime.now(timezone.utc)
+            # Match the reviewed-evidence publisher: acquire the case root
+            # before appending the link, then retain it through commit.
+            lock_event_scope_case(session, case_id)
             link = EvidenceLink(
                 thesis_id=thesis_id,
                 source_statement_id=statement_id,
@@ -237,7 +274,6 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
             )
             session.add(link)
             session.flush()
-            lock_event_scope_case(session, case_id)
             published_link_id.append(link.id)
             publish_locked.set()
             assert release_publish.wait(timeout=5)
@@ -258,6 +294,7 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
     def update_scope() -> None:
         session = SessionLocal()
         try:
+            scope_thread_id.append(get_ident())
             scope_started.set()
             EventResearchScopeService(session).update(
                 case_id,
@@ -274,18 +311,28 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
 
     publisher = Thread(target=publish)
     updater = Thread(target=update_scope)
-    publisher.start()
-    assert publish_locked.wait(timeout=5)
-    updater.start()
-    assert scope_started.wait(timeout=5)
-    sleep(0.2)
-    assert not scope_finished.is_set()
-    release_publish.set()
-    publisher.join(timeout=5)
-    updater.join(timeout=5)
-    assert not publisher.is_alive()
-    assert not updater.is_alive()
-    assert not errors
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_scope_lock)
+    try:
+        publisher.start()
+        assert publish_locked.wait(timeout=5)
+        updater.start()
+        assert scope_started.wait(timeout=5)
+        # The event is emitted immediately before PostgreSQL sends SELECT FOR
+        # UPDATE.  Publisher still holds that row, so a completed scope update
+        # here would prove the lock was not honored.
+        assert scope_lock_attempted.wait(timeout=5)
+        assert not scope_finished.is_set()
+        release_publish.set()
+        publisher.join(timeout=5)
+        updater.join(timeout=5)
+        assert not publisher.is_alive()
+        assert not updater.is_alive()
+        assert not errors
+    finally:
+        release_publish.set()
+        publisher.join(timeout=5)
+        updater.join(timeout=5)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_scope_lock)
 
     verify = SessionLocal()
     try:
@@ -305,6 +352,127 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
         )
         assert assignment is not None
         assert assignment.disposition == "mapped"
+    finally:
+        verify.close()
+
+
+@pytest.mark.pg_only
+def test_postgres_conclusion_publish_wins_after_interleaved_scope_update(
+    engine, monkeypatch
+) -> None:
+    """A scope's stale lifecycle object must not overwrite ``published``."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        created = EventResearchService(bootstrap).create(
+            CreateEventResearchRequest(
+                raw_input="Event input",
+                event_title="Conclusion concurrency",
+                research_question="What explains the event?",
+                candidate_factors=INITIAL_FACTORS,
+                created_by="tester",
+            )
+        )
+        case_id = uuid.UUID(created.case_id)
+        lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
+        assert lifecycle is not None
+        lifecycle.status = "awaiting_scope"
+        lifecycle.current_gap = "Need updated factors"
+        lifecycle.next_human_action = "Update factors"
+        EventConclusionService(bootstrap).create_draft(case_id)
+        bootstrap.commit()
+    finally:
+        bootstrap.close()
+
+    scope_has_lifecycle, allow_scope_continue = Event(), Event()
+    publish_lock_attempted, publish_finished = Event(), Event()
+    errors: list[BaseException] = []
+    publisher_thread_id: list[int] = []
+    original_continue = EventResearchScopeService._continue_research_if_needed
+
+    def pause_scope_lifecycle_write(service, lifecycle, active_theses, now) -> None:
+        scope_has_lifecycle.set()
+        assert allow_scope_continue.wait(timeout=5)
+        original_continue(service, lifecycle, active_theses, now)
+
+    def observe_publish_lock(
+        _conn, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if (
+            publisher_thread_id
+            and get_ident() == publisher_thread_id[0]
+            and "research_cases" in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            publish_lock_attempted.set()
+
+    monkeypatch.setattr(
+        EventResearchScopeService,
+        "_continue_research_if_needed",
+        pause_scope_lifecycle_write,
+    )
+
+    def update_scope() -> None:
+        session = SessionLocal()
+        try:
+            EventResearchScopeService(session).update(
+                case_id,
+                [INITIAL_FACTORS[0], "New factor two", "New factor three"],
+                "reviewer",
+            )
+            session.commit()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    def publish_conclusion() -> None:
+        session = SessionLocal()
+        try:
+            publisher_thread_id.append(get_ident())
+            EventConclusionService(session).publish(
+                case_id,
+                text="Human-reviewed conclusion",
+                reviewer="reviewer",
+            )
+            session.commit()
+            publish_finished.set()
+        except BaseException as exc:  # surfaced in the test thread
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    scope_thread = Thread(target=update_scope)
+    publish_thread = Thread(target=publish_conclusion)
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_publish_lock)
+    try:
+        scope_thread.start()
+        assert scope_has_lifecycle.wait(timeout=5)
+        publish_thread.start()
+        # Publish reached the same root-lock request but cannot pass the scope
+        # transaction until the test releases its lifecycle projection.
+        assert publish_lock_attempted.wait(timeout=5)
+        assert not publish_finished.is_set()
+        allow_scope_continue.set()
+        scope_thread.join(timeout=5)
+        publish_thread.join(timeout=5)
+        assert not scope_thread.is_alive()
+        assert not publish_thread.is_alive()
+        assert not errors
+    finally:
+        allow_scope_continue.set()
+        scope_thread.join(timeout=5)
+        publish_thread.join(timeout=5)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_publish_lock)
+
+    verify = SessionLocal()
+    try:
+        lifecycle = verify.get(EventResearchLifecycle, case_id)
+        assert lifecycle is not None
+        assert lifecycle.status == "published"
+        assert lifecycle.next_human_action is None
     finally:
         verify.close()
 
@@ -727,6 +895,33 @@ def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
     assert [item["factor_statement"] for item in workbench.json()["conclusion"]["citations"]] == [
         INITIAL_FACTORS[0]
     ]
+
+
+def test_conclusion_publish_takes_the_case_lifecycle_lock(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    EventConclusionService(cmd_session).create_draft(case_id)
+    cmd_session.commit()
+    calls: list[uuid.UUID] = []
+
+    def record_lock(session, locked_case_id):
+        calls.append(locked_case_id)
+        return session.get(EventResearchLifecycle, locked_case_id)
+
+    monkeypatch.setattr(
+        "app.services.event_conclusion.lock_event_research_lifecycle", record_lock
+    )
+
+    published = EventConclusionService(cmd_session).publish(
+        case_id,
+        text="Human-reviewed conclusion",
+        reviewer="reviewer",
+    )
+
+    assert calls == [case_id]
+    assert published.state == "published"
 
 
 @pytest.mark.parametrize(

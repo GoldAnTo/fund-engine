@@ -22,6 +22,7 @@ from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 
 
 class AutoResearchService:
@@ -195,7 +196,7 @@ class AutoResearchService:
         producing an unbounded queue.
         """
         lifecycle_repo = EventResearchLifecycleRepository(self.session)
-        lifecycle = lifecycle_repo.get(run.research_case_id)
+        lifecycle = lock_event_research_lifecycle(self.session, run.research_case_id)
         if lifecycle is None or lifecycle.active_run_id != run.id:
             return
 
@@ -272,7 +273,7 @@ class AutoResearchService:
     def continue_after_key_review(self, case_id: uuid.UUID) -> None:
         """Resume a bounded automatic cycle once all key evidence is decided."""
         lifecycle_repo = EventResearchLifecycleRepository(self.session)
-        lifecycle = lifecycle_repo.get(case_id)
+        lifecycle = lock_event_research_lifecycle(self.session, case_id)
         if lifecycle is None or lifecycle.status != "awaiting_key_review":
             return
         review_count = lifecycle_repo.pending_key_review_count(case_id)

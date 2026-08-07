@@ -12,6 +12,7 @@ from app.models.event_research import (
     EventResearchScopeVersion,
 )
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
+from app.models.operational import EventResearchLifecycle
 
 
 def lock_event_scope_case(
@@ -25,6 +26,23 @@ def lock_event_scope_case(
     """
     return session.scalar(
         select(ResearchCase).where(ResearchCase.id == case_id).with_for_update()
+    )
+
+
+def lock_event_research_lifecycle(
+    session: Session, case_id: uuid.UUID
+) -> EventResearchLifecycle | None:
+    """Lock an event lifecycle after taking its stable case lock.
+
+    Every lifecycle writer uses this order (``ResearchCase`` then lifecycle)
+    so a scope change, evidence publication, conclusion publication, and
+    worker handoff cannot each flush a stale lifecycle projection.
+    """
+    lock_event_scope_case(session, case_id)
+    return session.scalar(
+        select(EventResearchLifecycle)
+        .where(EventResearchLifecycle.research_case_id == case_id)
+        .with_for_update()
     )
 
 
