@@ -86,7 +86,7 @@ describe("EventResearchWorkbenchScreen", () => {
     expect(screen.getAllByText(/因素置信度：支持更强/)).toHaveLength(3);
   });
 
-  it("links researching work to its evidence basis instead of exposing a manual run", async () => {
+  it("shows researching as an automatic state with only a secondary evidence link", async () => {
     currentView = workbench({
       lifecycle: { ...workbench().lifecycle, status: "researching", summary: "正在核验证据" },
       nextAction: { kind: "wait", label: "系统继续处理" },
@@ -94,8 +94,13 @@ describe("EventResearchWorkbenchScreen", () => {
     });
     renderWorkbench();
 
-    expect(await screen.findByRole("link", { name: "查看研究依据" })).toHaveAttribute("href", "/events/event-1/basis");
+    const basisLink = await screen.findByRole("link", { name: "查看研究依据" });
+    expect(basisLink).toHaveAttribute("href", "/events/event-1/basis");
+    expect(basisLink).toHaveClass("event-next-action__basis");
+    const supportingDetail = basisLink.closest("p");
+    expect(supportingDetail).toHaveTextContent("系统正在自动核验，无需手动推进");
     expect(screen.queryByRole("button", { name: /启动|继续处理/ })).not.toBeInTheDocument();
+    expect(supportingDetail?.closest("aside")?.querySelector(".primary")).toBeNull();
     expect(screen.getByText("当前缺口：当前未发现范围缺口")).toBeVisible();
   });
 
