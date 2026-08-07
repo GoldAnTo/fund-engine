@@ -24,6 +24,15 @@ function factorLabel(item: EventReviewQueueItem): string {
   return item.thesisStatement || "未归属因素";
 }
 
+function displaySourceTitle(sourceTitle: string | null): string {
+  const title = sourceTitle?.trim();
+  if (!title) return "未提供来源标题";
+  if (/example\.(?:com|test)\b/i.test(title) || /^https?:\/\//i.test(title) || /^source\s+for\b/i.test(title)) {
+    return "来源待核验";
+  }
+  return title;
+}
+
 export function hasOwnKey(object: object, property: PropertyKey): boolean {
   const objectHasOwn = (Object as typeof Object & {
     hasOwn?: (target: object, key: PropertyKey) => boolean;
@@ -143,7 +152,7 @@ export function KeyEvidenceReviewScreen() {
   </main>;
   if (!item) return null;
 
-  const sourceTitle = item.sourceTitle || "未标明来源标题";
+  const sourceTitle = displaySourceTitle(item.sourceTitle);
 
   return <main className="prototype-screen evidence-review-screen">
     {header}
@@ -159,7 +168,7 @@ export function KeyEvidenceReviewScreen() {
           {queue.items.map((queued, index) => <li key={queued.proposalId}>
             <button aria-current={index === position ? "true" : undefined} className={index === position ? "is-selected" : ""} onClick={() => setPosition(index)} type="button">
               <span className="evidence-review-queue-index">{index + 1}</span>
-              <span><strong>{factorLabel(queued)}</strong><small>{queued.sourceTitle || "未标明来源标题"}</small><small>AI 关系：{relationshipLabel(queued.aiRole)}</small></span>
+              <span><strong>{factorLabel(queued)}</strong><small>{displaySourceTitle(queued.sourceTitle)}</small><small>AI 关系：{relationshipLabel(queued.aiRole)}</small></span>
               <span className={`evidence-source-status evidence-source-status--${queued.sourceStatus}`}>{sourceStatusLabel[queued.sourceStatus]}</span>
             </button>
           </li>)}

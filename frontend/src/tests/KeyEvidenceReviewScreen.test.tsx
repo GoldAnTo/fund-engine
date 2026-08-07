@@ -62,6 +62,28 @@ describe("KeyEvidenceReviewScreen", () => {
     expect(screen.getByRole("button", { name: "退回并继续找真实来源" })).toBeVisible();
   });
 
+  it("replaces a test-domain source title while preserving the invalid source audit link", async () => {
+    const user = userEvent.setup();
+    const originalGetQueue = adapter.getEventReviewQueue.bind(adapter);
+    vi.spyOn(adapter, "getEventReviewQueue").mockImplementation(async (caseId) => {
+      const queue = await originalGetQueue(caseId);
+      return {
+        ...queue,
+        items: queue.items.map((item, index) => index === 2 ? {
+          ...item,
+          sourceTitle: "Source for https://example.test/unverified",
+        } : item),
+      };
+    });
+    renderScreen();
+
+    await user.click(await screen.findByRole("button", { name: /来源待核验/ }));
+    expect(screen.queryByText("Source for https://example.test/unverified")).not.toBeInTheDocument();
+    expect(screen.getAllByText("来源待核验").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "https://example.test/unverified" })).toHaveAttribute("href", "https://example.test/unverified");
+    expect(screen.getAllByText("无效来源")[0]).toBeVisible();
+  });
+
   it("describes the selected factor with the queue item's AI relationship", async () => {
     const user = userEvent.setup();
     renderScreen();
