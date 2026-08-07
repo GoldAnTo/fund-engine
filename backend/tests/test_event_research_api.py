@@ -26,6 +26,7 @@ from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
 from app.repositories.operational import TaskRepository
 from app.services.event_conclusion import EventConclusionService
+from app.services.event_review_queue import EventReviewQueueService
 
 
 def _confirmed_event() -> dict:
@@ -596,6 +597,29 @@ def test_event_workbench_exposes_a_reviewable_draft_when_research_is_ready(cmd_c
     assert response.status_code == 200
     assert response.json()["conclusion"]["state"] == "ai_draft"
     assert "已审核" in response.json()["conclusion"]["text"]
+
+
+def test_event_workbench_uses_summary_without_loading_review_queue_items(
+    cmd_client, monkeypatch
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+
+    def fail_if_full_queue_is_loaded(*_args, **_kwargs):
+        raise AssertionError("workbench must not load review queue items")
+
+    monkeypatch.setattr(EventReviewQueueService, "review_queue", fail_if_full_queue_is_loaded)
+
+    response = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["progress"] == {
+        "verified": 0,
+        "pending": 0,
+        "invalid_source": 0,
+        "current_gap": None,
+    }
 
 
 def test_event_workbench_exposes_current_scope_progress_and_action_priority(

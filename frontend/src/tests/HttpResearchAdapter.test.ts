@@ -1113,4 +1113,35 @@ describe("HttpResearchAdapter", () => {
     ]);
     expect(queue.items.filter((item) => !item.canAccept)).toHaveLength(2);
   });
+
+  it("mock event scope updates persist the latest scope and continue research", async () => {
+    const adapter = new MockResearchAdapter();
+    const factors = ["新因素甲", "新因素乙", "新因素丙"];
+
+    const updated = await adapter.updateEventResearchScope({
+      caseId: "event-exhausted",
+      factors,
+      changedBy: "reviewer",
+    });
+    const view = await adapter.getEventWorkbench("event-exhausted");
+
+    expect(updated).toEqual({
+      version: 2,
+      factors,
+      reclassifiedEvidenceCount: 0,
+      unmappedEvidenceCount: 0,
+    });
+    expect(view.scope).toEqual({
+      version: 2,
+      factors,
+      unmappedEvidenceCount: 0,
+    });
+    expect(view.lifecycle).toMatchObject({
+      status: "continuing",
+      nextHumanAction: null,
+      currentGap: "缺少能区分主要解释的反证",
+    });
+    expect(view.progress.currentGap).toBe("缺少能区分主要解释的反证");
+    expect(view.nextAction).toEqual({ kind: "wait", label: "系统继续处理" });
+  });
 });

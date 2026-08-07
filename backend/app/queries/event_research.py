@@ -304,7 +304,7 @@ class EventResearchQueries:
     def _progress(
         self, case_id: uuid.UUID, lifecycle: EventResearchLifecycle
     ) -> EventWorkbenchProgressDTO:
-        review_summary = EventReviewQueueService(self._session).review_queue(case_id).summary
+        review_summary = EventReviewQueueService(self._session).summary(case_id)
         return EventWorkbenchProgressDTO(
             verified=len(current_mapped_evidence_ids(self._session, case_id)),
             pending=review_summary.pending,

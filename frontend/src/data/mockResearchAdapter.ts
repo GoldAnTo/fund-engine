@@ -2945,6 +2945,10 @@ export class MockResearchAdapter implements ResearchClient {
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmProposalPending = true;
+  private eventStates = new Map<string, {
+    lifecycle: EventLifecycle;
+    scope: { version: number; factors: string[]; unmappedEvidenceCount: number };
+  }>();
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2956,6 +2960,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.decisions = [];
     this.eventTsmProposalPending = true;
+    this.eventStates.clear();
   }
 
   getDecisions() {
@@ -3710,7 +3715,22 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     this.throwIfOffline();
-    const events: EventResearchListItem[] = [
+    const events = this.eventResearchItems().map((event) => {
+      const state = this.eventStates.get(event.id);
+      return state
+        ? {
+            ...event,
+            status: state.lifecycle.status,
+            statusSummary: state.lifecycle.summary,
+            nextHumanAction: state.lifecycle.nextHumanAction,
+          }
+        : event;
+    });
+    return simulateLatency(_status ? events.filter((event) => event.status === _status) : events);
+  }
+
+  private eventResearchItems(): EventResearchListItem[] {
+    return [
       { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
       { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: "awaiting_key_review", statusSummary: "已筛出 2 条关键证据，等待审核", nextHumanAction: "审核 2 条关键证据", updatedAt: "2026-08-07T09:00:00Z" },
       { id: "event-cannot-conclude", eventTitle: "公司上调投入指引后下跌", companyName: "样例公司", ticker: null, eventAt: "2026-08-05T00:00:00Z", status: "exhausted", statusSummary: "当前证据不足以区分主要解释", nextHumanAction: null, updatedAt: "2026-08-07T08:30:00Z" },
@@ -3718,14 +3738,30 @@ export class MockResearchAdapter implements ResearchClient {
       { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
       { id: "event-published", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
     ];
-    return simulateLatency(_status ? events.filter((event) => event.status === _status) : events);
   }
 
   async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
-    const event = (await this.listEventResearch()).find((item) => item.id === caseId) ?? (await this.listEventResearch())[0];
-    const currentGap = event.status === "exhausted"
+    const baseEvent = this.eventResearchItems().find((item) => item.id === caseId)
+      ?? this.eventResearchItems()[0];
+    const saved = this.eventStates.get(baseEvent.id);
+    const currentGap = baseEvent.status === "exhausted"
       ? "缺少能区分主要解释的反证" : null;
-    const lifecycle: EventLifecycle = { status: event.status, activeRunId: event.status === "published" ? null : "run-mock", currentRound: 1, summary: event.statusSummary, currentGap, nextHumanAction: event.nextHumanAction };
+    const lifecycle: EventLifecycle = saved?.lifecycle ?? {
+      status: baseEvent.status,
+      activeRunId: baseEvent.status === "published" ? null : "run-mock",
+      currentRound: 1,
+      summary: baseEvent.statusSummary,
+      currentGap,
+      nextHumanAction: baseEvent.nextHumanAction,
+    };
+    const event: EventResearchListItem = saved
+      ? {
+          ...baseEvent,
+          status: lifecycle.status,
+          statusSummary: lifecycle.summary,
+          nextHumanAction: lifecycle.nextHumanAction,
+        }
+      : baseEvent;
     const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
     const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
@@ -3747,19 +3783,39 @@ export class MockResearchAdapter implements ResearchClient {
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", citations: [] },
       factors: factorStatements.map((statement, index) => ({ statement, position: index + 1, reviewedSupportCount: reviewedCount ? 1 : 0, reviewedContradictionCount: 0, currentGap })),
       evidence,
-      progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap },
-      scope: { version: 1, factors: factorStatements, unmappedEvidenceCount: 0 },
+      progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
+      scope: saved?.scope ?? { version: 1, factors: factorStatements, unmappedEvidenceCount: 0 },
       nextAction,
     });
   }
 
   async updateEventResearchScope(input: { caseId: string; factors: string[]; changedBy: string }): Promise<{ version: number; factors: string[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
-    void input.caseId;
+    const event = this.eventResearchItems().find((item) => item.id === input.caseId)
+      ?? this.eventResearchItems()[0];
+    const previous = this.eventStates.get(event.id);
+    const currentGap = previous?.lifecycle.currentGap
+      ?? (event.status === "exhausted" ? "缺少能区分主要解释的反证" : null);
+    const scope = {
+      version: (previous?.scope.version ?? 1) + 1,
+      factors: [...input.factors],
+      unmappedEvidenceCount: 0,
+    };
+    this.eventStates.set(event.id, {
+      scope,
+      lifecycle: {
+        status: "continuing",
+        activeRunId: "run-mock",
+        currentRound: previous?.lifecycle.currentRound ?? 1,
+        summary: "研究范围已更新，系统继续自动研究",
+        currentGap,
+        nextHumanAction: null,
+      },
+    });
     void input.changedBy;
     return simulateLatency({
-      version: 2,
-      factors: input.factors,
+      version: scope.version,
+      factors: scope.factors,
       reclassifiedEvidenceCount: 0,
       unmappedEvidenceCount: 0,
     });

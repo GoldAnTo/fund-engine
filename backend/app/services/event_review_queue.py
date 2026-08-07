@@ -9,6 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.models.event_research import EventResearchFactorDraft
 from app.models.events import DomainEvent
+from app.models.ledger import (
+    CaseDocumentVersion,
+    DocumentVersion,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
 from app.models.operational import EventResearchLifecycle
 from app.models.proposals import Proposal
 from app.queries.review_queue import ProposalEvidenceContext, proposal_evidence_context
@@ -19,7 +26,7 @@ from app.schemas.v1.event_research import (
     EventReviewQueueResponse,
     EventReviewQueueSummaryDTO,
 )
-from app.services.source_admission import SourceStatus
+from app.services.source_admission import SourceStatus, classify_source
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,93 @@ class EventReviewQueueService:
                 next_action=lifecycle.next_human_action if lifecycle else None,
             ),
         )
+
+    def summary(self, case_id: uuid.UUID) -> EventReviewQueueSummaryDTO:
+        """Return workbench counts without materializing full review-queue rows.
+
+        Source provenance is resolved in bounded batches, keeping this path at
+        a fixed number of queries regardless of pending-proposal volume.
+        """
+        proposals = list(
+            self._session.scalars(
+                select(Proposal)
+                .where(Proposal.research_case_id == case_id)
+                .where(Proposal.kind == "evidence_link")
+            )
+        )
+        lifecycle = self._session.get(EventResearchLifecycle, case_id)
+        pending = [proposal for proposal in proposals if proposal.status == "pending"]
+        statement_ids = {
+            statement_id
+            for proposal in pending
+            if (statement_id := _payload_uuid(proposal.payload, "source_statement_id"))
+            is not None
+        }
+        thesis_ids = {
+            thesis_id
+            for proposal in pending
+            if (thesis_id := _payload_uuid(proposal.target_context, "thesis_id"))
+            is not None
+        }
+        statements = self._records_by_id(SourceStatement, statement_ids)
+        theses = self._records_by_id(Thesis, thesis_ids)
+        spans = self._records_by_id(
+            SourceSpan,
+            {statement.source_span_id for statement in statements.values()},
+        )
+        documents = self._records_by_id(
+            DocumentVersion,
+            {span.document_version_id for span in spans.values()},
+        )
+        document_ids = set(documents)
+        linked_document_ids = set(
+            self._session.scalars(
+                select(CaseDocumentVersion.document_version_id)
+                .where(CaseDocumentVersion.research_case_id == case_id)
+                .where(CaseDocumentVersion.document_version_id.in_(document_ids))
+            )
+        ) if document_ids else set()
+
+        admissible_pending = 0
+        invalid_pending = 0
+        for proposal in pending:
+            statement = statements.get(
+                _payload_uuid(proposal.payload, "source_statement_id")
+            )
+            thesis = theses.get(_payload_uuid(proposal.target_context, "thesis_id"))
+            span = spans.get(statement.source_span_id) if statement else None
+            document = documents.get(span.document_version_id) if span else None
+            if thesis is None or thesis.research_case_id != case_id:
+                invalid_pending += 1
+                continue
+            if document is not None and document.id not in linked_document_ids:
+                invalid_pending += 1
+                continue
+            admission = classify_source(
+                document.source_url if document else None,
+                document.parser_version if document else "",
+                bool(document and document.parse_state in {"success", "parsed"}),
+            )
+            if admission.can_accept:
+                admissible_pending += 1
+            if admission.status == SourceStatus.INVALID:
+                invalid_pending += 1
+        return EventReviewQueueSummaryDTO(
+            total=len(proposals),
+            reviewed=sum(proposal.status == "decided" for proposal in proposals),
+            pending=admissible_pending,
+            invalid_source=invalid_pending,
+            current_round=lifecycle.current_round if lifecycle else 0,
+            next_action=lifecycle.next_human_action if lifecycle else None,
+        )
+
+    def _records_by_id(self, model, ids: set[uuid.UUID]) -> dict:
+        if not ids:
+            return {}
+        return {
+            record.id: record
+            for record in self._session.scalars(select(model).where(model.id.in_(ids)))
+        }
 
     def reconcile_event_review_queue(
         self, case_id: uuid.UUID
@@ -160,3 +254,11 @@ class EventReviewQueueService:
             .where(DomainEvent.aggregate_id == str(proposal_id))
             .limit(1)
         ) is not None
+
+
+def _payload_uuid(payload: object, key: str) -> uuid.UUID | None:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
