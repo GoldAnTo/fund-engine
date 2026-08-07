@@ -223,9 +223,11 @@ def test_valid_public_ipv6_source_is_accessible():
         "https://[::127.0.0.1]/report.pdf",
         "https://[::10.0.0.1]/report.pdf",
         "https://[::ffff:192.168.1.1]/report.pdf",
+        "https://[::8.8.8.8]/report.pdf",
+        "https://[::ffff:8.8.8.8]/report.pdf",
     ],
 )
-def test_ipv4_compatible_ipv6_private_addresses_are_rejected(source_url: str):
+def test_ipv4_compatible_or_mapped_ipv6_addresses_are_rejected(source_url: str):
     result = classify_source(
         source_url=source_url,
         parser_version="docling-v2",

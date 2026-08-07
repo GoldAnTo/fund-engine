@@ -150,7 +150,7 @@ def _is_non_public_ip_or_local_host(
     if address is not None:
         embedded_ipv4 = _embedded_ipv4_address(address)
         if embedded_ipv4 is not None:
-            return not embedded_ipv4.is_global
+            return True
         return not address.is_global
 
     return hostname == "localhost" or "." not in hostname
