@@ -118,7 +118,8 @@ Expected: no event-owned document and a recalled statement from the other case.
 
 ```python
 # EventResearchService.create, after case creation
-document = DocumentService(DocumentRepository(self._session)).freeze(
+document_service = DocumentService(DocumentRepository(self._session))
+document = document_service.freeze(
     raw=payload.raw_input.encode("utf-8"),
     source_url=payload.source_url or "event://pasted-news",
     parser_version="user-pasted-v1",
@@ -267,7 +268,7 @@ def _assert_publishable_event_source(proposal: Proposal, db: Session) -> None:
         )
 ```
 
-Call this guard before `ProposalPublisher.publish()`. `rejected` remains allowed and records the reviewer’s exclusion decision. Return the stable v1 validation envelope, never an internal error.
+For `confirmed` and `modified` outcomes, call this guard **before** `ProposalService.decide()` so an invalid source leaves the proposal pending and reviewable. `rejected` remains allowed and records the reviewer’s exclusion decision. Return the stable v1 validation envelope, never an internal error.
 
 - [ ] **Step 4: Run proposal-review tests**
 
@@ -408,7 +409,7 @@ git commit -m "feat: make event evidence review actionable"
 **Files:**
 - Modify: `backend/tests/test_event_research_lifecycle.py`
 - Modify: `backend/tests/test_event_research_api.py`
-- Modify: `frontend/e2e/event-research.spec.ts`
+- Create: `frontend/e2e/event-research.spec.ts`
 
 - [ ] **Step 1: Write an end-to-end regression for the full decision boundary**
 
