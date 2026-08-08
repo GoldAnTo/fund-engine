@@ -53,7 +53,7 @@ function ReviewDialog({
   const keepFocusInside = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose();
+      if (!submitting) onClose();
       return;
     }
     if (event.key !== "Tab") return;
@@ -100,7 +100,7 @@ function ReviewDialog({
             <h2 id="impact-review-title">审核公司传导关系</h2>
             <p>{relation.companyName}，{relation.mechanism}</p>
           </div>
-          <button className="prototype-button" type="button" onClick={onClose}>
+          <button className="prototype-button" type="button" onClick={onClose} disabled={submitting}>
             取消
           </button>
         </div>
@@ -153,12 +153,12 @@ function FactorRelations({ factor, onReview }: { factor: EventImpactFactor; onRe
                 <p>{relation.relationKind} · {relation.direction} · {relation.mechanism}</p>
               </div>
               <span className={`impact-status impact-status--${relation.effectiveStatus}`}>
-                {relation.effectiveStatus === "verified" ? "已核验" : relation.effectiveStatus === "rejected" ? "已拒绝" : "待核验"}
+                {relation.effectiveStatus === "verified" ? "已验证影响" : relation.effectiveStatus === "rejected" ? "影响已拒绝" : "传导待验证"}
               </span>
             </div>
             <p className="impact-relation__boundary">{relationStatus(relation)}</p>
             {relation.companyType === "unlisted_supplier" || relation.companyType !== "listed" ? (
-              <p className="impact-relation__unlisted">未上市主体不映射股票或基金敞口。</p>
+              <p className="impact-relation__unlisted">未上市 · 传导节点，不计算股票或基金暴露</p>
             ) : (
               <p className="impact-relation__stock">A 股映射：{relation.stocks.map((stock) => `${stock.name}（${stock.code}）`).join("、") || "尚未解析"}</p>
             )}
@@ -193,7 +193,7 @@ function EvidenceLayer({ trace }: { trace: EventImpactTrace }) {
               <ul>
                 {relation.observations.map((observation, index) => (
                   <li key={`${relation.relationId}-${observation.kind}-${index}`}>
-                    <span>{observation.status === "verified" ? "已核验" : observation.status}</span>
+                    <span>{observation.kind === "market" && observation.status === "verified" ? "市场反应已观察" : observation.status === "verified" ? "已验证影响" : observation.status}</span>
                     {observation.summary}
                     <small>{observation.asOfDate ?? "未标注日期"}{observation.sourceStatementId ? ` · 原子陈述 ${observation.sourceStatementId}` : " · 无来源陈述"}</small>
                   </li>
@@ -213,12 +213,12 @@ function FundRow({ fund }: { fund: EventImpactFund }) {
   const source = safeExternalHref(sourceValue);
   const coverageRatio = Number.isFinite(fund.coverageRatio) ? fund.coverageRatio : 0;
   const coverageState = fund.coverageStatus === "stale"
-    ? "披露已过时，不计算敞口"
+    ? "披露过期，暂不可计算"
     : fund.coverageStatus === "partial"
-      ? "覆盖不完整，不计算敞口"
+      ? "持仓覆盖不足，暂不可计算"
       : fund.computable
-        ? "覆盖完整，敞口可计算"
-        : "覆盖不足，不计算敞口";
+        ? "持仓覆盖完整，可计算"
+        : "持仓覆盖不足，暂不可计算";
   return (
     <article className="impact-fund-row">
       <div>
@@ -226,8 +226,8 @@ function FundRow({ fund }: { fund: EventImpactFund }) {
         <span>{fund.fundCode || "代码待补"} · 截至 {fund.reportPeriod || "日期待补"}</span>
       </div>
       <dl>
-        <div><dt>覆盖</dt><dd>{Math.round(coverageRatio * 100)}% · {coverageState}</dd></div>
-        <div><dt>敞口</dt><dd>{fund.computable ? fund.exposure ?? "未计算" : "覆盖不足，不计算"}</dd></div>
+        <div><dt>覆盖</dt><dd><span>{Math.round(coverageRatio * 100)}%</span> · <span>{coverageState}</span></dd></div>
+        <div><dt>敞口</dt><dd>{fund.computable ? fund.exposure ?? "未计算" : coverageState}</dd></div>
         <div><dt>可见时间</dt><dd>{fund.publishedAt || "时间待补"}</dd></div>
       </dl>
       {source ? <a href={source} target="_blank" rel="noopener noreferrer">查看披露来源</a> : <small>{sourceValue}</small>}
@@ -245,6 +245,7 @@ export function EventImpactTraceScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const reviewTrigger = useRef<HTMLButtonElement | null>(null);
+  const statusRef = useRef<HTMLParagraphElement | null>(null);
   const [selectedFactorId, setSelectedFactorId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -268,6 +269,9 @@ export function EventImpactTraceScreen() {
   }, [caseId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (status && !reviewing) statusRef.current?.focus();
+  }, [reviewing, status]);
 
   const submitReview = async (outcome: ReviewOutcome, reason: string, reviewer: string) => {
     if (!reviewing || submitting) return;
@@ -278,7 +282,6 @@ export function EventImpactTraceScreen() {
       setStatus("已记录审核结果。关系仍需遵循其来源和当前 scope 的边界。");
       await load();
       setReviewing(null);
-      window.setTimeout(() => reviewTrigger.current?.focus(), 0);
     } catch (reason) {
       setReviewError(reason instanceof Error ? reason.message : "请检查审核内容后重试");
     } finally {
@@ -304,7 +307,7 @@ export function EventImpactTraceScreen() {
       <p>{workbench.conclusion.text}</p>
       <div className="impact-conclusion__meta"><span>置信度：{workbench.conclusion.confidence === "high" ? "高" : workbench.conclusion.confidence === "medium" ? "中" : "低"}</span><span>当前缺口：{workbench.progress.currentGap ?? "未发现明确缺口"}</span>{selectedFactor ? <span>当前查看：{selectedFactor.statement}</span> : null}</div>
     </section>
-    {status ? <p className="impact-review-status" role="status">{status}</p> : null}
+    {status ? <p ref={statusRef} className="impact-review-status" role="status" tabIndex={-1}>{status}</p> : null}
     <section className="impact-layer impact-transmission" aria-labelledby="impact-transmission-title">
       <div className="impact-layer__heading"><div><p className="section-kicker">第二层</p><h2 id="impact-transmission-title">传导关系</h2></div><span>{trace.progress.relations} 条当前关系</span></div>
       <div className="impact-factor-selector" role="group" aria-label="选择影响因素">

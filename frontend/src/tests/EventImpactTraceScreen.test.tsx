@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,7 @@ function trace(): EventImpactTrace {
       ],
     }, {
       hypothesisId: "h2", statement: "市场替代解释", rank: 2, classification: "alternative", scoreComponents: { market: 1 }, explanation: "市场层面仍是竞争性解释。",
-      relations: [{ relationId: "r-alt", companyId: "c-alt", companyName: "未选中的公司", companyType: "listed", relationKind: "competitor", direction: "mixed", mechanism: "市场替代", status: "candidate", effectiveStatus: "verified", isHighImpact: true, isReviewable: true, sourceStatementId: null, review: null, stocks: [{ stockId: "s-alt", code: "600099", name: "未选中的公司", market: "SSE" }], observations: [], fundExposure: [] }],
+      relations: [{ relationId: "r-alt", companyId: "c-alt", companyName: "未选中的公司", companyType: "listed", relationKind: "competitor", direction: "mixed", mechanism: "市场替代", status: "candidate", effectiveStatus: "verified", isHighImpact: true, isReviewable: true, sourceStatementId: null, review: null, stocks: [{ stockId: "s-alt", code: "600099", name: "未选中的公司", market: "SSE" }], observations: [{ kind: "market", status: "verified", sourceStatementId: "market-statement", valuationSnapshotId: null, summary: "市场反应确认", asOfDate: "2026-08-08" }], fundExposure: [] }],
       funds: [],
     }],
   };
@@ -64,10 +64,11 @@ describe("EventImpactTraceScreen", () => {
     expect(screen.getByRole("button", { name: "订单向供应链传导" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "市场替代解释" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByText("未选中的公司")).not.toBeInTheDocument();
-    expect(screen.getByText(/覆盖不完整，不计算敞口/)).toBeVisible();
-    expect(screen.getByText(/披露已过时，不计算敞口/)).toBeVisible();
+    expect(screen.getAllByText("持仓覆盖不足，暂不可计算")).toHaveLength(2);
+    expect(screen.getAllByText("披露过期，暂不可计算")).toHaveLength(2);
     expect(screen.getAllByText("未上市零部件商")).toHaveLength(2);
-    expect(screen.getByText("未上市主体不映射股票或基金敞口。")).toBeVisible();
+    expect(screen.getByText("未上市 · 传导节点，不计算股票或基金暴露")).toBeVisible();
+    expect(screen.getAllByText("传导待验证")).toHaveLength(2);
     const safeSource = screen.getAllByRole("link", { name: "查看披露来源" })[0];
     expect(safeSource).toHaveAttribute("href", "https://example.com/disclosure");
     expect(safeSource).toHaveAttribute("rel", "noopener noreferrer");
@@ -81,12 +82,18 @@ describe("EventImpactTraceScreen", () => {
     await user.click(await screen.findByRole("button", { name: "市场替代解释" }));
     expect(screen.getByRole("button", { name: "市场替代解释" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByText("未选中的公司")).toHaveLength(2);
+    expect(screen.getByText("已验证影响")).toBeVisible();
+    expect(screen.getByText("市场反应已观察")).toBeVisible();
     expect(screen.queryByText("示例中国基金")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "审核此关系" })).not.toBeInTheDocument();
   });
 
   it("uses an accessible review dialog and only records an explicit reviewer decision", async () => {
     const user = userEvent.setup();
+    const acceptedTrace = trace();
+    acceptedTrace.factors[0].relations[0].effectiveStatus = "verified";
+    acceptedTrace.factors[0].relations[0].isReviewable = false;
+    vi.spyOn(adapter, "getEventImpactTrace").mockReset().mockResolvedValueOnce(trace()).mockResolvedValueOnce(acceptedTrace);
     const review = vi.spyOn(adapter, "reviewEventImpactRelation").mockResolvedValue({ reviewId: "review-1", relationId: "r-listed", outcome: "accepted" });
     renderScreen();
 
@@ -100,6 +107,26 @@ describe("EventImpactTraceScreen", () => {
     await waitFor(() => expect(review).toHaveBeenCalledWith({ relationId: "r-listed", outcome: "accepted", reason: "已核对披露边界", reviewer: "研究员" }));
     expect(screen.queryByRole("dialog", { name: "审核公司传导关系" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("已记录审核结果");
-    expect(screen.getByRole("button", { name: "审核此关系" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "审核此关系" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveFocus();
+  });
+
+  it("keeps the review dialog open while a review is submitting", async () => {
+    const user = userEvent.setup();
+    let resolveReview: ((value: { reviewId: string; relationId: string; outcome: string }) => void) | undefined;
+    vi.spyOn(adapter, "reviewEventImpactRelation").mockImplementation(() => new Promise((resolve) => { resolveReview = resolve; }));
+    renderScreen();
+
+    await user.click(await screen.findByRole("button", { name: "审核此关系" }));
+    await user.type(screen.getByLabelText("审核说明"), "正在提交的审核");
+    await user.type(screen.getByLabelText("审核人"), "研究员");
+    await user.click(screen.getByRole("button", { name: "提交审核" }));
+    const dialog = screen.getByRole("dialog", { name: "审核公司传导关系" });
+    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "审核公司传导关系" })).toBeVisible();
+
+    resolveReview?.({ reviewId: "review-2", relationId: "r-listed", outcome: "needs_more" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "审核公司传导关系" })).not.toBeInTheDocument());
   });
 });
