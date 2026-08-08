@@ -7,11 +7,14 @@ from decimal import Decimal
 from threading import Barrier, Lock, Thread
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import (
     CaseDocumentVersion,
+    ChinaIndustryIndex,
+    ChinaIndustryIndexMembership,
+    ChinaIndustryIndexSnapshot,
     Company,
     DocumentVersion,
     Fund,
@@ -229,6 +232,216 @@ def test_report_market_window_uses_next_trading_days_and_ledger_metrics(session)
             )
         )
     ) == len(persisted)
+
+
+def test_industry_control_uses_visible_real_index_snapshot_not_target_stock(session):
+    _case, claim = _report_claim(session)
+    target, target_stock = _company_stock(session, name="行业控制目标", code="600071")
+    relation = _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    industry_index = ChinaIndustryIndex(
+        id=uuid.uuid4(),
+        code="801080.SI",
+        name="申万电子",
+        provider="申万",
+        market="CN",
+        source="provider://sw/index",
+        definition="申万一级电子行业指数",
+        created_at=NOW,
+    )
+    session.add(industry_index)
+    session.flush()
+    session.add(
+        ChinaIndustryIndexMembership(
+            id=uuid.uuid4(),
+            company_id=target.id,
+            industry_index_id=industry_index.id,
+            applicable_from=None,
+            applicable_to=None,
+            source="provider://sw/constituents",
+            definition="目标公司的申万一级行业归属",
+            available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+    )
+    snapshots = []
+    for as_of, metric in (
+        (TRADING_DAYS[0], "INDUSTRY_RETURN_1D"),
+        (TRADING_DAYS[4], "INDUSTRY_RETURN_5D"),
+    ):
+        snapshot = ChinaIndustryIndexSnapshot(
+            id=uuid.uuid4(),
+            industry_index_id=industry_index.id,
+            as_of_date=as_of,
+            metric_name=metric,
+            metric_value=Decimal("0.015"),
+            source="provider://sw/quotes",
+            definition=f"{metric} 行业指数收益率",
+            available_at=datetime.combine(as_of, time.max, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+        snapshots.append(snapshot)
+        session.add(snapshot)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+    session.commit()
+
+    controls = [
+        row
+        for row in result.observations
+        if row.kind == "industry_control" and row.report_relation_id == relation.id
+    ]
+    assert [(row.window, row.status, row.industry_index_snapshot_id) for row in controls] == [
+        ("1d", "verified", snapshots[0].id),
+        ("5d", "verified", snapshots[1].id),
+    ]
+    assert all(row.stock_id is None and row.valuation_snapshot_id is None for row in controls)
+    assert all("801080.SI" in row.summary for row in controls)
+
+
+def test_bulk_market_collection_read_queries_do_not_scale_with_report_relations(session):
+    def collect_select_count(relation_count: int) -> int:
+        _case, claim = _report_claim(session)
+        if relation_count == 1:
+            _calendar_days(session)
+        industry_index = ChinaIndustryIndex(
+            id=uuid.uuid4(),
+            code=f"801{relation_count:03d}.SI",
+            name="批量行业",
+            provider="申万",
+            market="CN",
+            source="provider://sw/index",
+            definition="批量查询行业指数",
+            created_at=NOW,
+        )
+        session.add(industry_index)
+        for as_of, metric in (
+            (TRADING_DAYS[0], "INDUSTRY_RETURN_1D"),
+            (TRADING_DAYS[4], "INDUSTRY_RETURN_5D"),
+        ):
+            session.add(
+                ChinaIndustryIndexSnapshot(
+                    id=uuid.uuid4(),
+                    industry_index_id=industry_index.id,
+                    as_of_date=as_of,
+                    metric_name=metric,
+                    metric_value=Decimal("0.01"),
+                    source="provider://sw/quotes",
+                    definition="批量行业窗口",
+                    available_at=datetime.combine(as_of, time.max, tzinfo=timezone.utc),
+                    created_at=NOW,
+                )
+            )
+        for number in range(relation_count):
+            company, stock = _company_stock(
+                session,
+                name=f"批量关系公司{relation_count}-{number}",
+                code=f"60{relation_count:02d}{number:03d}",
+            )
+            _mapped_relation(session, claim, target=company)
+            session.add(
+                ChinaIndustryIndexMembership(
+                    id=uuid.uuid4(),
+                    company_id=company.id,
+                    industry_index_id=industry_index.id,
+                    applicable_from=None,
+                    applicable_to=None,
+                    source="provider://sw/constituents",
+                    definition="批量公司行业映射",
+                    available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+                    created_at=NOW,
+                )
+            )
+            for as_of in (TRADING_DAYS[0], TRADING_DAYS[4]):
+                return_metric = (
+                    "EVENT_RETURN_1D" if as_of == TRADING_DAYS[0] else "EVENT_RETURN_5D"
+                )
+                for metric in (
+                    return_metric,
+                    "VOLUME",
+                    "TURNOVER_RATE",
+                    "VOLATILITY",
+                    "PE_TTM",
+                ):
+                    _snapshot(session, stock, as_of=as_of, metric=metric)
+        session.commit()
+
+        selects = 0
+
+        def count_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
+            nonlocal selects
+            if statement.lstrip().upper().startswith("SELECT"):
+                selects += 1
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", count_selects)
+        try:
+            ReportMarketImpactService(session).collect(claim.id)
+            session.commit()
+        finally:
+            event.remove(engine, "before_cursor_execute", count_selects)
+        return selects
+
+    one_relation = collect_select_count(1)
+    many_relations = collect_select_count(8)
+
+    # The collector may do a fixed number of batched reads per window, but it
+    # must never issue one company/stock/snapshot/fund query for each edge.
+    assert many_relations <= one_relation + 4
+
+
+def test_verified_industry_control_requires_an_industry_index_snapshot(session):
+    _case, claim = _report_claim(session)
+    target, stock = _company_stock(session, name="控制来源校验公司", code="600072")
+    relation = _mapped_relation(session, claim, target=target)
+    index = ChinaIndustryIndex(
+        id=uuid.uuid4(),
+        code="801081.SI",
+        name="申万控制",
+        provider="申万",
+        market="CN",
+        source="provider://sw/index",
+        definition="控制来源",
+        created_at=NOW,
+    )
+    session.add(index)
+    session.flush()
+    snapshot = ChinaIndustryIndexSnapshot(
+        id=uuid.uuid4(),
+        industry_index_id=index.id,
+        as_of_date=TRADING_DAYS[0],
+        metric_name="INDUSTRY_RETURN_1D",
+        metric_value=Decimal("0.01"),
+        source="provider://sw/quotes",
+        definition="控制来源",
+        available_at=datetime.combine(TRADING_DAYS[0], time.max, tzinfo=timezone.utc),
+        created_at=NOW,
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        ReportMarketObservation(
+            id=uuid.uuid4(),
+            research_case_id=claim.research_case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            stock_id=stock.id,
+            valuation_snapshot_id=None,
+            industry_index_snapshot_id=snapshot.id,
+            window="1d",
+            kind="target_market",
+            status="verified",
+            as_of_date=TRADING_DAYS[0],
+            metric_name="EVENT_RETURN_1D",
+            summary="伪造的目标市场指数来源",
+            collection_key=uuid.uuid4().hex,
+            created_at=NOW,
+        )
+    )
+
+    with pytest.raises(ValueError, match="industry control"):
+        session.flush()
 
 
 def test_missing_publish_time_skips_market_window(session):

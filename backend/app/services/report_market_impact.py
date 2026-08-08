@@ -21,8 +21,13 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.ledger import (
     CaseDocumentVersion,
+    ChinaIndustryIndex,
+    ChinaIndustryIndexMembership,
+    ChinaIndustryIndexSnapshot,
     Company,
     DocumentVersion,
+    Fund,
+    HoldingDisclosure,
     SourceSpan,
     SourceStatement,
     Stock,
@@ -36,15 +41,14 @@ from app.models.report_research import (
     ReportRelation,
 )
 from app.services.china_market_data import (
+    CHINA_A_SHARE_MARKETS,
     ChinaMarketData,
     LedgerChinaMarketData,
-    REPORT_INDUSTRY_METRICS_1D,
-    REPORT_INDUSTRY_METRICS_5D,
     REPORT_PEER_METRICS_1D,
     REPORT_PEER_METRICS_5D,
     REPORT_TARGET_METRICS_1D,
     REPORT_TARGET_METRICS_5D,
-    is_china_a_share,
+    is_china_public_fund,
 )
 
 
@@ -87,9 +91,11 @@ class ReportMarketImpactService:
         self._session = session
         self._market_data = market_data or LedgerChinaMarketData(session)
         self._output_slot = output_slot
+        self._existing_records: dict[type, dict[str, object]] = {}
 
     def collect(self, claim_id: uuid.UUID) -> MarketImpactResult:
         claim, document = self._claim_and_document(claim_id)
+        self._prime_existing_records(claim.id)
         if document.published_at is None:
             return MarketImpactResult(
                 windows={},
@@ -104,6 +110,13 @@ class ReportMarketImpactService:
             )
         )
         targets, peers = self._mapped_china_entities(claim)
+        stocks_by_company = self._china_stocks_by_company(
+            [target.company for target in targets]
+            + [peer.company for peer in peers]
+        )
+        industry_by_company = self._visible_industry_indexes(
+            targets, available_at=document.published_at
+        )
         if len(trading_days) < 5:
             observations = self._append_calendar_gap(claim, targets)
             return MarketImpactResult(
@@ -119,6 +132,14 @@ class ReportMarketImpactService:
         gaps: list[str] = []
         windows: dict[str, str] = {}
         window_days: dict[str, date] = {}
+        target_stock_ids = {
+            stock.id
+            for target in targets
+            for stock in stocks_by_company.get(target.company.id, ())
+        }
+        holdings_by_stock = self._visible_fund_holdings(
+            target_stock_ids, as_of=document.published_at.date()
+        )
         for window, index in _WINDOWS:
             as_of = trading_days[index]
             window_days[window] = as_of
@@ -126,6 +147,8 @@ class ReportMarketImpactService:
                 claim=claim,
                 targets=targets,
                 peers=peers,
+                industry_by_company=industry_by_company,
+                stocks_by_company=stocks_by_company,
                 window=window,
                 as_of=as_of,
             )
@@ -143,8 +166,12 @@ class ReportMarketImpactService:
             )
             fund_exposures.extend(
                 self._collect_fund_exposures(
-                    claim=claim, targets=targets, window=window,
+                    claim=claim,
+                    targets=targets,
+                    window=window,
                     as_of=document.published_at.date(),
+                    stocks_by_company=stocks_by_company,
+                    holdings_by_stock=holdings_by_stock,
                 )
             )
         return MarketImpactResult(
@@ -163,6 +190,8 @@ class ReportMarketImpactService:
         targets: Sequence[_Target],
         window: str,
         as_of: date,
+        stocks_by_company: dict[uuid.UUID, list[Stock]],
+        holdings_by_stock: dict[uuid.UUID, list[HoldingDisclosure]],
     ) -> list[ReportFundExposure]:
         """Map only visible China public-fund holdings for listed A-shares."""
         rows: list[ReportFundExposure] = []
@@ -171,8 +200,8 @@ class ReportMarketImpactService:
                 # An unlisted company is a transmission node, never a fake
                 # fund exposure.  Its market gap above is the complete record.
                 continue
-            for stock in self._china_stocks(target.company):
-                holdings = self._market_data.fund_holdings([stock.id], as_of=as_of)
+            for stock in stocks_by_company.get(target.company.id, ()):
+                holdings = holdings_by_stock.get(stock.id, ())
                 if not holdings:
                     rows.append(
                         self._append_fund_insufficient(
@@ -327,16 +356,31 @@ class ReportMarketImpactService:
                 select(Company).where(Company.id.in_(company_ids))
             )
         } if company_ids else {}
+        names = {
+            identity
+            for relation in relations
+            for identity in (
+                self._company_identity(relation.subject_name),
+                self._company_identity(relation.object_name),
+            )
+            if identity is not None
+        }
+        companies_by_name = {
+            company.canonical_identity: company
+            for company in self._session.scalars(
+                select(Company).where(Company.canonical_identity.in_(names))
+            )
+        } if names else {}
         targets: list[_Target] = []
         peers: list[_Peer] = []
         seen_targets: set[tuple[uuid.UUID, uuid.UUID]] = set()
         seen_peers: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for relation in relations:
-            subject = companies.get(relation.subject_company_id) or self._named_company(
-                relation.subject_name
+            subject = companies.get(relation.subject_company_id) or companies_by_name.get(
+                self._company_identity(relation.subject_name)
             )
-            obj = companies.get(relation.object_company_id) or self._named_company(
-                relation.object_name
+            obj = companies.get(relation.object_company_id) or companies_by_name.get(
+                self._company_identity(relation.object_name)
             )
             if subject is not None:
                 key = (relation.id, subject.id)
@@ -355,14 +399,12 @@ class ReportMarketImpactService:
                     seen_targets.add(key)
         return tuple(targets), tuple(peers)
 
-    def _named_company(self, name: str | None) -> Company | None:
-        """Resolve only an exact normalized ledger identity; never create one."""
+    @staticmethod
+    def _company_identity(name: str | None) -> str | None:
+        """Return an exact ledger identity; callers never create a company."""
         if not name:
             return None
-        identity = " ".join(normalize("NFKC", name).split()).casefold()
-        return self._session.scalar(
-            select(Company).where(Company.canonical_identity == identity)
-        )
+        return " ".join(normalize("NFKC", name).split()).casefold()
 
     def _collect_window(
         self,
@@ -370,8 +412,10 @@ class ReportMarketImpactService:
         claim: ReportClaim,
         targets: Sequence[_Target],
         peers: Sequence[_Peer],
+        industry_by_company: dict[uuid.UUID, ChinaIndustryIndex],
+        stocks_by_company: dict[uuid.UUID, list[Stock]],
         window: str,
-        as_of: date | None,
+        as_of: date,
     ) -> tuple[str, list[ReportMarketObservation], list[str]]:
         observations: list[ReportMarketObservation] = []
         gaps: list[str] = []
@@ -397,8 +441,27 @@ class ReportMarketImpactService:
             REPORT_TARGET_METRICS_1D if window == "1d" else REPORT_TARGET_METRICS_5D
         )
         return_metric = "EVENT_RETURN_1D" if window == "1d" else "EVENT_RETURN_5D"
+        industry_metric = (
+            "INDUSTRY_RETURN_1D" if window == "1d" else "INDUSTRY_RETURN_5D"
+        )
+        industry_snapshots = self._industry_snapshots(
+            list({index.id for index in industry_by_company.values()}),
+            metric_name=industry_metric,
+            as_of=as_of,
+        )
+        market_snapshots = self._market_snapshots(
+            [
+                stock.id
+                for company_stocks in stocks_by_company.values()
+                for stock in company_stocks
+            ],
+            metric_names=expected_target | (
+                REPORT_PEER_METRICS_1D if window == "1d" else REPORT_PEER_METRICS_5D
+            ),
+            as_of=as_of,
+        )
         for target in targets:
-            stocks = self._china_stocks(target.company)
+            stocks = stocks_by_company.get(target.company.id, ())
             if target.company.type != "listed" or not stocks:
                 target_complete = False
                 observation = self._append_insufficient(
@@ -418,9 +481,11 @@ class ReportMarketImpactService:
                 gaps.append(f"{window}：{target.company.name} 未上市或缺少中国 A 股映射")
                 continue
             for stock in stocks:
-                snapshots = self._market_data.report_target_observations(
-                    stock, as_of=as_of, window=window
-                )
+                snapshots = [
+                    snapshot
+                    for snapshot in market_snapshots.get(stock.id, ())
+                    if snapshot.metric_name in expected_target
+                ]
                 actual_names = {snapshot.metric_name for snapshot in snapshots}
                 target_return_seen = target_return_seen or return_metric in actual_names
                 for snapshot in snapshots:
@@ -453,31 +518,40 @@ class ReportMarketImpactService:
                     )
                     gaps.append(f"{window}：{stock.code} 缺少 {metric}")
 
-                # A metric carried on the target stock is not an industry
-                # index.  The current ledger has no index entity/snapshot
-                # table, so treating INDUSTRY_RETURN_* on a stock as an index
-                # would falsely strengthen attribution.  Preserve the gap
-                # until a real index ledger source is introduced.
+            industry_index = industry_by_company.get(target.company.id)
+            industry_snapshot = (
+                industry_snapshots.get(industry_index.id)
+                if industry_index is not None
+                else None
+            )
+            if industry_snapshot is None:
                 observations.append(
                     self._append_insufficient(
                         claim=claim,
                         relation=target.relation,
-                        stock=stock,
+                        stock=None,
                         window=window,
                         kind="industry_control",
                         as_of=as_of,
-                        metric_name=(
-                            "INDUSTRY_RETURN_1D"
-                            if window == "1d"
-                            else "INDUSTRY_RETURN_5D"
-                        ),
+                        metric_name=industry_metric,
                         summary=(
-                            "当前账本没有可审计的行业指数实体与快照；"
-                            "不将目标股票上的行业代理指标冒充为行业控制。"
+                            f"公司 {target.company.name} 在研报公开时点没有"
+                            "可审计行业指数映射或窗口快照；"
+                            "不将目标股票指标冒充为行业控制。"
                         ),
                     )
                 )
-                gaps.append(f"{window}：缺少可审计行业指数控制")
+                gaps.append(f"{window}：{target.company.name} 缺少可审计行业指数控制")
+            else:
+                observations.append(
+                    self._append_industry_snapshot(
+                        claim=claim,
+                        relation=target.relation,
+                        index=industry_index,
+                        snapshot=industry_snapshot,
+                        window=window,
+                    )
+                )
 
         if not peers:
             observations.append(
@@ -498,7 +572,7 @@ class ReportMarketImpactService:
                 REPORT_PEER_METRICS_1D if window == "1d" else REPORT_PEER_METRICS_5D
             )
             for peer in peers:
-                stocks = self._china_stocks(peer.company)
+                stocks = stocks_by_company.get(peer.company.id, ())
                 if peer.company.type != "listed" or not stocks:
                     observations.append(
                         self._append_insufficient(
@@ -515,9 +589,11 @@ class ReportMarketImpactService:
                     gaps.append(f"{window}：同业 {peer.company.name} 缺少中国 A 股映射")
                     continue
                 for stock in stocks:
-                    snapshots = self._market_data.report_peer_observations(
-                        stock, as_of=as_of, window=window
-                    )
+                    snapshots = [
+                        snapshot
+                        for snapshot in market_snapshots.get(stock.id, ())
+                        if snapshot.metric_name in expected_peer
+                    ]
                     observations.extend(
                         self._append_control_rows(
                             claim=claim,
@@ -537,14 +613,84 @@ class ReportMarketImpactService:
             status = "insufficient"
         return status, observations, gaps
 
-    def _china_stocks(self, company: Company) -> list[Stock]:
-        return [
-            stock
-            for stock in self._session.scalars(
-                select(Stock).where(Stock.company_id == company.id)
+    def _china_stocks_by_company(
+        self, companies: Sequence[Company]
+    ) -> dict[uuid.UUID, list[Stock]]:
+        company_ids = {company.id for company in companies}
+        if not company_ids:
+            return {}
+        rows = self._session.scalars(
+            select(Stock)
+            .where(Stock.company_id.in_(company_ids))
+            .where(Stock.market.in_(tuple(CHINA_A_SHARE_MARKETS)))
+            .order_by(Stock.company_id, Stock.code)
+        )
+        stocks: dict[uuid.UUID, list[Stock]] = {}
+        for stock in rows:
+            stocks.setdefault(stock.company_id, []).append(stock)
+        return stocks
+
+    def _visible_fund_holdings(
+        self, stock_ids: set[uuid.UUID], *, as_of: date
+    ) -> dict[uuid.UUID, list[HoldingDisclosure]]:
+        """One point-in-time, China-fund holding read for every target stock."""
+        if not stock_ids:
+            return {}
+        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
+        rows = self._session.execute(
+            select(HoldingDisclosure, Fund)
+            .join(Fund, Fund.id == HoldingDisclosure.fund_id)
+            .where(HoldingDisclosure.stock_id.in_(stock_ids))
+            .where(HoldingDisclosure.published_at <= cutoff)
+            .where(HoldingDisclosure.acquired_at <= cutoff)
+            .order_by(
+                HoldingDisclosure.stock_id,
+                HoldingDisclosure.fund_id,
+                HoldingDisclosure.report_period.desc(),
+                HoldingDisclosure.published_at.desc(),
             )
-            if is_china_a_share(stock)
-        ]
+        )
+        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
+        for holding, fund in rows:
+            if is_china_public_fund(fund.code):
+                latest.setdefault((holding.stock_id, holding.fund_id), holding)
+        grouped: dict[uuid.UUID, list[HoldingDisclosure]] = {}
+        for holding in latest.values():
+            grouped.setdefault(holding.stock_id, []).append(holding)
+        return grouped
+
+    def _market_snapshots(
+        self,
+        stock_ids: Sequence[uuid.UUID],
+        *,
+        metric_names: frozenset[str],
+        as_of: date,
+    ) -> dict[uuid.UUID, list[ValuationSnapshot]]:
+        """Read every target/peer metric for one window in a single query."""
+        if not stock_ids:
+            return {}
+        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
+        rows = self._session.scalars(
+            select(ValuationSnapshot)
+            .where(ValuationSnapshot.stock_id.in_(set(stock_ids)))
+            .where(ValuationSnapshot.as_of_date == as_of)
+            .where(ValuationSnapshot.metric_name.in_(metric_names))
+            .where(ValuationSnapshot.available_at.is_not(None))
+            .where(ValuationSnapshot.available_at <= cutoff)
+            .order_by(
+                ValuationSnapshot.stock_id,
+                ValuationSnapshot.metric_name,
+                ValuationSnapshot.available_at.desc(),
+                ValuationSnapshot.created_at.desc(),
+            )
+        )
+        latest: dict[tuple[uuid.UUID, str], ValuationSnapshot] = {}
+        for snapshot in rows:
+            latest.setdefault((snapshot.stock_id, snapshot.metric_name), snapshot)
+        grouped: dict[uuid.UUID, list[ValuationSnapshot]] = {}
+        for snapshot in latest.values():
+            grouped.setdefault(snapshot.stock_id, []).append(snapshot)
+        return grouped
 
     def _append_control_rows(
         self,
@@ -612,6 +758,7 @@ class ReportMarketImpactService:
                 report_relation_id=relation.id,
                 stock_id=stock.id,
                 valuation_snapshot_id=snapshot.id,
+                industry_index_snapshot_id=None,
                 window=window,
                 kind=kind,
                 status="verified",
@@ -655,6 +802,7 @@ class ReportMarketImpactService:
                 report_relation_id=relation.id if relation is not None else None,
                 stock_id=stock.id if stock is not None else None,
                 valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
                 window=window,
                 kind=kind,
                 status="insufficient",
@@ -664,6 +812,128 @@ class ReportMarketImpactService:
                 collection_key=key,
             ),
         )
+
+    def _append_industry_snapshot(
+        self,
+        *,
+        claim: ReportClaim,
+        relation: ReportRelation,
+        index: ChinaIndustryIndex,
+        snapshot: ChinaIndustryIndexSnapshot,
+        window: str,
+    ) -> ReportMarketObservation:
+        key = self._key(
+            claim.id,
+            relation.id,
+            window,
+            "industry_control",
+            index.id,
+            snapshot.id,
+            snapshot.metric_name,
+        )
+        return self._persist_unique(
+            ReportMarketObservation,
+            key,
+            lambda: ReportMarketObservation(
+                research_case_id=claim.research_case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=snapshot.id,
+                window=window,
+                kind="industry_control",
+                status="verified",
+                as_of_date=snapshot.as_of_date,
+                metric_name=snapshot.metric_name,
+                summary=(
+                    f"行业指数 {index.code}（{index.name}）账本指标 "
+                    f"{snapshot.metric_name}={snapshot.metric_value} "
+                    f"({snapshot.source}; {snapshot.definition})"
+                ),
+                collection_key=key,
+            ),
+        )
+
+    def _visible_industry_indexes(
+        self,
+        targets: Sequence[_Target],
+        *,
+        available_at: datetime,
+    ) -> dict[uuid.UUID, ChinaIndustryIndex]:
+        """Latest visible, applicable index mapping for every target company."""
+        company_ids = {target.company.id for target in targets}
+        if not company_ids:
+            return {}
+        rows = self._session.execute(
+            select(ChinaIndustryIndexMembership, ChinaIndustryIndex)
+            .join(
+                ChinaIndustryIndex,
+                ChinaIndustryIndex.id == ChinaIndustryIndexMembership.industry_index_id,
+            )
+            .where(ChinaIndustryIndexMembership.company_id.in_(company_ids))
+            .where(ChinaIndustryIndexMembership.available_at <= available_at)
+            .where(
+                (ChinaIndustryIndexMembership.applicable_from.is_(None))
+                | (ChinaIndustryIndexMembership.applicable_from <= available_at.date())
+            )
+            .where(
+                (ChinaIndustryIndexMembership.applicable_to.is_(None))
+                | (ChinaIndustryIndexMembership.applicable_to >= available_at.date())
+            )
+            .order_by(
+                ChinaIndustryIndexMembership.company_id,
+                ChinaIndustryIndexMembership.available_at.desc(),
+                ChinaIndustryIndexMembership.created_at.desc(),
+            )
+        )
+        indexed: dict[uuid.UUID, ChinaIndustryIndex] = {}
+        for membership, industry_index in rows:
+            indexed.setdefault(membership.company_id, industry_index)
+        return indexed
+
+    def _industry_snapshots(
+        self,
+        index_ids: Sequence[uuid.UUID],
+        *,
+        metric_name: str,
+        as_of: date,
+    ) -> dict[uuid.UUID, ChinaIndustryIndexSnapshot]:
+        if not index_ids:
+            return {}
+        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
+        rows = self._session.scalars(
+            select(ChinaIndustryIndexSnapshot)
+            .where(ChinaIndustryIndexSnapshot.industry_index_id.in_(index_ids))
+            .where(ChinaIndustryIndexSnapshot.as_of_date == as_of)
+            .where(ChinaIndustryIndexSnapshot.metric_name == metric_name)
+            .where(ChinaIndustryIndexSnapshot.available_at <= cutoff)
+            .order_by(
+                ChinaIndustryIndexSnapshot.industry_index_id,
+                ChinaIndustryIndexSnapshot.available_at.desc(),
+                ChinaIndustryIndexSnapshot.created_at.desc(),
+            )
+        )
+        snapshots: dict[uuid.UUID, ChinaIndustryIndexSnapshot] = {}
+        for snapshot in rows:
+            snapshots.setdefault(snapshot.industry_index_id, snapshot)
+        return snapshots
+
+    def _prime_existing_records(self, claim_id: uuid.UUID) -> None:
+        """Avoid a lookup query per immutable output on repeat/bulk collection."""
+        self._existing_records = {
+            model: {
+                row.collection_key: row
+                for row in self._session.scalars(
+                    select(model).where(model.report_claim_id == claim_id)
+                )
+            }
+            for model in (
+                ReportMarketObservation,
+                ReportMarketConfounder,
+                ReportFundExposure,
+            )
+        }
 
     def _collect_confounders(
         self,
@@ -720,9 +990,8 @@ class ReportMarketImpactService:
         A failed insert is isolated in a savepoint so PostgreSQL's outer task
         transaction stays usable for the remaining collection records.
         """
-        existing = self._session.scalar(
-            select(model).where(model.collection_key == key)
-        )
+        cached = self._existing_records.setdefault(model, {})
+        existing = cached.get(key)
         if existing is not None:
             return existing
         try:
@@ -733,6 +1002,7 @@ class ReportMarketImpactService:
                 created = factory()
                 self._session.add(created)
                 self._session.flush()
+                cached[key] = created
             return created
         except IntegrityError:
             winner = self._session.scalar(
@@ -740,6 +1010,7 @@ class ReportMarketImpactService:
             )
             if winner is None:
                 raise
+            cached[key] = winner
             return winner
 
     @staticmethod

@@ -25,7 +25,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from app.models.ledger import Base, CaseDocumentVersion, SourceSpan, SourceStatement, _uuid
+from app.models.ledger import (
+    Base,
+    CaseDocumentVersion,
+    ChinaIndustryIndexSnapshot,
+    SourceSpan,
+    SourceStatement,
+    _uuid,
+)
 
 
 def _utcnow() -> datetime:
@@ -219,6 +226,15 @@ class ReportMarketObservation(Base):
             "status IN ('verified', 'insufficient')",
             name="ck_report_market_observation_status",
         ),
+        CheckConstraint(
+            "(kind = 'industry_control' AND status = 'verified' "
+            "AND industry_index_snapshot_id IS NOT NULL "
+            "AND stock_id IS NULL AND valuation_snapshot_id IS NULL) "
+            "OR (kind = 'industry_control' AND status != 'verified' "
+            "AND industry_index_snapshot_id IS NULL) "
+            "OR (kind != 'industry_control' AND industry_index_snapshot_id IS NULL)",
+            name="ck_report_market_industry_snapshot_source",
+        ),
         UniqueConstraint("collection_key", name="uq_report_market_observation_key"),
         Index(
             "ix_report_market_observations_claim_window",
@@ -242,6 +258,14 @@ class ReportMarketObservation(Base):
     )
     valuation_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("valuation_snapshots.id"), nullable=True
+    )
+    # ``industry_control`` never borrows a target stock metric.  When it is
+    # verified this is the immutable ChinaIndustryIndexSnapshot actually used
+    # as the control; target/peer observations leave it NULL.
+    industry_index_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("china_industry_index_snapshots.id"),
+        nullable=True,
     )
     window: Mapped[str] = mapped_column(String(8), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -423,6 +447,32 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
             relation = session.get(ReportRelation, observation.report_relation_id)
             if relation is None or relation.claim_id != claim.id:
                 raise ValueError("report market observation relation must belong to its claim")
+        if observation.kind == "industry_control":
+            if observation.status == "verified":
+                if (
+                    observation.industry_index_snapshot_id is None
+                    or observation.stock_id is not None
+                    or observation.valuation_snapshot_id is not None
+                ):
+                    raise ValueError(
+                        "verified industry control must use only an industry index snapshot"
+                    )
+                snapshot = session.get(
+                    ChinaIndustryIndexSnapshot,
+                    observation.industry_index_snapshot_id,
+                )
+                if (
+                    snapshot is None
+                    or snapshot.as_of_date != observation.as_of_date
+                    or snapshot.metric_name != observation.metric_name
+                ):
+                    raise ValueError(
+                        "industry control must reference its exact industry index snapshot"
+                    )
+            elif observation.industry_index_snapshot_id is not None:
+                raise ValueError("insufficient industry control cannot cite an index snapshot")
+        elif observation.industry_index_snapshot_id is not None:
+            raise ValueError("only industry control can cite an industry index snapshot")
 
     for confounder in session.new:
         if not isinstance(confounder, ReportMarketConfounder):

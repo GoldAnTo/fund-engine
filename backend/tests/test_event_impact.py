@@ -3105,6 +3105,11 @@ def test_china_market_data_model_indexes_match_the_migration_contract() -> None:
             "metric_name",
             "as_of_date",
         ),
+        "ix_valuation_snapshots_availability": (
+            "stock_id",
+            "as_of_date",
+            "available_at",
+        ),
         "ix_holding_disclosures_stock_published_report": (
             "stock_id",
             "published_at",

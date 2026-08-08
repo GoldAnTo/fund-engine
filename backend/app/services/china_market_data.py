@@ -34,8 +34,6 @@ REPORT_TARGET_METRICS_5D = frozenset(
 )
 REPORT_PEER_METRICS_1D = frozenset({"PEER_RETURN_1D"})
 REPORT_PEER_METRICS_5D = frozenset({"PEER_RETURN_5D"})
-REPORT_INDUSTRY_METRICS_1D = frozenset({"INDUSTRY_RETURN_1D"})
-REPORT_INDUSTRY_METRICS_5D = frozenset({"INDUSTRY_RETURN_5D"})
 # These are the exact market labels written by the two in-repository China
 # ingest paths: Gildata uses SSE/SZSE/BSE and AKShare uses SH/SZ.  Keeping
 # this explicit rejects KRX, HK, US, and unknown labels instead of inferring
@@ -73,11 +71,6 @@ class ChinaMarketData(Protocol):
     def report_peer_observations(
         self, stock: Stock, *, as_of: date, window: str
     ) -> Sequence[ValuationSnapshot]: ...
-
-    def report_industry_observations(
-        self, stock: Stock, *, as_of: date, window: str
-    ) -> Sequence[ValuationSnapshot]: ...
-
 
 def is_china_a_share(stock: Stock) -> bool:
     return stock.market.upper() in CHINA_A_SHARE_MARKETS
@@ -199,17 +192,6 @@ class LedgerChinaMarketData:
         return self._exact_metric_snapshots(
             stock,
             REPORT_PEER_METRICS_1D if window == "1d" else REPORT_PEER_METRICS_5D,
-            as_of,
-        )
-
-    def report_industry_observations(
-        self, stock: Stock, *, as_of: date, window: str
-    ) -> list[ValuationSnapshot]:
-        return self._exact_metric_snapshots(
-            stock,
-            REPORT_INDUSTRY_METRICS_1D
-            if window == "1d"
-            else REPORT_INDUSTRY_METRICS_5D,
             as_of,
         )
 

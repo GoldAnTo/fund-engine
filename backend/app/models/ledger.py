@@ -79,6 +79,9 @@ IMMUTABLE_TABLES = frozenset(
         "fund_companies",
         "funds",
         "valuation_snapshots",
+        "china_industry_indexes",
+        "china_industry_index_memberships",
+        "china_industry_index_snapshots",
         "holding_disclosures",
         "theme_roles",
         "case_theme_tag_events",
@@ -573,6 +576,104 @@ class ValuationSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+class ChinaIndustryIndex(Base):
+    """One provider-defined China industry index, frozen as ledger metadata."""
+
+    __tablename__ = "china_industry_indexes"
+    __table_args__ = (
+        UniqueConstraint("provider", "code", name="uq_china_industry_index_provider_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    market: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ChinaIndustryIndexMembership(Base):
+    """Point-in-time visible company-to-industry-index mapping."""
+
+    __tablename__ = "china_industry_index_memberships"
+    __table_args__ = (
+        Index(
+            "ix_china_industry_memberships_company_available",
+            "company_id",
+            "available_at",
+        ),
+        Index(
+            "ix_china_industry_memberships_index_available",
+            "industry_index_id",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("companies.id"), nullable=False
+    )
+    industry_index_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("china_industry_indexes.id"), nullable=False
+    )
+    applicable_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    applicable_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ChinaIndustryIndexSnapshot(Base):
+    """One externally visible industry-index metric observation."""
+
+    __tablename__ = "china_industry_index_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_china_industry_index_snapshots_metric_as_of",
+            "industry_index_id",
+            "metric_name",
+            "as_of_date",
+        ),
+        Index(
+            "ix_china_industry_index_snapshots_availability",
+            "industry_index_id",
+            "as_of_date",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    industry_index_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("china_industry_indexes.id"), nullable=False
+    )
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    metric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(ChinaIndustryIndexSnapshot, "before_insert")
+def _validate_industry_snapshot_availability(
+    _mapper, _connection, target: ChinaIndustryIndexSnapshot
+) -> None:
+    if target.available_at.date() < target.as_of_date:
+        raise ValueError(
+            "industry index snapshot availability cannot predate its trade date"
+        )
 
 
 
