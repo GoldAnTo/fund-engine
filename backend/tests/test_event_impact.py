@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
-from datetime import UTC, datetime
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,8 +19,26 @@ from app.models.event_impact import (
     CompanyImpactRelationReview,
     EventImpactHypothesis,
 )
-from app.models.event_research import EventResearchScopeVersion
-from app.models.ledger import Company, ImmutableLedgerError, Stock
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
+from app.models.ledger import (
+    CaseDocumentVersion,
+    Company,
+    DocumentVersion,
+    EvidenceLink,
+    ImmutableLedgerError,
+    SourceSpan,
+    SourceStatement,
+    Stock,
+    Thesis,
+)
+from app.services.event_impact import (
+    EventImpactResearchService,
+    ResolvedImpactCompany,
+)
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -81,6 +101,311 @@ def _relation(session, hypothesis, scope, company) -> CompanyImpactRelation:
     session.add(relation)
     session.commit()
     return relation
+
+
+@dataclass
+class _FakeImpactResolver:
+    results_by_factor: dict[str, list[ResolvedImpactCompany]]
+
+    def resolve(self, *, factor_statement: str, statements):
+        return self.results_by_factor.get(factor_statement, [])
+
+
+def _event_scope(
+    session, research_case, *, factors: list[str], version: int = 1
+) -> EventResearchScopeVersion:
+    session.add(
+        EventResearchBrief(
+            research_case_id=research_case.id,
+            raw_input="event fixture",
+            source_url="https://investor.tsmc.com/event",
+            event_title="Event fixture",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            research_question="What is the transmission path?",
+            extraction_state="human_confirmed",
+            created_at=NOW,
+        )
+    )
+    scope = EventResearchScopeVersion(
+        research_case_id=research_case.id,
+        version=version,
+        changed_by="tester",
+        change_summary="fixture event scope",
+        created_at=NOW,
+    )
+    session.add(scope)
+    session.flush()
+    session.add_all(
+        EventResearchScopeFactor(
+            scope_version_id=scope.id,
+            statement=factor,
+            description=None,
+            position=position,
+        )
+        for position, factor in enumerate(factors, start=1)
+    )
+    session.commit()
+    return scope
+
+
+def _case_statement(
+    session,
+    research_case,
+    *,
+    source_url: str = "https://investor.tsmc.com/releases/q2",
+    observed_period: date | None = date(2026, 8, 7),
+) -> SourceStatement:
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url=source_url,
+        available_at=NOW,
+        acquired_at=NOW,
+        parser_version="html-v1",
+        parse_state="success",
+    )
+    thesis = Thesis(
+        research_case_id=research_case.id,
+        statement="fixture evidence thesis",
+        created_by="tester",
+        created_at=NOW,
+    )
+    session.add_all([document, thesis])
+    session.flush()
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=research_case.id,
+            document_version_id=document.id,
+            linked_at=NOW,
+        )
+    )
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="Supplier confirmed additional orders.",
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="Supplier confirmed additional orders.",
+        observed_period=observed_period,
+        created_at=NOW,
+    )
+    session.add(statement)
+    session.flush()
+    session.add(
+        EvidenceLink(
+            thesis_id=thesis.id,
+            source_statement_id=statement.id,
+            role="supports",
+            reason="fixture evidence",
+            scope={},
+            available_at=NOW,
+            creator_type="human",
+            review_state="reviewed",
+            created_at=NOW,
+        )
+    )
+    session.commit()
+    return statement
+
+
+def _candidate(
+    *,
+    company_name: str = "Acme Supplier",
+    company_type: str = "listed",
+    source_statement_id: uuid.UUID | None,
+) -> ResolvedImpactCompany:
+    return ResolvedImpactCompany(
+        company_name=company_name,
+        company_type=company_type,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        source_statement_id=source_statement_id,
+    )
+
+
+def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_source(
+    session, research_case
+) -> None:
+    factor = "capital expenditure raises supplier orders"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    service = EventImpactResearchService(
+        session,
+        _FakeImpactResolver({factor: [_candidate(source_statement_id=statement.id)]}),
+    )
+
+    result = service.refresh(research_case.id)
+    session.commit()
+
+    hypothesis = session.scalar(select(EventImpactHypothesis))
+    relation = session.scalar(select(CompanyImpactRelation))
+    observation = session.scalar(select(CompanyImpactObservation))
+    assert result.hypotheses_created == 1
+    assert result.relations_created == 1
+    assert hypothesis is not None and hypothesis.scope_version_id == scope.id
+    assert hypothesis.research_case_id == research_case.id
+    assert hypothesis.classification == "candidate"
+    assert hypothesis.rank == 1
+    assert hypothesis.score_components == {}
+    assert relation is not None and relation.source_statement_id == statement.id
+    assert relation.scope_version_id == scope.id
+    assert observation is not None
+    assert observation.source_statement_id == statement.id
+    assert observation.kind == "relation"
+    assert observation.status == "verified"
+    assert observation.as_of_date == date(2026, 8, 7)
+
+
+def test_refresh_keeps_unlisted_supplier_without_creating_stock(session, research_case) -> None:
+    factor = "domestic supplier benefits"
+    _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+
+    EventImpactResearchService(
+        session,
+        _FakeImpactResolver(
+            {
+                factor: [
+                    _candidate(
+                        company_name="Private ODM",
+                        company_type="unlisted_supplier",
+                        source_statement_id=statement.id,
+                    )
+                ]
+            }
+        ),
+    ).refresh(research_case.id)
+    session.commit()
+
+    company = session.scalar(select(Company).where(Company.name == "Private ODM"))
+    assert company is not None and company.type == "unlisted_supplier"
+    assert list(session.scalars(select(Stock).where(Stock.company_id == company.id))) == []
+
+
+def test_refresh_rejects_foreign_and_invalid_source_statement_ids(
+    session, research_case, research_service
+) -> None:
+    factor = "supplier impact"
+    _event_scope(session, research_case, factors=[factor])
+    foreign_case = research_service.add_case(
+        title="foreign", industry_topic="other", created_by="tester"
+    )
+    foreign_statement = _case_statement(session, foreign_case)
+    invalid_statement = _case_statement(
+        session, research_case, source_url="https://example.com/invalid"
+    )
+
+    result = EventImpactResearchService(
+        session,
+        _FakeImpactResolver(
+            {
+                factor: [
+                    _candidate(
+                        company_name="Foreign Co",
+                        source_statement_id=foreign_statement.id,
+                    ),
+                    _candidate(
+                        company_name="Invalid Co",
+                        source_statement_id=invalid_statement.id,
+                    ),
+                ]
+            }
+        ),
+    ).refresh(research_case.id)
+    session.commit()
+
+    assert result.source_rejected_count == 2
+    assert result.relations_created == 0
+    assert list(session.scalars(select(CompanyImpactRelation))) == []
+    assert list(session.scalars(select(CompanyImpactObservation))) == []
+
+
+def test_refresh_keeps_sourceless_candidate_unresolved_without_observation(
+    session, research_case
+) -> None:
+    factor = "supplier impact"
+    _event_scope(session, research_case, factors=[factor])
+
+    result = EventImpactResearchService(
+        session,
+        _FakeImpactResolver({factor: [_candidate(source_statement_id=None)]}),
+    ).refresh(research_case.id)
+    session.commit()
+
+    hypothesis = session.scalar(select(EventImpactHypothesis))
+    assert result.unresolved_candidate_count == 1
+    assert result.relations_created == 0
+    assert hypothesis is not None
+    assert "source" in hypothesis.explanation.lower()
+    assert list(session.scalars(select(CompanyImpactObservation))) == []
+
+
+def test_refresh_appends_new_scope_rows_without_mutating_prior_scope_rows(
+    session, research_case
+) -> None:
+    first_factor = "first factor"
+    first_scope = _event_scope(session, research_case, factors=[first_factor])
+    statement = _case_statement(session, research_case)
+    resolver = _FakeImpactResolver(
+        {
+            first_factor: [_candidate(source_statement_id=statement.id)],
+            "second factor": [
+                _candidate(company_name="Second Co", source_statement_id=statement.id)
+            ],
+        }
+    )
+    service = EventImpactResearchService(session, resolver)
+    service.refresh(research_case.id)
+    session.commit()
+    first_hypothesis = session.scalar(
+        select(EventImpactHypothesis).where(
+            EventImpactHypothesis.scope_version_id == first_scope.id
+        )
+    )
+    assert first_hypothesis is not None
+
+    second_scope = EventResearchScopeVersion(
+        research_case_id=research_case.id,
+        version=2,
+        changed_by="tester",
+        change_summary="new scope",
+        created_at=NOW,
+    )
+    session.add(second_scope)
+    session.flush()
+    session.add(
+        EventResearchScopeFactor(
+            scope_version_id=second_scope.id,
+            statement="second factor",
+            description=None,
+            position=1,
+        )
+    )
+    session.commit()
+
+    service.refresh(research_case.id)
+    session.commit()
+
+    hypotheses = list(
+        session.scalars(
+            select(EventImpactHypothesis).order_by(
+                EventImpactHypothesis.created_at, EventImpactHypothesis.id
+            )
+        )
+    )
+    assert [(row.scope_version_id, row.statement) for row in hypotheses] == [
+        (first_scope.id, first_factor),
+        (second_scope.id, "second factor"),
+    ]
+    assert first_hypothesis.classification == "candidate"
+    assert first_hypothesis.scope_version_id == first_scope.id
 
 
 def test_impact_relation_is_scope_bound_and_append_only(session, research_case) -> None:
