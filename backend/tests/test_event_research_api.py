@@ -14,6 +14,7 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.event_impact import EventImpactHypothesis, EventImpactHypothesisAssessment
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
@@ -941,6 +942,24 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
             },
         )
         assert confirmed.status_code == 201
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+    )
+    assert scope is not None
+    hypothesis = EventImpactHypothesis(
+        research_case_id=case_id, scope_version_id=scope.id,
+        statement=_confirmed_event()["candidate_factors"][0], classification="candidate",
+        rank=1, score_components={}, explanation="fixture", created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(hypothesis)
+    cmd_session.flush()
+    cmd_session.add(EventImpactHypothesisAssessment(
+        hypothesis_id=hypothesis.id, research_case_id=case_id, scope_version_id=scope.id,
+        classification="key", rank=1, score_components={"event": 1}, explanation="fixture key",
+        created_at=datetime.now(timezone.utc),
+    ))
     EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
 
