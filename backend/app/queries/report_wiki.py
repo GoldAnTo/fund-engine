@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from unicodedata import normalize
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
@@ -133,7 +133,7 @@ class ReportWikiQueries:
         for relation in relations:
             relations_by_claim[relation.claim_id].append(relation)
         companies = self._companies(relations)
-        observations_by_claim = self._observations(claim_ids)
+        observations_by_claim = self._observations(claim_ids, selected_relation_ids)
         confounders_by_claim = self._confounders(claim_ids)
         confounder_sources = self._confounder_sources(
             case_id,
@@ -144,7 +144,7 @@ class ReportWikiQueries:
             },
         )
         confounder_assessments = self._confounder_assessments(claim_ids)
-        exposures_by_claim = self._fund_exposures(claim_ids)
+        exposures_by_claim = self._fund_exposures(claim_ids, selected_relation_ids)
         funds = self._funds(exposures_by_claim)
         independent_evidence = self._independent_case_evidence(case_id, document.id)
 
@@ -297,7 +297,12 @@ class ReportWikiQueries:
                         )
                     )
 
-            observations = observations_by_claim.get(claim.id, ())
+            observations = tuple(
+                row
+                for row in observations_by_claim.get(claim.id, ())
+                if row.report_relation_id is None
+                or row.report_relation_id in selected_relation_ids
+            )
             for observation in observations:
                 market_node_id = f"market_window:{observation.id}"
                 market_locator = self._market_locator(observation)
@@ -366,7 +371,11 @@ class ReportWikiQueries:
                         )
                     )
 
-            for exposure in exposures_by_claim.get(claim.id, ()):
+            for exposure in (
+                row
+                for row in exposures_by_claim.get(claim.id, ())
+                if row.report_relation_id in selected_relation_ids
+            ):
                 fund = funds.get(exposure.fund_id) if exposure.fund_id else None
                 fund_node_id = (
                     f"fund:{fund.id}" if fund is not None else f"fund_gap:{exposure.id}"
@@ -613,13 +622,24 @@ class ReportWikiQueries:
         }
 
     def _observations(
-        self, claim_ids: set[uuid.UUID]
+        self, claim_ids: set[uuid.UUID], selected_relation_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, list[ReportMarketObservation]]:
         grouped: dict[uuid.UUID, list[ReportMarketObservation]] = defaultdict(list)
         if claim_ids:
+            allowed_paths = (
+                ReportMarketObservation.report_relation_id.in_(selected_relation_ids)
+                if selected_relation_ids
+                else ReportMarketObservation.report_relation_id.is_(None)
+            )
             for row in self._session.scalars(
                 select(ReportMarketObservation)
                 .where(ReportMarketObservation.report_claim_id.in_(claim_ids))
+                .where(
+                    or_(
+                        ReportMarketObservation.report_relation_id.is_(None),
+                        allowed_paths,
+                    )
+                )
                 .order_by(ReportMarketObservation.created_at, ReportMarketObservation.id)
             ):
                 grouped[row.report_claim_id].append(row)
@@ -657,13 +677,14 @@ class ReportWikiQueries:
         return latest
 
     def _fund_exposures(
-        self, claim_ids: set[uuid.UUID]
+        self, claim_ids: set[uuid.UUID], selected_relation_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, list[ReportFundExposure]]:
         grouped: dict[uuid.UUID, list[ReportFundExposure]] = defaultdict(list)
-        if claim_ids:
+        if claim_ids and selected_relation_ids:
             for row in self._session.scalars(
                 select(ReportFundExposure)
                 .where(ReportFundExposure.report_claim_id.in_(claim_ids))
+                .where(ReportFundExposure.report_relation_id.in_(selected_relation_ids))
                 .order_by(ReportFundExposure.created_at, ReportFundExposure.id)
             ):
                 grouped[row.report_claim_id].append(row)

@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import event, select
 
-from app.models.ledger import Company, SourceSpan, SourceStatement
+from app.models.ledger import Company, SourceSpan, SourceStatement, Stock
 from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
     ReportConfounderAssessment,
+    ReportFundExposure,
     ReportMarketConfounder,
     ReportMarketObservation,
     ReportRelation,
@@ -820,3 +821,128 @@ def test_factor_gate_never_unions_market_and_peer_evidence_across_relations(
     )
     assert any(edge["kind"] == "target_market" for edge in focused_body["edges"])
     assert not any(edge["kind"] == "peer_control" for edge in focused_body["edges"])
+
+
+def test_scope_hides_unselected_relation_market_and_fund_edges_but_keeps_claim_gap(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="范围不泄露未选路径证据",
+        content="研报观点：占位关系。",
+    )
+    now = datetime.now(timezone.utc)
+    companies = [
+        Company(code=f"FILTER-{index}", name=name, type="listed", created_at=now)
+        for index, name in enumerate(("供应商甲", "目标甲", "供应商乙", "目标乙"), start=1)
+    ]
+    cmd_session.add_all(companies)
+    cmd_session.flush()
+    document, span, source_statement, claim = _append_report_claim(
+        cmd_session,
+        case_id=case_id,
+        statement="研报观点：供应商甲和供应商乙均受订单拉动。",
+        source_url="report://fixture/scope-edge-filter",
+        subject_company_id=companies[0].id,
+        object_company_id=companies[1].id,
+    )
+    first_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert first_relation is not None
+    second_relation = ReportRelation(
+        claim_id=claim.id,
+        research_case_id=case_id,
+        source_span_id=span.id,
+        source_statement_id=source_statement.id,
+        subject_company_id=companies[2].id,
+        object_company_id=companies[3].id,
+        subject_name=None,
+        object_name=None,
+        relation_kind="supplier",
+        mechanism="研报明确供应商关系",
+        status="report_claim",
+    )
+    selected_stock = Stock(
+        company_id=companies[2].id,
+        code="600099",
+        name="路径乙股票",
+        market="CN",
+        created_at=now,
+    )
+    cmd_session.add_all((second_relation, selected_stock))
+    cmd_session.flush()
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document.id,
+        changed_by="tester",
+        change_summary="只研究供应商甲路径",
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[first_relation.id],
+    )
+    cmd_session.add_all(
+        (
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=second_relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="1d",
+                kind="target_market",
+                status="insufficient",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                metric_name=None,
+                summary="仅路径乙的市场窗口",
+                collection_key="scope-filter-relation-b-market",
+            ),
+            ReportFundExposure(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=second_relation.id,
+                stock_id=selected_stock.id,
+                fund_id=None,
+                holding_disclosure_id=None,
+                window="1d",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                status="insufficient",
+                weight=None,
+                summary="仅路径乙的基金暴露",
+                collection_key="scope-filter-relation-b-fund",
+            ),
+            # A NULL relation_id is an actual claim-level collection gap, not
+            # evidence borrowed from an unselected relationship path.
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=None,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="5d",
+                kind="target_market",
+                status="insufficient",
+                as_of_date=datetime(2026, 8, 7, tzinfo=timezone.utc).date(),
+                metric_name=None,
+                summary="观点级市场数据不足",
+                collection_key="scope-filter-claim-gap",
+            ),
+        )
+    )
+    cmd_session.commit()
+
+    graph = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+
+    assert graph.status_code == 200
+    body = graph.json()
+    assert not any(
+        edge["relation_id"] == str(second_relation.id) for edge in body["edges"]
+    )
+    assert "仅路径乙的市场窗口" not in graph.text
+    assert "仅路径乙的基金暴露" not in graph.text
+    assert any(
+        edge["kind"] == "target_market" and edge["relation_id"] is None
+        for edge in body["edges"]
+    )
+    assert "观点级市场数据不足" in graph.text
