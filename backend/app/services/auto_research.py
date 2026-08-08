@@ -234,7 +234,12 @@ class AutoResearchService:
             now = self._run_evidence_count(run)
             self.repo.update_run(run, budget_used=used, round=current_round)
             if used >= run.budget:
-                self.repo.update_run(run, status="waiting_for_review", stage="stopped", stop_reason="budget_exhausted")
+                self.repo.update_run(
+                    run,
+                    status="failed" if failed else "waiting_for_review",
+                    stage="failed" if failed else "stopped",
+                    stop_reason="task_failed" if failed else "budget_exhausted",
+                )
                 break
             if current_round >= run.max_rounds:
                 self.repo.update_run(run, status="failed" if failed else "waiting_for_review", stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")

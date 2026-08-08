@@ -153,9 +153,12 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
             # ``execute`` advances a run's round before doing its queued
             # tasks.  A retry of a failed first-round impact task therefore
             # must reopen that round; otherwise the task remains queued but
-            # can never be selected by the worker.
+            # can never be selected by the worker.  Its failed attempt also
+            # consumed one unit in ``execute``; refund that unit only for the
+            # requeued impact task so a budget-bound retry can run it.
             if recovered_impact:
                 run.round = max(0, run.round - 1)
+                run.budget_used = max(0, (run.budget_used or 0) - 1)
             run.status = "queued"
             run.stage = "planning"
             run.stop_reason = None

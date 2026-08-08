@@ -113,13 +113,21 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     )
     cmd_session.add(scope)
     cmd_session.flush()
-    cmd_session.add(
-        EventResearchScopeFactor(
-            scope_version_id=scope.id,
-            statement="supplier retry factor",
-            description=None,
-            position=1,
-        )
+    cmd_session.add_all(
+        [
+            EventResearchScopeFactor(
+                scope_version_id=scope.id,
+                statement="supplier retry factor one",
+                description=None,
+                position=1,
+            ),
+            EventResearchScopeFactor(
+                scope_version_id=scope.id,
+                statement="supplier retry factor two",
+                description=None,
+                position=2,
+            ),
+        ]
     )
     cmd_session.commit()
 
@@ -129,7 +137,7 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
 
         def resolve(self, *, factor_statement, statements):
             self.calls += 1
-            if self.calls == 1:
+            if self.calls == 2:
                 raise RuntimeError("resolver temporarily unavailable")
             return [
                 ResolvedImpactCompany(
@@ -147,7 +155,7 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     run = worker.start(
         case.id,
         max_rounds=1,
-        budget=2,
+        budget=1,
         thesis_ids=[],
         scope_version_id=scope.id,
     )
@@ -167,6 +175,14 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     )
     assert impact_task is not None and impact_task.status == "failed"
     assert run.status == "failed"
+    assert run.budget_used == 1
+    assert list(
+        cmd_session.scalars(
+            select(EventImpactHypothesis).where(
+                EventImpactHypothesis.scope_version_id == scope.id
+            )
+        )
+    ) == []
 
     response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
     assert response.status_code == 200, response.text
@@ -174,18 +190,24 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     cmd_session.refresh(impact_task)
     assert run.status == "queued"
     assert impact_task.status == "queued"
+    assert run.budget_used == 0
 
     worker.execute(run)
     cmd_session.commit()
-    assert resolver.calls == 2
+    assert resolver.calls == 4
     assert impact_task.status == "done"
-    output = cmd_session.scalar(
-        select(EventImpactHypothesis).where(
-            EventImpactHypothesis.scope_version_id == scope.id,
-            EventImpactHypothesis.classification == "unresolved",
+    outputs = list(
+        cmd_session.scalars(
+            select(EventImpactHypothesis).where(
+                EventImpactHypothesis.scope_version_id == scope.id
+            )
         )
     )
-    assert output is not None
+    assert [row.statement for row in outputs if row.classification == "candidate"] == [
+        "supplier retry factor one",
+        "supplier retry factor two",
+    ]
+    assert len([row for row in outputs if row.classification == "unresolved"]) == 2
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):

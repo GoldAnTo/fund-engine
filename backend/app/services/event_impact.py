@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Protocol, Sequence
 from unicodedata import normalize
 
@@ -104,6 +104,12 @@ class _ResolvedCandidate:
     candidate: ResolvedImpactCompany
 
 
+@dataclass(frozen=True)
+class _ResolvedFactor:
+    factor: EventResearchScopeFactor
+    candidates: Sequence[ResolvedImpactCompany]
+
+
 class EventImpactResearchService:
     def __init__(self, session: Session, resolver: ImpactResolver | None = None) -> None:
         self._session = session
@@ -161,7 +167,11 @@ class EventImpactResearchService:
             for statement, document in admissible_records
         }
 
-        resolved_candidates: list[_ResolvedCandidate] = []
+        # Providers are deliberately run before any refresh output is added
+        # to this Session.  If one factor fails, the task failure commit cannot
+        # accidentally publish the hypotheses from factors that happened to
+        # resolve first.
+        resolved_factors: list[_ResolvedFactor] = []
         for factor in factors:
             candidates = list(
                 self._resolver.resolve(
@@ -169,117 +179,146 @@ class EventImpactResearchService:
                     statements=admissible_statements,
                 )
             )
-            hypothesis = EventImpactHypothesis(
-                research_case_id=case_id,
-                scope_version_id=scope.id,
-                statement=factor.statement,
-                classification="candidate",
-                rank=factor.position,
-                score_components={"refresh_key": refresh_key},
-                explanation=self._pending_evidence_explanation(candidates, admissible_by_id),
-                created_at=_utcnow(),
-            )
-            self._session.add(hypothesis)
-            resolved_candidates.extend(
-                _ResolvedCandidate(hypothesis=hypothesis, candidate=candidate)
-                for candidate in candidates
-            )
+            resolved_factors.append(_ResolvedFactor(factor, candidates))
 
         if output_slot is not None and not output_slot():
             return ImpactRefreshResult(0, 0, 0, 0)
 
-        source_rejected_count = 0
-        unresolved_candidate_count = 0
-        source_backed_candidates: list[
-            tuple[_ResolvedCandidate, SourceStatement]
-        ] = []
-        for entry in resolved_candidates:
-            candidate = entry.candidate
-            if candidate.source_statement_id is None:
-                unresolved_candidate_count += 1
+        return self._append_refresh_output(
+            case_id=case_id,
+            scope=scope,
+            refresh_key=refresh_key,
+            resolved_factors=resolved_factors,
+            admissible_by_id=admissible_by_id,
+            statement_dates=statement_dates,
+        )
+
+    def _append_refresh_output(
+        self,
+        *,
+        case_id: uuid.UUID,
+        scope: EventResearchScopeVersion,
+        refresh_key: str,
+        resolved_factors: Sequence[_ResolvedFactor],
+        admissible_by_id: dict[uuid.UUID, SourceStatement],
+        statement_dates: dict[uuid.UUID, date],
+    ) -> ImpactRefreshResult:
+        """Append a complete refresh trace in one savepoint or append none."""
+        with self._session.begin_nested():
+            resolved_candidates: list[_ResolvedCandidate] = []
+            for resolved_factor in resolved_factors:
+                factor = resolved_factor.factor
+                candidates = resolved_factor.candidates
+                hypothesis = EventImpactHypothesis(
+                    research_case_id=case_id,
+                    scope_version_id=scope.id,
+                    statement=factor.statement,
+                    classification="candidate",
+                    rank=factor.position,
+                    score_components={"refresh_key": refresh_key},
+                    explanation=self._pending_evidence_explanation(
+                        candidates, admissible_by_id
+                    ),
+                    created_at=_utcnow(),
+                )
+                self._session.add(hypothesis)
+                resolved_candidates.extend(
+                    _ResolvedCandidate(hypothesis=hypothesis, candidate=candidate)
+                    for candidate in candidates
+                )
+
+            source_rejected_count = 0
+            unresolved_candidate_count = 0
+            source_backed_candidates: list[
+                tuple[_ResolvedCandidate, SourceStatement]
+            ] = []
+            for entry in resolved_candidates:
+                candidate = entry.candidate
+                if candidate.source_statement_id is None:
+                    unresolved_candidate_count += 1
+                    self._session.add(
+                        EventImpactHypothesis(
+                            research_case_id=entry.hypothesis.research_case_id,
+                            scope_version_id=entry.hypothesis.scope_version_id,
+                            statement=(
+                                f"{candidate.company_name} {candidate.relation_kind}: "
+                                f"{candidate.mechanism}"
+                            ),
+                            classification="unresolved",
+                            rank=entry.hypothesis.rank,
+                            score_components={"refresh_key": refresh_key, "source": 0},
+                            explanation=(
+                                "source_statement_id is missing for "
+                                f"{candidate.company_name}'s {candidate.relation_kind} "
+                                "relationship; no relation or observation was appended."
+                            ),
+                            created_at=_utcnow(),
+                        )
+                    )
+                    continue
+                statement = admissible_by_id.get(candidate.source_statement_id)
+                if statement is None:
+                    source_rejected_count += 1
+                    continue
+                source_backed_candidates.append((entry, statement))
+
+            # Source ownership/admission is checked before company creation.  A
+            # resolver cannot manufacture entities by offering foreign/invalid ids.
+            companies = self._companies_for(
+                [entry.candidate for entry, _ in source_backed_candidates]
+            )
+            resolved_companies = [
+                (
+                    entry,
+                    statement,
+                    self._resolve_or_create_company(entry.candidate, companies),
+                )
+                for entry, statement in source_backed_candidates
+            ]
+            # New Company ids are needed by the append-only relation rows.  This
+            # is a single bulk flush, rather than a lookup/flush for each candidate.
+            self._session.flush()
+
+            relations_created = 0
+            relation_sources: list[
+                tuple[CompanyImpactRelation, ResolvedImpactCompany, SourceStatement]
+            ] = []
+            for entry, statement, company in resolved_companies:
+                candidate = entry.candidate
+                relation = CompanyImpactRelation(
+                    hypothesis=entry.hypothesis,
+                    scope_version_id=entry.hypothesis.scope_version_id,
+                    affected_company_id=company.id,
+                    relation_kind=candidate.relation_kind,
+                    direction=candidate.direction,
+                    mechanism=candidate.mechanism,
+                    status="candidate",
+                    source_statement_id=statement.id,
+                    created_at=_utcnow(),
+                )
+                self._session.add(relation)
+                relation_sources.append((relation, candidate, statement))
+                relations_created += 1
+            self._session.flush()
+            for relation, candidate, statement in relation_sources:
                 self._session.add(
-                    EventImpactHypothesis(
-                        research_case_id=entry.hypothesis.research_case_id,
-                        scope_version_id=entry.hypothesis.scope_version_id,
-                        statement=(
-                            f"{candidate.company_name} {candidate.relation_kind}: "
-                            f"{candidate.mechanism}"
+                    CompanyImpactObservation(
+                        relation_id=relation.id,
+                        kind="relation",
+                        status="verified",
+                        source_statement_id=statement.id,
+                        valuation_snapshot_id=None,
+                        summary=(
+                            f"{candidate.relation_kind}: {candidate.mechanism}. "
+                            f"Evidence: {statement.normalized_text}"
                         ),
-                        classification="unresolved",
-                        rank=entry.hypothesis.rank,
-                        score_components={"refresh_key": refresh_key, "source": 0},
-                        explanation=(
-                            "source_statement_id is missing for "
-                            f"{candidate.company_name}'s {candidate.relation_kind} "
-                            "relationship; no relation or observation was appended."
-                        ),
+                        as_of_date=statement_dates[statement.id],
                         created_at=_utcnow(),
                     )
                 )
-                continue
-            statement = admissible_by_id.get(candidate.source_statement_id)
-            if statement is None:
-                source_rejected_count += 1
-                continue
-            source_backed_candidates.append((entry, statement))
-
-        # Source ownership/admission is checked before company creation.  A
-        # resolver cannot manufacture entities by offering foreign/invalid ids.
-        companies = self._companies_for(
-            [entry.candidate for entry, _ in source_backed_candidates]
-        )
-        resolved_companies = [
-            (
-                entry,
-                statement,
-                self._resolve_or_create_company(entry.candidate, companies),
-            )
-            for entry, statement in source_backed_candidates
-        ]
-        # New Company ids are needed by the append-only relation rows.  This
-        # is a single bulk flush, rather than a lookup/flush for each candidate.
-        self._session.flush()
-
-        relations_created = 0
-        relation_sources: list[
-            tuple[CompanyImpactRelation, ResolvedImpactCompany, SourceStatement]
-        ] = []
-        for entry, statement, company in resolved_companies:
-            candidate = entry.candidate
-            relation = CompanyImpactRelation(
-                hypothesis=entry.hypothesis,
-                scope_version_id=entry.hypothesis.scope_version_id,
-                affected_company_id=company.id,
-                relation_kind=candidate.relation_kind,
-                direction=candidate.direction,
-                mechanism=candidate.mechanism,
-                status="candidate",
-                source_statement_id=statement.id,
-                created_at=_utcnow(),
-            )
-            self._session.add(relation)
-            relation_sources.append((relation, candidate, statement))
-            relations_created += 1
-        self._session.flush()
-        for relation, candidate, statement in relation_sources:
-            self._session.add(
-                CompanyImpactObservation(
-                    relation_id=relation.id,
-                    kind="relation",
-                    status="verified",
-                    source_statement_id=statement.id,
-                    valuation_snapshot_id=None,
-                    summary=(
-                        f"{candidate.relation_kind}: {candidate.mechanism}. "
-                        f"Evidence: {statement.normalized_text}"
-                    ),
-                    as_of_date=statement_dates[statement.id],
-                    created_at=_utcnow(),
-                )
-            )
-        self._session.flush()
+            self._session.flush()
         return ImpactRefreshResult(
-            hypotheses_created=len(factors) + unresolved_candidate_count,
+            hypotheses_created=len(resolved_factors) + unresolved_candidate_count,
             relations_created=relations_created,
             source_rejected_count=source_rejected_count,
             unresolved_candidate_count=unresolved_candidate_count,
