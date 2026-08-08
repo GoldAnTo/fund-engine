@@ -150,6 +150,73 @@ def test_created_report_automatically_extracts_claim_and_safe_named_relation(
     assert relation.object_company_id is None
 
 
+def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
+    cmd_client, cmd_session
+) -> None:
+    """Explicit relations are report assertions even when no opinion cue exists."""
+    from app.models.ledger import Company
+
+    plain = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "客户关系",
+            "content": "未上市客户乙是星海科技的客户。",
+        },
+    )
+    narrated = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "供应商关系",
+            "content": "公司认为未上市供应商甲是星海科技的供应商。",
+        },
+    )
+
+    assert plain.status_code == 201
+    assert narrated.status_code == 201
+    plain_case = uuid.UUID(plain.json()["case"]["id"])
+    narrated_case = uuid.UUID(narrated.json()["case"]["id"])
+    plain_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == plain_case)
+    )
+    narrated_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == narrated_case)
+    )
+    assert plain_claim is not None
+    assert narrated_claim is not None
+    plain_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == plain_claim.id)
+    )
+    narrated_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == narrated_claim.id)
+    )
+    assert plain_relation is not None
+    assert (plain_relation.subject_name, plain_relation.object_name) == (
+        "未上市客户乙",
+        "星海科技",
+    )
+    assert narrated_relation is not None
+    assert (narrated_relation.subject_name, narrated_relation.object_name) == (
+        "未上市供应商甲",
+        "星海科技",
+    )
+    assert all(
+        company_id is None
+        for company_id in (
+            plain_relation.subject_company_id,
+            plain_relation.object_company_id,
+            narrated_relation.subject_company_id,
+            narrated_relation.object_company_id,
+        )
+    )
+    assert cmd_session.scalars(
+        select(Company).where(
+            Company.name.in_(("未上市客户乙", "未上市供应商甲", "星海科技"))
+        )
+    ).all() == []
+
+
 def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
     cmd_client, cmd_session, monkeypatch, tmp_path
 ) -> None:

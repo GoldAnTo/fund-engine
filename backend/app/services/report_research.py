@@ -79,6 +79,10 @@ class RuleBasedReportContentExtractor:
     _competitor_relation = re.compile(
         rf"(?P<subject>{_company_name})与(?P<object>{_company_name})(?:存在)?竞争"
     )
+    _narrator_prefix = re.compile(
+        r"^(?:(?:本)?报告|研报|公司|管理层)(?:认为|指出|表示|判断|提到|称|强调)"
+        r"(?:[:：，,、\s]*)"
+    )
 
     def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]:
         extracted: list[ExtractedReportClaim] = []
@@ -86,13 +90,19 @@ class RuleBasedReportContentExtractor:
             statement = fragment.strip()
             if not statement:
                 continue
+            relations = tuple(self._relations_for(statement))
             kind = self._kind_for(statement)
+            # An explicit company relationship is itself a report assertion.
+            # Do not require an additional narrator/opinion marker to retain
+            # it for later verification.
+            if kind is None and relations:
+                kind = "report_opinion"
             if kind is not None:
                 extracted.append(
                     ExtractedReportClaim(
                         kind=kind,
                         statement=statement,
-                        relations=tuple(self._relations_for(statement)),
+                        relations=relations,
                     )
                 )
         return extracted
@@ -104,7 +114,8 @@ class RuleBasedReportContentExtractor:
         recognizes a narrow, easily reviewable set of Chinese report phrases;
         broader entity resolution belongs behind an injected parser boundary.
         """
-        role_match = self._role_relation.search(statement)
+        normalized_statement = self._narrator_prefix.sub("", statement).strip()
+        role_match = self._role_relation.search(normalized_statement)
         if role_match is not None:
             role = role_match.group("role")
             kind = {
@@ -120,7 +131,7 @@ class RuleBasedReportContentExtractor:
                     mechanism=f"研报明确称为{role}",
                 ),
             )
-        competitor_match = self._competitor_relation.search(statement)
+        competitor_match = self._competitor_relation.search(normalized_statement)
         if competitor_match is not None:
             return (
                 ExtractedReportRelation(
