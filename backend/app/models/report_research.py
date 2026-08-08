@@ -109,6 +109,41 @@ class ReportExtractionClaim(Base):
     )
 
 
+class ReportResearchScopeVersion(Base):
+    """Immutable ownership of the report document currently being researched.
+
+    A document id is evidence provenance, not a research scope.  This ledger
+    records the human/system decision that promoted an attached report version
+    into a new research scope, keeping historical Wiki reads explicit and
+    preventing a document revision from silently replacing prior results.
+    """
+
+    __tablename__ = "report_research_scope_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id", "version", name="uq_report_scope_case_version"
+        ),
+        UniqueConstraint(
+            "research_case_id", "document_version_id", name="uq_report_scope_case_document"
+        ),
+        Index("ix_report_scope_case_version", "research_case_id", "version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    change_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class ReportClaim(Base):
     """One source-backed opinion, forecast, assumption, or risk in a report."""
 
@@ -310,6 +345,42 @@ class ReportMarketConfounder(Base):
     as_of_date: Mapped[date] = mapped_column(nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     collection_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class ReportConfounderAssessment(Base):
+    """Append-only causal assessment of one confounder on one relation path."""
+
+    __tablename__ = "report_confounder_assessments"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('material', 'not_material', 'unresolved')",
+            name="ck_report_confounder_assessment_outcome",
+        ),
+        Index(
+            "ix_report_confounder_assessment_relation_created",
+            "report_relation_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_claims.id"), nullable=False
+    )
+    report_relation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_relations.id"), nullable=False
+    )
+    report_confounder_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_market_confounders.id"), nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -545,6 +616,36 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
         if attached is None:
             raise ValueError("report case span document is not attached to its research case")
 
+    for scope in session.new:
+        if not isinstance(scope, ReportResearchScopeVersion):
+            continue
+        attached = session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == scope.research_case_id,
+                CaseDocumentVersion.document_version_id == scope.document_version_id,
+            )
+        )
+        if attached is None and not any(
+            isinstance(binding, CaseDocumentVersion)
+            and binding.research_case_id == scope.research_case_id
+            and binding.document_version_id == scope.document_version_id
+            for binding in session.new
+        ):
+            raise ValueError("report scope document must be attached to its research case")
+        selected_span = session.scalar(
+            select(ReportCaseSourceSpan.id).where(
+                ReportCaseSourceSpan.research_case_id == scope.research_case_id,
+                ReportCaseSourceSpan.document_version_id == scope.document_version_id,
+            )
+        )
+        if selected_span is None and not any(
+            isinstance(binding, ReportCaseSourceSpan)
+            and binding.research_case_id == scope.research_case_id
+            and binding.document_version_id == scope.document_version_id
+            for binding in session.new
+        ):
+            raise ValueError("report scope document must have report source spans")
+
     pending_claims = {
         claim.id: claim
         for claim in session.new
@@ -685,6 +786,40 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
         )
         if attached is None:
             raise ValueError("report market confounder source must be attached to its claim case")
+
+    pending_confounders = {
+        confounder.id: confounder
+        for confounder in session.new
+        if isinstance(confounder, ReportMarketConfounder)
+    }
+    pending_relations = {
+        relation.id: relation
+        for relation in session.new
+        if isinstance(relation, ReportRelation)
+    }
+    for assessment in session.new:
+        if not isinstance(assessment, ReportConfounderAssessment):
+            continue
+        claim = pending_claims.get(assessment.report_claim_id) or session.get(
+            ReportClaim, assessment.report_claim_id
+        )
+        relation = pending_relations.get(assessment.report_relation_id) or session.get(
+            ReportRelation, assessment.report_relation_id
+        )
+        confounder = pending_confounders.get(
+            assessment.report_confounder_id
+        ) or session.get(ReportMarketConfounder, assessment.report_confounder_id)
+        if (
+            claim is None
+            or relation is None
+            or confounder is None
+            or assessment.research_case_id != claim.research_case_id
+            or relation.claim_id != claim.id
+            or confounder.report_claim_id != claim.id
+        ):
+            raise ValueError(
+                "report confounder assessment must belong to one claim relation path"
+            )
 
     for exposure in session.new:
         if not isinstance(exposure, ReportFundExposure):

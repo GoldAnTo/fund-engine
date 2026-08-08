@@ -24,6 +24,7 @@ from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
     ReportExtractionClaim,
+    ReportResearchScopeVersion,
     ReportRelation,
 )
 from app.repositories.documents import DocumentRepository
@@ -91,7 +92,8 @@ class ReportFactorClassifier:
         operating: bool,
         market: bool,
         peer: bool,
-        confounder: bool,
+        confounder_assessed: bool,
+        competing_explanation: bool,
     ) -> ReportFactorAssessment:
         components = {
             "report_source": report_source,
@@ -99,9 +101,9 @@ class ReportFactorClassifier:
             "operating": operating,
             "market": market,
             "peer": peer,
-            "confounder": confounder,
+            "confounder": confounder_assessed,
         }
-        if all(components.values()):
+        if all(components.values()) and not competing_explanation:
             return ReportFactorAssessment(
                 classification="key",
                 components=components,
@@ -110,7 +112,7 @@ class ReportFactorClassifier:
                     "因素评估均已具备；该因素可作为待审阅的关键因素。"
                 ),
             )
-        if confounder and (market or peer):
+        if competing_explanation:
             return ReportFactorAssessment(
                 classification="alternative",
                 components=components,
@@ -492,6 +494,7 @@ class ReportResearchService:
             input_kind=request.input_kind,
             publisher=request.publisher,
         )
+        self._create_initial_scope(case.id, document.id, request.created_by)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._schedule_market_impact(case.id)
         self._session.commit()
@@ -576,6 +579,7 @@ class ReportResearchService:
                 span.id, parsed.verbatim_text, kind="research_opinion"
             )
             statement_ids.append(statement.id)
+        self._create_initial_scope(case.id, document.id, created_by)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._schedule_market_impact(case.id)
         self._session.commit()
@@ -632,6 +636,7 @@ class ReportResearchService:
             verbatim_text="PDF uploaded but no extractable text is available.",
         )
         self._select_span_for_case(case.id, document.id, span.id)
+        self._create_initial_scope(case.id, document.id, created_by)
         statement = self._research.add_statement(
             span.id,
             "PDF uploaded but no extractable text is available.",
@@ -687,6 +692,59 @@ class ReportResearchService:
             )
         )
         self._session.flush()
+
+    def _create_initial_scope(
+        self,
+        research_case_id: uuid.UUID,
+        document_version_id: uuid.UUID,
+        changed_by: str,
+    ) -> ReportResearchScopeVersion:
+        """Append the first explicit report-research scope for a new case."""
+        scope = ReportResearchScopeVersion(
+            research_case_id=research_case_id,
+            document_version_id=document_version_id,
+            version=1,
+            changed_by=changed_by,
+            change_summary="初始研报研究范围",
+        )
+        self._session.add(scope)
+        self._session.flush()
+        return scope
+
+    def append_scope(
+        self,
+        research_case_id: uuid.UUID,
+        document_version_id: uuid.UUID,
+        *,
+        changed_by: str,
+        change_summary: str,
+    ) -> ReportResearchScopeVersion:
+        """Select an attached report revision as a new immutable scope.
+
+        This is the single write seam for future UI/API scope switching.  It
+        deliberately appends a version rather than changing a document tag,
+        so historical Wiki and factor results remain independently readable.
+        """
+        if not changed_by.strip() or not change_summary.strip():
+            raise ValueError("report scope changed_by and change_summary must not be blank")
+        latest = self._session.scalar(
+            select(ReportResearchScopeVersion)
+            .where(ReportResearchScopeVersion.research_case_id == research_case_id)
+            .order_by(ReportResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if latest is None:
+            raise ValueError("report research case has no initial scope")
+        scope = ReportResearchScopeVersion(
+            research_case_id=research_case_id,
+            document_version_id=document_version_id,
+            version=latest.version + 1,
+            changed_by=changed_by.strip(),
+            change_summary=change_summary.strip(),
+        )
+        self._session.add(scope)
+        self._session.flush()
+        return scope
 
     def _extract_claim_statement_ids(self, research_case_id: uuid.UUID) -> list:
         """Run the default report parser immediately after source intake.

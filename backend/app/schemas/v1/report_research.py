@@ -88,7 +88,7 @@ class ReportWikiNodeDTO(V1Model):
     label: str
     status: ReportWikiNodeStatus
     source_locator: str | None = None
-    scope_version: str
+    scope_version: int
 
 
 class ReportWikiEdgeDTO(V1Model):
@@ -98,11 +98,12 @@ class ReportWikiEdgeDTO(V1Model):
     kind: str
     status: ReportWikiNodeStatus
     source_locator: str | None = None
-    scope_version: str
+    scope_version: int
 
 
 class ReportFactorDTO(V1Model):
     claim_id: uuid.UUID
+    relation_id: uuid.UUID | None = None
     statement: str
     classification: ReportFactorClassification
     components: dict[str, bool]
@@ -113,7 +114,7 @@ class ReportWikiGraphDTO(V1Model):
     """The selected report-document scope, never a mixed history view."""
 
     research_case_id: uuid.UUID
-    scope_version: str
+    scope_version: int
     document_id: uuid.UUID
     nodes: list[ReportWikiNodeDTO]
     edges: list[ReportWikiEdgeDTO]

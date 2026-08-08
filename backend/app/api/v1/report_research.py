@@ -86,18 +86,18 @@ def upload_pdf_report(
 @router.get("/{case_id}/wiki", response_model=ReportWikiGraphDTO)
 def report_wiki_graph(
     case_id: uuid.UUID,
-    scope_version: uuid.UUID | None = Query(default=None),
+    scope_version: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
 ) -> ReportWikiGraphDTO:
     """Return one document version of a report Wiki graph.
 
     The default is the latest attached report document.  A caller that already
-    has access to this case may select an older immutable document id through
+    has access to this case may select an older immutable report scope through
     ``scope_version``; no response ever combines multiple report revisions.
     Case-level authorization is supplied by the hosting application boundary,
     just as it is for the existing case read endpoints.
     """
-    return ReportWikiQueries(db).graph(case_id, scope_version_id=scope_version)
+    return ReportWikiQueries(db).graph(case_id, scope_version=scope_version)
 
 
 @router.get("/documents/{document_id}/original")

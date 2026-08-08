@@ -32,9 +32,11 @@ from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
     ReportFundExposure,
+    ReportConfounderAssessment,
     ReportMarketConfounder,
     ReportMarketObservation,
     ReportRelation,
+    ReportResearchScopeVersion,
 )
 from app.schemas.v1.report_research import (
     ReportFactorDTO,
@@ -43,6 +45,7 @@ from app.schemas.v1.report_research import (
     ReportWikiNodeDTO,
 )
 from app.services.report_research import ReportFactorClassifier
+from app.services.source_admission import classify_source
 
 
 _OPERATING_TERMS = (
@@ -81,11 +84,14 @@ class ReportWikiQueries:
         self,
         case_id: uuid.UUID,
         *,
-        scope_version_id: uuid.UUID | None = None,
+        scope_version: int | None = None,
     ) -> ReportWikiGraphDTO:
         self._require_case(case_id)
-        document = self._scope_document(case_id, scope_version_id)
-        scope_version = str(document.id)
+        scope = self._scope(case_id, scope_version)
+        document = self._session.get(DocumentVersion, scope.document_version_id)
+        if document is None:  # foreign key is the database boundary; fail closed for SQLite fixtures.
+            raise NotFoundError("report scope document not found")
+        current_scope_version = scope.version
         claims, claim_spans, claim_statements = self._claims_for_document(
             case_id, document.id
         )
@@ -105,6 +111,7 @@ class ReportWikiQueries:
                 for row in rows
             },
         )
+        confounder_assessments = self._confounder_assessments(claim_ids)
         exposures_by_claim = self._fund_exposures(claim_ids)
         funds = self._funds(exposures_by_claim)
         independent_evidence = self._independent_case_evidence(case_id, document.id)
@@ -132,7 +139,7 @@ class ReportWikiQueries:
                     label=claim.statement,
                     status="report_claim",
                     source_locator=locator,
-                    scope_version=scope_version,
+                    scope_version=current_scope_version,
                 )
             )
             add_node(
@@ -142,7 +149,7 @@ class ReportWikiQueries:
                     label=statement.normalized_text,
                     status="report_claim",
                     source_locator=locator,
-                    scope_version=scope_version,
+                    scope_version=current_scope_version,
                 )
             )
             add_edge(
@@ -152,15 +159,16 @@ class ReportWikiQueries:
                     "reported_by",
                     "report_claim",
                     locator,
-                    scope_version,
+                    current_scope_version,
                 )
             )
 
             claim_relations = relations_by_claim[claim.id]
-            relation_verified = False
-            operating = False
             relation_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
             operating_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
+            path_evidence: dict[
+                uuid.UUID, tuple[bool, tuple[_IndependentEvidence, ...]]
+            ] = {}
             for relation in claim_relations:
                 subject_id, subject_label = self._company_node(
                     relation.subject_company_id,
@@ -179,7 +187,7 @@ class ReportWikiQueries:
                         label=subject_label,
                         status="report_claim",
                         source_locator=locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_node(
@@ -189,7 +197,7 @@ class ReportWikiQueries:
                         label=object_label,
                         status="report_claim",
                         source_locator=locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_edge(
@@ -199,7 +207,7 @@ class ReportWikiQueries:
                         relation.relation_kind,
                         "report_claim",
                         locator,
-                        scope_version,
+                        current_scope_version,
                         suffix=str(relation.id),
                     )
                 )
@@ -208,11 +216,10 @@ class ReportWikiQueries:
                     companies=companies,
                     evidence=independent_evidence,
                 )
+                path_evidence[relation.id] = (verified is not None, operating_rows)
                 if verified is not None:
-                    relation_verified = True
                     relation_evidence[verified.statement.id] = verified
                 for row in operating_rows:
-                    operating = True
                     operating_evidence[row.statement.id] = row
 
             for row in (*relation_evidence.values(), *operating_evidence.values()):
@@ -225,7 +232,7 @@ class ReportWikiQueries:
                         label=row.statement.normalized_text,
                         status="verified",
                         source_locator=independent_locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_edge(
@@ -235,20 +242,11 @@ class ReportWikiQueries:
                         "independent_evidence",
                         "verified",
                         independent_locator,
-                        scope_version,
+                        current_scope_version,
                     )
                 )
 
             observations = observations_by_claim.get(claim.id, ())
-            market = any(
-                row.status == "verified" and row.kind == "target_market"
-                for row in observations
-            )
-            peer = any(
-                row.status == "verified"
-                and row.kind in {"peer_control", "industry_control"}
-                for row in observations
-            )
             for observation in observations:
                 market_node_id = f"market_window:{observation.id}"
                 market_locator = self._market_locator(observation)
@@ -259,7 +257,7 @@ class ReportWikiQueries:
                         label=f"发布后 {observation.window}：{observation.summary}",
                         status="market_observation",
                         source_locator=market_locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_edge(
@@ -269,7 +267,7 @@ class ReportWikiQueries:
                         observation.kind,
                         "market_observation",
                         market_locator,
-                        scope_version,
+                        current_scope_version,
                     )
                 )
 
@@ -291,7 +289,7 @@ class ReportWikiQueries:
                         label=confounder.summary,
                         status="candidate",
                         source_locator=confounder_locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_edge(
@@ -301,7 +299,7 @@ class ReportWikiQueries:
                         f"confounder:{confounder.kind}",
                         "candidate",
                         confounder_locator,
-                        scope_version,
+                        current_scope_version,
                     )
                 )
 
@@ -327,7 +325,7 @@ class ReportWikiQueries:
                         label=fund_label,
                         status="verified" if exposure.status == "verified" else "candidate",
                         source_locator=fund_locator,
-                        scope_version=scope_version,
+                        scope_version=current_scope_version,
                     )
                 )
                 add_edge(
@@ -337,32 +335,74 @@ class ReportWikiQueries:
                         "fund_exposure",
                         "verified" if exposure.status == "verified" else "candidate",
                         fund_locator,
-                        scope_version,
+                        current_scope_version,
                         suffix=str(exposure.id),
                     )
                 )
 
-            assessment = ReportFactorClassifier.classify(
-                report_source=True,
-                company_relation=relation_verified,
-                operating=operating,
-                market=market,
-                peer=peer,
-                confounder=bool(confounders),
-            )
-            factors.append(
-                ReportFactorDTO(
-                    claim_id=claim.id,
-                    statement=claim.statement,
-                    classification=assessment.classification,
-                    components=assessment.components,
-                    explanation=assessment.explanation,
+            # Every factor is assessed per relationship path.  A peer window
+            # for company A and a target window for company B must never be
+            # unioned into a fabricated "key" explanation.
+            factor_paths: list[ReportRelation | None] = claim_relations or [None]
+            for relation in factor_paths:
+                relation_id = relation.id if relation is not None else None
+                relation_verified, operating_rows = (
+                    path_evidence.get(relation_id, (False, ()))
+                    if relation_id is not None
+                    else (False, ())
                 )
-            )
+                path_observations = [
+                    row
+                    for row in observations
+                    if row.report_relation_id == relation_id
+                ]
+                path_market = any(
+                    row.status == "verified" and row.kind == "target_market"
+                    for row in path_observations
+                )
+                path_peer = any(
+                    row.status == "verified"
+                    and row.kind in {"peer_control", "industry_control"}
+                    for row in path_observations
+                )
+                path_confounders = confounders if relation_id is not None else ()
+                latest_outcomes = {
+                    confounder.id: confounder_assessments.get(
+                        (relation_id, confounder.id)
+                    )
+                    for confounder in path_confounders
+                }
+                confounder_assessed = bool(path_confounders) and all(
+                    outcome is not None and outcome.outcome != "unresolved"
+                    for outcome in latest_outcomes.values()
+                )
+                competing_explanation = any(
+                    outcome is not None and outcome.outcome == "material"
+                    for outcome in latest_outcomes.values()
+                )
+                assessment = ReportFactorClassifier.classify(
+                    report_source=True,
+                    company_relation=relation_verified,
+                    operating=bool(operating_rows),
+                    market=path_market,
+                    peer=path_peer,
+                    confounder_assessed=confounder_assessed,
+                    competing_explanation=competing_explanation,
+                )
+                factors.append(
+                    ReportFactorDTO(
+                        claim_id=claim.id,
+                        relation_id=relation_id,
+                        statement=claim.statement,
+                        classification=assessment.classification,
+                        components=assessment.components,
+                        explanation=assessment.explanation,
+                    )
+                )
 
         return ReportWikiGraphDTO(
             research_case_id=case_id,
-            scope_version=scope_version,
+            scope_version=current_scope_version,
             document_id=document.id,
             nodes=list(nodes.values()),
             edges=list(edges.values()),
@@ -373,36 +413,21 @@ class ReportWikiQueries:
         if self._session.get(ResearchCase, case_id) is None:
             raise NotFoundError("report research case not found")
 
-    def _scope_document(
-        self, case_id: uuid.UUID, scope_version_id: uuid.UUID | None
-    ) -> DocumentVersion:
+    def _scope(
+        self, case_id: uuid.UUID, scope_version: int | None
+    ) -> ReportResearchScopeVersion:
         statement = (
-            select(DocumentVersion)
-            .join(
-                ReportCaseSourceSpan,
-                ReportCaseSourceSpan.document_version_id == DocumentVersion.id,
-            )
-            .join(
-                CaseDocumentVersion,
-                and_(
-                    CaseDocumentVersion.document_version_id == DocumentVersion.id,
-                    CaseDocumentVersion.research_case_id == case_id,
-                ),
-            )
-            .where(ReportCaseSourceSpan.research_case_id == case_id)
+            select(ReportResearchScopeVersion)
+            .where(ReportResearchScopeVersion.research_case_id == case_id)
         )
-        if scope_version_id is not None:
-            statement = statement.where(DocumentVersion.id == scope_version_id)
+        if scope_version is not None:
+            statement = statement.where(ReportResearchScopeVersion.version == scope_version)
         else:
-            statement = statement.order_by(
-                CaseDocumentVersion.linked_at.desc(),
-                DocumentVersion.available_at.desc(),
-                DocumentVersion.id.desc(),
-            ).limit(1)
-        document = self._session.scalars(statement).first()
-        if document is None:
+            statement = statement.order_by(ReportResearchScopeVersion.version.desc()).limit(1)
+        selected = self._session.scalars(statement).first()
+        if selected is None:
             raise NotFoundError("report research scope not found")
-        return document
+        return selected
 
     def _claims_for_document(
         self, case_id: uuid.UUID, document_id: uuid.UUID
@@ -496,6 +521,24 @@ class ReportWikiQueries:
                 grouped[row.report_claim_id].append(row)
         return grouped
 
+    def _confounder_assessments(
+        self, claim_ids: set[uuid.UUID]
+    ) -> dict[tuple[uuid.UUID, uuid.UUID], ReportConfounderAssessment]:
+        """Read only the latest append-only outcome for each relation path."""
+        latest: dict[tuple[uuid.UUID, uuid.UUID], ReportConfounderAssessment] = {}
+        if not claim_ids:
+            return latest
+        for row in self._session.scalars(
+            select(ReportConfounderAssessment)
+            .where(ReportConfounderAssessment.report_claim_id.in_(claim_ids))
+            .order_by(
+                ReportConfounderAssessment.created_at.desc(),
+                ReportConfounderAssessment.id.desc(),
+            )
+        ):
+            latest.setdefault((row.report_relation_id, row.report_confounder_id), row)
+        return latest
+
     def _fund_exposures(
         self, claim_ids: set[uuid.UUID]
     ) -> dict[uuid.UUID, list[ReportFundExposure]]:
@@ -529,8 +572,9 @@ class ReportWikiQueries:
         self, case_id: uuid.UUID, document_id: uuid.UUID
     ) -> tuple[_IndependentEvidence, ...]:
         rows = self._session.execute(
-            select(SourceStatement, SourceSpan)
+            select(SourceStatement, SourceSpan, DocumentVersion)
             .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
+            .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
             .join(
                 CaseDocumentVersion,
                 and_(
@@ -539,8 +583,17 @@ class ReportWikiQueries:
                 ),
             )
             .where(SourceSpan.document_version_id != document_id)
+            .where(SourceStatement.kind.in_(("disclosed_fact", "management_attribution")))
         )
-        return tuple(_IndependentEvidence(statement, span) for statement, span in rows)
+        return tuple(
+            _IndependentEvidence(statement, span)
+            for statement, span, source_document in rows
+            if classify_source(
+                source_document.source_url,
+                source_document.parser_version,
+                source_document.parse_state in {"success", "parsed"},
+            ).can_accept
+        )
 
     def _confounder_sources(
         self, case_id: uuid.UUID, statement_ids: set[uuid.UUID]
@@ -639,7 +692,7 @@ class ReportWikiQueries:
         kind: str,
         status: str,
         source_locator: str | None,
-        scope_version: str,
+        scope_version: int,
         *,
         suffix: str = "",
     ) -> ReportWikiEdgeDTO:
