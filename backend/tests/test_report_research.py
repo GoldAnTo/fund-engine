@@ -5,10 +5,19 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, update
 
 from app.datasources.docling import PdfParseError
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, SourceSpan, SourceStatement
+from app.models.ledger import (
+    CaseDocumentVersion,
+    DocumentBlob,
+    DocumentVersion,
+    ImmutableLedgerError,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+)
 
 
 def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> None:
@@ -99,7 +108,7 @@ def test_web_report_preserves_origin_url_and_creates_auditable_statement(
 
 
 def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
-    cmd_client, cmd_session, monkeypatch
+    cmd_client, cmd_session, monkeypatch, tmp_path
 ) -> None:
     def _parse_failure(self, raw: bytes, *, document_sha256: str):
         raise PdfParseError("fixture parser failure")
@@ -107,6 +116,7 @@ def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
     monkeypatch.setattr(
         "app.services.report_research.PypdfAdapter.extract_spans", _parse_failure
     )
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
     raw = b"%PDF-fixture-that-cannot-be-parsed"
     response = cmd_client.post(
         "/api/v1/report-research/pdf",
@@ -138,3 +148,43 @@ def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
     assert cmd_session.scalar(
         select(SourceStatement).where(SourceStatement.source_span_id == span.id)
     ) is not None
+    blob = cmd_session.scalar(
+        select(DocumentBlob).where(DocumentBlob.document_version_id == document.id)
+    )
+    assert blob is not None
+    assert blob.content_sha256 == hashlib.sha256(raw).hexdigest()
+    assert (tmp_path / "report-blobs" / blob.storage_key).read_bytes() == raw
+    retrieved = cmd_client.get(
+        f"/api/v1/report-research/documents/{document.id}/original"
+    )
+    assert retrieved.status_code == 200
+    assert retrieved.headers["content-type"].startswith("application/pdf")
+    assert retrieved.content == raw
+    with pytest.raises(ImmutableLedgerError):
+        cmd_session.execute(
+            update(DocumentBlob)
+            .where(DocumentBlob.id == blob.id)
+            .values(storage_key="sha256/replaced")
+        )
+
+
+def test_report_research_rejects_blank_title_or_content(cmd_client) -> None:
+    blank_title = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "   ",
+            "content": "有内容",
+        },
+    )
+    blank_content = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "有标题",
+            "content": " \n ",
+        },
+    )
+
+    assert blank_title.status_code == 422
+    assert blank_content.status_code == 422

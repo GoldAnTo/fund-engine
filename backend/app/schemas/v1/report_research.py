@@ -34,6 +34,10 @@ class CreateReportResearchRequest(V1Model):
         self.publisher = self.publisher.strip() if self.publisher else None
         self.source_url = self.source_url.strip() if self.source_url else None
         self.content = self.content.strip()
+        if not self.title:
+            raise ValueError("title must not be blank")
+        if not self.content:
+            raise ValueError("content must not be blank")
         return self
 
 

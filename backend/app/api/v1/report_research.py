@@ -3,10 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, Query, status
+import uuid
+
+from fastapi import APIRouter, Body, Depends, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.errors import NotFoundError
+from app.models.ledger import DocumentBlob
 from app.schemas.v1.report_research import (
     CreateReportResearchRequest,
     ReportResearchCreatedResponse,
@@ -14,6 +19,7 @@ from app.schemas.v1.report_research import (
     ReportResearchDocumentDTO,
 )
 from app.services.report_research import CreatedReportResearch, ReportResearchService
+from app.services.document_blobs import LocalImmutableBlobStore
 
 router = APIRouter(prefix="/report-research", tags=["report-research-v1"])
 
@@ -59,6 +65,11 @@ def upload_pdf_report(
     created_by: str = Query(default="report-research-system", min_length=1, max_length=128),
     db: Session = Depends(get_db),
 ) -> ReportResearchCreatedResponse:
+    title = title.strip()
+    if not title:
+        from app.errors import ValidationFailedError
+
+        raise ValidationFailedError("title must not be blank")
     created = ReportResearchService(db).create_pdf(
         raw=raw,
         title=title,
@@ -68,3 +79,16 @@ def upload_pdf_report(
         created_by=created_by,
     )
     return _response(created)
+
+
+@router.get("/documents/{document_id}/original")
+def get_original_report_upload(
+    document_id: uuid.UUID, db: Session = Depends(get_db)
+) -> Response:
+    blob = db.scalar(
+        select(DocumentBlob).where(DocumentBlob.document_version_id == document_id)
+    )
+    if blob is None:
+        raise NotFoundError(f"original upload for document {document_id} not found")
+    raw = LocalImmutableBlobStore().read(blob)
+    return Response(content=raw, media_type=blob.media_type)

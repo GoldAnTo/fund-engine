@@ -41,6 +41,7 @@ AIRunStatus = Literal["success", "failed"]
 IMMUTABLE_TABLES = frozenset(
     {
         "document_versions",
+        "document_blobs",
         "case_document_versions",
         "event_research_briefs",
         "event_research_factor_drafts",
@@ -170,6 +171,33 @@ class DocumentVersion(Base):
     parse_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="success"
     )
+
+
+class DocumentBlob(Base):
+    """Immutable reference to bytes supplied directly by a researcher.
+
+    DocumentVersion deliberately remains a ledger identity record rather than
+    an unbounded binary column.  For uploads, this companion record points to
+    content-addressed bytes in the configured local immutable blob store.
+    """
+
+    __tablename__ = "document_blobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id", name="uq_document_blobs_document_version"
+        ),
+        UniqueConstraint("storage_key", name="uq_document_blobs_storage_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False, index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CaseDocumentVersion(Base):

@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
-from app.models.ledger import DocumentVersion, ResearchCase
+from app.models.ledger import DocumentBlob, DocumentVersion, ResearchCase
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.report_research import CreateReportResearchRequest
 from app.services.ingest import DocumentService
+from app.services.document_blobs import LocalImmutableBlobStore
 from app.services.research import ResearchService
 
 
@@ -38,6 +39,7 @@ class ReportResearchService:
         self._session = session
         self._documents = DocumentService(DocumentRepository(session))
         self._research = ResearchService(ResearchRepository(session))
+        self._blobs = LocalImmutableBlobStore()
 
     def create_text(
         self, request: CreateReportResearchRequest
@@ -105,13 +107,14 @@ class ReportResearchService:
 
         document = self._documents.freeze(
             raw=raw,
-            source_url=self._generated_source_url("pdf_upload", raw, filename),
+            source_url=self._generated_source_url("pdf_upload", raw),
             published_at=published_at,
             parser_version=PARSER_VERSION_PYPDF,
             title=normalized_title,
             language="zh",
             parse_state="success",
         )
+        self._persist_uploaded_blob(document, raw)
         case = self._create_case(normalized_title, normalized_publisher, created_by)
         self._documents.attach_to_case(
             research_case_id=case.id, document_version_id=document.id
@@ -161,13 +164,14 @@ class ReportResearchService:
     ) -> CreatedReportResearch:
         document = self._documents.freeze(
             raw=raw,
-            source_url=self._generated_source_url("pdf_upload", raw, filename),
+            source_url=self._generated_source_url("pdf_upload", raw),
             published_at=published_at,
             parser_version=PARSER_VERSION_PYPDF,
             title=title,
             language=None,
             parse_state="failed",
         )
+        self._persist_uploaded_blob(document, raw)
         case = self._create_case(title, publisher, created_by)
         self._documents.attach_to_case(
             research_case_id=case.id, document_version_id=document.id
@@ -234,6 +238,26 @@ class ReportResearchService:
             core_question=f"验证《{title}》中的核心观点及其市场影响。",
         )
 
+    def _persist_uploaded_blob(self, document: DocumentVersion, raw: bytes) -> DocumentBlob:
+        existing = self._session.query(DocumentBlob).filter_by(
+            document_version_id=document.id
+        ).one_or_none()
+        if existing is not None:
+            self._blobs.read(existing)
+            return existing
+        storage_key, digest = self._blobs.persist(raw)
+        blob = DocumentBlob(
+            document_version_id=document.id,
+            storage_key=storage_key,
+            content_sha256=digest,
+            byte_size=len(raw),
+            media_type="application/pdf",
+            created_at=datetime.now(timezone.utc),
+        )
+        self._session.add(blob)
+        self._session.flush()
+        return blob
+
     @staticmethod
     def _iso_published_at(published_at: datetime | None) -> str | None:
         if published_at is None:
@@ -243,7 +267,9 @@ class ReportResearchService:
         return published_at.isoformat()
 
     @staticmethod
-    def _generated_source_url(input_kind: str, raw: bytes, filename: str | None = None) -> str:
+    def _generated_source_url(input_kind: str, raw: bytes) -> str:
         digest = hashlib.sha256(raw).hexdigest()
-        suffix = filename.rsplit("/", 1)[-1] if filename else digest[:32]
-        return f"report://{input_kind}/{suffix}?sha256={digest}"
+        # File names are untrusted user input. The content-addressed source
+        # identity is enough for the ledger and cannot be interpreted as an
+        # external navigable URL.
+        return f"report://{input_kind}/{digest[:32]}?sha256={digest}"
