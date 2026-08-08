@@ -70,7 +70,7 @@ class EventImpactQueries:
             for review in self._session.scalars(
                 select(CompanyImpactRelationReview)
                 .where(CompanyImpactRelationReview.relation_id.in_(relation_ids))
-                .order_by(CompanyImpactRelationReview.created_at.desc())
+                .order_by(CompanyImpactRelationReview.created_at.desc(), CompanyImpactRelationReview.id.desc())
             ):
                 latest_reviews.setdefault(review.relation_id, review)
         stock_by_id = {

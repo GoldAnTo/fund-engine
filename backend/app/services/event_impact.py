@@ -786,11 +786,31 @@ class EventImpactResearchService:
             .where(TaskItem.scope_version_id == relation.scope_version_id)
         ) is None:
             raise ValidationFailedError("impact relation is not a high-impact source gap")
+        existing = self._session.scalar(
+            select(CompanyImpactRelationReview)
+            .where(CompanyImpactRelationReview.relation_id == relation.id)
+            .where(CompanyImpactRelationReview.outcome == outcome)
+            .where(CompanyImpactRelationReview.reason == reason.strip())
+            .where(CompanyImpactRelationReview.reviewer == reviewer.strip())
+            .order_by(CompanyImpactRelationReview.created_at.desc(), CompanyImpactRelationReview.id.desc())
+            .limit(1)
+        )
+        if existing is not None:
+            return existing
         review = CompanyImpactRelationReview(
             relation_id=relation.id, outcome=outcome, reason=reason.strip(), reviewer=reviewer.strip(), created_at=_utcnow()
         )
         self._session.add(review)
         self._session.flush()
+        self._session.execute(
+            update(TaskItem)
+            .where(TaskItem.task_type == "review_company_impact")
+            .where(TaskItem.ref_type == "company_impact_relation")
+            .where(TaskItem.ref_id == relation.id)
+            .where(TaskItem.scope_version_id == relation.scope_version_id)
+            .where(TaskItem.status.in_(("open", "in_progress")))
+            .values(status="done")
+        )
         self.classify(hypothesis.research_case_id, scope_version_id=relation.scope_version_id,
                       hypothesis_ids=[hypothesis.id], update_lifecycle=False)
         return review
