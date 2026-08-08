@@ -13,10 +13,13 @@ from app.db import get_db
 from app.errors import NotFoundError
 from app.models.ledger import DocumentBlob
 from app.schemas.v1.report_research import (
+    AppendReportResearchScopeRequest,
     CreateReportResearchRequest,
     ReportResearchCreatedResponse,
     ReportResearchCaseDTO,
     ReportResearchDocumentDTO,
+    ReportResearchScopeDTO,
+    ReportResearchScopeListResponse,
     ReportEmbedWikiGraphDTO,
     ReportWikiGraphDTO,
 )
@@ -52,6 +55,19 @@ def _response(created: CreatedReportResearch) -> ReportResearchCreatedResponse:
     )
 
 
+def _scope_response(scope) -> ReportResearchScopeDTO:
+    return ReportResearchScopeDTO(
+        version=scope.scope.version,
+        document_id=scope.scope.document_version_id,
+        visibility_cutoff_at=scope.scope.visibility_cutoff_at,
+        research_question=scope.scope.research_question,
+        factor_selection=list(scope.scope.factor_selection),
+        evidence_plan=list(scope.scope.evidence_plan),
+        selected_claim_ids=list(scope.selected_claim_ids),
+        selected_relation_ids=list(scope.selected_relation_ids),
+    )
+
+
 @router.post("", response_model=ReportResearchCreatedResponse, status_code=status.HTTP_201_CREATED)
 def create_report_research(
     payload: CreateReportResearchRequest, db: Session = Depends(get_db)
@@ -83,6 +99,72 @@ def upload_pdf_report(
         created_by=created_by,
     )
     return _response(created)
+
+
+@router.get("/{case_id}/scopes", response_model=ReportResearchScopeListResponse)
+def list_report_research_scopes(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> ReportResearchScopeListResponse:
+    service = ReportResearchService(db)
+    try:
+        scopes = service.list_scope_selections(case_id)
+    except ValueError as exc:
+        raise NotFoundError(str(exc)) from None
+    items = [_scope_response(scope) for scope in scopes]
+    return ReportResearchScopeListResponse(
+        items=items,
+        current_scope_version=items[-1].version if items else None,
+    )
+
+
+@router.get("/{case_id}/scopes/current", response_model=ReportResearchScopeDTO)
+def current_report_research_scope(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> ReportResearchScopeDTO:
+    service = ReportResearchService(db)
+    try:
+        scopes = service.list_scope_selections(case_id)
+    except ValueError as exc:
+        raise NotFoundError(str(exc)) from None
+    if not scopes:
+        raise NotFoundError("report research scope not found")
+    return _scope_response(scopes[-1])
+
+
+@router.post(
+    "/{case_id}/scopes",
+    response_model=ReportResearchScopeDTO,
+    status_code=status.HTTP_201_CREATED,
+)
+def append_report_research_scope(
+    case_id: uuid.UUID,
+    payload: AppendReportResearchScopeRequest,
+    db: Session = Depends(get_db),
+) -> ReportResearchScopeDTO:
+    service = ReportResearchService(db)
+    try:
+        scope = service.append_scope(
+            case_id,
+            payload.document_id,
+            changed_by=payload.changed_by,
+            change_summary=payload.change_summary,
+            research_question=payload.research_question,
+            factor_selection=payload.factor_selection,
+            evidence_plan=payload.evidence_plan,
+            selected_claim_ids=payload.selected_claim_ids,
+            selected_relation_ids=payload.selected_relation_ids,
+        )
+        db.commit()
+        selections = service.list_scope_selections(case_id)
+    except ValueError as exc:
+        db.rollback()
+        if str(exc) == "report research case not found":
+            raise NotFoundError(str(exc)) from None
+        from app.errors import ValidationFailedError
+
+        raise ValidationFailedError(str(exc)) from None
+    selected = next(item for item in selections if item.scope.id == scope.id)
+    return _scope_response(selected)
 
 
 @router.get("/{case_id}/wiki", response_model=ReportWikiGraphDTO)

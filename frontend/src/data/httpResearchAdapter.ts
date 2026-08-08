@@ -2930,7 +2930,60 @@ export class HttpResearchAdapter implements ResearchClient {
     return { scopeVersion: dto.scope_version, asOf: dto.as_of ?? null, factors: (dto.factors ?? []).map(mapFactor), alternatives: (dto.alternatives ?? []).map(mapFactor), progress: dto.progress ?? {} };
   }
 
-  async getReportWikiGraph(caseId: string, options?: { relationId?: string }): Promise<ReportWikiGraph> {
+  async createReportResearch(input: import("../domain/eventResearch").CreateReportResearchInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
+    const dto = await this.post<{
+      case: { id: string }; document: { id: string };
+      state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean;
+    }>("/report-research", {
+      input_kind: input.inputKind,
+      title: input.title,
+      publisher: input.publisher || null,
+      published_at: input.publishedAt || null,
+      source_url: input.sourceUrl || null,
+      content: input.content,
+    });
+    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true };
+  }
+
+  async createReportResearchPdf(input: import("../domain/eventResearch").CreateReportResearchPdfInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
+    const query = new URLSearchParams({ title: input.title, filename: input.file.name });
+    if (input.publisher) query.set("publisher", input.publisher);
+    if (input.publishedAt) query.set("published_at", input.publishedAt);
+    let response: Response;
+    try {
+      response = await fetch(`${this.options.baseUrl}/report-research/pdf?${query.toString()}`, {
+        method: "POST", headers: { Accept: "application/json", "Content-Type": "application/pdf" }, body: input.file,
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
+      throw new PageStateError(asPageStateErrorKind(payload?.error?.code), payload?.error?.message);
+    }
+    const dto = await response.json() as { case: { id: string }; document: { id: string }; state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean };
+    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true };
+  }
+
+  async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
+    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[] };
+    const dto = await this.get<{ items: WireScope[]; current_scope_version: number | null }>(`/report-research/${encodeURIComponent(caseId)}/scopes`);
+    const map = (scope: WireScope) => ({ version: scope.version, documentId: scope.document_id, visibilityCutoffAt: scope.visibility_cutoff_at, researchQuestion: scope.research_question, factorSelection: scope.factor_selection, evidencePlan: scope.evidence_plan, selectedClaimIds: scope.selected_claim_ids, selectedRelationIds: scope.selected_relation_ids });
+    return { items: dto.items.map(map), currentScopeVersion: dto.current_scope_version };
+  }
+
+  async appendReportResearchScope(input: import("../domain/eventResearch").AppendReportResearchScopeInput): Promise<import("../domain/eventResearch").ReportResearchScope> {
+    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[] };
+    const dto = await this.post<WireScope>(`/report-research/${encodeURIComponent(input.caseId)}/scopes`, {
+      document_id: input.documentId, research_question: input.researchQuestion,
+      factor_selection: input.factorSelection, evidence_plan: input.evidencePlan,
+      selected_claim_ids: input.selectedClaimIds, selected_relation_ids: input.selectedRelationIds,
+      changed_by: input.changedBy || "report-research-user", change_summary: input.changeSummary || "研究者创建新的研究范围",
+    });
+    return { version: dto.version, documentId: dto.document_id, visibilityCutoffAt: dto.visibility_cutoff_at, researchQuestion: dto.research_question, factorSelection: dto.factor_selection, evidencePlan: dto.evidence_plan, selectedClaimIds: dto.selected_claim_ids, selectedRelationIds: dto.selected_relation_ids };
+  }
+
+  async getReportWikiGraph(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph> {
     type WireNode = { id: string; kind: ReportWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus; source_locator?: string | null; asset_mapping?: { company_kind?: "listed_a_share" | "unlisted_transmission" | null; a_share_codes?: string[]; fund_coverage?: "complete" | "partial" | "stale" | "insufficient" | null; computable?: boolean | null } | null; scope_version: number };
     type WireEdge = { id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus; relation_id?: string | null; source_locator?: string | null; scope_version: number };
     type Wire = {
@@ -2939,7 +2992,10 @@ export class HttpResearchAdapter implements ResearchClient {
       nodes: WireNode[]; edges: WireEdge[];
       factors: Array<{ claim_id: string; relation_id?: string | null; statement: string; classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
     };
-    const query = options?.relationId ? `?relation_id=${encodeURIComponent(options.relationId)}` : "";
+    const search = new URLSearchParams();
+    if (options?.relationId) search.set("relation_id", options.relationId);
+    if (options?.scopeVersion) search.set("scope_version", String(options.scopeVersion));
+    const query = search.size ? `?${search.toString()}` : "";
     const dto = await this.get<Wire>(`/report-research/${encodeURIComponent(caseId)}/wiki${query}`);
     return {
       researchCaseId: dto.research_case_id,

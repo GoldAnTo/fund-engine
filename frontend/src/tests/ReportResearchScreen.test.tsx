@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
@@ -62,5 +63,47 @@ describe("ReportResearchScreen", () => {
     renderScreen();
     expect(await screen.findByRole("alert")).toHaveTextContent("服务暂不可用");
     expect(screen.getByRole("button", { name: "重新加载研究" })).toBeVisible();
+  });
+
+  it("appends an immutable successor scope and can return to historical scope", async () => {
+    const user = userEvent.setup();
+    const first = structuredClone(graph);
+    const second = structuredClone(graph);
+    second.scopeVersion = 2;
+    second.scope = {
+      ...second.scope,
+      version: 2,
+      researchQuestion: "只验证供应商路径是否存在，并保留市场证据缺口。",
+      factorSelection: ["供应链"],
+      evidencePlan: ["公司公告"],
+    };
+    let scopes = [first.scope];
+    vi.spyOn(adapter, "listReportResearchScopes").mockImplementation(async () => ({ items: scopes, currentScopeVersion: scopes[scopes.length - 1]?.version ?? null }));
+    vi.spyOn(adapter, "getReportWikiGraph").mockImplementation(async (_caseId, options) => options?.scopeVersion === 1 ? first : scopes.length > 1 ? second : first);
+    const append = vi.spyOn(adapter, "appendReportResearchScope").mockImplementation(async (input) => {
+      scopes = [first.scope, { ...second.scope, researchQuestion: input.researchQuestion, factorSelection: input.factorSelection, evidencePlan: input.evidencePlan }];
+      return scopes[1];
+    });
+    renderScreen();
+
+    expect(await screen.findByRole("heading", { name: "研究范围" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "创建新的研究范围" }));
+    const question = screen.getByLabelText("研究问题");
+    await user.clear(question);
+    await user.type(question, "只验证供应商路径是否存在，并保留市场证据缺口。");
+    await user.clear(screen.getByLabelText("因素重点（每行一项）"));
+    await user.type(screen.getByLabelText("因素重点（每行一项）"), "供应链");
+    await user.clear(screen.getByLabelText("证据计划（每行一项）"));
+    await user.type(screen.getByLabelText("证据计划（每行一项）"), "公司公告");
+    await user.click(screen.getByRole("button", { name: "保存为新的研究范围" }));
+
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      caseId: "report-1", documentId: "doc-1", researchQuestion: "只验证供应商路径是否存在，并保留市场证据缺口。",
+      selectedClaimIds: ["claim-1"], selectedRelationIds: ["relation-1"],
+    }));
+    expect(await screen.findByText("当前正在查看范围 v2")).toBeVisible();
+    expect(screen.getByText(/历史范围/)).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("查看研究范围版本"), "1");
+    expect(await screen.findByText("上调资本开支会否压低供应商的现金流预期？")).toBeVisible();
   });
 });

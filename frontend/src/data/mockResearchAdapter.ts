@@ -2954,6 +2954,7 @@ export class MockResearchAdapter implements ResearchClient {
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
   }>();
+  private reportScopes = new Map<string, import("../domain/eventResearch").ReportResearchScope[]>();
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2966,6 +2967,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.decisions = [];
     this.eventTsmProposalPending = true;
     this.eventStates.clear();
+    this.reportScopes.clear();
   }
 
   getDecisions() {
@@ -3799,11 +3801,43 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ scopeVersion: 1, asOf: "2026-08-08", progress: { hypotheses: 2, relations: 2 }, alternatives: [{ hypothesisId: "impact-alt", statement: "市场替代解释", rank: 2, classification: "alternative", scoreComponents: { market: 1 }, explanation: "市场证据尚不足", relations: [], funds: [] }], factors: [{ hypothesisId: "impact-1", statement: "资本开支传导", rank: 1, classification: "candidate", scoreComponents: { event: 1 }, explanation: "等待传导审核", relations: [{ relationId: "impact-listed", companyId: "company-listed", companyName: "示例 A 股公司", companyType: "listed", relationKind: "supplier", direction: "benefits", mechanism: "订单传导", status: "verified", effectiveStatus: "verified", isHighImpact: true, isReviewable: false, sourceStatementId: "statement-listed", review: { outcome: "accepted", reason: "公告披露", reviewer: "researcher", createdAt: "2026-08-08T00:00:00Z" }, stocks: [{ stockId: "stock-1", code: "600001.SH", name: "示例 A 股公司", market: "SSE" }], observations: [], fundExposure: [] }, { relationId: "impact-unlisted", companyId: "company-unlisted", companyName: "未上市供应商", companyType: "unlisted_supplier", relationKind: "supplier", direction: "benefits", mechanism: "产能传导", status: "candidate", effectiveStatus: "candidate", isHighImpact: false, isReviewable: false, sourceStatementId: null, review: null, stocks: [], observations: [], fundExposure: [] }], funds: [{ fundId: "fund-complete", fundCode: "000001", fundName: "示例中国基金", coverageRatio: 1, coverageStatus: "complete", computable: true, exposure: "0.12", reportPeriod: "2026-06-30", publishedAt: "2026-08-01T00:00:00Z", source: "https://example.invalid/fund-complete" }, { fundId: "fund-partial", fundCode: "000002", fundName: "示例部分覆盖基金", coverageRatio: 0.5, coverageStatus: "partial", computable: false, exposure: null, reportPeriod: "2026-06-30", publishedAt: "2026-08-01T00:00:00Z", source: "https://example.invalid/fund-disclosure" }] }] });
   }
 
-  async getReportWikiGraph(_caseId: string, _options?: { relationId?: string }): Promise<ReportWikiGraph> {
+  async createReportResearch(input: import("../domain/eventResearch").CreateReportResearchInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
     this.throwIfOffline();
-    return simulateLatency({
-      researchCaseId: "report-mock", scopeVersion: 1, documentId: "report-document-mock",
-      scope: { version: 1, documentId: "report-document-mock", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"] },
+    const caseId = `report-${input.inputKind}-mock`;
+    const documentId = `document-${input.inputKind}-mock`;
+    this.reportScopes.set(caseId, [this.defaultReportScope(documentId)]);
+    return simulateLatency({ caseId, documentId, state: "ready_to_extract", needsTextOrPages: false });
+  }
+
+  async createReportResearchPdf(input: import("../domain/eventResearch").CreateReportResearchPdfInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
+    this.throwIfOffline();
+    if (input.file.type !== "application/pdf") throw new Error("请选择 PDF 文件");
+    this.reportScopes.set("report-pdf-mock", [this.defaultReportScope("document-pdf-mock")]);
+    return simulateLatency({ caseId: "report-pdf-mock", documentId: "document-pdf-mock", state: "ready_to_extract", needsTextOrPages: false });
+  }
+
+  async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
+    const scopes = this.reportScopes.get(caseId) ?? [this.defaultReportScope("report-document-mock")];
+    return simulateLatency({ items: scopes, currentScopeVersion: scopes[scopes.length - 1]?.version ?? null });
+  }
+
+  async appendReportResearchScope(input: import("../domain/eventResearch").AppendReportResearchScopeInput): Promise<import("../domain/eventResearch").ReportResearchScope> {
+    const previous = this.reportScopes.get(input.caseId) ?? [this.defaultReportScope(input.documentId)];
+    const next = { version: previous[previous.length - 1].version + 1, documentId: input.documentId, visibilityCutoffAt: new Date().toISOString(), researchQuestion: input.researchQuestion, factorSelection: input.factorSelection, evidencePlan: input.evidencePlan, selectedClaimIds: input.selectedClaimIds, selectedRelationIds: input.selectedRelationIds };
+    this.reportScopes.set(input.caseId, [...previous, next]);
+    return simulateLatency(next);
+  }
+
+  private defaultReportScope(documentId: string): import("../domain/eventResearch").ReportResearchScope {
+    return { version: 1, documentId, visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"] };
+  }
+
+  async getReportWikiGraph(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph> {
+    this.throwIfOffline();
+    const scopes = this.reportScopes.get(caseId) ?? [this.defaultReportScope("report-document-mock")];
+    const scope = options?.scopeVersion === undefined ? scopes[scopes.length - 1] : scopes.find((item) => item.version === options.scopeVersion) ?? scopes[scopes.length - 1];
+    const graph = {
+      researchCaseId: caseId, scopeVersion: scope.version, documentId: scope.documentId, scope,
       nodes: [
         { id: "claim-mock", kind: "report_claim", label: "报告认为资本开支上调会压低自由现金流预期", status: "report_claim", sourceLocator: '{"page":3,"paragraph":2}', scopeVersion: 1 },
         { id: "company-mock", kind: "company", label: "示例 A 股服务器供应商", status: "verified", sourceLocator: null, assetMapping: { companyKind: "listed_a_share", aShareCodes: ["600001.SH"] }, scopeVersion: 1 },
@@ -3819,7 +3853,8 @@ export class MockResearchAdapter implements ResearchClient {
         { id: "edge-mock-3", sourceId: "claim-mock", targetId: "evidence-mock", kind: "confounder:earnings", status: "candidate", relationId: "relation-mock", sourceLocator: "report_market_observation:mock", scopeVersion: 1 },
       ],
       factors: [{ claimId: "claim-mock", relationId: "relation-mock", statement: "资本开支上调压低自由现金流预期", classification: "evidence_gap", components: { report_claim: true, operating_evidence: false, market_evidence: false, confounder_assessed: false }, explanation: "尚缺独立经营数据和发布期混杂因素核对，不能归为关键因素。" }],
-    });
+    } satisfies ReportWikiGraph;
+    return simulateLatency(graph);
   }
 
   async getReportEmbedWiki(_caseId: string, token: string): Promise<ReportEmbedWikiGraph> {

@@ -162,6 +162,43 @@ export interface ReportResearchScope {
   selectedRelationIds: string[];
 }
 
+export type ReportResearchInputKind = "pasted_text" | "web_content";
+
+export interface CreateReportResearchInput {
+  inputKind: ReportResearchInputKind;
+  title: string;
+  publisher?: string;
+  publishedAt?: string;
+  sourceUrl?: string;
+  content: string;
+}
+
+export interface CreateReportResearchPdfInput {
+  title: string;
+  publisher?: string;
+  publishedAt?: string;
+  file: File;
+}
+
+export interface CreatedReportResearch {
+  caseId: string;
+  documentId: string;
+  state: "ready_to_extract" | "needs_text_or_pages";
+  needsTextOrPages: boolean;
+}
+
+export interface AppendReportResearchScopeInput {
+  caseId: string;
+  documentId: string;
+  researchQuestion: string;
+  factorSelection: string[];
+  evidencePlan: string[];
+  selectedClaimIds: string[];
+  selectedRelationIds: string[];
+  changedBy?: string;
+  changeSummary?: string;
+}
+
 export interface ReportWikiFactor {
   claimId: string;
   relationId: string | null;
@@ -272,7 +309,11 @@ export interface EventResearchClient {
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
   getEventImpactTrace?(caseId: string): Promise<EventImpactTrace>;
-  getReportWikiGraph?(caseId: string, options?: { relationId?: string }): Promise<ReportWikiGraph>;
+  createReportResearch?(input: CreateReportResearchInput): Promise<CreatedReportResearch>;
+  createReportResearchPdf?(input: CreateReportResearchPdfInput): Promise<CreatedReportResearch>;
+  listReportResearchScopes?(caseId: string): Promise<{ items: ReportResearchScope[]; currentScopeVersion: number | null }>;
+  appendReportResearchScope?(input: AppendReportResearchScopeInput): Promise<ReportResearchScope>;
+  getReportWikiGraph?(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph>;
   getReportEmbedWiki?(caseId: string, token: string): Promise<ReportEmbedWikiGraph>;
   reviewEventImpactRelation?(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;

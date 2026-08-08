@@ -134,6 +134,42 @@ class ReportResearchScopeDTO(V1Model):
     selected_relation_ids: list[uuid.UUID]
 
 
+class AppendReportResearchScopeRequest(V1Model):
+    """Command to append one immutable report-research scope.
+
+    The selected paths are explicit instead of inferred from the prior scope:
+    a researcher can narrow, broaden, or change the question while the old
+    scope remains reproducible.
+    """
+
+    document_id: uuid.UUID
+    research_question: str = Field(min_length=1, max_length=4000)
+    factor_selection: list[str] = Field(default_factory=list)
+    evidence_plan: list[str] = Field(default_factory=list)
+    selected_claim_ids: list[uuid.UUID] = Field(min_length=1)
+    selected_relation_ids: list[uuid.UUID] = Field(default_factory=list)
+    changed_by: str = Field(default="report-research-user", min_length=1, max_length=128)
+    change_summary: str = Field(default="研究者创建新的研究范围", min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def normalize_scope_strings(self) -> "AppendReportResearchScopeRequest":
+        self.research_question = self.research_question.strip()
+        self.changed_by = self.changed_by.strip()
+        self.change_summary = self.change_summary.strip()
+        self.factor_selection = [item.strip() for item in self.factor_selection if item.strip()]
+        self.evidence_plan = [item.strip() for item in self.evidence_plan if item.strip()]
+        if not self.research_question:
+            raise ValueError("research_question must not be blank")
+        if not self.changed_by or not self.change_summary:
+            raise ValueError("changed_by and change_summary must not be blank")
+        return self
+
+
+class ReportResearchScopeListResponse(V1Model):
+    items: list[ReportResearchScopeDTO]
+    current_scope_version: int | None = None
+
+
 class ReportWikiGraphDTO(V1Model):
     """The selected report-document scope, never a mixed history view."""
 

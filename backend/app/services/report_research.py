@@ -88,6 +88,15 @@ class ReportFactorAssessment:
     explanation: str
 
 
+@dataclass(frozen=True)
+class ReportResearchScopeSelection:
+    """One display-safe immutable scope with its persisted path selection."""
+
+    scope: ReportResearchScopeVersion
+    selected_claim_ids: list[uuid.UUID]
+    selected_relation_ids: list[uuid.UUID]
+
+
 class ReportFactorClassifier:
     """Classify a report factor without conflating opinion with verified fact."""
 
@@ -826,6 +835,57 @@ class ReportResearchService:
             selected_relation_ids=selected_relation_ids,
         )
         return scope
+
+    def list_scope_selections(
+        self, research_case_id: uuid.UUID
+    ) -> list[ReportResearchScopeSelection]:
+        """Read all immutable scopes for one report case in version order.
+
+        This command/read seam deliberately does not fall back to document
+        history.  A report may have been frozen but not yet yielded a claim,
+        in which case callers receive an empty scope list rather than a
+        fabricated selection.
+        """
+        if self._session.get(ResearchCase, research_case_id) is None:
+            raise ValueError("report research case not found")
+        scopes = list(
+            self._session.scalars(
+                select(ReportResearchScopeVersion)
+                .where(ReportResearchScopeVersion.research_case_id == research_case_id)
+                .order_by(ReportResearchScopeVersion.version)
+            )
+        )
+        if not scopes:
+            return []
+        scope_ids = [scope.id for scope in scopes]
+        claims_by_scope: dict[uuid.UUID, list[uuid.UUID]] = {scope_id: [] for scope_id in scope_ids}
+        relations_by_scope: dict[uuid.UUID, list[uuid.UUID]] = {scope_id: [] for scope_id in scope_ids}
+        for scope_id, claim_id in self._session.execute(
+            select(
+                ReportResearchScopeClaim.scope_version_id,
+                ReportResearchScopeClaim.report_claim_id,
+            )
+            .where(ReportResearchScopeClaim.scope_version_id.in_(scope_ids))
+            .order_by(ReportResearchScopeClaim.created_at, ReportResearchScopeClaim.id)
+        ):
+            claims_by_scope[scope_id].append(claim_id)
+        for scope_id, relation_id in self._session.execute(
+            select(
+                ReportResearchScopeRelation.scope_version_id,
+                ReportResearchScopeRelation.report_relation_id,
+            )
+            .where(ReportResearchScopeRelation.scope_version_id.in_(scope_ids))
+            .order_by(ReportResearchScopeRelation.created_at, ReportResearchScopeRelation.id)
+        ):
+            relations_by_scope[scope_id].append(relation_id)
+        return [
+            ReportResearchScopeSelection(
+                scope=scope,
+                selected_claim_ids=claims_by_scope[scope.id],
+                selected_relation_ids=relations_by_scope[scope.id],
+            )
+            for scope in scopes
+        ]
 
     def _paths_for_document(
         self, research_case_id: uuid.UUID, document_version_id: uuid.UUID

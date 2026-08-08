@@ -70,6 +70,28 @@ describe("HttpResearchAdapter", () => {
     expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).not.toContain("token-from-hash");
   });
 
+  it("maps report intake and immutable scope commands without using form multipart", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/pdf?")) return jsonResponse({ case: { id: "case-pdf" }, document: { id: "doc-pdf" }, state: "ready_to_extract", needs_text_or_pages: false });
+      if (url.endsWith("/scopes")) return jsonResponse({ items: [{ version: 1, document_id: "doc-1", visibility_cutoff_at: "2026-08-08T00:00:00Z", research_question: "原问题", factor_selection: [], evidence_plan: [], selected_claim_ids: ["claim-1"], selected_relation_ids: ["relation-1"] }], current_scope_version: 1 });
+      return jsonResponse({ case: { id: "case-text" }, document: { id: "doc-text" }, state: "ready_to_extract", needs_text_or_pages: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    const pasted = await adapter.createReportResearch({ inputKind: "pasted_text", title: "测试研报", content: "观点" });
+    const pdfFile = new File(["%PDF-1.4"], "report.pdf", { type: "application/pdf" });
+    const pdf = await adapter.createReportResearchPdf({ title: "PDF 研报", file: pdfFile });
+    const scopes = await adapter.listReportResearchScopes("case-text");
+
+    expect(pasted).toMatchObject({ caseId: "case-text", documentId: "doc-text" });
+    expect(pdf).toMatchObject({ caseId: "case-pdf", documentId: "doc-pdf" });
+    expect(scopes).toMatchObject({ currentScopeVersion: 1, items: [expect.objectContaining({ documentId: "doc-1", selectedClaimIds: ["claim-1"] })] });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/v1/report-research", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Content-Type": "application/json" }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, expect.stringContaining("/report-research/pdf?title=PDF+%E7%A0%94%E6%8A%A5&filename=report.pdf"), expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Content-Type": "application/pdf" }), body: pdfFile }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/api/v1/report-research/case-text/scopes", expect.anything());
+  });
+
   it("maps unlisted relations, complete partial-fund fields, observations and reviews", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ scope_version: 2, as_of: "2026-08-08", progress: {}, alternatives: [], factors: [{ hypothesis_id: "h1", statement: "factor", rank: 1, classification: "candidate", score_components: {}, explanation: "gap", funds: [{ fund_id: "fund-1", fund_code: "000001", fund_name: "China fund", report_period: "2026-06-30", published_at: "2026-08-01T00:00:00+00:00", source: "filing", coverage_ratio: 0.5, coverage_status: "partial", computable: false, exposure: null }], relations: [{ relation_id: "r1", company_id: "c1", company_name: "Private", company_type: "unlisted_supplier", relation_kind: "supplier", direction: "benefits", mechanism: "m", status: "candidate", effective_status: "verified", is_high_impact: false, is_reviewable: false, source_statement_id: null, stocks: [], fund_exposure: [], review: { outcome: "accepted", reason: "r", reviewer: "u", created_at: "2026-08-08T00:00:00Z" }, observations: [{ kind: "event", status: "verified", source_statement_id: "s1", valuation_snapshot_id: null, summary: "source", as_of_date: "2026-08-08" }] }] }] })));
     const trace = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }).getEventImpactTrace("case-1");
