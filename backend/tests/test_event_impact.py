@@ -222,7 +222,7 @@ def _candidate(
 ) -> ResolvedImpactCompany:
     return ResolvedImpactCompany(
         company_name=company_name,
-        company_type=company_type,
+        type=company_type,
         relation_kind="supplier",
         direction="benefits",
         mechanism="订单传导",
@@ -268,17 +268,19 @@ def test_refresh_keeps_unlisted_supplier_without_creating_stock(session, researc
     _event_scope(session, research_case, factors=[factor])
     statement = _case_statement(session, research_case)
 
+    unlisted_candidate = ResolvedImpactCompany(
+        company_name="Private ODM",
+        type="unlisted_supplier",
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        source_statement_id=statement.id,
+    )
     EventImpactResearchService(
         session,
         _FakeImpactResolver(
             {
-                factor: [
-                    _candidate(
-                        company_name="Private ODM",
-                        company_type="unlisted_supplier",
-                        source_statement_id=statement.id,
-                    )
-                ]
+                factor: [unlisted_candidate]
             }
         ),
     ).refresh(research_case.id)
@@ -331,7 +333,7 @@ def test_refresh_keeps_sourceless_candidate_unresolved_without_observation(
     session, research_case
 ) -> None:
     factor = "supplier impact"
-    _event_scope(session, research_case, factors=[factor])
+    scope = _event_scope(session, research_case, factors=[factor])
 
     result = EventImpactResearchService(
         session,
@@ -339,12 +341,25 @@ def test_refresh_keeps_sourceless_candidate_unresolved_without_observation(
     ).refresh(research_case.id)
     session.commit()
 
-    hypothesis = session.scalar(select(EventImpactHypothesis))
+    hypotheses = list(session.scalars(select(EventImpactHypothesis)))
+    unresolved = next(
+        row for row in hypotheses if row.classification == "unresolved"
+    )
+    factor_candidate = next(
+        row for row in hypotheses if row.classification == "candidate"
+    )
     assert result.unresolved_candidate_count == 1
+    assert result.hypotheses_created == 2
     assert result.relations_created == 0
-    assert hypothesis is not None
-    assert "source" in hypothesis.explanation.lower()
+    assert unresolved.research_case_id == research_case.id
+    assert unresolved.scope_version_id == scope.id
+    assert "Acme Supplier" in unresolved.statement
+    assert "supplier" in unresolved.statement
+    assert unresolved.score_components == {"source": 0}
+    assert "source_statement_id is missing" in unresolved.explanation
+    assert factor_candidate.statement == factor
     assert list(session.scalars(select(CompanyImpactObservation))) == []
+    assert list(session.scalars(select(CompanyImpactRelation))) == []
 
 
 def test_refresh_appends_new_scope_rows_without_mutating_prior_scope_rows(

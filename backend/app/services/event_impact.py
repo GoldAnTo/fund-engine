@@ -40,7 +40,7 @@ def _utcnow() -> datetime:
 @dataclass(frozen=True)
 class ResolvedImpactCompany:
     company_name: str
-    company_type: str
+    type: str
     relation_kind: str
     direction: str
     mechanism: str
@@ -154,6 +154,25 @@ class EventImpactResearchService:
             candidate = entry.candidate
             if candidate.source_statement_id is None:
                 unresolved_candidate_count += 1
+                self._session.add(
+                    EventImpactHypothesis(
+                        research_case_id=entry.hypothesis.research_case_id,
+                        scope_version_id=entry.hypothesis.scope_version_id,
+                        statement=(
+                            f"{candidate.company_name} {candidate.relation_kind}: "
+                            f"{candidate.mechanism}"
+                        ),
+                        classification="unresolved",
+                        rank=entry.hypothesis.rank,
+                        score_components={"source": 0},
+                        explanation=(
+                            "source_statement_id is missing for "
+                            f"{candidate.company_name}'s {candidate.relation_kind} "
+                            "relationship; no relation or observation was appended."
+                        ),
+                        created_at=_utcnow(),
+                    )
+                )
                 continue
             statement = admissible_by_id.get(candidate.source_statement_id)
             if statement is None:
@@ -192,7 +211,7 @@ class EventImpactResearchService:
             )
         self._session.flush()
         return ImpactRefreshResult(
-            hypotheses_created=len(factors),
+            hypotheses_created=len(factors) + unresolved_candidate_count,
             relations_created=relations_created,
             source_rejected_count=source_rejected_count,
             unresolved_candidate_count=unresolved_candidate_count,
@@ -250,14 +269,14 @@ class EventImpactResearchService:
         self, candidates: Sequence[ResolvedImpactCompany]
     ) -> dict[tuple[str, str, str], Company]:
         keys = {
-            self._company_key(candidate.company_name, candidate.company_type)
+            self._company_key(candidate.company_name, candidate.type)
             for candidate in candidates
         }
         if not keys:
             return {}
         codes = {key[0] for key in keys}
         names = {candidate.company_name.strip() for candidate in candidates}
-        company_types = {candidate.company_type for candidate in candidates}
+        company_types = {candidate.type for candidate in candidates}
         existing = self._session.scalars(
             select(Company).where(
                 Company.type.in_(company_types),
@@ -280,14 +299,14 @@ class EventImpactResearchService:
         candidate: ResolvedImpactCompany,
         companies: dict[tuple[str, str, str], Company],
     ) -> Company:
-        key = self._company_key(candidate.company_name, candidate.company_type)
+        key = self._company_key(candidate.company_name, candidate.type)
         company = companies.get(key)
         if company is not None:
             return company
         company = Company(
             code=key[0],
             name=candidate.company_name.strip(),
-            type=candidate.company_type,
+            type=candidate.type,
             created_at=_utcnow(),
         )
         self._session.add(company)
