@@ -4,6 +4,7 @@ import importlib.util
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
 from types import SimpleNamespace
@@ -34,12 +35,16 @@ from app.models.ledger import (
     DocumentVersion,
     EvidenceLink,
     ImmutableLedgerError,
+    Fund,
+    HoldingDisclosure,
     ResearchCase,
     SourceSpan,
     SourceStatement,
     Stock,
     Thesis,
+    ValuationSnapshot,
 )
+from app.services.china_market_data import LedgerChinaMarketData
 from app.services.event_impact import (
     EventImpactResearchService,
     ResolvedImpactCompany,
@@ -250,6 +255,187 @@ def _candidate(
         mechanism="订单传导",
         source_statement_id=source_statement_id,
     )
+
+
+def _listed_relation_with_stock(session, research_case):
+    scope = _scope(session, research_case)
+    company = _company(session, code="ASHARE-CO", company_type="listed")
+    stock = Stock(
+        company_id=company.id,
+        code="600001.SH",
+        name="A-share Co",
+        market="CN-A",
+        created_at=NOW,
+    )
+    session.add(stock)
+    session.commit()
+    hypothesis = _hypothesis(session, research_case.id, scope.id)
+    relation = _relation(session, hypothesis, scope, company)
+    return relation, company, stock
+
+
+def _snapshot(session, stock, *, metric_name: str, value: str = "1"):
+    snapshot = ValuationSnapshot(
+        stock_id=stock.id,
+        as_of_date=date(2026, 8, 8),
+        metric_name=metric_name,
+        metric_value=Decimal(value),
+        source="ledger-fixture",
+        definition=f"fixture {metric_name}",
+        created_at=NOW,
+    )
+    session.add(snapshot)
+    session.commit()
+    return snapshot
+
+
+def test_collect_data_uses_ledger_operating_market_and_peer_evidence(
+    session, research_case
+) -> None:
+    relation, _company_row, stock = _listed_relation_with_stock(session, research_case)
+    _snapshot(session, stock, metric_name="REVENUE_YOY")
+    _snapshot(session, stock, metric_name="EVENT_RETURN_1D")
+    _snapshot(session, stock, metric_name="PEER_RETURN_1D")
+
+    EventImpactResearchService(
+        session, market_data=LedgerChinaMarketData(session)
+    ).collect_data(relation.id, as_of=date(2026, 8, 8))
+    session.commit()
+
+    statuses = {
+        row.kind: row.status
+        for row in session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id
+            )
+        )
+    }
+    assert statuses == {
+        "operating": "verified",
+        "market": "verified",
+        "peer_control": "verified",
+    }
+
+
+def test_collect_data_keeps_unlisted_relation_outside_stock_and_fund_layers(
+    session, research_case
+) -> None:
+    scope = _scope(session, research_case)
+    company = _company(session, code="PRIVATE-ODM", company_type="unlisted_supplier")
+    hypothesis = _hypothesis(session, research_case.id, scope.id)
+    relation = _relation(session, hypothesis, scope, company)
+    session.add(
+        CompanyImpactObservation(
+            relation_id=relation.id,
+            kind="relation",
+            status="verified",
+            source_statement_id=None,
+            valuation_snapshot_id=None,
+            summary="source-backed supplier relation",
+            as_of_date=date(2026, 8, 8),
+            created_at=NOW,
+        )
+    )
+    session.commit()
+
+    EventImpactResearchService(
+        session, market_data=LedgerChinaMarketData(session)
+    ).collect_data(relation.id, as_of=date(2026, 8, 8))
+    session.commit()
+
+    assert {
+        row.kind
+        for row in session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id
+            )
+        )
+    } == {"relation", "operating"}
+
+
+def test_collect_data_without_ledger_metrics_records_insufficient_not_fabricated(
+    session, research_case
+) -> None:
+    relation, _company_row, _stock = _listed_relation_with_stock(session, research_case)
+
+    result = EventImpactResearchService(session).collect_data(
+        relation.id, as_of=date(2026, 8, 8)
+    )
+    session.commit()
+
+    observations = list(
+        session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id
+            )
+        )
+    )
+    assert result.insufficient_kinds == ("operating", "market", "peer_control")
+    assert {(row.kind, row.status, row.valuation_snapshot_id) for row in observations} == {
+        ("operating", "insufficient", None),
+        ("market", "insufficient", None),
+        ("peer_control", "insufficient", None),
+    }
+
+
+def test_fund_exposure_marks_partial_visible_holdings_not_computable(
+    session, research_case
+) -> None:
+    relation, company, first_stock = _listed_relation_with_stock(session, research_case)
+    second_stock = Stock(
+        company_id=company.id,
+        code="600002.SH",
+        name="A-share Co second listing",
+        market="CN-A",
+        created_at=NOW,
+    )
+    session.add(second_stock)
+    session.flush()
+    verified_relation = CompanyImpactRelation(
+        hypothesis_id=relation.hypothesis_id,
+        scope_version_id=relation.scope_version_id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="verified fixture",
+        status="verified",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000001",
+        name="Partial holding fund",
+        fund_type="equity",
+        management_company_id=None,
+        scale=None,
+        establish_date=None,
+        created_at=NOW,
+    )
+    session.add_all([verified_relation, fund])
+    session.flush()
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=first_stock.id,
+            weight=Decimal("3.5"),
+            report_period=date(2026, 6, 30),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="fund-report-fixture",
+            created_at=NOW,
+        )
+    )
+    session.commit()
+
+    coverage = EventImpactResearchService(session).fund_exposure(
+        verified_relation.id, as_of=date(2026, 8, 8)
+    )
+
+    assert len(coverage) == 1
+    assert coverage[0].computable is False
+    assert coverage[0].exposure is None
+    assert coverage[0].coverage_status == "partial"
+    assert coverage[0].coverage_ratio == Decimal("0.5")
 
 
 def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_source(

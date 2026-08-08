@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Callable, Protocol, Sequence
 from unicodedata import normalize
 
@@ -31,13 +32,18 @@ from app.models.ledger import (
     Company,
     DocumentVersion,
     EvidenceLink,
+    Fund,
+    HoldingDisclosure,
     SourceSpan,
     SourceStatement,
+    Stock,
     Thesis,
+    ValuationSnapshot,
 )
 from app.models.operational import ResearchRun, ResearchTask
 from app.services.source_admission import classify_source
 from app.repositories.outbox import emit_event
+from app.services.china_market_data import ChinaMarketData, LedgerChinaMarketData
 
 
 _INITIAL_REFRESH_KEY_SUFFIX = "initial"
@@ -128,6 +134,38 @@ class _PreparedImpactRefresh:
     statement_dates: dict[uuid.UUID, date]
 
 
+@dataclass(frozen=True)
+class ImpactDataCollectionResult:
+    observations_created: int
+    insufficient_kinds: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FundImpactPosition:
+    stock_id: uuid.UUID
+    stock_code: str
+    stock_name: str
+    weight: Decimal
+    report_period: date
+    published_at: datetime
+    source: str
+
+
+@dataclass(frozen=True)
+class FundImpactExposure:
+    fund_id: uuid.UUID
+    fund_code: str
+    fund_name: str
+    report_period: date | None
+    published_at: datetime | None
+    source: str | None
+    covered_positions: tuple[FundImpactPosition, ...]
+    coverage_ratio: Decimal
+    coverage_status: str
+    computable: bool
+    exposure: Decimal | None
+
+
 class EventImpactResearchService:
     def __init__(
         self,
@@ -135,9 +173,11 @@ class EventImpactResearchService:
         resolver: ImpactResolver | None = None,
         *,
         preflight_session_factory: Callable[[], Session] | None = None,
+        market_data: ChinaMarketData | None = None,
     ) -> None:
         self._session = session
         self._resolver = resolver or _EmptyImpactResolver()
+        self._market_data = market_data or LedgerChinaMarketData(session)
         if preflight_session_factory is not None:
             self._preflight_session_factory = preflight_session_factory
         else:
@@ -166,6 +206,7 @@ class EventImpactResearchService:
                 preflight_session,
                 resolver=self._resolver,
                 preflight_session_factory=self._preflight_session_factory,
+                market_data=self._market_data,
             )
             prepared = preflight._prepare_provider_refresh(
                 case_id,
@@ -278,6 +319,169 @@ class EventImpactResearchService:
             self._session.expunge(statement)
         self._session.commit()
         return prepared
+
+    def collect_data(
+        self, relation_id: uuid.UUID, *, as_of: date
+    ) -> ImpactDataCollectionResult:
+        """Append ledger-backed operating/market/peer evidence for one relation.
+
+        This service never calls a provider.  Missing ledger coverage is an
+        explicit ``insufficient`` observation, not a synthetic market fact.
+        """
+        relation = self._session.get(CompanyImpactRelation, relation_id)
+        if relation is None:
+            raise NotFoundError(f"impact relation {relation_id} not found")
+        company = self._session.get(Company, relation.affected_company_id)
+        if company is None:
+            raise ValidationFailedError("impact relation company not found")
+        existing_kinds = {
+            kind
+            for kind in self._session.scalars(
+                select(CompanyImpactObservation.kind)
+                .where(CompanyImpactObservation.relation_id == relation.id)
+                .where(CompanyImpactObservation.as_of_date == as_of)
+                .where(CompanyImpactObservation.kind.in_(("operating", "market", "peer_control")))
+            )
+        }
+        if company.type != "listed":
+            created = self._append_insufficient_data_observation(
+                relation, "operating", as_of, "Company is unlisted; no A-share operating ledger coverage."
+            ) if "operating" not in existing_kinds else False
+            return ImpactDataCollectionResult(
+                observations_created=int(created),
+                insufficient_kinds=("operating",) if created else (),
+            )
+
+        stocks = list(
+            self._session.scalars(
+                select(Stock).where(Stock.company_id == company.id)
+            )
+        )
+        sources = (
+            ("operating", self._market_data.operating_observations),
+            ("market", self._market_data.market_observations),
+            ("peer_control", self._market_data.peer_observations),
+        )
+        created = 0
+        insufficient: list[str] = []
+        for kind, loader in sources:
+            if kind in existing_kinds:
+                continue
+            snapshots = [snapshot for stock in stocks for snapshot in loader(stock, as_of=as_of)]
+            if not snapshots:
+                self._append_insufficient_data_observation(
+                    relation,
+                    kind,
+                    as_of,
+                    f"No ledger-backed {kind} metric is available by {as_of.isoformat()}.",
+                )
+                created += 1
+                insufficient.append(kind)
+                continue
+            latest = max(snapshots, key=lambda snapshot: snapshot.as_of_date)
+            metrics = "; ".join(
+                f"{snapshot.metric_name}={snapshot.metric_value} "
+                f"({snapshot.source}; {snapshot.definition})"
+                for snapshot in snapshots
+            )
+            self._session.add(
+                CompanyImpactObservation(
+                    relation_id=relation.id,
+                    kind=kind,
+                    status="verified",
+                    source_statement_id=None,
+                    valuation_snapshot_id=latest.id,
+                    summary=f"Ledger {kind} metrics: {metrics}",
+                    as_of_date=as_of,
+                    created_at=_utcnow(),
+                )
+            )
+            created += 1
+        return ImpactDataCollectionResult(created, tuple(insufficient))
+
+    def fund_exposure(
+        self, relation_id: uuid.UUID, *, as_of: date
+    ) -> list[FundImpactExposure]:
+        """Return point-in-time, coverage-gated fund exposure for a relation."""
+        relation = self._session.get(CompanyImpactRelation, relation_id)
+        if relation is None:
+            raise NotFoundError(f"impact relation {relation_id} not found")
+        if relation.status != "verified":
+            return []
+        company = self._session.get(Company, relation.affected_company_id)
+        if company is None or company.type != "listed":
+            return []
+        stocks = list(self._session.scalars(select(Stock).where(Stock.company_id == company.id)))
+        if not stocks:
+            return []
+        stock_by_id = {stock.id: stock for stock in stocks}
+        holdings = self._market_data.fund_holdings(list(stock_by_id), as_of=as_of)
+        by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = {}
+        for holding in holdings:
+            by_fund.setdefault(holding.fund_id, []).append(holding)
+        funds = {
+            fund.id: fund
+            for fund in self._session.scalars(select(Fund).where(Fund.id.in_(by_fund)))
+        } if by_fund else {}
+        results: list[FundImpactExposure] = []
+        for fund_id, disclosures in by_fund.items():
+            fund = funds.get(fund_id)
+            if fund is None:
+                continue
+            positions = tuple(
+                FundImpactPosition(
+                    stock_id=disclosure.stock_id,
+                    stock_code=stock_by_id[disclosure.stock_id].code,
+                    stock_name=stock_by_id[disclosure.stock_id].name,
+                    weight=disclosure.weight,
+                    report_period=disclosure.report_period,
+                    published_at=disclosure.published_at,
+                    source=disclosure.source,
+                )
+                for disclosure in sorted(disclosures, key=lambda item: item.weight, reverse=True)
+            )
+            coverage_ratio = Decimal(len({row.stock_id for row in positions})) / Decimal(len(stocks))
+            latest = max(disclosures, key=lambda item: (item.report_period, item.published_at))
+            stale = (as_of - latest.report_period).days > 180
+            coverage_status = "stale" if stale else ("complete" if coverage_ratio >= Decimal("0.80") else "partial")
+            computable = coverage_status == "complete"
+            results.append(
+                FundImpactExposure(
+                    fund_id=fund.id,
+                    fund_code=fund.code,
+                    fund_name=fund.name,
+                    report_period=latest.report_period,
+                    published_at=latest.published_at,
+                    source=latest.source,
+                    covered_positions=positions,
+                    coverage_ratio=coverage_ratio,
+                    coverage_status=coverage_status,
+                    computable=computable,
+                    exposure=sum((position.weight for position in positions), Decimal("0")) if computable else None,
+                )
+            )
+        return sorted(results, key=lambda result: (result.exposure is None, result.fund_code))
+
+    def _append_insufficient_data_observation(
+        self,
+        relation: CompanyImpactRelation,
+        kind: str,
+        as_of: date,
+        summary: str,
+    ) -> bool:
+        self._session.add(
+            CompanyImpactObservation(
+                relation_id=relation.id,
+                kind=kind,
+                status="insufficient",
+                source_statement_id=None,
+                valuation_snapshot_id=None,
+                summary=summary,
+                as_of_date=as_of,
+                created_at=_utcnow(),
+            )
+        )
+        return True
 
     def _append_refresh_output(
         self,
