@@ -20,7 +20,7 @@ test.describe("report-first research workspace", () => {
     await page.goto("/reports/report-mock/wiki?client=mock");
     await expect(page.getByRole("button", { name: "当前路径" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("heading", { name: "结构化路径" })).toBeVisible();
-    await expect(page.getByRole("img", { name: /当前研究范围的关系图谱/ })).toBeHidden();
+    await expect(page.getByRole("group", { name: /当前研究范围的关系图谱/ })).toBeHidden();
     await page.getByRole("button", { name: "所有关系" }).click();
     await expect(page.getByRole("button", { name: "所有关系" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).resolves.toBe(true);

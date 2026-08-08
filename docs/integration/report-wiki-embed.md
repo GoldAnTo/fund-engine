@@ -4,7 +4,7 @@
 
 ```html
 <iframe
-  src="https://embed.example/reports/CASE/wiki#token=READ_ONLY_TOKEN"
+  src="https://embed.example/embed/reports/CASE/wiki#token=READ_ONLY_TOKEN"
   title="只读研报关系图谱"
   referrerpolicy="no-referrer"
 ></iframe>

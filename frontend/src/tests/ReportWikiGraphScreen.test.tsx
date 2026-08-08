@@ -60,9 +60,21 @@ describe("ReportWikiGraphScreen", () => {
   it("keeps every node selectable in a dynamically sized SVG", async () => {
     renderScreen();
     await screen.findByRole("heading", { name: "研报关系图谱" });
-    const svg = screen.getByRole("img");
+    const svg = screen.getByRole("group", { name: /当前研究范围的关系图谱/ });
     expect(svg.getAttribute("viewBox")).toMatch(/0 0 820 (?:3|4|5|6|7|8|9)\d{2}/);
-    expect(screen.getByRole("button", { name: "查看 示例基金 的来源定位或状态" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "查看 示例基金 的来源定位或状态" })).not.toBeInTheDocument();
+  });
+
+  it("disables current-path mode when the selected scope has no relation path", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(adapter, "getReportWikiGraph").mockResolvedValue({ ...graph, factors: [{ ...graph.factors[0], relationId: null }] });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: "当前路径" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText(/当前范围没有可选关系路径/)).toBeVisible();
+    await user.click(button);
+    expect(adapter.getReportWikiGraph).toHaveBeenCalledTimes(1);
   });
 
   it("retries the initial base-to-selected sequence when selected-path loading fails", async () => {
