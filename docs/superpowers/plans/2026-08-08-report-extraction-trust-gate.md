@@ -22,7 +22,7 @@ The P0-A result is usable through command APIs and a read-model queue. It makes 
 
 | File | Responsibility |
 |---|---|
-| `backend/alembic/versions/0019_atomic_claim_candidates.py` | Append-only candidate, extraction-observation and candidate-review tables; non-breaking statement provenance columns and Postgres immutability triggers. |
+| `backend/alembic/versions/0020_atomic_claim_candidates.py` | Append-only candidate, extraction-observation and candidate-review tables; non-breaking statement provenance columns and Postgres immutability triggers. |
 | `backend/app/models/ledger.py` | ORM records, allowed claim/authority/review literals, immutable-table list. |
 | `backend/app/services/ingest.py`, `backend/app/repositories/documents.py` | Carries an explicit document authority stamp at freeze time; defaults legacy/unspecified material to `unknown`. |
 | `backend/app/domain/atomic_claims.py` | Typed candidate draft, canonical-key computation, quote hash, deterministic quote/period/value/unit/authority validators. |
@@ -87,7 +87,7 @@ An `AtomicClaimCandidate` stores the admitted draft and validation result. `Atom
 ### Task 1: Lock the migration and immutable data model
 
 **Files:**
-- Create: `backend/alembic/versions/0019_atomic_claim_candidates.py`
+- Create: `backend/alembic/versions/0020_atomic_claim_candidates.py`
 - Modify: `backend/app/models/ledger.py`
 - Modify: `backend/app/services/ingest.py`
 - Modify: `backend/app/repositories/documents.py`
@@ -148,7 +148,7 @@ Expected: PASS; immutability tests reject both ordinary updates and deletes.
 - [ ] **Step 5: Commit the schema slice**
 
 ```bash
-git add backend/alembic/versions/0019_atomic_claim_candidates.py backend/app/models/ledger.py backend/app/services/ingest.py backend/app/repositories/documents.py backend/tests/test_atomic_claims.py
+git add backend/alembic/versions/0020_atomic_claim_candidates.py backend/app/models/ledger.py backend/app/services/ingest.py backend/app/repositories/documents.py backend/tests/test_atomic_claims.py
 git commit -m "feat: add immutable atomic claim ledger"
 ```
 
