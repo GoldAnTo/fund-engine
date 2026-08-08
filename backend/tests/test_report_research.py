@@ -1,0 +1,140 @@
+"""Report-first research input contracts and immutable provenance."""
+from __future__ import annotations
+
+import hashlib
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from app.datasources.docling import PdfParseError
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, SourceSpan, SourceStatement
+
+
+def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> None:
+    published_at = "2026-08-01T08:00:00Z"
+    response = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "服务器产业链更新",
+            "publisher": "某券商",
+            "published_at": published_at,
+            "content": "核心观点：订单增长。",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["document"]["kind"] == "research_report"
+    assert body["document"]["input_kind"] == "pasted_text"
+    assert body["document"]["publisher"] == "某券商"
+    assert datetime.fromisoformat(body["document"]["published_at"]).astimezone(
+        timezone.utc
+    ) == datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    assert body["state"] == "ready_to_extract"
+
+    case_id = uuid.UUID(body["case"]["id"])
+    document_id = uuid.UUID(body["document"]["id"])
+    case = cmd_session.get(ResearchCase, case_id)
+    document = cmd_session.get(DocumentVersion, document_id)
+    assert case is not None
+    assert case.title == "服务器产业链更新"
+    assert document is not None
+    assert document.title == "服务器产业链更新"
+    assert document.published_at.replace(tzinfo=timezone.utc) == datetime(
+        2026, 8, 1, 8, tzinfo=timezone.utc
+    )
+    assert document.parse_state == "partial"
+    assert cmd_session.scalar(
+        select(CaseDocumentVersion).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == document_id,
+        )
+    ) is not None
+    span = cmd_session.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == document_id)
+    )
+    assert span is not None
+    assert span.locator["input_kind"] == "pasted_text"
+    assert span.locator["publisher"] == "某券商"
+    assert datetime.fromisoformat(span.locator["published_at"]).astimezone(
+        timezone.utc
+    ) == datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    statement = cmd_session.scalar(
+        select(SourceStatement).where(SourceStatement.source_span_id == span.id)
+    )
+    assert statement is not None
+    assert statement.normalized_text == "核心观点：订单增长。"
+
+
+def test_web_report_preserves_origin_url_and_creates_auditable_statement(
+    cmd_client, cmd_session
+) -> None:
+    response = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "web_content",
+            "title": "算力产业观察",
+            "publisher": "行业观察站",
+            "published_at": "2026-08-02T09:30:00Z",
+            "source_url": "https://research.example.com/ai-chain",
+            "content": "观点：服务器出货将提升。",
+        },
+    )
+
+    assert response.status_code == 201
+    document_id = uuid.UUID(response.json()["document"]["id"])
+    document = cmd_session.get(DocumentVersion, document_id)
+    assert document is not None
+    assert document.source_url == "https://research.example.com/ai-chain"
+    span = cmd_session.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == document.id)
+    )
+    assert span is not None
+    assert span.locator["input_kind"] == "web_content"
+    assert cmd_session.scalar(
+        select(SourceStatement).where(SourceStatement.source_span_id == span.id)
+    ) is not None
+
+
+def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    def _parse_failure(self, raw: bytes, *, document_sha256: str):
+        raise PdfParseError("fixture parser failure")
+
+    monkeypatch.setattr(
+        "app.services.report_research.PypdfAdapter.extract_spans", _parse_failure
+    )
+    raw = b"%PDF-fixture-that-cannot-be-parsed"
+    response = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params={
+            "title": "无法解析的公司研报",
+            "publisher": "某券商",
+            "published_at": "2026-08-03T08:00:00Z",
+            "filename": "broken-report.pdf",
+        },
+        content=raw,
+        headers={"content-type": "application/pdf"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["state"] == "needs_text_or_pages"
+    assert body["needs_text_or_pages"] is True
+    document_id = uuid.UUID(body["document"]["id"])
+    document = cmd_session.get(DocumentVersion, document_id)
+    assert document is not None
+    assert document.content_sha256 == hashlib.sha256(raw).hexdigest()
+    assert document.parse_state == "failed"
+    span = cmd_session.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == document.id)
+    )
+    assert span is not None
+    assert span.locator["input_kind"] == "pdf_upload"
+    assert span.locator["parse_state"] == "failed"
+    assert cmd_session.scalar(
+        select(SourceStatement).where(SourceStatement.source_span_id == span.id)
+    ) is not None
