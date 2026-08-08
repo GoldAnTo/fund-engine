@@ -145,6 +145,52 @@ class ReportResearchScopeVersion(Base):
     )
 
 
+class ReportResearchScopeClaim(Base):
+    """One report claim deliberately included in an immutable scope."""
+
+    __tablename__ = "report_research_scope_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_version_id", "report_claim_id", name="uq_report_scope_claim"
+        ),
+        Index("ix_report_scope_claim_claim", "report_claim_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_research_scope_versions.id"), nullable=False
+    )
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_claims.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class ReportResearchScopeRelation(Base):
+    """One company-relation path deliberately included in a scope."""
+
+    __tablename__ = "report_research_scope_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_version_id", "report_relation_id", name="uq_report_scope_relation"
+        ),
+        Index("ix_report_scope_relation_relation", "report_relation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_research_scope_versions.id"), nullable=False
+    )
+    report_relation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_relations.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class ReportClaim(Base):
     """One source-backed opinion, forecast, assumption, or risk in a report."""
 
@@ -646,6 +692,54 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
             for binding in session.new
         ):
             raise ValueError("report scope document must have report source spans")
+
+    pending_scope_claims: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for selection in session.new:
+        if not isinstance(selection, ReportResearchScopeClaim):
+            continue
+        scope = session.get(ReportResearchScopeVersion, selection.scope_version_id)
+        claim = session.get(ReportClaim, selection.report_claim_id)
+        if scope is None or claim is None:
+            raise ValueError("report scope claim must reference an existing scope and claim")
+        claim_document_id = session.scalar(
+            select(SourceSpan.document_version_id).where(SourceSpan.id == claim.source_span_id)
+        )
+        if (
+            claim.research_case_id != scope.research_case_id
+            or claim_document_id != scope.document_version_id
+        ):
+            raise ValueError("report scope claim must belong to its scope case and document")
+        pending_scope_claims.setdefault(selection.scope_version_id, set()).add(
+            selection.report_claim_id
+        )
+
+    for selection in session.new:
+        if not isinstance(selection, ReportResearchScopeRelation):
+            continue
+        scope = session.get(ReportResearchScopeVersion, selection.scope_version_id)
+        relation = session.get(ReportRelation, selection.report_relation_id)
+        if scope is None or relation is None:
+            raise ValueError("report scope relation must reference an existing scope and relation")
+        claim = session.get(ReportClaim, relation.claim_id)
+        if claim is None:
+            raise ValueError("report scope relation must reference a relation claim")
+        selected_claim = relation.claim_id in pending_scope_claims.get(
+            selection.scope_version_id, set()
+        ) or session.scalar(
+            select(ReportResearchScopeClaim.id)
+            .where(ReportResearchScopeClaim.scope_version_id == selection.scope_version_id)
+            .where(ReportResearchScopeClaim.report_claim_id == relation.claim_id)
+        )
+        claim_document_id = session.scalar(
+            select(SourceSpan.document_version_id).where(SourceSpan.id == claim.source_span_id)
+        )
+        if (
+            not selected_claim
+            or relation.research_case_id != scope.research_case_id
+            or claim.research_case_id != scope.research_case_id
+            or claim_document_id != scope.document_version_id
+        ):
+            raise ValueError("report scope relation must belong to its selected claim, case and document")
 
     pending_claims = {
         claim.id: claim

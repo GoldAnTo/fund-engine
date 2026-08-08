@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import event, select
 
 from app.models.ledger import Company, SourceSpan, SourceStatement
@@ -100,11 +101,18 @@ def _append_report_claim(
         )
         cmd_session.flush()
     if create_scope:
+        relation_ids = list(
+            cmd_session.scalars(
+                select(ReportRelation.id).where(ReportRelation.claim_id == claim.id)
+            )
+        )
         ReportResearchService(cmd_session).append_scope(
             case_id,
             document.id,
             changed_by="tester",
             change_summary="切换至修订研报",
+            selected_claim_ids=[claim.id],
+            selected_relation_ids=relation_ids,
         )
     return document, span, source_statement, claim
 
@@ -132,6 +140,61 @@ def _append_independent_statement(
         verbatim_text=text,
     )
     return research.add_statement(span.id, text, kind=kind)
+
+
+def _append_claim_to_report_document(
+    cmd_session,
+    *,
+    case_id: uuid.UUID,
+    document_id: uuid.UUID,
+    statement: str,
+    subject_name: str,
+    object_name: str,
+):
+    """Add a second extracted path to the same immutable report revision."""
+    documents = DocumentService(DocumentRepository(cmd_session))
+    research = ResearchService(ResearchRepository(cmd_session))
+    span = documents.add_span(
+        document_version_id=document_id,
+        locator={"page": 2, "paragraph": 1},
+        verbatim_text=statement,
+    )
+    source_statement = research.add_statement(
+        span.id, statement, kind="research_opinion"
+    )
+    cmd_session.add(
+        ReportCaseSourceSpan(
+            research_case_id=case_id,
+            document_version_id=document_id,
+            source_span_id=span.id,
+        )
+    )
+    cmd_session.flush()
+    claim = ReportClaim(
+        research_case_id=case_id,
+        source_span_id=span.id,
+        source_statement_id=source_statement.id,
+        kind="report_opinion",
+        statement=statement,
+    )
+    cmd_session.add(claim)
+    cmd_session.flush()
+    relation = ReportRelation(
+        claim_id=claim.id,
+        research_case_id=case_id,
+        source_span_id=span.id,
+        source_statement_id=source_statement.id,
+        subject_company_id=None,
+        object_company_id=None,
+        subject_name=subject_name,
+        object_name=object_name,
+        relation_kind="supplier",
+        mechanism="研报明确供应商关系",
+        status="report_claim",
+    )
+    cmd_session.add(relation)
+    cmd_session.flush()
+    return claim, relation
 
 
 def test_wiki_graph_returns_only_the_current_report_scope_and_source_locators(
@@ -236,6 +299,10 @@ def test_same_report_document_can_have_multiple_question_scopes(cmd_client, cmd_
     assert created.status_code == 201
     case_id = uuid.UUID(created.json()["case"]["id"])
     document_id = uuid.UUID(created.json()["document"]["id"])
+    claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == case_id)
+    )
+    assert claim is not None
 
     scope = ReportResearchService(cmd_session).append_scope(
         case_id,
@@ -245,6 +312,8 @@ def test_same_report_document_can_have_multiple_question_scopes(cmd_client, cmd_
         research_question="订单增长是否会传导至中国基金？",
         factor_selection=["订单", "基金暴露"],
         evidence_plan=["公司公告", "基金持仓", "发布后市场窗口"],
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[],
     )
     cmd_session.commit()
 
@@ -260,6 +329,118 @@ def test_same_report_document_can_have_multiple_question_scopes(cmd_client, cmd_
     assert current.json()["scope"]["factor_selection"] == ["订单", "基金暴露"]
     assert history.json()["scope_version"] == 1
     assert history.json()["scope"]["research_question"] != current.json()["scope"]["research_question"]
+
+
+def test_same_document_scopes_freeze_distinct_claim_and_relation_paths(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="同一研报不同路径",
+        content="研报观点：供应商甲是星海科技的供应商。",
+    )
+    document_id = cmd_session.scalar(
+        select(ReportCaseSourceSpan.document_version_id)
+        .where(ReportCaseSourceSpan.research_case_id == case_id)
+        .limit(1)
+    )
+    first_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == case_id)
+    )
+    assert document_id is not None and first_claim is not None
+    first_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == first_claim.id)
+    )
+    assert first_relation is not None
+    second_claim, second_relation = _append_claim_to_report_document(
+        cmd_session,
+        case_id=case_id,
+        document_id=document_id,
+        statement="研报观点：供应商乙是星海科技的供应商。",
+        subject_name="供应商乙",
+        object_name="星海科技",
+    )
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document_id,
+        changed_by="tester",
+        change_summary="改为验证供应商乙路径",
+        selected_claim_ids=[second_claim.id],
+        selected_relation_ids=[second_relation.id],
+    )
+    cmd_session.commit()
+
+    current = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+    history = cmd_client.get(
+        f"/api/v1/report-research/{case_id}/wiki", params={"scope_version": 1}
+    )
+
+    assert current.status_code == history.status_code == 200
+    assert current.json()["scope"]["selected_claim_ids"] == [str(second_claim.id)]
+    assert current.json()["scope"]["selected_relation_ids"] == [str(second_relation.id)]
+    assert [row["relation_id"] for row in current.json()["factors"]] == [
+        str(second_relation.id)
+    ]
+    assert [row["relation_id"] for row in history.json()["factors"]] == [
+        str(first_relation.id)
+    ]
+    assert "供应商乙" in current.text
+    assert "供应商甲" not in current.text
+    assert "供应商甲" in history.text
+    assert "供应商乙" not in history.text
+
+
+def test_scope_selection_rejects_foreign_claim_before_appending_scope(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="范围归属校验",
+        content="研报观点：供应商甲是星海科技的供应商。",
+    )
+    other_case_id = _create_report(
+        cmd_client,
+        title="其他研报",
+        content="研报观点：供应商乙是远海科技的供应商。",
+    )
+    document_id = cmd_session.scalar(
+        select(ReportCaseSourceSpan.document_version_id)
+        .where(ReportCaseSourceSpan.research_case_id == case_id)
+        .limit(1)
+    )
+    foreign_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == other_case_id)
+    )
+    assert document_id is not None and foreign_claim is not None
+    version_count = len(
+        list(
+            cmd_session.scalars(
+                select(ReportResearchScopeVersion).where(
+                    ReportResearchScopeVersion.research_case_id == case_id
+                )
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="selected claims must belong"):
+        ReportResearchService(cmd_session).append_scope(
+            case_id,
+            document_id,
+            changed_by="tester",
+            change_summary="错误地选择了其他案例的观点",
+            selected_claim_ids=[foreign_claim.id],
+            selected_relation_ids=[],
+        )
+
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(ReportResearchScopeVersion).where(
+                    ReportResearchScopeVersion.research_case_id == case_id
+                )
+            )
+        )
+    ) == version_count
 
 
 def test_factor_becomes_key_only_with_independent_relation_operating_market_peer_and_confounder_evidence(
@@ -524,6 +705,14 @@ def test_factor_gate_never_unions_market_and_peer_evidence_across_relations(
     )
     cmd_session.add(second_relation)
     cmd_session.flush()
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        _doc.id,
+        changed_by="tester",
+        change_summary="扩展为双供应商路径核验",
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[first_relation.id, second_relation.id],
+    )
     independent = _append_independent_statement(
         cmd_session,
         case_id=case_id,

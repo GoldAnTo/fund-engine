@@ -37,6 +37,8 @@ from app.models.report_research import (
     ReportMarketObservation,
     ReportRelation,
     ReportResearchScopeVersion,
+    ReportResearchScopeClaim,
+    ReportResearchScopeRelation,
 )
 from app.schemas.v1.report_research import (
     ReportFactorDTO,
@@ -97,8 +99,26 @@ class ReportWikiQueries:
         claims, claim_spans, claim_statements = self._claims_for_document(
             case_id, document.id
         )
+        selected_claim_ids, selected_relation_ids = self._scope_paths(scope.id)
+        if not selected_claim_ids:
+            raise NotFoundError("report scope has no selected claim paths")
+        claims = [claim for claim in claims if claim.id in selected_claim_ids]
+        claim_spans = {
+            claim_id: span
+            for claim_id, span in claim_spans.items()
+            if claim_id in selected_claim_ids
+        }
+        claim_statements = {
+            claim_id: statement
+            for claim_id, statement in claim_statements.items()
+            if claim_id in selected_claim_ids
+        }
         claim_ids = {claim.id for claim in claims}
-        relations = self._relations(claim_ids)
+        relations = [
+            relation
+            for relation in self._relations(claim_ids)
+            if relation.id in selected_relation_ids
+        ]
         if relation_id is not None and relation_id not in {row.id for row in relations}:
             raise NotFoundError("report relation is not in the selected scope")
         selected_claim_id = next(
@@ -477,6 +497,8 @@ class ReportWikiQueries:
                 research_question=scope.research_question,
                 factor_selection=list(scope.factor_selection),
                 evidence_plan=list(scope.evidence_plan),
+                selected_claim_ids=sorted(selected_claim_ids),
+                selected_relation_ids=sorted(selected_relation_ids),
             ),
             document_id=document.id,
             nodes=list(nodes.values()),
@@ -503,6 +525,26 @@ class ReportWikiQueries:
         if selected is None:
             raise NotFoundError("report research scope not found")
         return selected
+
+    def _scope_paths(
+        self, scope_version_id: uuid.UUID
+    ) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+        """Read one immutable scope's selected claim and relation IDs in bulk."""
+        claim_ids = set(
+            self._session.scalars(
+                select(ReportResearchScopeClaim.report_claim_id).where(
+                    ReportResearchScopeClaim.scope_version_id == scope_version_id
+                )
+            )
+        )
+        relation_ids = set(
+            self._session.scalars(
+                select(ReportResearchScopeRelation.report_relation_id).where(
+                    ReportResearchScopeRelation.scope_version_id == scope_version_id
+                )
+            )
+        )
+        return claim_ids, relation_ids
 
     def _claims_for_document(
         self, case_id: uuid.UUID, document_id: uuid.UUID

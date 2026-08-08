@@ -117,6 +117,8 @@ class ReportResearchScopeDTO(V1Model):
     research_question: str
     factor_selection: list[str]
     evidence_plan: list[str]
+    selected_claim_ids: list[uuid.UUID]
+    selected_relation_ids: list[uuid.UUID]
 
 
 class ReportWikiGraphDTO(V1Model):

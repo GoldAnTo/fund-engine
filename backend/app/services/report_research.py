@@ -24,6 +24,8 @@ from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
     ReportExtractionClaim,
+    ReportResearchScopeClaim,
+    ReportResearchScopeRelation,
     ReportResearchScopeVersion,
     ReportRelation,
 )
@@ -494,10 +496,10 @@ class ReportResearchService:
             input_kind=request.input_kind,
             publisher=request.publisher,
         )
+        statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._create_initial_scope(
             case.id, document.id, request.created_by, case.core_question
         )
-        statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._schedule_market_impact(case.id)
         self._session.commit()
         return CreatedReportResearch(
@@ -581,8 +583,8 @@ class ReportResearchService:
                 span.id, parsed.verbatim_text, kind="research_opinion"
             )
             statement_ids.append(statement.id)
-        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
+        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
         self._schedule_market_impact(case.id)
         self._session.commit()
         return CreatedReportResearch(
@@ -638,7 +640,6 @@ class ReportResearchService:
             verbatim_text="PDF uploaded but no extractable text is available.",
         )
         self._select_span_for_case(case.id, document.id, span.id)
-        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
         statement = self._research.add_statement(
             span.id,
             "PDF uploaded but no extractable text is available.",
@@ -701,8 +702,23 @@ class ReportResearchService:
         document_version_id: uuid.UUID,
         changed_by: str,
         research_question: str | None,
-    ) -> ReportResearchScopeVersion:
+    ) -> ReportResearchScopeVersion | None:
         """Append the first explicit report-research scope for a new case."""
+        selected_claim_ids, selected_relation_ids = self._paths_for_document(
+            research_case_id, document_version_id
+        )
+        if not selected_claim_ids:
+            # A report with no extracted claim is a valid intake outcome, but
+            # not yet a research scope.  Creating an empty scope would make
+            # its selection semantics ambiguous; later extraction must append
+            # a first scope with explicit paths instead.
+            return None
+        selected_claim_ids, selected_relation_ids = self._validate_scope_selection(
+            research_case_id,
+            document_version_id,
+            selected_claim_ids=selected_claim_ids,
+            selected_relation_ids=selected_relation_ids,
+        )
         scope = ReportResearchScopeVersion(
             research_case_id=research_case_id,
             document_version_id=document_version_id,
@@ -715,6 +731,11 @@ class ReportResearchService:
         )
         self._session.add(scope)
         self._session.flush()
+        self._append_scope_selections(
+            scope,
+            selected_claim_ids=selected_claim_ids,
+            selected_relation_ids=selected_relation_ids,
+        )
         return scope
 
     def append_scope(
@@ -727,6 +748,8 @@ class ReportResearchService:
         research_question: str | None = None,
         factor_selection: Sequence[str] | None = None,
         evidence_plan: Sequence[str] | None = None,
+        selected_claim_ids: Sequence[uuid.UUID],
+        selected_relation_ids: Sequence[uuid.UUID] = (),
     ) -> ReportResearchScopeVersion:
         """Select an attached report revision as a new immutable scope.
 
@@ -742,26 +765,146 @@ class ReportResearchService:
             .order_by(ReportResearchScopeVersion.version.desc())
             .limit(1)
         )
-        if latest is None:
-            raise ValueError("report research case has no initial scope")
-        selected_question = (research_question or latest.research_question).strip()
+        selected_question = (
+            research_question
+            or (latest.research_question if latest is not None else "验证研报观点与市场影响。")
+        ).strip()
         if not selected_question:
             raise ValueError("report scope research_question must not be blank")
+        selected_claim_ids, selected_relation_ids = self._validate_scope_selection(
+            research_case_id,
+            document_version_id,
+            selected_claim_ids=selected_claim_ids,
+            selected_relation_ids=selected_relation_ids,
+        )
         scope = ReportResearchScopeVersion(
             research_case_id=research_case_id,
             document_version_id=document_version_id,
-            version=latest.version + 1,
+            version=1 if latest is None else latest.version + 1,
             changed_by=changed_by.strip(),
             change_summary=change_summary.strip(),
             research_question=selected_question,
             factor_selection=list(
-                latest.factor_selection if factor_selection is None else factor_selection
+                latest.factor_selection
+                if factor_selection is None and latest is not None
+                else factor_selection or []
             ),
-            evidence_plan=list(latest.evidence_plan if evidence_plan is None else evidence_plan),
+            evidence_plan=list(
+                latest.evidence_plan
+                if evidence_plan is None and latest is not None
+                else evidence_plan or []
+            ),
         )
         self._session.add(scope)
         self._session.flush()
+        self._append_scope_selections(
+            scope,
+            selected_claim_ids=selected_claim_ids,
+            selected_relation_ids=selected_relation_ids,
+        )
         return scope
+
+    def _paths_for_document(
+        self, research_case_id: uuid.UUID, document_version_id: uuid.UUID
+    ) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+        """Return every extracted path for the system-created initial scope."""
+        claim_ids = list(
+            self._session.scalars(
+                select(ReportClaim.id)
+                .join(SourceSpan, SourceSpan.id == ReportClaim.source_span_id)
+                .where(ReportClaim.research_case_id == research_case_id)
+                .where(SourceSpan.document_version_id == document_version_id)
+                .order_by(ReportClaim.created_at, ReportClaim.id)
+            )
+        )
+        if not claim_ids:
+            return [], []
+        relation_ids = list(
+            self._session.scalars(
+                select(ReportRelation.id)
+                .where(ReportRelation.research_case_id == research_case_id)
+                .where(ReportRelation.claim_id.in_(claim_ids))
+                .order_by(ReportRelation.created_at, ReportRelation.id)
+            )
+        )
+        return claim_ids, relation_ids
+
+    def _append_scope_selections(
+        self,
+        scope: ReportResearchScopeVersion,
+        *,
+        selected_claim_ids: Sequence[uuid.UUID],
+        selected_relation_ids: Sequence[uuid.UUID],
+    ) -> None:
+        """Persist a selection that was validated before the scope was inserted."""
+        self._session.add_all(
+            ReportResearchScopeClaim(
+                scope_version_id=scope.id,
+                report_claim_id=claim_id,
+            )
+            for claim_id in selected_claim_ids
+        )
+        self._session.add_all(
+            ReportResearchScopeRelation(
+                scope_version_id=scope.id,
+                report_relation_id=relation_id,
+            )
+            for relation_id in selected_relation_ids
+        )
+        self._session.flush()
+
+    def _validate_scope_selection(
+        self,
+        research_case_id: uuid.UUID,
+        document_version_id: uuid.UUID,
+        *,
+        selected_claim_ids: Sequence[uuid.UUID],
+        selected_relation_ids: Sequence[uuid.UUID],
+    ) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+        """Validate a complete selection before a new immutable scope exists."""
+        claim_ids = list(dict.fromkeys(selected_claim_ids))
+        relation_ids = list(dict.fromkeys(selected_relation_ids))
+        if not claim_ids:
+            raise ValueError("report scope requires at least one selected claim")
+        claims = {
+            claim.id: claim
+            for claim in self._session.scalars(
+                select(ReportClaim)
+                .join(SourceSpan, SourceSpan.id == ReportClaim.source_span_id)
+                .where(ReportClaim.id.in_(claim_ids))
+                .where(ReportClaim.research_case_id == research_case_id)
+                .where(SourceSpan.document_version_id == document_version_id)
+            )
+        }
+        if set(claim_ids) != set(claims):
+            raise ValueError("report scope selected claims must belong to its case and document")
+        relations = {
+            relation.id: relation
+            for relation in self._session.scalars(
+                select(ReportRelation)
+                .where(ReportRelation.id.in_(relation_ids))
+                .where(ReportRelation.research_case_id == research_case_id)
+            )
+        } if relation_ids else {}
+        if set(relation_ids) != set(relations) or any(
+            relation.claim_id not in claims for relation in relations.values()
+        ):
+            raise ValueError(
+                "report scope selected relations must belong to its selected claims, case and document"
+            )
+        claims_with_paths = set(
+            self._session.scalars(
+                select(ReportRelation.claim_id)
+                .where(ReportRelation.research_case_id == research_case_id)
+                .where(ReportRelation.claim_id.in_(claim_ids))
+            )
+        )
+        selected_path_claims = {relation.claim_id for relation in relations.values()}
+        if claims_with_paths - selected_path_claims:
+            raise ValueError(
+                "report scope must select at least one relation for every selected claim with paths"
+            )
+        return claim_ids, relation_ids
 
     def _extract_claim_statement_ids(self, research_case_id: uuid.UUID) -> list:
         """Run the default report parser immediately after source intake.

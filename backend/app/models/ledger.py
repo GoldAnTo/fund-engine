@@ -58,6 +58,8 @@ IMMUTABLE_TABLES = frozenset(
         "report_case_source_spans",
         "report_extraction_claims",
         "report_research_scope_versions",
+        "report_research_scope_claims",
+        "report_research_scope_relations",
         "report_claims",
         "report_relations",
         "report_market_observations",
