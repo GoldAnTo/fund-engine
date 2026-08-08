@@ -75,6 +75,12 @@ MIGRATION_0021_PATH = (
     / "versions"
     / "0021_company_identity_aliases.py"
 )
+MIGRATION_0022_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0022_china_market_data_indexes.py"
+)
 
 
 def _scope(session, research_case, *, version: int = 1) -> EventResearchScopeVersion:
@@ -1756,6 +1762,28 @@ def test_impact_model_indexes_match_the_migration_contract() -> None:
     }
 
 
+def test_china_market_data_model_indexes_match_the_migration_contract() -> None:
+    ledger_tables = (Stock.__table__, ValuationSnapshot.__table__, HoldingDisclosure.__table__)
+
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for table in ledger_tables
+        for index in table.indexes
+    } == {
+        "ix_stocks_company_market": ("company_id", "market"),
+        "ix_valuation_snapshots_stock_metric_as_of": (
+            "stock_id",
+            "metric_name",
+            "as_of_date",
+        ),
+        "ix_holding_disclosures_stock_published_report": (
+            "stock_id",
+            "published_at",
+            "report_period",
+        ),
+    }
+
+
 def test_impact_migration_creates_indexed_immutable_tables_on_postgres() -> None:
     migration = _load_migration()
     operations = _OperationsRecorder("postgresql")
@@ -1885,6 +1913,100 @@ def test_0021_migration_alias_contract_on_postgres() -> None:
 
     migration.downgrade()
     assert operations.dropped_tables[-1] == ("company_identity_aliases",)
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_0022_migration_creates_and_drops_china_market_data_indexes(dialect: str) -> None:
+    migration = _load_migration(MIGRATION_0022_PATH)
+    operations = _OperationsRecorder(dialect)
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0022"
+    assert migration.down_revision == "0021"
+    assert {
+        (name, table, tuple(columns), options)
+        for name, table, columns, options in operations.indexes
+    } == {
+        (
+            "ix_valuation_snapshots_stock_metric_as_of",
+            "valuation_snapshots",
+            ("stock_id", "metric_name", "as_of_date"),
+            None,
+        ),
+        (
+            "ix_holding_disclosures_stock_published_report",
+            "holding_disclosures",
+            ("stock_id", "published_at", "report_period"),
+            None,
+        ),
+        ("ix_stocks_company_market", "stocks", ("company_id", "market"), None),
+    }
+
+    migration.downgrade()
+
+    assert operations.dropped_indexes == [
+        ("ix_stocks_company_market",),
+        ("ix_holding_disclosures_stock_published_report",),
+        ("ix_valuation_snapshots_stock_metric_as_of",),
+    ]
+
+
+def test_0022_sqlite_upgrade_and_downgrade_create_the_ledger_indexes() -> None:
+    """Use SQLite DDL to protect the migration path used in local development."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "CREATE TABLE stocks (id VARCHAR(36) PRIMARY KEY, company_id VARCHAR(36) NOT NULL, "
+                "market VARCHAR(64) NOT NULL)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "CREATE TABLE valuation_snapshots (id VARCHAR(36) PRIMARY KEY, stock_id VARCHAR(36) "
+                "NOT NULL, metric_name VARCHAR(64) NOT NULL, as_of_date DATE NOT NULL)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "CREATE TABLE holding_disclosures (id VARCHAR(36) PRIMARY KEY, stock_id VARCHAR(36) "
+                "NOT NULL, published_at DATETIME NOT NULL, report_period DATE NOT NULL)"
+            )
+        )
+        migration = _load_migration(MIGRATION_0022_PATH)
+        migration.op = Operations(MigrationContext.configure(connection))
+
+        migration.upgrade()
+
+        inspector = sa.inspect(connection)
+        assert {
+            index["name"]: tuple(index["column_names"])
+            for table in ("stocks", "valuation_snapshots", "holding_disclosures")
+            for index in inspector.get_indexes(table)
+        } == {
+            "ix_stocks_company_market": ("company_id", "market"),
+            "ix_valuation_snapshots_stock_metric_as_of": (
+                "stock_id",
+                "metric_name",
+                "as_of_date",
+            ),
+            "ix_holding_disclosures_stock_published_report": (
+                "stock_id",
+                "published_at",
+                "report_period",
+            ),
+        }
+
+        migration.downgrade()
+        assert all(
+            not sa.inspect(connection).get_indexes(table)
+            for table in ("stocks", "valuation_snapshots", "holding_disclosures")
+        )
 
 
 def test_0021_sqlite_upgrade_backfills_nfkc_aliases_for_legacy_companies() -> None:

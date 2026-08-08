@@ -456,6 +456,9 @@ def _set_company_canonical_identity(_mapper, _connection, target: Company) -> No
 
 class Stock(Base):
     __tablename__ = "stocks"
+    __table_args__ = (
+        Index("ix_stocks_company_market", "company_id", "market"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     company_id: Mapped[uuid.UUID] = mapped_column(
@@ -499,6 +502,14 @@ class Fund(Base):
 
 class ValuationSnapshot(Base):
     __tablename__ = "valuation_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_valuation_snapshots_stock_metric_as_of",
+            "stock_id",
+            "metric_name",
+            "as_of_date",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     stock_id: Mapped[uuid.UUID] = mapped_column(
@@ -516,6 +527,14 @@ class ValuationSnapshot(Base):
 
 class HoldingDisclosure(Base):
     __tablename__ = "holding_disclosures"
+    __table_args__ = (
+        Index(
+            "ix_holding_disclosures_stock_published_report",
+            "stock_id",
+            "published_at",
+            "report_period",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     fund_id: Mapped[uuid.UUID] = mapped_column(
