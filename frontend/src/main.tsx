@@ -30,6 +30,7 @@ import { EventConclusionReviewScreen } from "./pages/prototype/EventConclusionRe
 import { EventEvidenceLibraryScreen } from "./pages/prototype/EventEvidenceLibraryScreen";
 import { EventMonitoringScreen } from "./pages/prototype/EventMonitoringScreen";
 import { EventResearchBasisScreen } from "./pages/prototype/EventResearchBasisScreen";
+import { EventImpactTraceScreen } from "./pages/prototype/EventImpactTraceScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -44,6 +45,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="events/:caseId" element={<EventResearchWorkbenchScreen />} />
           <Route path="events/:caseId/review" element={<KeyEvidenceReviewScreen />} />
           <Route path="events/:caseId/conclusion" element={<EventConclusionReviewScreen />} />
+          <Route path="events/:caseId/impact" element={<EventImpactTraceScreen />} />
           <Route path="events/:caseId/basis" element={<EventResearchBasisScreen />} />
           <Route path="library" element={<EventEvidenceLibraryScreen />} />
           <Route path="versions" element={<EventMonitoringScreen />} />
