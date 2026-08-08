@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import event, select
 
-from app.models.ledger import Company, SourceSpan, SourceStatement, Stock
+from app.models.ledger import Company, DocumentVersion, SourceSpan, SourceStatement, Stock
 from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
@@ -461,14 +461,14 @@ def test_factor_becomes_key_only_with_independent_relation_operating_market_peer
     )
     cmd_session.add_all((supplier, issuer))
     cmd_session.flush()
-    _document, _span, _source_statement, claim = _append_report_claim(
+    document, _span, _source_statement, claim = _append_report_claim(
         cmd_session,
         case_id=case_id,
         statement="研报观点：供应商甲是星海科技的供应商。",
         source_url="report://fixture/factor-gate",
         subject_company_id=supplier.id,
         object_company_id=issuer.id,
-        create_scope=True,
+        create_scope=False,
     )
     independent = _append_independent_statement(
         cmd_session,
@@ -479,6 +479,14 @@ def test_factor_becomes_key_only_with_independent_relation_operating_market_peer
         select(ReportRelation).where(ReportRelation.claim_id == claim.id)
     )
     assert relation is not None
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document.id,
+        changed_by="tester",
+        change_summary="以当时已可见公告验证供应链路径",
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[relation.id],
+    )
     confounder = ReportMarketConfounder(
         research_case_id=case_id,
         report_claim_id=claim.id,
@@ -573,6 +581,244 @@ def test_factor_becomes_key_only_with_independent_relation_operating_market_peer
         if row["relation_id"] == str(relation.id)
     )
     assert alternative_factor["classification"] == "alternative"
+
+
+def test_unadmitted_confounder_cannot_satisfy_factor_gate_or_leak_into_wiki(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="混杂来源必须准入",
+        content="研报观点：占位关系。",
+    )
+    now = datetime.now(timezone.utc)
+    supplier = Company(code="CONF-SUP", name="混杂供应商", type="listed", created_at=now)
+    issuer = Company(code="CONF-ISSUER", name="混杂发行人", type="listed", created_at=now)
+    cmd_session.add_all((supplier, issuer))
+    cmd_session.flush()
+    document, _span, _source_statement, claim = _append_report_claim(
+        cmd_session,
+        case_id=case_id,
+        statement="研报观点：混杂供应商是混杂发行人的供应商。",
+        source_url="report://fixture/confounder-admission",
+        subject_company_id=supplier.id,
+        object_company_id=issuer.id,
+    )
+    relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert relation is not None
+    later_statement = _append_independent_statement(
+        cmd_session,
+        case_id=case_id,
+        text="公告披露：混杂供应商是混杂发行人的供应商，订单和收入增长。",
+    )
+    rejected_source = _append_independent_statement(
+        cmd_session,
+        case_id=case_id,
+        text="不可准入混杂消息：同期消息。",
+        source_url="https://example.test/unadmitted-confounder",
+    )
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document.id,
+        changed_by="tester",
+        change_summary="验证来源准入后的混杂路径",
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[relation.id],
+    )
+    confounder = ReportMarketConfounder(
+        research_case_id=case_id,
+        report_claim_id=claim.id,
+        source_statement_id=rejected_source.id,
+        window="1d",
+        kind="announcement",
+        as_of_date=datetime(2026, 8, 2, tzinfo=timezone.utc).date(),
+        summary="不可准入混杂消息",
+        collection_key="unadmitted-confounder",
+    )
+    cmd_session.add_all(
+        (
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="1d",
+                kind="target_market",
+                status="verified",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                metric_name="EVENT_RETURN_1D",
+                summary="目标市场已验证",
+                collection_key="unadmitted-confounder-market",
+            ),
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="1d",
+                kind="peer_control",
+                status="verified",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                metric_name="PEER_RETURN_1D",
+                summary="同业控制已验证",
+                collection_key="unadmitted-confounder-peer",
+            ),
+            confounder,
+        )
+    )
+    cmd_session.flush()
+    cmd_session.add(
+        ReportConfounderAssessment(
+            research_case_id=case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            report_confounder_id=confounder.id,
+            outcome="not_material",
+            rationale="即使写入评估，也不能绕过来源准入。",
+        )
+    )
+    cmd_session.commit()
+
+    graph = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+
+    assert graph.status_code == 200
+    factor = next(row for row in graph.json()["factors"] if row["relation_id"] == str(relation.id))
+    assert factor["classification"] == "evidence_gap"
+    assert factor["components"]["confounder"] is False
+    assert "不可准入混杂消息" not in graph.text
+
+
+def test_later_disclosure_cannot_upgrade_an_older_scope_to_causal_key(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="旧范围不能使用后验材料",
+        content="研报观点：占位关系。",
+    )
+    now = datetime.now(timezone.utc)
+    supplier = Company(code="ASOF-SUP", name="时点供应商", type="listed", created_at=now)
+    issuer = Company(code="ASOF-ISSUER", name="时点发行人", type="listed", created_at=now)
+    cmd_session.add_all((supplier, issuer))
+    cmd_session.flush()
+    document, _span, _source_statement, claim = _append_report_claim(
+        cmd_session,
+        case_id=case_id,
+        statement="研报观点：时点供应商是时点发行人的供应商。",
+        source_url="report://fixture/visibility-cutoff",
+        subject_company_id=supplier.id,
+        object_company_id=issuer.id,
+    )
+    relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert relation is not None
+    confounder_source = _append_independent_statement(
+        cmd_session,
+        case_id=case_id,
+        text="公告披露：同期没有改变市场判断的事项。",
+    )
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document.id,
+        changed_by="tester",
+        change_summary="冻结初始可见证据范围",
+        selected_claim_ids=[claim.id],
+        selected_relation_ids=[relation.id],
+    )
+    later_statement = _append_independent_statement(
+        cmd_session,
+        case_id=case_id,
+        text="公告披露：时点供应商是时点发行人的供应商，订单和收入增长。",
+        source_url="https://issuer.example.com/later-disclosure",
+    )
+    # Freeze the later document's visibility timestamp after the scope has
+    # already been appended; otherwise a single final flush assigns both
+    # append-only defaults at once and erases the test's temporal ordering.
+    cmd_session.flush()
+    scope = cmd_session.scalar(
+        select(ReportResearchScopeVersion)
+        .where(ReportResearchScopeVersion.research_case_id == case_id)
+        .order_by(ReportResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    later_span = cmd_session.get(SourceSpan, later_statement.source_span_id)
+    assert scope is not None and later_span is not None
+    later_document = cmd_session.get(DocumentVersion, later_span.document_version_id)
+    assert later_document is not None
+    assert later_document.available_at > scope.created_at
+    confounder = ReportMarketConfounder(
+        research_case_id=case_id,
+        report_claim_id=claim.id,
+        source_statement_id=confounder_source.id,
+        window="1d",
+        kind="announcement",
+        as_of_date=datetime(2026, 8, 2, tzinfo=timezone.utc).date(),
+        summary="同期事项已评估",
+        collection_key="old-scope-confounder",
+    )
+    cmd_session.add_all(
+        (
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="1d",
+                kind="target_market",
+                status="verified",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                metric_name="EVENT_RETURN_1D",
+                summary="目标市场已验证",
+                collection_key="old-scope-market",
+            ),
+            ReportMarketObservation(
+                research_case_id=case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=None,
+                valuation_snapshot_id=None,
+                industry_index_snapshot_id=None,
+                window="1d",
+                kind="peer_control",
+                status="verified",
+                as_of_date=datetime(2026, 8, 3, tzinfo=timezone.utc).date(),
+                metric_name="PEER_RETURN_1D",
+                summary="同业控制已验证",
+                collection_key="old-scope-peer",
+            ),
+            confounder,
+        )
+    )
+    cmd_session.flush()
+    cmd_session.add(
+        ReportConfounderAssessment(
+            research_case_id=case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            report_confounder_id=confounder.id,
+            outcome="not_material",
+            rationale="没有实质替代解释。",
+        )
+    )
+    cmd_session.commit()
+
+    graph = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+
+    assert graph.status_code == 200
+    factor = next(row for row in graph.json()["factors"] if row["relation_id"] == str(relation.id))
+    assert factor["classification"] == "evidence_gap"
+    assert factor["components"]["company_relation"] is False
+    assert factor["components"]["operating"] is False
+    assert "订单和收入增长" not in graph.text
 
 
 def test_wiki_bulk_loads_confounder_sources(cmd_client, cmd_session) -> None:

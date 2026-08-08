@@ -13,6 +13,7 @@ import json
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from unicodedata import normalize
 
 from sqlalchemy import and_, or_, select
@@ -137,16 +138,31 @@ class ReportWikiQueries:
         confounders_by_claim = self._confounders(claim_ids)
         confounder_sources = self._confounder_sources(
             case_id,
+            document.id,
+            scope.created_at,
             {
                 row.source_statement_id
                 for rows in confounders_by_claim.values()
                 for row in rows
             },
         )
+        confounders_by_claim = {
+            claim_id: [
+                row
+                for row in rows
+                if row.source_statement_id in confounder_sources
+            ]
+            for claim_id, rows in confounders_by_claim.items()
+        }
         confounder_assessments = self._confounder_assessments(claim_ids)
         exposures_by_claim = self._fund_exposures(claim_ids, selected_relation_ids)
         funds = self._funds(exposures_by_claim)
-        independent_evidence = self._independent_case_evidence(case_id, document.id)
+        # ``created_at`` is the immutable visibility cutoff for this scope.
+        # Later disclosures may be examined in a successor scope, but cannot
+        # retroactively promote this historical scope to a causal key factor.
+        independent_evidence = self._independent_case_evidence(
+            case_id, document.id, scope.created_at
+        )
 
         nodes: dict[str, ReportWikiNodeDTO] = {}
         edges: dict[str, ReportWikiEdgeDTO] = {}
@@ -707,7 +723,10 @@ class ReportWikiQueries:
         }
 
     def _independent_case_evidence(
-        self, case_id: uuid.UUID, document_id: uuid.UUID
+        self,
+        case_id: uuid.UUID,
+        document_id: uuid.UUID,
+        visibility_cutoff: datetime,
     ) -> tuple[_IndependentEvidence, ...]:
         rows = self._session.execute(
             select(SourceStatement, SourceSpan, DocumentVersion)
@@ -722,6 +741,8 @@ class ReportWikiQueries:
             )
             .where(SourceSpan.document_version_id != document_id)
             .where(SourceStatement.kind.in_(("disclosed_fact", "management_attribution")))
+            .where(DocumentVersion.available_at <= visibility_cutoff)
+            .where(CaseDocumentVersion.linked_at <= visibility_cutoff)
         )
         return tuple(
             _IndependentEvidence(statement, span)
@@ -734,14 +755,19 @@ class ReportWikiQueries:
         )
 
     def _confounder_sources(
-        self, case_id: uuid.UUID, statement_ids: set[uuid.UUID]
+        self,
+        case_id: uuid.UUID,
+        report_document_id: uuid.UUID,
+        visibility_cutoff: datetime,
+        statement_ids: set[uuid.UUID],
     ) -> dict[uuid.UUID, tuple[SourceStatement, SourceSpan]]:
-        """Load every exposed confounder locator in one case-scoped query."""
+        """Load only source-admitted, cutoff-visible confounder locators."""
         if not statement_ids:
             return {}
         rows = self._session.execute(
-            select(SourceStatement, SourceSpan)
+            select(SourceStatement, SourceSpan, DocumentVersion)
             .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
+            .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
             .join(
                 CaseDocumentVersion,
                 and_(
@@ -750,8 +776,20 @@ class ReportWikiQueries:
                 ),
             )
             .where(SourceStatement.id.in_(statement_ids))
+            .where(SourceSpan.document_version_id != report_document_id)
+            .where(SourceStatement.kind.in_(("disclosed_fact", "management_attribution")))
+            .where(DocumentVersion.available_at <= visibility_cutoff)
+            .where(CaseDocumentVersion.linked_at <= visibility_cutoff)
         )
-        return {statement.id: (statement, span) for statement, span in rows}
+        return {
+            statement.id: (statement, span)
+            for statement, span, source_document in rows
+            if classify_source(
+                source_document.source_url,
+                source_document.parser_version,
+                source_document.parse_state in {"success", "parsed"},
+            ).can_accept
+        }
 
     def _independent_relation_evidence(
         self,
