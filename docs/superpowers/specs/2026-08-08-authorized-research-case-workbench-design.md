@@ -132,6 +132,8 @@
 
 ### 研报主张与关键因素
 
+任何进入验证链路的研报主张还必须通过 `MetricRegistry + MechanismTemplate + ResearchabilityGate`。结果变量、目标实体/业务范围、方向、基线、时间窗、模板版本和反证规则均须由研究员确认并冻结；AI 只能以原文定位提议候选。完整对象、首个“海外 AI CapEx 到中国硬件公司”模板、节点角色和拒绝条件见 [固定结果变量与机制模板设计](2026-08-08-metric-and-mechanism-template-design.md)。
+
 每份研报必须先经过版面和抽取质量主链路，再产生 `ReportClaim` 候选：`Docling + PP-Structure` 负责页码、段落、表格、单元格和阅读顺序；LLM 或 PP-UIE 只产生 `AtomicClaimCandidate`；候选必须通过逐字连续 quote 的 offset/hash、数值、单位、期间、主体和来源权威性校验，并通过版本化金标回归与人工审核，才可写入正式 `SourceStatement`。解析器、模型或提示词升级不能直接覆盖既有结果，必须留下独立候选/运行版本并通过回归门禁。
 
 `AtomicClaimCandidate` 至少保留逐字 quote、精确 locator、文档与 quote hash、主体、谓词、对象或数值、单位、期间、适用范围、断言者、主张性质和机器校验结果；一次候选只包含一个可独立判断的主张。通过审核的正式 `SourceStatement` 可被用来提出 `ReportClaim` 候选。该候选必须保留精确原文定位、主张类型（`disclosed_fact`、`forecast`、`research_opinion`）、涉及实体、观察期和提出者。研报主张不是事实，只有原文所说的内容可被审核确认；预测和研究观点必须始终保留其性质。

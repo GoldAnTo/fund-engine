@@ -178,7 +178,17 @@ Docling + PP-Structure
 
 模型、提示词、解析器或规则升级前，必须在版本化中文研报金标集上回归。金标集保留双人标注、分歧裁决和原文定位；衡量逐字引用/定位命中率、原子陈述 precision/recall、重复率、事实/预测/意见混淆、数值/单位/期间/实体错误以及人工审核通过率。逐字引用与 hash/offset 机器校验必须为 100%；高影响陈述（关键因素、股票/基金表达、正式结论）必须人工审核。
 
-### 7.1 从研报到验证
+### 7.1 指标词典、机制模板与可研究性门槛
+
+为避免每篇研报由模型临时决定结果变量和关键因素，所有进入正式验证的 `ReportClaim` 必须使用受控、可版本化的 `MetricRegistry`、`MechanismTemplate` 与 `ResearchabilityGate`。完整设计见 [固定结果变量与机制模板设计](../superpowers/specs/2026-08-08-metric-and-mechanism-template-design.md)。
+
+`OutcomeBinding` 固定命题的结果指标、实体/业务范围、方向、基线和时间窗；`MechanismTemplate` 明确 `required_for_outcome`、`required_for_attribution`、`alternative_explanation` 与 `scope_guard` 节点角色；`VerificationRule` 明确支持/反驳条件、允许来源、验证窗口和下一验证事件。模型只提出可回到原文的候选，研究员负责确认绑定、模板版本、必要节点与阈值。
+
+没有已审核结果变量、模板版本、可观测反证/替代解释和完整时点/范围的材料，必须停留在线索或研究计划，不能写入正式证据、结论、股票市场表达或基金披露表达。业务线主结论至少需要两个独立主指标；只有一个主指标时只能作为 `single_metric_monitoring`，结论不得高于 `insufficient_evidence` 或 `not_due`。
+
+首个模板限定为“海外 AI CapEx 到中国硬件公司”：客户实际 CapEx → 相关技术/架构投入 → 目标公司订单/份额 → 交付/出货 → 相关业务收入 → ASP/成本/毛利率 → 利润结果。仅有行业景气、客户 CapEx 或公司总收入增长均不足以自动声称传导成立。
+
+### 7.2 从研报到验证
 
 解析研报后产生 `ReportClaim` 候选，至少包括原文定位、类型（`disclosed_fact`、`forecast`、`research_opinion`）、实体、观察期与提出者。研报主张不是自动确认的事实。
 
@@ -186,7 +196,7 @@ Docling + PP-Structure
 
 `ClaimVerification` 只允许 `supported`、`contradicted`、`insufficient_evidence`、`not_due`。持续研究和立即补证围绕关键因素执行，而不是围绕模糊的“找利好/利空”执行。
 
-### 7.2 市场与表达页
+### 7.3 市场与表达页
 
 该页的影响路径为：
 
@@ -285,4 +295,5 @@ ReportClaim → KeyFactor → ClaimVerification
 | 2026-08-08 | 独立 Case 与受审核 CaseRelation，Case Wiki 与全局研究网络分层 | 已确认 |
 | 2026-08-08 | 研报主张、关键因素、验证、股票市场观测与基金披露表达闭环 | 已确认 |
 | 2026-08-08 | 研报抽取采用“解析 → 原子陈述候选 → 原文/数值/时态/权威性校验 → 金标回归 → 人审 → 正式陈述”的质量主链路 | 已确认 |
+| 2026-08-08 | 用版本化 MetricRegistry、MechanismTemplate 与 ResearchabilityGate 固定结果变量、必要节点、替代解释和反证；首个模板限于海外 AI CapEx 到中国硬件公司 | 已确认 |
 | 后续 | 所有新需求以本表追加决策、影响范围和替代/废弃规则 | 待执行 |
