@@ -58,6 +58,18 @@ MIGRATION_PATH = (
     / "versions"
     / "0019_event_impact_traces.py"
 )
+MIGRATION_0020_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0020_event_impact_refresh_claims.py"
+)
+MIGRATION_0021_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0021_company_identity_aliases.py"
+)
 
 
 def _scope(session, research_case, *, version: int = 1) -> EventResearchScopeVersion:
@@ -1071,15 +1083,26 @@ class _OperationsRecorder:
         self.executed: list[str] = []
         self.dropped_indexes: list[tuple] = []
         self.dropped_tables: list[tuple] = []
+        self.added_columns: list[tuple] = []
+        self.dropped_columns: list[tuple] = []
 
     def get_bind(self):
-        return SimpleNamespace(dialect=SimpleNamespace(name=self._dialect))
+        return SimpleNamespace(
+            dialect=SimpleNamespace(name=self._dialect),
+            execute=lambda _statement, _params=None: SimpleNamespace(mappings=lambda: []),
+        )
+
+    def add_column(self, *args) -> None:
+        self.added_columns.append(args)
+
+    def drop_column(self, *args) -> None:
+        self.dropped_columns.append(args)
 
     def create_table(self, *args) -> None:
         self.tables.append(args)
 
-    def create_index(self, *args) -> None:
-        self.indexes.append(args)
+    def create_index(self, *args, **kwargs) -> None:
+        self.indexes.append(args + ((kwargs or None),))
 
     def execute(self, statement: str) -> None:
         self.executed.append(statement)
@@ -1091,8 +1114,8 @@ class _OperationsRecorder:
         self.dropped_tables.append(args)
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("event_impact_migration", MIGRATION_PATH)
+def _load_migration(path=MIGRATION_PATH):
+    spec = importlib.util.spec_from_file_location("event_impact_migration", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -1223,3 +1246,54 @@ def test_impact_migration_downgrade_drops_triggers_indexes_and_tables() -> None:
         ("company_impact_relations",),
         ("event_impact_hypotheses",),
     ]
+
+
+def test_0020_migration_claim_and_company_identity_contract_on_postgres() -> None:
+    migration = _load_migration(MIGRATION_0020_PATH)
+    operations = _OperationsRecorder("postgresql")
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0020"
+    assert migration.down_revision == "0019"
+    assert operations.added_columns[0][0] == "companies"
+    assert operations.added_columns[0][1].name == "canonical_identity"
+    assert operations.indexes == [
+        (
+            "uq_companies_type_canonical_identity",
+            "companies",
+            ["type", "canonical_identity"],
+            {"unique": True},
+        )
+    ]
+    claims = next(args for args in operations.tables if args[0] == "event_impact_refresh_claims")
+    assert _columns(claims) == {
+        "id", "research_case_id", "scope_version_id", "run_id", "refresh_key", "created_at"
+    }
+    assert "no_update_event_impact_refresh_claims" in operations.executed[0]
+    assert "no_delete_event_impact_refresh_claims" in operations.executed[1]
+
+    migration.downgrade()
+    assert operations.dropped_columns == [("companies", "canonical_identity")]
+    assert operations.dropped_tables[-1] == ("event_impact_refresh_claims",)
+
+
+def test_0021_migration_alias_contract_on_postgres() -> None:
+    migration = _load_migration(MIGRATION_0021_PATH)
+    operations = _OperationsRecorder("postgresql")
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0021"
+    assert migration.down_revision == "0020"
+    aliases = next(args for args in operations.tables if args[0] == "company_identity_aliases")
+    assert _columns(aliases) == {
+        "id", "company_id", "company_type", "canonical_identity", "created_at"
+    }
+    assert "no_update_company_identity_aliases" in operations.executed[0]
+    assert "no_delete_company_identity_aliases" in operations.executed[1]
+
+    migration.downgrade()
+    assert operations.dropped_tables[-1] == ("company_identity_aliases",)

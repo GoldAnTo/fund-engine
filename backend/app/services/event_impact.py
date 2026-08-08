@@ -111,6 +111,7 @@ class EventImpactResearchService:
         *,
         scope_version_id: uuid.UUID | None = None,
         refresh_key: str | None = None,
+        output_slot=None,
     ) -> ImpactRefreshResult:
         scope = self._scope_for(case_id, scope_version_id)
         refresh_key = refresh_key or self._initial_refresh_key(scope.id)
@@ -179,6 +180,9 @@ class EventImpactResearchService:
                 _ResolvedCandidate(hypothesis=hypothesis, candidate=candidate)
                 for candidate in candidates
             )
+
+        if output_slot is not None and not output_slot():
+            return ImpactRefreshResult(0, 0, 0, 0)
 
         source_rejected_count = 0
         unresolved_candidate_count = 0

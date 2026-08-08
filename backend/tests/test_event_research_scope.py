@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from threading import Event, Thread, get_ident
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +20,7 @@ from app.models.event_research import (
     EventResearchScopeVersion,
 )
 from app.models.event_impact import EventImpactRefreshClaim
+from app.models.event_impact import EventImpactHypothesis
 from app.models.events import DomainEvent
 from app.models.ledger import (
     AIAssessment,
@@ -43,6 +45,7 @@ from app.services.event_research_scope_evidence import (
     lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
+from app.services.event_impact import ResolvedImpactCompany
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.operational import TaskRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
@@ -208,6 +211,112 @@ def test_scope_update_schedules_exact_scope_impact_refresh(cmd_client, cmd_sessi
         )
     )
     assert any(str(scope.id) in task.query for task in impact_tasks)
+
+
+@pytest.mark.pg_only
+def test_postgres_scope_replacement_finishes_before_blocked_impact_output(
+    engine,
+) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        created = EventResearchService(bootstrap).create(
+            CreateEventResearchRequest(
+                raw_input="Event input",
+                event_title="Impact output race",
+                research_question="What explains the event?",
+                candidate_factors=INITIAL_FACTORS,
+                created_by="tester",
+            )
+        )
+        case_id = uuid.UUID(created.case_id)
+        lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
+        assert lifecycle is not None and lifecycle.active_run_id is not None
+        old_run_id = lifecycle.active_run_id
+        old_scope = bootstrap.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+        )
+        assert old_scope is not None
+    finally:
+        bootstrap.close()
+
+    resolver_entered = Event()
+    allow_resolver_return = Event()
+    scope_committed = Event()
+    worker_errors: list[BaseException] = []
+
+    class BlockingResolver:
+        def resolve(self, *, factor_statement, statements):
+            resolver_entered.set()
+            assert allow_resolver_return.wait(timeout=5)
+            return [
+                ResolvedImpactCompany(
+                    company_name="Blocked Supplier",
+                    type="unlisted_supplier",
+                    relation_kind="supplier",
+                    direction="benefits",
+                    mechanism="blocked output",
+                    source_statement_id=None,
+                )
+            ]
+
+    def execute_worker() -> None:
+        db = SessionLocal()
+        try:
+            run = db.get(ResearchRun, old_run_id)
+            assert run is not None
+            AutoResearchService(db, impact_resolver=BlockingResolver()).execute(run)
+            db.commit()
+        except BaseException as exc:
+            worker_errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    worker = Thread(target=execute_worker)
+    worker.start()
+    assert resolver_entered.wait(timeout=5)
+
+    replacement = SessionLocal()
+    try:
+        EventResearchScopeService(replacement).update(
+            case_id,
+            ["new factor one", "new factor two", "new factor three"],
+            "reviewer",
+        )
+        replacement.commit()
+        scope_committed.set()
+    finally:
+        replacement.close()
+    assert scope_committed.is_set()
+    allow_resolver_return.set()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert worker_errors == []
+
+    verify = SessionLocal()
+    try:
+        assert verify.scalar(
+            select(sa.func.count())
+            .select_from(EventImpactHypothesis)
+            .where(EventImpactHypothesis.scope_version_id == old_scope.id)
+        ) == 0
+        successor = verify.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+        )
+        assert successor is not None and successor.id != old_scope.id
+        assert verify.scalar(
+            select(sa.func.count())
+            .select_from(ResearchTask)
+            .where(ResearchTask.run_id == verify.get(EventResearchLifecycle, case_id).active_run_id)
+            .where(ResearchTask.task_type == "impact_refresh")
+        ) == 1
+    finally:
+        verify.close()
 
 
 def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:

@@ -144,17 +144,15 @@ class AutoResearchService:
                 cancelled_during_task = False
                 try:
                     if task.task_type == "impact_refresh":
-                        if not self._claim_task_output_slot(run, task):
-                            cancelled_during_task = True
-                        else:
-                            _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
-                            impact = EventImpactResearchService(
-                                self.session, resolver=self._impact_resolver
-                            ).refresh(
-                                run.research_case_id,
-                                scope_version_id=uuid.UUID(scope_id),
-                                refresh_key=refresh_key,
-                            )
+                        _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
+                        impact = EventImpactResearchService(
+                            self.session, resolver=self._impact_resolver
+                        ).refresh(
+                            run.research_case_id,
+                            scope_version_id=uuid.UUID(scope_id),
+                            refresh_key=refresh_key,
+                            output_slot=lambda: self._claim_task_output_slot(run, task),
+                        )
                     elif task.task_type in {"support", "contradict", "alternative"}:
                         proposed_ids = self._propose_for_task(proposer, task, run)
                     else:
