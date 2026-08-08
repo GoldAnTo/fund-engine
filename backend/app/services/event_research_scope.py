@@ -19,7 +19,6 @@ from app.models.event_research import (
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.services.auto_research import AutoResearchService
-from app.services.event_impact import EventImpactResearchService
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
     normalize_event_research_scope_factors,
@@ -136,9 +135,8 @@ class EventResearchScopeService:
         # longer appear actionable while the successor run is pending.
         EventReviewQueueService(self._session).reconcile_event_review_queue(case_id)
         if lifecycle is not None:
-            self._continue_research_if_needed(lifecycle, active_theses, now)
+            self._continue_research_if_needed(lifecycle, active_theses, now, scope.id)
         self._session.flush()
-        EventImpactResearchService(self._session).schedule_refresh(case_id, scope.id)
         return UpdatedEventResearchScope(
             version=scope.version,
             factors=normalized,
@@ -218,6 +216,7 @@ class EventResearchScopeService:
         lifecycle: EventResearchLifecycle,
         active_theses: list[Thesis],
         now: datetime,
+        scope_version_id: uuid.UUID,
     ) -> None:
         current_run = (
             self._session.get(ResearchRun, lifecycle.active_run_id)
@@ -235,6 +234,7 @@ class EventResearchScopeService:
             budget=current_run.budget if current_run is not None else 100,
             commit=False,
             thesis_ids=[thesis.id for thesis in active_theses],
+            scope_version_id=scope_version_id,
         )
         lifecycle.status = "continuing"
         lifecycle.active_run_id = successor.id

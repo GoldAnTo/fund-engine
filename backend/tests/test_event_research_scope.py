@@ -18,6 +18,7 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.event_impact import EventImpactRefreshClaim
 from app.models.events import DomainEvent
 from app.models.ledger import (
     AIAssessment,
@@ -191,19 +192,22 @@ def test_scope_update_schedules_exact_scope_impact_refresh(cmd_client, cmd_sessi
         .where(EventResearchScopeVersion.research_case_id == case_id)
         .order_by(EventResearchScopeVersion.version.desc())
     )
-    events = list(
+    claims = list(
         cmd_session.scalars(
-            select(DomainEvent).where(
-                DomainEvent.type == "event_impact_refresh_requested"
+            select(EventImpactRefreshClaim).where(
+                EventImpactRefreshClaim.scope_version_id == scope.id
             )
         )
     )
     assert scope is not None
-    assert len(events) == 1
-    assert events[0].payload == {
-        "research_case_id": str(case_id),
-        "scope_version_id": str(scope.id),
-    }
+    assert len(claims) == 1
+    assert claims[0].research_case_id == case_id
+    impact_tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask).where(ResearchTask.task_type == "impact_refresh")
+        )
+    )
+    assert any(str(scope.id) in task.query for task in impact_tasks)
 
 
 def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:

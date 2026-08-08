@@ -17,6 +17,7 @@ from app.models.event_impact import (
     CompanyImpactObservation,
     CompanyImpactRelation,
     CompanyImpactRelationReview,
+    EventImpactRefreshClaim,
     EventImpactHypothesis,
 )
 from app.models.event_research import (
@@ -41,6 +42,7 @@ from app.services.event_impact import (
 )
 from app.errors import ValidationFailedError
 from app.models.events import DomainEvent
+from app.models.operational import ResearchRun, ResearchTask
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -415,22 +417,31 @@ def test_refresh_uses_requested_prior_scope_and_rejects_foreign_scope(
 
 def test_schedule_refresh_is_idempotent_for_one_exact_scope(session, research_case) -> None:
     scope = _event_scope(session, research_case, factors=["factor"])
+    run = ResearchRun(
+        research_case_id=research_case.id,
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=1,
+        budget=1,
+        budget_used=0,
+        scope_thesis_ids=[],
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    session.add(run)
+    session.commit()
     service = EventImpactResearchService(session)
 
-    service.schedule_refresh(research_case.id, scope.id)
-    service.schedule_refresh(research_case.id, scope.id)
+    service.schedule_refresh(research_case.id, scope.id, run.id)
+    service.schedule_refresh(research_case.id, scope.id, run.id)
     session.commit()
 
-    events = list(
-        session.scalars(
-            select(DomainEvent).where(DomainEvent.type == "event_impact_refresh_requested")
-        )
-    )
-    assert len(events) == 1
-    assert events[0].payload == {
-        "research_case_id": str(research_case.id),
-        "scope_version_id": str(scope.id),
-    }
+    assert len(list(session.scalars(select(EventImpactRefreshClaim)))) == 1
+    tasks = list(session.scalars(select(ResearchTask)))
+    assert len(tasks) == 1
+    assert tasks[0].task_type == "impact_refresh"
+    assert str(scope.id) in tasks[0].query
 
 
 def test_refresh_retry_is_idempotent_for_scope_initial_key(session, research_case) -> None:

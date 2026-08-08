@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import DateTime, Date, ForeignKey, Index, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -52,6 +52,7 @@ IMMUTABLE_TABLES = frozenset(
         "company_impact_relations",
         "company_impact_relation_reviews",
         "company_impact_observations",
+        "event_impact_refresh_claims",
         "source_spans",
         "research_cases",
         "theses",
@@ -424,14 +425,32 @@ class EvidenceReview(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+    __table_args__ = (
+        Index(
+            "uq_companies_type_canonical_identity",
+            "type",
+            "canonical_identity",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_identity: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+@event.listens_for(Company, "before_insert")
+def _set_company_canonical_identity(_mapper, _connection, target: Company) -> None:
+    from unicodedata import normalize
+
+    target.canonical_identity = " ".join(
+        normalize("NFKC", target.name).split()
+    ).casefold()
 
 
 class Stock(Base):

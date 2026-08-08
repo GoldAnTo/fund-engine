@@ -23,6 +23,7 @@ from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.event_impact import EventImpactResearchService
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
     lock_event_research_lifecycle,
@@ -45,6 +46,7 @@ class AutoResearchService:
         auto_execute: bool = False,
         commit: bool = True,
         thesis_ids: list[uuid.UUID] | None = None,
+        scope_version_id: uuid.UUID | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -73,6 +75,10 @@ class AutoResearchService:
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
                 )
+        if scope_version_id is not None:
+            EventImpactResearchService(self.session).schedule_refresh(
+                case_id, scope_version_id, run.id
+            )
         self.repo.enqueue_run_job(run)
         # HTTP commands only persist a run + job.  A separately supervised
         # worker claims the job, so a provider timeout cannot hold an API
@@ -132,7 +138,14 @@ class AutoResearchService:
                 self.session.commit()
                 cancelled_during_task = False
                 try:
-                    if task.task_type in {"support", "contradict", "alternative"}:
+                    if task.task_type == "impact_refresh":
+                        _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
+                        impact = EventImpactResearchService(self.session).refresh(
+                            run.research_case_id,
+                            scope_version_id=uuid.UUID(scope_id),
+                            refresh_key=refresh_key,
+                        )
+                    elif task.task_type in {"support", "contradict", "alternative"}:
                         proposed_ids = self._propose_for_task(proposer, task, run)
                     else:
                         assessment = generator.generate(
@@ -154,6 +167,12 @@ class AutoResearchService:
                             "proposed_proposal_ids": [str(item) for item in proposed_ids],
                         }
                         task.evidence_count = self._evidence_count(task.thesis_id)
+                    elif task.task_type == "impact_refresh":
+                        task.result = {
+                            "task_type": task.task_type,
+                            "hypotheses_created": impact.hypotheses_created,
+                            "relations_created": impact.relations_created,
+                        }
                     else:
                         task.result = {
                             "task_type": task.task_type,

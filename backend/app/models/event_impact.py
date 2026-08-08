@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    UniqueConstraint,
     Integer,
     JSON,
     String,
@@ -168,6 +169,30 @@ class CompanyImpactObservation(Base):
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     as_of_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EventImpactRefreshClaim(Base):
+    """Immutable, unique claim for one scope-specific impact refresh key."""
+
+    __tablename__ = "event_impact_refresh_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_version_id", "refresh_key", name="uq_event_impact_refresh_claim"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("research_runs.id"), nullable=True
+    )
+    refresh_key: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

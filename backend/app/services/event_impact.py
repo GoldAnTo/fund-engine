@@ -8,12 +8,14 @@ from typing import Protocol, Sequence
 from unicodedata import normalize
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_impact import (
     CompanyImpactObservation,
     CompanyImpactRelation,
+    EventImpactRefreshClaim,
     EventImpactHypothesis,
 )
 from app.models.event_research import (
@@ -31,6 +33,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from app.models.operational import ResearchRun, ResearchTask
 from app.services.source_admission import classify_source
 from app.repositories.outbox import emit_event
 
@@ -98,9 +101,11 @@ class EventImpactResearchService:
         case_id: uuid.UUID,
         *,
         scope_version_id: uuid.UUID | None = None,
+        refresh_key: str | None = None,
     ) -> ImpactRefreshResult:
         scope = self._scope_for(case_id, scope_version_id)
-        refresh_key = self._initial_refresh_key(scope.id)
+        refresh_key = refresh_key or self._initial_refresh_key(scope.id)
+        self._claim_refresh(case_id, scope.id, refresh_key)
         existing_hypotheses = self._session.scalars(
             select(EventImpactHypothesis).where(
                 EventImpactHypothesis.research_case_id == case_id,
@@ -254,10 +259,94 @@ class EventImpactResearchService:
         )
 
     def schedule_refresh(
-        self, case_id: uuid.UUID, scope_version_id: uuid.UUID
-    ) -> DomainEvent:
-        """Append one durable handoff for a specific immutable scope version."""
+        self, case_id: uuid.UUID, scope_version_id: uuid.UUID, run_id: uuid.UUID
+    ) -> EventImpactRefreshClaim:
+        """Atomically claim and enqueue one executable scope refresh task."""
         scope = self._scope_for(case_id, scope_version_id)
+        run = self._session.get(ResearchRun, run_id)
+        if run is None or run.research_case_id != case_id:
+            raise ValidationFailedError("research run does not belong to the event research case")
+        refresh_key = self._initial_refresh_key(scope.id)
+        claim, created = self._claim_refresh(
+            case_id, scope.id, refresh_key, run_id=run_id
+        )
+        if created:
+            self._session.add(
+                ResearchTask(
+                    run_id=run_id,
+                    research_case_id=case_id,
+                    thesis_id=None,
+                    task_type="impact_refresh",
+                    query=(
+                        f"impact_refresh:{claim.id}:{scope.id}:{refresh_key}"
+                    ),
+                    result=None,
+                    created_at=_utcnow(),
+                    updated_at=_utcnow(),
+                )
+            )
+            emit_event(
+                self._session,
+                type=_REFRESH_REQUEST_EVENT_TYPE,
+                aggregate_type="event_impact_refresh_claim",
+                aggregate_id=claim.id,
+                ref_type="research_case",
+                ref_id=case_id,
+                origin="operational",
+                payload={
+                    "research_case_id": str(case_id),
+                    "scope_version_id": str(scope.id),
+                    "refresh_claim_id": str(claim.id),
+                    "run_id": str(run_id),
+                },
+            )
+        self._session.flush()
+        return claim
+
+    def _claim_refresh(
+        self,
+        case_id: uuid.UUID,
+        scope_version_id: uuid.UUID,
+        refresh_key: str,
+        *,
+        run_id: uuid.UUID | None = None,
+    ) -> tuple[EventImpactRefreshClaim, bool]:
+        """Use the unique ledger claim as the concurrency boundary."""
+        existing = self._session.scalar(
+            select(EventImpactRefreshClaim)
+            .where(EventImpactRefreshClaim.scope_version_id == scope_version_id)
+            .where(EventImpactRefreshClaim.refresh_key == refresh_key)
+            .limit(1)
+        )
+        if existing is not None:
+            return existing, False
+        try:
+            with self._session.begin_nested():
+                claim = EventImpactRefreshClaim(
+                    research_case_id=case_id,
+                    scope_version_id=scope_version_id,
+                    run_id=run_id,
+                    refresh_key=refresh_key,
+                    created_at=_utcnow(),
+                )
+                self._session.add(claim)
+                self._session.flush()
+            return claim, True
+        except IntegrityError:
+            claim = self._session.scalar(
+                select(EventImpactRefreshClaim)
+                .where(EventImpactRefreshClaim.scope_version_id == scope_version_id)
+                .where(EventImpactRefreshClaim.refresh_key == refresh_key)
+                .limit(1)
+            )
+            if claim is None:  # pragma: no cover - protects unusual DB drivers
+                raise
+            return claim, False
+
+    def _legacy_schedule_event(
+        self, case_id: uuid.UUID, scope: EventResearchScopeVersion
+    ) -> DomainEvent | None:
+        """Retained only for audit compatibility; tasks/claims drive execution."""
         existing = self._session.scalar(
             select(DomainEvent)
             .where(DomainEvent.type == _REFRESH_REQUEST_EVENT_TYPE)
@@ -354,9 +443,12 @@ class EventImpactResearchService:
         }
         if not keys:
             return {}
+        identities = {key[1] for key in keys}
         company_types = {candidate.type for candidate in candidates}
         existing = self._session.scalars(
-            select(Company).where(Company.type.in_(company_types))
+            select(Company)
+            .where(Company.type.in_(company_types))
+            .where(Company.canonical_identity.in_(identities))
         )
         companies: dict[tuple[str, str, str], Company] = {}
         for company in existing:
