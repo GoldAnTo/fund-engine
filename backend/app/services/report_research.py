@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
 from app.models.ledger import DocumentBlob, DocumentVersion, ResearchCase
@@ -25,6 +26,10 @@ class CreatedReportResearch:
     publisher: str | None
     state: str
     source_statement_ids: list
+
+
+def _before_document_blob_insert() -> None:
+    """Test seam for the concurrent immutable-blob reference race."""
 
 
 class ReportResearchService:
@@ -263,17 +268,31 @@ class ReportResearchService:
             self._blobs.read(existing)
             return existing
         storage_key, digest = self._blobs.persist(raw)
-        blob = DocumentBlob(
-            document_version_id=document.id,
-            storage_key=storage_key,
-            content_sha256=digest,
-            byte_size=len(raw),
-            media_type="application/pdf",
-            created_at=datetime.now(timezone.utc),
-        )
-        self._session.add(blob)
-        self._session.flush()
-        return blob
+        try:
+            with self._session.begin_nested():
+                _before_document_blob_insert()
+                blob = DocumentBlob(
+                    document_version_id=document.id,
+                    storage_key=storage_key,
+                    content_sha256=digest,
+                    byte_size=len(raw),
+                    media_type="application/pdf",
+                    created_at=datetime.now(timezone.utc),
+                )
+                self._session.add(blob)
+                self._session.flush()
+            return blob
+        except IntegrityError:
+            # A concurrent request persisted the same immutable reference.
+            # The savepoint leaves the outer case/document transaction usable;
+            # re-read and validate the winner before treating it as a replay.
+            existing = self._session.query(DocumentBlob).filter_by(
+                document_version_id=document.id
+            ).one_or_none()
+            if existing is None:
+                raise
+            self._blobs.read(existing)
+            return existing
 
     @staticmethod
     def _iso_published_at(published_at: datetime | None) -> str | None:

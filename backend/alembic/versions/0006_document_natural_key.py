@@ -59,6 +59,7 @@ def _natural_key(source_url: str, title: str | None, published_at: object | None
 
 def upgrade() -> None:
     conn = op.get_bind()
+    dialect = conn.dialect.name
     op.add_column(
         "document_versions",
         sa.Column("natural_key", sa.String(32), nullable=True),
@@ -69,11 +70,16 @@ def upgrade() -> None:
     # raw bytes hash 唯一性，仍可通过 SHA256 命中旧逻辑）。
     # DocumentVersion 没有 title 列；title 存于 source_spans.locator 的
     # JSON 内，按 acquired_at 取最早一条 span 的 locator.title 作为代表。
+    title_expression = (
+        "ss.locator->>'title'"
+        if dialect == "postgresql"
+        else "json_extract(ss.locator, '$.title')"
+    )
     rows = conn.execute(
         sa.text(
-            """
+            f"""
             SELECT dv.id, dv.source_url, dv.published_at, dv.acquired_at,
-                   (SELECT ss.locator->>'title'
+                   (SELECT {title_expression}
                     FROM source_spans ss
                     WHERE ss.document_version_id = dv.id
                     ORDER BY ss.id ASC
@@ -106,17 +112,28 @@ def upgrade() -> None:
                 {"k": key, "id": row.id},
             )
 
-    op.create_unique_constraint(
-        "uq_document_versions_natural_key",
-        "document_versions",
-        ["natural_key"],
-    )
+    if dialect == "sqlite":
+        with op.batch_alter_table("document_versions") as batch:
+            batch.create_unique_constraint(
+                "uq_document_versions_natural_key", ["natural_key"]
+            )
+    else:
+        op.create_unique_constraint(
+            "uq_document_versions_natural_key",
+            "document_versions",
+            ["natural_key"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_document_versions_natural_key",
-        "document_versions",
-        type_="unique",
-    )
-    op.drop_column("document_versions", "natural_key")
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("document_versions") as batch:
+            batch.drop_constraint("uq_document_versions_natural_key", type_="unique")
+            batch.drop_column("natural_key")
+    else:
+        op.drop_constraint(
+            "uq_document_versions_natural_key",
+            "document_versions",
+            type_="unique",
+        )
+        op.drop_column("document_versions", "natural_key")

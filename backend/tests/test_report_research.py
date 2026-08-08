@@ -413,3 +413,73 @@ def test_blob_store_concurrent_writers_never_expose_partial_object(
     assert results[0] == results[1]
     key, _ = results[0]
     assert (tmp_path / "report-blobs" / key).read_bytes() == raw
+
+
+@pytest.mark.pg_only
+def test_postgres_concurrent_blob_reference_creation_rereads_existing_row(
+    engine, monkeypatch, tmp_path
+) -> None:
+    from sqlalchemy.orm import sessionmaker
+
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+    from app.services.report_research import ReportResearchService
+
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    raw = b"same uploaded PDF bytes"
+    try:
+        document = DocumentService(DocumentRepository(bootstrap)).freeze(
+            raw=raw,
+            source_url="report://pdf_upload/blob-race",
+            title="并发 blob",
+            natural_key=hashlib.sha256(raw).hexdigest()[:32],
+        )
+        bootstrap.commit()
+        document_id = document.id
+    finally:
+        bootstrap.close()
+
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
+    before_insert = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.report_research._before_document_blob_insert",
+        lambda: before_insert.wait(timeout=5),
+    )
+    errors: list[BaseException] = []
+
+    def _persist_reference() -> None:
+        db = SessionLocal()
+        try:
+            document = db.get(DocumentVersion, document_id)
+            assert document is not None
+            ReportResearchService(db)._persist_uploaded_blob(document, raw)
+            db.commit()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first = Thread(target=_persist_reference)
+    second = Thread(target=_persist_reference)
+    first.start()
+    second.start()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    verify = SessionLocal()
+    try:
+        blobs = list(
+            verify.scalars(
+                select(DocumentBlob).where(
+                    DocumentBlob.document_version_id == document_id
+                )
+            )
+        )
+        assert len(blobs) == 1
+        assert (tmp_path / "report-blobs" / blobs[0].storage_key).read_bytes() == raw
+    finally:
+        verify.close()
