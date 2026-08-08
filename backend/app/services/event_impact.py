@@ -595,6 +595,14 @@ class EventImpactResearchService:
             )
         ) if hypotheses else []
         relation_ids = [relation.id for relation in relations]
+        latest_reviews: dict[uuid.UUID, CompanyImpactRelationReview] = {}
+        if relation_ids:
+            for review in self._session.scalars(
+                select(CompanyImpactRelationReview)
+                .where(CompanyImpactRelationReview.relation_id.in_(relation_ids))
+                .order_by(CompanyImpactRelationReview.created_at.desc())
+            ):
+                latest_reviews.setdefault(review.relation_id, review)
         if output_slot is not None and not output_slot():
             return {"cancelled": True, "observations_created": 0}
         if stage == "impact_companies":
@@ -822,6 +830,14 @@ class EventImpactResearchService:
             )
         ) if hypothesis_ids else []
         relation_ids = [relation.id for relation in relations]
+        latest_reviews: dict[uuid.UUID, CompanyImpactRelationReview] = {}
+        if relation_ids:
+            for review in self._session.scalars(
+                select(CompanyImpactRelationReview)
+                .where(CompanyImpactRelationReview.relation_id.in_(relation_ids))
+                .order_by(CompanyImpactRelationReview.created_at.desc())
+            ):
+                latest_reviews.setdefault(review.relation_id, review)
         observations = list(
             self._session.scalars(
                 select(CompanyImpactObservation).where(
@@ -865,6 +881,14 @@ class EventImpactResearchService:
                 hypothesis_relations,
                 hypothesis_observations,
                 fund_coverage_by_relation,
+                {
+                    relation.id: (
+                        "verified" if latest_reviews.get(relation.id) and latest_reviews[relation.id].outcome == "accepted"
+                        else "rejected" if latest_reviews.get(relation.id) and latest_reviews[relation.id].outcome == "rejected"
+                        else relation.status
+                    )
+                    for relation in hypothesis_relations
+                },
             )
             classification, explanation = self._impact_classification(
                 hypothesis, score
@@ -911,6 +935,7 @@ class EventImpactResearchService:
         relations: Sequence[CompanyImpactRelation],
         observations: Sequence[CompanyImpactObservation],
         fund_coverage_by_relation: dict[uuid.UUID, bool],
+        effective_relation_statuses: dict[uuid.UUID, str] | None = None,
     ) -> dict[str, int]:
         verified_kinds = {
             observation.kind
@@ -919,7 +944,10 @@ class EventImpactResearchService:
         }
         return {
             "event": int("event" in verified_kinds),
-            "company": int(any(relation.status == "verified" for relation in relations)),
+            "company": int(any(
+                (effective_relation_statuses or {}).get(relation.id, relation.status) == "verified"
+                for relation in relations
+            )),
             "operating": int("operating" in verified_kinds),
             "market": int("market" in verified_kinds),
             "peer_control": int("peer_control" in verified_kinds),

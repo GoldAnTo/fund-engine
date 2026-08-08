@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, time, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -118,17 +118,37 @@ class EventImpactQueries:
                     "as_of_date": observation.as_of_date.isoformat() if observation.as_of_date else None,
                 })
             relation_stocks = stocks_by_company[company.id] if company.type == "listed" else []
+            as_of = max(
+                (obs.as_of_date for obs in observations_by_relation[relation.id] if obs.as_of_date),
+                default=None,
+            )
+            cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc) if as_of else None
             by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = defaultdict(list)
+            latest_visible: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
             for stock in relation_stocks:
                 for holding in holdings_by_stock.get(stock.id, []):
-                    by_fund[holding.fund_id].append(holding)
+                    published_at = holding.published_at
+                    if published_at.tzinfo is None:
+                        published_at = published_at.replace(tzinfo=timezone.utc)
+                    else:
+                        published_at = published_at.astimezone(timezone.utc)
+                    if cutoff is not None and published_at > cutoff:
+                        continue
+                    key = (holding.fund_id, holding.stock_id)
+                    current = latest_visible.get(key)
+                    if current is None or (holding.report_period, published_at) > (
+                        current.report_period,
+                        current.published_at.replace(tzinfo=timezone.utc) if current.published_at.tzinfo is None else current.published_at.astimezone(timezone.utc),
+                    ):
+                        latest_visible[key] = holding
+            for holding in latest_visible.values():
+                by_fund[holding.fund_id].append(holding)
             fund_rows = []
             for fund_id, holdings in by_fund.items():
                 fund = funds[fund_id]
                 covered = {holding.stock_id for holding in holdings}
                 ratio = len(covered) / len(relation_stocks) if relation_stocks else 0
                 latest = max(holdings, key=lambda row: (row.report_period, row.published_at))
-                as_of = max((obs.as_of_date for obs in observations_by_relation[relation.id] if obs.as_of_date), default=None)
                 stale = bool(as_of and (as_of - latest.report_period).days > 180)
                 coverage_status = "stale" if stale else ("complete" if ratio >= 0.80 else "partial")
                 computable = coverage_status == "complete"
