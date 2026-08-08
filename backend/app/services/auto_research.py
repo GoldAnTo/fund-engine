@@ -15,6 +15,7 @@ from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
+from app.models.event_research import EventResearchScopeVersion
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.repositories.operational import TaskRepository
@@ -25,7 +26,6 @@ from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_impact import EventImpactResearchService
 from app.services.event_research_scope_evidence import (
-    lock_event_scope_case,
     lock_event_research_lifecycle,
 )
 
@@ -485,7 +485,25 @@ class AutoResearchService:
         confirm that this task still owns an active run.  The caller keeps
         this short transaction through proposal/result persistence.
         """
-        lock_event_scope_case(self.session, run.research_case_id)
+        lifecycle = lock_event_research_lifecycle(self.session, run.research_case_id)
+        if lifecycle is not None and lifecycle.active_run_id != run.id:
+            return False
+        scope_id = self._impact_scope_id(task)
+        if task.task_type == "impact_refresh" or task.task_type in IMPACT_STAGE_TASK_TYPES:
+            if scope_id is None:
+                return False
+            latest_scope_id = self.session.scalar(
+                select(EventResearchScopeVersion.id)
+                .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+                .order_by(EventResearchScopeVersion.version.desc())
+                .limit(1)
+            )
+            if latest_scope_id != scope_id:
+                return False
+            # Some direct/legacy service callers have a versioned scope but
+            # no lifecycle projection.  They have no replacement run to
+            # supersede; when a projection exists, the check above is
+            # authoritative for every output kind.
         with self.session.no_autoflush:
             current_run = self.session.scalar(
                 select(ResearchRun)
@@ -513,6 +531,19 @@ class AutoResearchService:
             and current_task.status != "cancelled"
             and (job is None or not job.cancel_requested)
         )
+
+    @staticmethod
+    def _impact_scope_id(task) -> uuid.UUID | None:
+        try:
+            if task.task_type == "impact_refresh":
+                _, _claim_id, raw_scope_id, _refresh_key = task.query.split(":", 3)
+            elif task.task_type in IMPACT_STAGE_TASK_TYPES:
+                _, raw_scope_id, _stage = task.query.split(":", 2)
+            else:
+                return None
+            return uuid.UUID(raw_scope_id)
+        except (TypeError, ValueError):
+            return None
 
     def _impact_refresh_succeeded(self, run_id: uuid.UUID, task) -> bool:
         """Whether this exact-scope stage may consume its refresh output."""

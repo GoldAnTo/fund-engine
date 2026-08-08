@@ -9,7 +9,7 @@ and will later hand execution to a worker without changing these routes.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from app.repositories.outbox import emit_event
 from app.models.operational import ResearchRun, ResearchTask
 from app.models.event_research import EventResearchScopeVersion
 from app.services.auto_research import IMPACT_STAGE_TASK_TYPES
+from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.schemas.v1.common import CursorPage
 from app.schemas.v1.operational import (
     ActivityItemDTO,
@@ -131,13 +132,68 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
         raise NotFoundError(f"job {job_id} is not retryable (status={job.status})")
     if job.kind == "research_run" and job.target_id is not None:
         run = db.get(ResearchRun, job.target_id)
-        if run is not None and run.status != "cancelled":
+        stale_run = False
+        if run is not None:
+            lifecycle = lock_event_research_lifecycle(db, run.research_case_id)
             latest_scope = db.scalar(
                 select(EventResearchScopeVersion.id)
                 .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
                 .order_by(EventResearchScopeVersion.version.desc())
                 .limit(1)
             )
+            impact_scope_ids = {
+                parts[2]
+                for query in db.scalars(
+                    select(ResearchTask.query).where(ResearchTask.run_id == run.id)
+                )
+                if (parts := query.split(":", 3))[0] == "impact_refresh"
+                and len(parts) == 4
+            }
+            impact_scope_ids.update(
+                parts[1]
+                for query in db.scalars(
+                    select(ResearchTask.query).where(ResearchTask.run_id == run.id)
+                )
+                if (parts := query.split(":", 2))[0] == "impact_stage"
+                and len(parts) == 3
+            )
+            stale_run = (
+                run.status == "cancelled"
+                or (lifecycle is not None and lifecycle.active_run_id != run.id)
+                or (bool(impact_scope_ids) and str(latest_scope) not in impact_scope_ids)
+            )
+        if stale_run and run is not None:
+            run.status = "cancelled"
+            run.stage = "stopped"
+            run.stop_reason = "superseded_scope"
+            for task in db.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.status.not_in(("done", "cancelled")))
+            ):
+                task.status = "cancelled"
+                task.stage = "stopped"
+            job.status = "cancelled"
+            job.cancel_requested = True
+            job.finished_at = datetime.now(timezone.utc)
+            seq = repo.next_event_seq(job.id)
+            repo.append_event(
+                job_id=job.id,
+                seq=seq,
+                status="cancelled",
+                message="retry rejected: superseded event scope",
+            )
+            emit_event(
+                db,
+                type="job_progressed",
+                aggregate_type="job",
+                aggregate_id=job.id,
+                payload={"status": "cancelled", "retry": False, "reason": "superseded_scope"},
+                origin="operational",
+            )
+            db.commit()
+            return _job_dto(job)
+        if run is not None:
             recovered_impact = False
             recovered_round: int | None = None
             recovered_scope_id: str | None = None

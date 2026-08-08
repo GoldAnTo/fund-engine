@@ -18,11 +18,12 @@ from app.models.event_research import (
     EventResearchScopeVersion,
 )
 from app.models.ledger import ResearchCase, Thesis
-from app.models.operational import Job, JobEvent, ResearchTask
+from app.models.operational import EventResearchLifecycle, Job, JobEvent, ResearchRun, ResearchTask
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.operational import TaskRepository
 from app.services.auto_research import AutoResearchService
 from app.services.event_impact import EventImpactResearchService, ResolvedImpactCompany
+from app.services.event_research_scope import EventResearchScopeService
 from app.services.jobs import JobService
 
 
@@ -483,6 +484,146 @@ def test_job_retry_reopens_failed_current_scope_impact_stage_after_refresh(
     cmd_session.commit()
     cmd_session.refresh(operating)
     assert operating.status == "done"
+
+
+def test_retry_of_superseded_failed_impact_stage_is_cancelled_without_output(
+    cmd_client, cmd_session
+) -> None:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Superseded impact retry",
+        industry_topic="events",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    scope = EventResearchScopeVersion(
+        research_case_id=case.id,
+        version=1,
+        changed_by="tester",
+        change_summary="v1",
+        created_at=now,
+    )
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="v1 factor",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add_all([
+        EventResearchBrief(
+            research_case_id=case.id,
+            raw_input="fixture",
+            source_url=None,
+            event_title="fixture",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            research_question="fixture",
+            extraction_state="human_confirmed",
+            created_at=now,
+        ),
+        scope,
+        thesis,
+    ])
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchScopeFactor(
+            scope_version_id=scope.id,
+            statement=thesis.statement,
+            description=None,
+            position=1,
+        )
+    )
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="failed",
+        stage="failed",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=2,
+        stop_reason="task_failed",
+        scope_thesis_ids=[str(thesis.id)],
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_session.add(run)
+    cmd_session.flush()
+    cmd_session.add_all([
+        EventResearchLifecycle(
+            research_case_id=case.id,
+            status="researching",
+            active_run_id=run.id,
+            current_round=1,
+            status_summary="v1 running",
+            current_gap=None,
+            next_human_action=None,
+            updated_at=now,
+        ),
+        Job(
+            kind="research_run",
+            status="failed",
+            target_type="research_run",
+            target_id=run.id,
+            research_case_id=case.id,
+            created_at=now,
+        ),
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=None,
+            task_type="impact_refresh",
+            query=f"impact_refresh:{uuid.uuid4()}:{scope.id}:scope:{scope.id}:initial",
+            status="done",
+            stage="completed",
+            result={"hypotheses_created": 1},
+            created_at=now,
+            updated_at=now,
+        ),
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=thesis.id,
+            task_type="impact_operating",
+            query=f"impact_stage:{scope.id}:impact_operating",
+            status="failed",
+            stage="failed",
+            result={"error": "loader failed"},
+            created_at=now,
+            updated_at=now,
+        ),
+    ])
+    cmd_session.commit()
+    job = cmd_session.scalar(
+        select(Job).where(Job.target_id == run.id).where(Job.kind == "research_run")
+    )
+    operating = cmd_session.scalar(
+        select(ResearchTask)
+        .where(ResearchTask.run_id == run.id)
+        .where(ResearchTask.task_type == "impact_operating")
+    )
+    assert job is not None and operating is not None
+
+    EventResearchScopeService(cmd_session).update(
+        case.id,
+        ["v2 factor one", "v2 factor two", "v2 factor three"],
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
+    assert response.status_code == 200, response.text
+    cmd_session.refresh(run)
+    cmd_session.refresh(job)
+    cmd_session.refresh(operating)
+    assert run.status == "cancelled"
+    assert run.stop_reason == "superseded_scope"
+    assert job.status == "cancelled"
+    assert operating.status == "cancelled"
+    assert operating.result == {"error": "loader failed"}
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):
