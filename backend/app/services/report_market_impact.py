@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Sequence
+from unicodedata import normalize
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -80,10 +81,12 @@ class ReportMarketImpactService:
     """Append point-in-time China A-share observations for one report claim."""
 
     def __init__(
-        self, session: Session, *, market_data: ChinaMarketData | None = None
+        self, session: Session, *, market_data: ChinaMarketData | None = None,
+        output_slot=None,
     ) -> None:
         self._session = session
         self._market_data = market_data or LedgerChinaMarketData(session)
+        self._output_slot = output_slot
 
     def collect(self, claim_id: uuid.UUID) -> MarketImpactResult:
         claim, document = self._claim_and_document(claim_id)
@@ -134,13 +137,14 @@ class ReportMarketImpactService:
                     claim=claim,
                     report_document_id=document.id,
                     window=window,
-                    start=trading_days[0],
+                    start=document.published_at.date(),
                     end=as_of,
                 )
             )
             fund_exposures.extend(
                 self._collect_fund_exposures(
-                    claim=claim, targets=targets, window=window, as_of=as_of
+                    claim=claim, targets=targets, window=window,
+                    as_of=document.published_at.date(),
                 )
             )
         return MarketImpactResult(
@@ -292,7 +296,12 @@ class ReportMarketImpactService:
             select(ReportClaim, DocumentVersion)
             .join(SourceSpan, SourceSpan.id == ReportClaim.source_span_id)
             .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+            .join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.document_version_id == DocumentVersion.id,
+            )
             .where(ReportClaim.id == claim_id)
+            .where(CaseDocumentVersion.research_case_id == ReportClaim.research_case_id)
         ).one_or_none()
         if row is None:
             raise NotFoundError(f"report claim {claim_id} not found")
@@ -323,8 +332,12 @@ class ReportMarketImpactService:
         seen_targets: set[tuple[uuid.UUID, uuid.UUID]] = set()
         seen_peers: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for relation in relations:
-            subject = companies.get(relation.subject_company_id)
-            obj = companies.get(relation.object_company_id)
+            subject = companies.get(relation.subject_company_id) or self._named_company(
+                relation.subject_name
+            )
+            obj = companies.get(relation.object_company_id) or self._named_company(
+                relation.object_name
+            )
             if subject is not None:
                 key = (relation.id, subject.id)
                 if key not in seen_targets:
@@ -341,6 +354,15 @@ class ReportMarketImpactService:
                     targets.append(_Target(relation, obj))
                     seen_targets.add(key)
         return tuple(targets), tuple(peers)
+
+    def _named_company(self, name: str | None) -> Company | None:
+        """Resolve only an exact normalized ledger identity; never create one."""
+        if not name:
+            return None
+        identity = " ".join(normalize("NFKC", name).split()).casefold()
+        return self._session.scalar(
+            select(Company).where(Company.canonical_identity == identity)
+        )
 
     def _collect_window(
         self,
@@ -705,6 +727,8 @@ class ReportMarketImpactService:
             return existing
         try:
             with self._session.begin_nested():
+                if self._output_slot is not None and not self._output_slot():
+                    raise RuntimeError("report market task no longer owns its output slot")
                 _before_report_market_unique_insert(model, key)
                 created = factory()
                 self._session.add(created)

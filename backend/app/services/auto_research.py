@@ -187,9 +187,10 @@ class AutoResearchService:
                         )
                     elif task.task_type == "report_market_impact":
                         _, claim_id = task.query.split(":", 1)
-                        market_impact = ReportMarketImpactService(self.session).collect(
-                            uuid.UUID(claim_id)
-                        )
+                        market_impact = ReportMarketImpactService(
+                            self.session,
+                            output_slot=lambda: self._claim_task_output_slot(run, task),
+                        ).collect(uuid.UUID(claim_id))
                     elif task.task_type in IMPACT_STAGE_TASK_TYPES:
                         _, scope_id, stage = task.query.split(":", 2)
                         impact = EventImpactResearchService(

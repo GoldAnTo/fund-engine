@@ -235,6 +235,7 @@ class CaseDocumentVersion(Base):
 
 class SourceSpan(Base):
     __tablename__ = "source_spans"
+    __table_args__ = (Index("ix_source_spans_document_version", "document_version_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     document_version_id: Mapped[uuid.UUID] = mapped_column(
@@ -545,6 +546,12 @@ class ValuationSnapshot(Base):
             "metric_name",
             "as_of_date",
         ),
+        Index(
+            "ix_valuation_snapshots_availability",
+            "stock_id",
+            "as_of_date",
+            "available_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -566,6 +573,8 @@ class ValuationSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
 
 
 class HoldingDisclosure(Base):

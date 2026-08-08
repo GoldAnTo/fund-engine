@@ -190,6 +190,8 @@ class InstrumentService:
         # so reject before uniqueness check (422, malformed request).
         if as_of_date > _today_utc():
             raise ValidationError("as_of_date 不能晚于今天")
+        if available_at is not None and available_at.date() < as_of_date:
+            raise ValidationError("available_at 不能早于 as_of_date")
 
         existing = self._session.scalar(
             select(func.count())

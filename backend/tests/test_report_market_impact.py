@@ -540,9 +540,9 @@ def test_postgres_concurrent_collection_reuses_unique_observations(engine, monke
         assert len(rows) > 2
         exposures = list(
             verify.scalars(
-                select(ReportFundExposure).where(
-                    ReportFundExposure.report_claim_id == claim_id
-                )
+                select(ReportFundExposure)
+                .where(ReportFundExposure.report_claim_id == claim_id)
+                .order_by(ReportFundExposure.window, ReportFundExposure.created_at)
             )
         )
         assert [
