@@ -77,6 +77,10 @@ def _before_company_impact_review_insert() -> None:
     """Test seam for proving the unique review-task race without sleeps."""
 
 
+def _before_company_impact_review_schedule_lock() -> None:
+    """Test seam for scope replacement versus a stale review handoff."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -643,7 +647,21 @@ class EventImpactResearchService:
         and candidates without that fund signal remain explicit research gaps,
         rather than generating noisy operational review tasks.
         """
+        # Take the same case → lifecycle lock sequence used by a scope update.
+        # The latest-scope check must occur *after* that lock: an old worker
+        # may have started its handoff before replacement, but it must not
+        # recreate review work once the successor commits.
+        _before_company_impact_review_schedule_lock()
+        lock_event_research_lifecycle(self._session, case_id)
         scope = self._scope_for(case_id, scope_version_id)
+        current_scope_id = self._session.scalar(
+            select(EventResearchScopeVersion.id)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if current_scope_id != scope.id:
+            return 0
         cutoff = datetime.combine(
             as_of or _utcnow().date(), time.max, tzinfo=timezone.utc
         )

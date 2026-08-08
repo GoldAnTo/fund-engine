@@ -22,7 +22,7 @@ from app.models.operational import Job, JobEvent, ResearchTask
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.operational import TaskRepository
 from app.services.auto_research import AutoResearchService
-from app.services.event_impact import ResolvedImpactCompany
+from app.services.event_impact import EventImpactResearchService, ResolvedImpactCompany
 from app.services.jobs import JobService
 
 
@@ -371,6 +371,118 @@ def test_job_retry_reopens_the_failed_impact_tasks_round_after_later_rounds(
     cmd_session.commit()
     assert resolver.calls == 2
     assert impact_task.status == "done"
+
+
+def test_job_retry_reopens_failed_current_scope_impact_stage_after_refresh(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Impact stage retry",
+        industry_topic="events",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    scope = EventResearchScopeVersion(
+        research_case_id=case.id,
+        version=1,
+        changed_by="tester",
+        change_summary="stage retry fixture",
+        created_at=now,
+    )
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="stage retry factor",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add_all([
+        EventResearchBrief(
+            research_case_id=case.id,
+            raw_input="fixture",
+            source_url=None,
+            event_title="fixture",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            research_question="fixture",
+            extraction_state="human_confirmed",
+            created_at=now,
+        ),
+        scope,
+        thesis,
+    ])
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchScopeFactor(
+            scope_version_id=scope.id,
+            statement=thesis.statement,
+            description=None,
+            position=1,
+        )
+    )
+    cmd_session.commit()
+
+    original_run_stage = EventImpactResearchService.run_stage
+    failed_once = {"value": False}
+
+    def fail_operating_once(self, *args, stage, **kwargs):
+        if stage == "impact_operating" and not failed_once["value"]:
+            failed_once["value"] = True
+            raise RuntimeError("ledger loader unavailable")
+        return original_run_stage(self, *args, stage=stage, **kwargs)
+
+    monkeypatch.setattr(EventImpactResearchService, "run_stage", fail_operating_once)
+    worker = AutoResearchService(cmd_session)
+    run = worker.start(
+        case.id,
+        max_rounds=1,
+        budget=20,
+        thesis_ids=[thesis.id],
+        scope_version_id=scope.id,
+    )
+    for task in worker.repo.tasks_for_run(run.id):
+        if not task.task_type.startswith("impact_"):
+            task.status = "cancelled"
+    cmd_session.commit()
+
+    worker.execute(run)
+    job = AutoResearchRepository(cmd_session).job_for_run(run.id)
+    assert job is not None
+    AutoResearchRepository(cmd_session).record_job_completion(
+        job, status="failed", step="failed", error="ledger loader unavailable"
+    )
+    cmd_session.commit()
+
+    refresh = cmd_session.scalar(
+        select(ResearchTask)
+        .where(ResearchTask.run_id == run.id)
+        .where(ResearchTask.task_type == "impact_refresh")
+    )
+    operating = cmd_session.scalar(
+        select(ResearchTask)
+        .where(ResearchTask.run_id == run.id)
+        .where(ResearchTask.task_type == "impact_operating")
+    )
+    assert refresh is not None and refresh.status == "done"
+    assert operating is not None and operating.status == "failed"
+    budget_before_retry = run.budget_used
+
+    response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
+    assert response.status_code == 200, response.text
+    cmd_session.refresh(run)
+    cmd_session.refresh(operating)
+    assert operating.status == "queued"
+    assert run.round == 0
+    assert run.budget_used == budget_before_retry - 1
+
+    worker.execute(run)
+    cmd_session.commit()
+    cmd_session.refresh(operating)
+    assert operating.status == "done"
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):

@@ -141,6 +141,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
             recovered_impact = False
             recovered_round: int | None = None
             recovered_scope_id: str | None = None
+            recovered_task_count = 0
             for task in db.scalars(
                 select(ResearchTask)
                 .where(ResearchTask.run_id == run.id)
@@ -155,6 +156,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                     recovered_impact = True
                     recovered_round = task.round
                     recovered_scope_id = parts[2]
+                    recovered_task_count += 1
             # ``execute`` advances a run's round before doing its queued
             # tasks.  A retry of a failed first-round impact task therefore
             # must reopen that round; otherwise the task remains queued but
@@ -173,14 +175,44 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                     .where(ResearchTask.query.like(f"impact_stage:{recovered_scope_id}:%"))
                     .where(ResearchTask.status.in_(("queued", "failed", "blocked")))
                 ):
+                    if dependent.status == "failed":
+                        recovered_task_count += 1
+                        recovered_round = min(
+                            recovered_round or dependent.round, dependent.round
+                        )
                     dependent.status = "queued"
                     dependent.stage = "planned"
                     dependent.result = None
+            # A refresh can be complete while a later ledger loader or
+            # classifier stage fails.  Reopen those failed tasks only for the
+            # latest scope; completed siblings remain immutable audit output.
+            if latest_scope is not None:
+                failed_stages = list(
+                    db.scalars(
+                        select(ResearchTask)
+                        .where(ResearchTask.run_id == run.id)
+                        .where(ResearchTask.task_type.in_(IMPACT_STAGE_TASK_TYPES))
+                        .where(ResearchTask.query.like(f"impact_stage:{latest_scope}:%"))
+                        .where(ResearchTask.status == "failed")
+                    )
+                )
+                for dependent in failed_stages:
+                    dependent.status = "queued"
+                    dependent.stage = "planned"
+                    dependent.result = None
+                    recovered_impact = True
+                    recovered_round = min(
+                        recovered_round or dependent.round, dependent.round
+                    )
+                    recovered_task_count += 1
+            if recovered_impact:
                 # A late retry may happen after later rounds have already
                 # advanced the run.  Reopen the failed task's own round,
                 # never the current run round.
                 run.round = max(0, (recovered_round or 1) - 1)
-                run.budget_used = max(0, (run.budget_used or 0) - 1)
+                run.budget_used = max(
+                    0, (run.budget_used or 0) - recovered_task_count
+                )
             run.status = "queued"
             run.stage = "planning"
             run.stop_reason = None

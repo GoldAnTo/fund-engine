@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Event as ThreadEvent, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -57,6 +57,7 @@ from app.models.operational import EventResearchLifecycle, ResearchRun, Research
 from app.services.auto_research import AutoResearchService
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.event_conclusion import EventConclusionService
+from app.services.event_research_scope import EventResearchScopeService
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -2484,6 +2485,170 @@ def test_postgres_company_impact_review_task_is_atomic_per_scope(engine, monkeyp
         )
         assert len(tasks) == 1
         assert tasks[0].research_case_id == case_id
+    finally:
+        verify.close()
+
+
+@pytest.mark.pg_only
+def test_postgres_stale_review_scheduler_cannot_reopen_replaced_scope(
+    engine, monkeypatch
+) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        case = ResearchCase(
+            title="Stale review scheduler",
+            industry_topic="events",
+            created_by="tester",
+            created_at=NOW,
+        )
+        bootstrap.add(case)
+        bootstrap.flush()
+        scope = EventResearchScopeVersion(
+            research_case_id=case.id,
+            version=1,
+            changed_by="tester",
+            change_summary="old review scope",
+            created_at=NOW,
+        )
+        bootstrap.add_all([
+            EventResearchBrief(
+                research_case_id=case.id,
+                raw_input="fixture",
+                source_url=None,
+                event_title="fixture",
+                company_name=None,
+                ticker=None,
+                event_at=None,
+                market_reaction=None,
+                research_question="fixture",
+                extraction_state="human_confirmed",
+                created_at=NOW,
+            ),
+            scope,
+        ])
+        bootstrap.flush()
+        bootstrap.add(
+            EventResearchScopeFactor(
+                scope_version_id=scope.id,
+                statement="old factor",
+                description=None,
+                position=1,
+            )
+        )
+        hypothesis = EventImpactHypothesis(
+            research_case_id=case.id,
+            scope_version_id=scope.id,
+            statement="old factor",
+            classification="candidate",
+            rank=1,
+            score_components={},
+            explanation="fixture",
+            created_at=NOW,
+        )
+        company = Company(
+            code="STALE-REVIEW-CO",
+            name="Stale review company",
+            type="listed",
+            created_at=NOW,
+        )
+        bootstrap.add_all([hypothesis, company])
+        bootstrap.flush()
+        stock = Stock(
+            company_id=company.id,
+            code="600010.SH",
+            name="Stale review company",
+            market="SSE",
+            created_at=NOW,
+        )
+        fund = Fund(
+            code="000010",
+            name="China stale review fund",
+            fund_type="equity",
+            scale=None,
+            establish_date=None,
+            management_company_id=None,
+            created_at=NOW,
+        )
+        relation = CompanyImpactRelation(
+            hypothesis_id=hypothesis.id,
+            scope_version_id=scope.id,
+            affected_company_id=company.id,
+            relation_kind="supplier",
+            direction="benefits",
+            mechanism="fixture",
+            status="candidate",
+            source_statement_id=None,
+            created_at=NOW,
+        )
+        bootstrap.add_all([stock, fund, relation])
+        bootstrap.flush()
+        bootstrap.add(
+            HoldingDisclosure(
+                fund_id=fund.id,
+                stock_id=stock.id,
+                weight=Decimal("0.1"),
+                report_period=NOW.date(),
+                published_at=NOW,
+                acquired_at=NOW,
+                source="fixture",
+                created_at=NOW,
+            )
+        )
+        bootstrap.commit()
+        case_id, old_scope_id = case.id, scope.id
+    finally:
+        bootstrap.close()
+
+    scheduler_ready = ThreadEvent()
+    release_scheduler = ThreadEvent()
+    monkeypatch.setattr(
+        "app.services.event_impact._before_company_impact_review_schedule_lock",
+        lambda: (scheduler_ready.set(), release_scheduler.wait(timeout=5))[1],
+    )
+    scheduler_errors: list[BaseException] = []
+
+    def schedule_old_scope() -> None:
+        db = SessionLocal()
+        try:
+            EventImpactResearchService(db).schedule_company_impact_reviews(
+                case_id, scope_version_id=old_scope_id, as_of=NOW.date()
+            )
+            db.commit()
+        except BaseException as exc:
+            scheduler_errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    worker = Thread(target=schedule_old_scope)
+    worker.start()
+    assert scheduler_ready.wait(timeout=5)
+
+    replacement = SessionLocal()
+    try:
+        EventResearchScopeService(replacement).update(
+            case_id,
+            ["new factor one", "new factor two", "new factor three"],
+            "reviewer",
+        )
+        replacement.commit()
+    finally:
+        replacement.close()
+    release_scheduler.set()
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert scheduler_errors == []
+
+    verify = SessionLocal()
+    try:
+        assert verify.scalar(
+            select(sa.func.count())
+            .select_from(TaskItem)
+            .where(TaskItem.task_type == "review_company_impact")
+            .where(TaskItem.scope_version_id == old_scope_id)
+            .where(TaskItem.status.in_(("open", "in_progress")))
+        ) == 0
     finally:
         verify.close()
 
