@@ -172,24 +172,41 @@ def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
             "content": "公司认为未上市供应商甲是星海科技的供应商。",
         },
     )
+    competitor = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "竞争关系",
+            "content": "甲公司与乙公司存在竞争。",
+        },
+    )
 
     assert plain.status_code == 201
     assert narrated.status_code == 201
+    assert competitor.status_code == 201
     plain_case = uuid.UUID(plain.json()["case"]["id"])
     narrated_case = uuid.UUID(narrated.json()["case"]["id"])
+    competitor_case = uuid.UUID(competitor.json()["case"]["id"])
     plain_claim = cmd_session.scalar(
         select(ReportClaim).where(ReportClaim.research_case_id == plain_case)
     )
     narrated_claim = cmd_session.scalar(
         select(ReportClaim).where(ReportClaim.research_case_id == narrated_case)
     )
+    competitor_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == competitor_case)
+    )
     assert plain_claim is not None
     assert narrated_claim is not None
+    assert competitor_claim is not None
     plain_relation = cmd_session.scalar(
         select(ReportRelation).where(ReportRelation.claim_id == plain_claim.id)
     )
     narrated_relation = cmd_session.scalar(
         select(ReportRelation).where(ReportRelation.claim_id == narrated_claim.id)
+    )
+    competitor_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == competitor_claim.id)
     )
     assert plain_relation is not None
     assert (plain_relation.subject_name, plain_relation.object_name) == (
@@ -201,6 +218,12 @@ def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
         "未上市供应商甲",
         "星海科技",
     )
+    assert competitor_relation is not None
+    assert competitor_relation.relation_kind == "competitor"
+    assert (competitor_relation.subject_name, competitor_relation.object_name) == (
+        "甲公司",
+        "乙公司",
+    )
     assert all(
         company_id is None
         for company_id in (
@@ -208,11 +231,15 @@ def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
             plain_relation.object_company_id,
             narrated_relation.subject_company_id,
             narrated_relation.object_company_id,
+            competitor_relation.subject_company_id,
+            competitor_relation.object_company_id,
         )
     )
     assert cmd_session.scalars(
         select(Company).where(
-            Company.name.in_(("未上市客户乙", "未上市供应商甲", "星海科技"))
+            Company.name.in_(
+                ("未上市客户乙", "未上市供应商甲", "星海科技", "甲公司", "乙公司")
+            )
         )
     ).all() == []
 

@@ -77,7 +77,7 @@ class RuleBasedReportContentExtractor:
         rf"(?P<object>{_company_name})的(?P<role>供应商|客户|竞争对手)"
     )
     _competitor_relation = re.compile(
-        rf"(?P<subject>{_company_name})与(?P<object>{_company_name})(?:存在)?竞争"
+        rf"(?P<subject>{_company_name}?)与(?P<object>{_company_name}?)(?:存在)?竞争"
     )
     _narrator_prefix = re.compile(
         r"^(?:(?:本)?报告|研报|公司|管理层)(?:认为|指出|表示|判断|提到|称|强调)"
