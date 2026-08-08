@@ -62,6 +62,12 @@ class AutoResearchService:
             budget=max(1, budget),
             scope_thesis_ids=[str(thesis.id) for thesis in theses],
         )
+        # Impact tracing is the first runnable operation for an event scope;
+        # normal support/result tasks must not get ahead of this boundary.
+        if scope_version_id is not None:
+            EventImpactResearchService(self.session).schedule_refresh(
+                case_id, scope_version_id, run.id
+            )
         for thesis in theses:
             for task_type, label in (
                 ("support", "寻找支持证据"),
@@ -76,10 +82,6 @@ class AutoResearchService:
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
                 )
-        if scope_version_id is not None:
-            EventImpactResearchService(self.session).schedule_refresh(
-                case_id, scope_version_id, run.id
-            )
         self.repo.enqueue_run_job(run)
         # HTTP commands only persist a run + job.  A separately supervised
         # worker claims the job, so a provider timeout cannot hold an API
@@ -142,14 +144,17 @@ class AutoResearchService:
                 cancelled_during_task = False
                 try:
                     if task.task_type == "impact_refresh":
-                        _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
-                        impact = EventImpactResearchService(
-                            self.session, resolver=self._impact_resolver
-                        ).refresh(
-                            run.research_case_id,
-                            scope_version_id=uuid.UUID(scope_id),
-                            refresh_key=refresh_key,
-                        )
+                        if not self._claim_task_output_slot(run, task):
+                            cancelled_during_task = True
+                        else:
+                            _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
+                            impact = EventImpactResearchService(
+                                self.session, resolver=self._impact_resolver
+                            ).refresh(
+                                run.research_case_id,
+                                scope_version_id=uuid.UUID(scope_id),
+                                refresh_key=refresh_key,
+                            )
                     elif task.task_type in {"support", "contradict", "alternative"}:
                         proposed_ids = self._propose_for_task(proposer, task, run)
                     else:

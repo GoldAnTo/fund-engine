@@ -666,6 +666,22 @@ def test_impact_refresh_task_executes_with_injected_resolver(session, research_c
     assert session.scalar(select(EventImpactHypothesis)).scope_version_id == scope.id
 
 
+def test_impact_refresh_task_is_created_before_assessment_tasks(session, research_case) -> None:
+    scope = _event_scope(session, research_case, factors=["supplier impact"])
+    _case_statement(session, research_case)  # contributes a normal thesis task set
+
+    run = AutoResearchService(session).start(
+        research_case.id,
+        max_rounds=1,
+        budget=10,
+        scope_version_id=scope.id,
+    )
+
+    tasks = AutoResearchRepository(session).tasks_for_run(run.id)
+    assert tasks[0].task_type == "impact_refresh"
+    assert any(task.task_type == "result" for task in tasks[1:])
+
+
 def test_cancelled_old_scope_impact_task_cannot_write_before_successor_runs(
     session, research_case
 ) -> None:

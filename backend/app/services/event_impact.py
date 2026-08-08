@@ -107,6 +107,15 @@ class EventImpactResearchService:
         scope = self._scope_for(case_id, scope_version_id)
         refresh_key = refresh_key or self._initial_refresh_key(scope.id)
         self._claim_refresh(case_id, scope.id, refresh_key)
+        # This row is the durable execution mutex.  The lock covers resolver
+        # output through the caller's commit, so competing workers observe the
+        # completed append-only trace instead of writing a second one.
+        self._session.scalar(
+            select(EventImpactRefreshClaim)
+            .where(EventImpactRefreshClaim.scope_version_id == scope.id)
+            .where(EventImpactRefreshClaim.refresh_key == refresh_key)
+            .with_for_update()
+        )
         existing_hypotheses = self._session.scalars(
             select(EventImpactHypothesis).where(
                 EventImpactHypothesis.research_case_id == case_id,
@@ -271,21 +280,29 @@ class EventImpactResearchService:
         claim, created = self._claim_refresh(
             case_id, scope.id, refresh_key, run_id=run_id
         )
-        if created:
+        task_query = f"impact_refresh:{claim.id}:{scope.id}:{refresh_key}"
+        active_task = self._session.scalar(
+            select(ResearchTask.id)
+            .where(ResearchTask.run_id == run_id)
+            .where(ResearchTask.task_type == "impact_refresh")
+            .where(ResearchTask.query == task_query)
+            .where(ResearchTask.status.in_(("queued", "running", "done")))
+            .limit(1)
+        )
+        if active_task is None:
             self._session.add(
                 ResearchTask(
                     run_id=run_id,
                     research_case_id=case_id,
                     thesis_id=None,
                     task_type="impact_refresh",
-                    query=(
-                        f"impact_refresh:{claim.id}:{scope.id}:{refresh_key}"
-                    ),
+                    query=task_query,
                     result=None,
                     created_at=_utcnow(),
                     updated_at=_utcnow(),
                 )
             )
+        if created:
             emit_event(
                 self._session,
                 type=_REFRESH_REQUEST_EVENT_TYPE,
