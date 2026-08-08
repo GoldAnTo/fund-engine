@@ -39,6 +39,8 @@ from app.services.event_impact import (
     EventImpactResearchService,
     ResolvedImpactCompany,
 )
+from app.errors import ValidationFailedError
+from app.models.events import DomainEvent
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -253,7 +255,9 @@ def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_s
     assert hypothesis.research_case_id == research_case.id
     assert hypothesis.classification == "candidate"
     assert hypothesis.rank == 1
-    assert hypothesis.score_components == {}
+    assert hypothesis.score_components == {
+        "refresh_key": f"scope:{scope.id}:initial"
+    }
     assert relation is not None and relation.source_statement_id == statement.id
     assert relation.scope_version_id == scope.id
     assert observation is not None
@@ -303,6 +307,7 @@ def test_refresh_rejects_foreign_and_invalid_source_statement_ids(
     invalid_statement = _case_statement(
         session, research_case, source_url="https://example.com/invalid"
     )
+    company_ids_before = set(session.scalars(select(Company.id)))
 
     result = EventImpactResearchService(
         session,
@@ -325,6 +330,7 @@ def test_refresh_rejects_foreign_and_invalid_source_statement_ids(
 
     assert result.source_rejected_count == 2
     assert result.relations_created == 0
+    assert set(session.scalars(select(Company.id))) == company_ids_before
     assert list(session.scalars(select(CompanyImpactRelation))) == []
     assert list(session.scalars(select(CompanyImpactObservation))) == []
 
@@ -355,11 +361,135 @@ def test_refresh_keeps_sourceless_candidate_unresolved_without_observation(
     assert unresolved.scope_version_id == scope.id
     assert "Acme Supplier" in unresolved.statement
     assert "supplier" in unresolved.statement
-    assert unresolved.score_components == {"source": 0}
+    assert unresolved.score_components == {
+        "refresh_key": f"scope:{scope.id}:initial",
+        "source": 0,
+    }
     assert "source_statement_id is missing" in unresolved.explanation
     assert factor_candidate.statement == factor
     assert list(session.scalars(select(CompanyImpactObservation))) == []
     assert list(session.scalars(select(CompanyImpactRelation))) == []
+    assert list(session.scalars(select(Company))) == []
+
+
+def test_refresh_uses_requested_prior_scope_and_rejects_foreign_scope(
+    session, research_case, research_service
+) -> None:
+    first_factor = "first factor"
+    first_scope = _event_scope(session, research_case, factors=[first_factor])
+    second_scope = EventResearchScopeVersion(
+        research_case_id=research_case.id,
+        version=2,
+        changed_by="tester",
+        change_summary="successor scope",
+        created_at=NOW,
+    )
+    session.add(second_scope)
+    session.flush()
+    session.add(
+        EventResearchScopeFactor(
+            scope_version_id=second_scope.id,
+            statement="second factor",
+            description=None,
+            position=1,
+        )
+    )
+    session.commit()
+    resolver = _FakeImpactResolver({first_factor: []})
+
+    result = EventImpactResearchService(session, resolver).refresh(
+        research_case.id, scope_version_id=first_scope.id
+    )
+
+    assert result.hypotheses_created == 1
+    assert session.scalar(select(EventImpactHypothesis)).scope_version_id == first_scope.id
+    other_case = research_service.add_case(
+        title="other", industry_topic="other", created_by="tester"
+    )
+    other_scope = _event_scope(session, other_case, factors=["other factor"])
+    with pytest.raises(ValidationFailedError, match="does not belong"):
+        EventImpactResearchService(session, resolver).refresh(
+            research_case.id, scope_version_id=other_scope.id
+        )
+
+
+def test_schedule_refresh_is_idempotent_for_one_exact_scope(session, research_case) -> None:
+    scope = _event_scope(session, research_case, factors=["factor"])
+    service = EventImpactResearchService(session)
+
+    service.schedule_refresh(research_case.id, scope.id)
+    service.schedule_refresh(research_case.id, scope.id)
+    session.commit()
+
+    events = list(
+        session.scalars(
+            select(DomainEvent).where(DomainEvent.type == "event_impact_refresh_requested")
+        )
+    )
+    assert len(events) == 1
+    assert events[0].payload == {
+        "research_case_id": str(research_case.id),
+        "scope_version_id": str(scope.id),
+    }
+
+
+def test_refresh_retry_is_idempotent_for_scope_initial_key(session, research_case) -> None:
+    factor = "supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    service = EventImpactResearchService(
+        session,
+        _FakeImpactResolver({factor: [_candidate(source_statement_id=statement.id)]}),
+    )
+
+    first = service.refresh(research_case.id, scope_version_id=scope.id)
+    second = service.refresh(research_case.id, scope_version_id=scope.id)
+    session.commit()
+
+    assert first.hypotheses_created == 1
+    assert second.hypotheses_created == 0
+    assert second.relations_created == 0
+    assert len(list(session.scalars(select(EventImpactHypothesis)))) == 1
+    assert len(list(session.scalars(select(CompanyImpactRelation)))) == 1
+    assert len(list(session.scalars(select(CompanyImpactObservation)))) == 1
+
+
+def test_refresh_reuses_canonical_company_identity(session, research_case) -> None:
+    factor = "supplier impact"
+    _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    existing = Company(
+        code="ACME SUPPLIER",
+        name="ACME SUPPLIER",
+        type="listed",
+        created_at=NOW,
+    )
+    session.add(existing)
+    session.commit()
+
+    EventImpactResearchService(
+        session,
+        _FakeImpactResolver(
+            {
+                factor: [
+                    _candidate(
+                        company_name="Ａｃｍｅ　Supplier",
+                        source_statement_id=statement.id,
+                    ),
+                    _candidate(
+                        company_name="acme supplier",
+                        source_statement_id=statement.id,
+                    ),
+                ]
+            }
+        ),
+    ).refresh(research_case.id)
+    session.commit()
+
+    companies = list(session.scalars(select(Company)))
+    relations = list(session.scalars(select(CompanyImpactRelation)))
+    assert [company.id for company in companies] == [existing.id]
+    assert {relation.affected_company_id for relation in relations} == {existing.id}
 
 
 def test_refresh_appends_new_scope_rows_without_mutating_prior_scope_rows(

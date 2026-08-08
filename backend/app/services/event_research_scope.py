@@ -19,6 +19,7 @@ from app.models.event_research import (
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.services.auto_research import AutoResearchService
+from app.services.event_impact import EventImpactResearchService
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
     normalize_event_research_scope_factors,
@@ -137,6 +138,7 @@ class EventResearchScopeService:
         if lifecycle is not None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()
+        EventImpactResearchService(self._session).schedule_refresh(case_id, scope.id)
         return UpdatedEventResearchScope(
             version=scope.version,
             factors=normalized,

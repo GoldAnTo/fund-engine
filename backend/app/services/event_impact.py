@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Protocol, Sequence
 from unicodedata import normalize
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
@@ -21,6 +21,7 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.events import DomainEvent
 from app.models.ledger import (
     CaseDocumentVersion,
     Company,
@@ -31,6 +32,11 @@ from app.models.ledger import (
     Thesis,
 )
 from app.services.source_admission import classify_source
+from app.repositories.outbox import emit_event
+
+
+_INITIAL_REFRESH_KEY_SUFFIX = "initial"
+_REFRESH_REQUEST_EVENT_TYPE = "event_impact_refresh_requested"
 
 
 def _utcnow() -> datetime:
@@ -87,8 +93,25 @@ class EventImpactResearchService:
         self._session = session
         self._resolver = resolver or _EmptyImpactResolver()
 
-    def refresh(self, case_id: uuid.UUID) -> ImpactRefreshResult:
-        scope = self._latest_scope(case_id)
+    def refresh(
+        self,
+        case_id: uuid.UUID,
+        *,
+        scope_version_id: uuid.UUID | None = None,
+    ) -> ImpactRefreshResult:
+        scope = self._scope_for(case_id, scope_version_id)
+        refresh_key = self._initial_refresh_key(scope.id)
+        existing_hypotheses = self._session.scalars(
+            select(EventImpactHypothesis).where(
+                EventImpactHypothesis.research_case_id == case_id,
+                EventImpactHypothesis.scope_version_id == scope.id,
+            )
+        )
+        if any(
+            hypothesis.score_components.get("refresh_key") == refresh_key
+            for hypothesis in existing_hypotheses
+        ):
+            return ImpactRefreshResult(0, 0, 0, 0)
         factors = list(
             self._session.scalars(
                 select(EventResearchScopeFactor)
@@ -123,7 +146,7 @@ class EventImpactResearchService:
                 statement=factor.statement,
                 classification="candidate",
                 rank=factor.position,
-                score_components={},
+                score_components={"refresh_key": refresh_key},
                 explanation=self._pending_evidence_explanation(candidates, admissible_by_id),
                 created_at=_utcnow(),
             )
@@ -133,24 +156,12 @@ class EventImpactResearchService:
                 for candidate in candidates
             )
 
-        companies = self._companies_for(
-            [entry.candidate for entry in resolved_candidates]
-        )
-        resolved_companies = [
-            (entry, self._resolve_or_create_company(entry.candidate, companies))
-            for entry in resolved_candidates
-        ]
-        # New Company ids are needed by the append-only relation rows.  This
-        # is a single bulk flush, rather than a lookup/flush for each candidate.
-        self._session.flush()
-
-        relations_created = 0
         source_rejected_count = 0
         unresolved_candidate_count = 0
-        relation_sources: list[
-            tuple[CompanyImpactRelation, ResolvedImpactCompany, SourceStatement]
+        source_backed_candidates: list[
+            tuple[_ResolvedCandidate, SourceStatement]
         ] = []
-        for entry, company in resolved_companies:
+        for entry in resolved_candidates:
             candidate = entry.candidate
             if candidate.source_statement_id is None:
                 unresolved_candidate_count += 1
@@ -164,7 +175,7 @@ class EventImpactResearchService:
                         ),
                         classification="unresolved",
                         rank=entry.hypothesis.rank,
-                        score_components={"source": 0},
+                        score_components={"refresh_key": refresh_key, "source": 0},
                         explanation=(
                             "source_statement_id is missing for "
                             f"{candidate.company_name}'s {candidate.relation_kind} "
@@ -178,6 +189,31 @@ class EventImpactResearchService:
             if statement is None:
                 source_rejected_count += 1
                 continue
+            source_backed_candidates.append((entry, statement))
+
+        # Source ownership/admission is checked before company creation.  A
+        # resolver cannot manufacture entities by offering foreign/invalid ids.
+        companies = self._companies_for(
+            [entry.candidate for entry, _ in source_backed_candidates]
+        )
+        resolved_companies = [
+            (
+                entry,
+                statement,
+                self._resolve_or_create_company(entry.candidate, companies),
+            )
+            for entry, statement in source_backed_candidates
+        ]
+        # New Company ids are needed by the append-only relation rows.  This
+        # is a single bulk flush, rather than a lookup/flush for each candidate.
+        self._session.flush()
+
+        relations_created = 0
+        relation_sources: list[
+            tuple[CompanyImpactRelation, ResolvedImpactCompany, SourceStatement]
+        ] = []
+        for entry, statement, company in resolved_companies:
+            candidate = entry.candidate
             relation = CompanyImpactRelation(
                 hypothesis=entry.hypothesis,
                 scope_version_id=entry.hypothesis.scope_version_id,
@@ -217,22 +253,66 @@ class EventImpactResearchService:
             unresolved_candidate_count=unresolved_candidate_count,
         )
 
-    def _latest_scope(self, case_id: uuid.UUID) -> EventResearchScopeVersion:
+    def schedule_refresh(
+        self, case_id: uuid.UUID, scope_version_id: uuid.UUID
+    ) -> DomainEvent:
+        """Append one durable handoff for a specific immutable scope version."""
+        scope = self._scope_for(case_id, scope_version_id)
+        existing = self._session.scalar(
+            select(DomainEvent)
+            .where(DomainEvent.type == _REFRESH_REQUEST_EVENT_TYPE)
+            .where(DomainEvent.aggregate_type == "event_research_scope")
+            .where(DomainEvent.aggregate_id == str(scope.id))
+            .limit(1)
+        )
+        if existing is not None:
+            return existing
+        return emit_event(
+            self._session,
+            type=_REFRESH_REQUEST_EVENT_TYPE,
+            aggregate_type="event_research_scope",
+            aggregate_id=scope.id,
+            ref_type="research_case",
+            ref_id=case_id,
+            origin="operational",
+            payload={
+                "research_case_id": str(case_id),
+                "scope_version_id": str(scope.id),
+            },
+        )
+
+    def _scope_for(
+        self, case_id: uuid.UUID, scope_version_id: uuid.UUID | None
+    ) -> EventResearchScopeVersion:
         if self._session.scalar(
             select(EventResearchBrief.id).where(
                 EventResearchBrief.research_case_id == case_id
             )
         ) is None:
             raise NotFoundError("event research case not found")
+        scope_query = select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+        if scope_version_id is not None:
+            scope = self._session.scalar(
+                scope_query.where(EventResearchScopeVersion.id == scope_version_id)
+            )
+            if scope is None:
+                raise ValidationFailedError(
+                    "scope version does not belong to the event research case"
+                )
+            return scope
         scope = self._session.scalar(
-            select(EventResearchScopeVersion)
-            .where(EventResearchScopeVersion.research_case_id == case_id)
-            .order_by(EventResearchScopeVersion.version.desc())
-            .limit(1)
+            scope_query.order_by(EventResearchScopeVersion.version.desc()).limit(1)
         )
         if scope is None:
             raise ValidationFailedError("event research scope has not been created")
         return scope
+
+    @staticmethod
+    def _initial_refresh_key(scope_version_id: uuid.UUID) -> str:
+        """Identity for the one initial refresh of a scope; later runs use a new key."""
+        return f"scope:{scope_version_id}:{_INITIAL_REFRESH_KEY_SUFFIX}"
 
     def _admissible_statement_records(
         self, case_id: uuid.UUID
@@ -274,24 +354,22 @@ class EventImpactResearchService:
         }
         if not keys:
             return {}
-        codes = {key[0] for key in keys}
-        names = {candidate.company_name.strip() for candidate in candidates}
         company_types = {candidate.type for candidate in candidates}
         existing = self._session.scalars(
-            select(Company).where(
-                Company.type.in_(company_types),
-                or_(Company.code.in_(codes), Company.name.in_(names)),
-            )
+            select(Company).where(Company.type.in_(company_types))
         )
         companies: dict[tuple[str, str, str], Company] = {}
         for company in existing:
-            company_name = self._company_key(company.name, company.type)[1]
-            company_code = self._company_key(company.name, company.type, company.code)[0]
-            for key in keys:
-                if company.type == key[2] and (
-                    company_name == key[1] or company_code == key[0]
-                ):
-                    companies.setdefault(key, company)
+            companies.setdefault(self._company_key(company.name, company.type), company)
+            code_identity = self._canonical_identity(company.code.replace("-", " "))
+            companies.setdefault(
+                (
+                    self._canonical_code(company.code),
+                    code_identity,
+                    company.type,
+                ),
+                company,
+            )
         return companies
 
     def _resolve_or_create_company(
@@ -305,7 +383,7 @@ class EventImpactResearchService:
             return company
         company = Company(
             code=key[0],
-            name=candidate.company_name.strip(),
+            name=self._normalized_title(candidate.company_name),
             type=candidate.type,
             created_at=_utcnow(),
         )
@@ -317,15 +395,21 @@ class EventImpactResearchService:
     def _company_key(
         company_name: str,
         company_type: str,
-        code: str | None = None,
     ) -> tuple[str, str, str]:
-        normalized_name = " ".join(normalize("NFKC", company_name).split()).casefold()
-        normalized_code = (
-            " ".join(normalize("NFKC", code).split()).casefold()
-            if code is not None
-            else normalized_name.replace(" ", "-")
-        )
-        return normalized_code, normalized_name, company_type
+        identity = EventImpactResearchService._canonical_identity(company_name)
+        return identity.replace(" ", "-"), identity, company_type
+
+    @staticmethod
+    def _normalized_title(value: str) -> str:
+        return " ".join(normalize("NFKC", value).split())
+
+    @staticmethod
+    def _canonical_identity(value: str) -> str:
+        return EventImpactResearchService._normalized_title(value).casefold()
+
+    @staticmethod
+    def _canonical_code(value: str) -> str:
+        return EventImpactResearchService._canonical_identity(value).replace(" ", "-")
 
     @staticmethod
     def _pending_evidence_explanation(

@@ -175,6 +175,37 @@ def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_sessi
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
 
 
+def test_scope_update_schedules_exact_scope_impact_refresh(cmd_client, cmd_session) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        ["updated factor one", "updated factor two", "updated factor three"],
+        "tester",
+    )
+    cmd_session.commit()
+
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+    )
+    events = list(
+        cmd_session.scalars(
+            select(DomainEvent).where(
+                DomainEvent.type == "event_impact_refresh_requested"
+            )
+        )
+    )
+    assert scope is not None
+    assert len(events) == 1
+    assert events[0].payload == {
+        "research_case_id": str(case_id),
+        "scope_version_id": str(scope.id),
+    }
+
+
 def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:
     class RecordingSession:
         def __init__(self) -> None:
