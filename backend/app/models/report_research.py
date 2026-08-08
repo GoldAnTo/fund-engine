@@ -7,7 +7,7 @@ evidence collection is responsible for that distinction.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     CheckConstraint,
@@ -197,6 +197,96 @@ class ReportRelation(Base):
     )
 
 
+class ReportMarketObservation(Base):
+    """An immutable, ledger-backed observation in a report market window.
+
+    This stores the *fact observed* rather than a causal verdict.  The
+    referenced valuation snapshot remains the numerical source of truth;
+    rows with ``status='insufficient'`` deliberately have no snapshot so a
+    missing data point can never be mistaken for a zero return.
+    """
+
+    __tablename__ = "report_market_observations"
+    __table_args__ = (
+        CheckConstraint('"window" IN (\'1d\', \'5d\')', name="ck_report_market_window"),
+        CheckConstraint(
+            "kind IN ('target_market', 'peer_control', 'industry_control')",
+            name="ck_report_market_observation_kind",
+        ),
+        CheckConstraint(
+            "status IN ('verified', 'insufficient')",
+            name="ck_report_market_observation_status",
+        ),
+        UniqueConstraint("collection_key", name="uq_report_market_observation_key"),
+        Index(
+            "ix_report_market_observations_claim_window",
+            "report_claim_id",
+            "window",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_claims.id"), nullable=False
+    )
+    report_relation_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("report_relations.id"), nullable=True
+    )
+    stock_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("stocks.id"), nullable=True
+    )
+    valuation_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("valuation_snapshots.id"), nullable=True
+    )
+    window: Mapped[str] = mapped_column(String(8), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of_date: Mapped[date | None] = mapped_column(nullable=True)
+    metric_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    collection_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class ReportMarketConfounder(Base):
+    """One same-window announcement, earnings, policy, or news statement."""
+
+    __tablename__ = "report_market_confounders"
+    __table_args__ = (
+        CheckConstraint('"window" IN (\'1d\', \'5d\')', name="ck_report_confounder_window"),
+        CheckConstraint(
+            "kind IN ('announcement', 'earnings', 'policy', 'news')",
+            name="ck_report_confounder_kind",
+        ),
+        UniqueConstraint("collection_key", name="uq_report_market_confounder_key"),
+        Index("ix_report_market_confounders_claim_window", "report_claim_id", "window"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_claims.id"), nullable=False
+    )
+    source_statement_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_statements.id"), nullable=False
+    )
+    window: Mapped[str] = mapped_column(String(8), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    collection_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 @event.listens_for(Session, "before_flush")
 def _validate_report_ledger_provenance(session, _flush_context, _instances) -> None:
     """Keep denormalized graph keys bound to their immutable source ledger.
@@ -278,3 +368,25 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
             or relation.source_statement_id != claim.source_statement_id
         ):
             raise ValueError("report relation provenance must match its claim")
+
+    for observation in session.new:
+        if not isinstance(observation, ReportMarketObservation):
+            continue
+        claim = pending_claims.get(observation.report_claim_id) or session.get(
+            ReportClaim, observation.report_claim_id
+        )
+        if claim is None or claim.research_case_id != observation.research_case_id:
+            raise ValueError("report market observation must belong to its claim case")
+        if observation.report_relation_id is not None:
+            relation = session.get(ReportRelation, observation.report_relation_id)
+            if relation is None or relation.claim_id != claim.id:
+                raise ValueError("report market observation relation must belong to its claim")
+
+    for confounder in session.new:
+        if not isinstance(confounder, ReportMarketConfounder):
+            continue
+        claim = pending_claims.get(confounder.report_claim_id) or session.get(
+            ReportClaim, confounder.report_claim_id
+        )
+        if claim is None or claim.research_case_id != confounder.research_case_id:
+            raise ValueError("report market confounder must belong to its claim case")

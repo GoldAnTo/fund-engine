@@ -14,7 +14,7 @@ from datetime import date, datetime, time, timezone
 from re import fullmatch
 from typing import Protocol, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import distinct, select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import Fund, HoldingDisclosure, Stock, ValuationSnapshot
@@ -23,6 +23,19 @@ from app.models.ledger import Fund, HoldingDisclosure, Stock, ValuationSnapshot
 OPERATING_METRICS = frozenset({"REVENUE_YOY", "GROSS_MARGIN", "ORDER_GUIDANCE"})
 MARKET_METRICS = frozenset({"EVENT_RETURN_1D", "TURNOVER_RATE", "PE_TTM"})
 PEER_METRICS = frozenset({"PEER_RETURN_1D", "INDUSTRY_RETURN_1D", "PEER_PE_TTM"})
+# Report market studies deliberately use an exact observation date rather than
+# the gateway's normal latest-pre-cutoff reads.  A later snapshot cannot fill
+# an absent 1d/5d window without silently changing the event study.
+REPORT_TARGET_METRICS_1D = frozenset(
+    {"EVENT_RETURN_1D", "VOLUME", "TURNOVER_RATE", "VOLATILITY", "PE_TTM"}
+)
+REPORT_TARGET_METRICS_5D = frozenset(
+    {"EVENT_RETURN_5D", "VOLUME", "TURNOVER_RATE", "VOLATILITY", "PE_TTM"}
+)
+REPORT_PEER_METRICS_1D = frozenset({"PEER_RETURN_1D"})
+REPORT_PEER_METRICS_5D = frozenset({"PEER_RETURN_5D"})
+REPORT_INDUSTRY_METRICS_1D = frozenset({"INDUSTRY_RETURN_1D"})
+REPORT_INDUSTRY_METRICS_5D = frozenset({"INDUSTRY_RETURN_5D"})
 # These are the exact market labels written by the two in-repository China
 # ingest paths: Gildata uses SSE/SZSE/BSE and AKShare uses SH/SZ.  Keeping
 # this explicit rejects KRX, HK, US, and unknown labels instead of inferring
@@ -50,6 +63,20 @@ class ChinaMarketData(Protocol):
     def fund_holding_history(
         self, stock_ids: Sequence[uuid.UUID], *, as_of: date
     ) -> Sequence[HoldingDisclosure]: ...
+
+    def trading_days_after(self, *, after: date, count: int) -> Sequence[date]: ...
+
+    def report_target_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> Sequence[ValuationSnapshot]: ...
+
+    def report_peer_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> Sequence[ValuationSnapshot]: ...
+
+    def report_industry_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> Sequence[ValuationSnapshot]: ...
 
 
 def is_china_a_share(stock: Stock) -> bool:
@@ -137,6 +164,54 @@ class LedgerChinaMarketData:
         )
         return list(rows)
 
+    def trading_days_after(self, *, after: date, count: int) -> list[date]:
+        """Return ledger-observed China trading dates strictly after ``after``.
+
+        There is intentionally no weekday heuristic here.  A weekday with no
+        ledger-backed China observation is not declared a trading day, which
+        makes an incomplete calendar an explicit collection gap.
+        """
+        if count <= 0:
+            return []
+        rows = self._session.execute(
+            select(distinct(ValuationSnapshot.as_of_date))
+            .join(Stock, Stock.id == ValuationSnapshot.stock_id)
+            .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
+            .where(ValuationSnapshot.as_of_date > after)
+            .order_by(ValuationSnapshot.as_of_date.asc())
+            .limit(count)
+        )
+        return [value for (value,) in rows]
+
+    def report_target_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> list[ValuationSnapshot]:
+        return self._exact_metric_snapshots(
+            stock,
+            REPORT_TARGET_METRICS_1D if window == "1d" else REPORT_TARGET_METRICS_5D,
+            as_of,
+        )
+
+    def report_peer_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> list[ValuationSnapshot]:
+        return self._exact_metric_snapshots(
+            stock,
+            REPORT_PEER_METRICS_1D if window == "1d" else REPORT_PEER_METRICS_5D,
+            as_of,
+        )
+
+    def report_industry_observations(
+        self, stock: Stock, *, as_of: date, window: str
+    ) -> list[ValuationSnapshot]:
+        return self._exact_metric_snapshots(
+            stock,
+            REPORT_INDUSTRY_METRICS_1D
+            if window == "1d"
+            else REPORT_INDUSTRY_METRICS_5D,
+            as_of,
+        )
+
     def _metric_snapshots(
         self,
         stock_id: uuid.UUID,
@@ -155,3 +230,21 @@ class LedgerChinaMarketData:
         for row in rows:
             latest.setdefault(row.metric_name, row)
         return list(latest.values())
+
+    def _exact_metric_snapshots(
+        self,
+        stock: Stock,
+        metric_names: frozenset[str],
+        as_of: date,
+    ) -> list[ValuationSnapshot]:
+        if not is_china_a_share(stock):
+            return []
+        return list(
+            self._session.scalars(
+                select(ValuationSnapshot)
+                .where(ValuationSnapshot.stock_id == stock.id)
+                .where(ValuationSnapshot.as_of_date == as_of)
+                .where(ValuationSnapshot.metric_name.in_(metric_names))
+                .order_by(ValuationSnapshot.metric_name)
+            )
+        )
