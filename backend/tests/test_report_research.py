@@ -252,7 +252,16 @@ def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
 def test_adversarial_narrator_prefixes_do_not_become_relation_entities(
     cmd_client, cmd_session
 ) -> None:
-    prefixes = ("我们认为", "分析师认为", "本文认为", "据悉")
+    prefixes = (
+        "我们认为",
+        "分析师认为",
+        "本文认为",
+        "据悉",
+        "我们预计",
+        "券商认为",
+        "研究员认为",
+        "本公司预计",
+    )
     case_ids: list[uuid.UUID] = []
     for index, prefix in enumerate(prefixes):
         response = cmd_client.post(

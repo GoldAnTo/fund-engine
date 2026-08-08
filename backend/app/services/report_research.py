@@ -84,12 +84,17 @@ class RuleBasedReportContentExtractor:
     _competitor_relation = re.compile(
         rf"(?P<subject>{_company_name}?)与(?P<object>{_company_name}?)(?:存在)?竞争"
     )
-    _narrator_prefix = re.compile(
-        r"^(?:(?:本)?报告|研报|公司|管理层|我们|分析师|本文)"
-        r"(?:认为|指出|表示|判断|提到|称|强调)?"
-        r"(?:[:：，,、\s]*)"
+    # Consume the *construction* (speaker + attribution/prediction verb),
+    # rather than maintaining a brittle list of every possible narrator.
+    # This intentionally favors an unresolved relation over a polluted node.
+    _attribution_prefix = re.compile(
+        r"^(?:[\u4e00-\u9fffA-Za-z0-9]{1,16}"
+        r"(?:认为|预计|预测|判断|指出|表示|提到|称|强调|看好)"
+        r"|据悉|传闻|消息称|报道称)(?:[:：，,、\s]*)"
     )
-    _hearsay_prefix = re.compile(r"^据悉(?:[:：，,、\s]*)")
+    _unsafe_entity_cue = re.compile(
+        r"(?:认为|预计|预测|判断|指出|表示|提到|称|强调|看好|据悉|传闻|消息|报道)"
+    )
 
     def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]:
         extracted: list[ExtractedReportClaim] = []
@@ -121,8 +126,7 @@ class RuleBasedReportContentExtractor:
         recognizes a narrow, easily reviewable set of Chinese report phrases;
         broader entity resolution belongs behind an injected parser boundary.
         """
-        normalized_statement = self._narrator_prefix.sub("", statement).strip()
-        normalized_statement = self._hearsay_prefix.sub("", normalized_statement).strip()
+        normalized_statement = self._strip_attribution_prefixes(statement)
         role_match = self._role_relation.search(normalized_statement)
         if role_match is not None:
             role = role_match.group("role")
@@ -131,25 +135,53 @@ class RuleBasedReportContentExtractor:
                 "客户": "customer",
                 "竞争对手": "competitor",
             }[role]
-            return (
-                ExtractedReportRelation(
-                    subject_name=role_match.group("subject"),
-                    object_name=role_match.group("object"),
-                    relation_kind=kind,
-                    mechanism=f"研报明确称为{role}",
-                ),
+            return self._safe_relation(
+                subject_name=role_match.group("subject"),
+                object_name=role_match.group("object"),
+                relation_kind=kind,
+                mechanism=f"研报明确称为{role}",
             )
         competitor_match = self._competitor_relation.search(normalized_statement)
         if competitor_match is not None:
-            return (
-                ExtractedReportRelation(
-                    subject_name=competitor_match.group("subject"),
-                    object_name=competitor_match.group("object"),
-                    relation_kind="competitor",
-                    mechanism="研报明确称双方存在竞争关系",
-                ),
+            return self._safe_relation(
+                subject_name=competitor_match.group("subject"),
+                object_name=competitor_match.group("object"),
+                relation_kind="competitor",
+                mechanism="研报明确称双方存在竞争关系",
             )
         return ()
+
+    def _strip_attribution_prefixes(self, statement: str) -> str:
+        normalized = statement.strip()
+        # Nested attributions such as “据悉券商认为…” are common.  A bounded
+        # loop strips only leading constructions, never a relation's interior.
+        for _ in range(3):
+            stripped = self._attribution_prefix.sub("", normalized, count=1).strip()
+            if stripped == normalized:
+                break
+            normalized = stripped
+        return normalized
+
+    def _safe_relation(
+        self,
+        *,
+        subject_name: str,
+        object_name: str,
+        relation_kind: str,
+        mechanism: str,
+    ) -> Sequence[ExtractedReportRelation]:
+        if self._unsafe_entity_cue.search(subject_name) or self._unsafe_entity_cue.search(
+            object_name
+        ):
+            return ()
+        return (
+            ExtractedReportRelation(
+                subject_name=subject_name,
+                object_name=object_name,
+                relation_kind=relation_kind,
+                mechanism=mechanism,
+            ),
+        )
 
     @staticmethod
     def _kind_for(statement: str) -> str | None:
