@@ -36,7 +36,13 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
+from app.models.operational import (
+    EventResearchLifecycle,
+    Job,
+    ResearchRun,
+    ResearchTask,
+    TaskItem,
+)
 from app.models.proposals import Proposal
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
@@ -78,6 +84,43 @@ def _create_event(client) -> dict:
     )
     assert response.status_code == 201
     return response.json()
+
+
+def test_scope_update_closes_prior_scope_company_impact_review_task(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    old_scope = cmd_session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+    )
+    assert old_scope is not None
+    review = TaskItem(
+        title="old impact review",
+        description="obsolete scope candidate",
+        task_type="review_company_impact",
+        ref_type="company_impact_relation",
+        ref_id=uuid.uuid4(),
+        research_case_id=case_id,
+        scope_version_id=old_scope.id,
+        status="open",
+        priority="high",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(review)
+    cmd_session.commit()
+
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        ["successor factor one", "successor factor two", "successor factor three"],
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    cmd_session.refresh(review)
+    assert review.status == "cancelled"
 
 
 def _scope_statements(session, version_id: uuid.UUID) -> list[str]:

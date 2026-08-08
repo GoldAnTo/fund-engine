@@ -157,6 +157,15 @@ class AutoResearchService:
                     break
                 if used >= run.budget:
                     break
+                if (
+                    task.task_type in IMPACT_STAGE_TASK_TYPES
+                    and not self._impact_refresh_succeeded(run.id, task)
+                ):
+                    # Impact stages are dependent work, never substitute
+                    # successful output for a failed refresh.  Leave them
+                    # queued without spending budget; the durable job retry
+                    # reopens this exact scope/round atomically.
+                    continue
                 task.status, task.stage = "running", "research"
                 # A provider call can take seconds.  Persist and end this
                 # short task-state transaction before it starts, otherwise
@@ -504,6 +513,21 @@ class AutoResearchService:
             and current_task.status != "cancelled"
             and (job is None or not job.cancel_requested)
         )
+
+    def _impact_refresh_succeeded(self, run_id: uuid.UUID, task) -> bool:
+        """Whether this exact-scope stage may consume its refresh output."""
+        try:
+            _, scope_id, _stage = task.query.split(":", 2)
+        except ValueError:
+            return False
+        return self.session.scalar(
+            select(ResearchTask.id)
+            .where(ResearchTask.run_id == run_id)
+            .where(ResearchTask.task_type == "impact_refresh")
+            .where(ResearchTask.status == "done")
+            .where(ResearchTask.query.like(f"impact_refresh:%:{scope_id}:%"))
+            .limit(1)
+        ) is not None
 
     def _handoff_for_review(self, run) -> None:
         """Create idempotent home-page tasks for this run's reviewable outputs."""

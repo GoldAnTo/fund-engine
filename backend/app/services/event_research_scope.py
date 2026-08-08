@@ -25,6 +25,7 @@ from app.services.event_research_factors import (
 )
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.event_impact import EventImpactResearchService
 
 
 def _utcnow() -> datetime:
@@ -130,6 +131,14 @@ class EventResearchScopeService:
                     created_at=now,
                 )
             )
+        # Review items summarize mutable operational work.  They belong to
+        # the scope that made them actionable, so a successor closes rather
+        # than silently carries forward an obsolete high-impact candidate.
+        EventImpactResearchService(
+            self._session
+        ).close_superseded_company_impact_reviews(
+            case_id, keep_scope_version_id=scope.id
+        )
         # Pending proposals for factors removed from this just-created scope
         # remain immutable audit records, but their review tasks must no
         # longer appear actionable while the successor run is pending.

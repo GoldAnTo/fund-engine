@@ -90,6 +90,12 @@ MIGRATION_0023_PATH = (
     / "versions"
     / "0023_event_impact_assessments.py"
 )
+MIGRATION_0024_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0024_scope_bound_impact_review_tasks.py"
+)
 
 
 def _scope(session, research_case, *, version: int = 1) -> EventResearchScopeVersion:
@@ -2188,6 +2194,30 @@ def test_review_company_impact_requires_listed_china_fund_and_missing_source(
     session.add(low_impact_stock)
     session.commit()
     _relation(session, hypothesis, scope, low_impact)
+    # Legacy corruption can leave a Stock row on an unlisted company.  The
+    # review policy must still treat it as an unlisted research gap.
+    anomalous_unlisted_stock = Stock(
+        company_id=unlisted.id,
+        code="600003.SH",
+        name="Unexpected unlisted stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    session.add(anomalous_unlisted_stock)
+    session.flush()
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=anomalous_unlisted_stock.id,
+            weight=Decimal("0.08"),
+            report_period=date(2026, 7, 31),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="legacy anomaly fixture",
+            created_at=NOW,
+        )
+    )
+    session.commit()
     assert EventImpactResearchService(session).schedule_company_impact_reviews(
         research_case.id, scope_version_id=scope.id, as_of=NOW.date()
     ) == 0
@@ -2314,6 +2344,148 @@ def test_worker_executes_scope_impact_stages_after_refresh(session, research_cas
         "cancelled": False,
         "observations_created": 1,
     }
+
+
+@pytest.mark.pg_only
+def test_postgres_company_impact_review_task_is_atomic_per_scope(engine, monkeypatch) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        case = ResearchCase(
+            title="Concurrent impact review",
+            industry_topic="events",
+            created_by="tester",
+            created_at=NOW,
+        )
+        bootstrap.add(case)
+        bootstrap.flush()
+        scope = EventResearchScopeVersion(
+            research_case_id=case.id,
+            version=1,
+            changed_by="tester",
+            change_summary="review race",
+            created_at=NOW,
+        )
+        bootstrap.add_all([
+            EventResearchBrief(
+                research_case_id=case.id,
+                raw_input="fixture",
+                source_url=None,
+                event_title="fixture",
+                company_name=None,
+                ticker=None,
+                event_at=None,
+                market_reaction=None,
+                research_question="fixture",
+                extraction_state="human_confirmed",
+                created_at=NOW,
+            ),
+            scope,
+        ])
+        bootstrap.flush()
+        hypothesis = EventImpactHypothesis(
+            research_case_id=case.id,
+            scope_version_id=scope.id,
+            statement="review race factor",
+            classification="candidate",
+            rank=1,
+            score_components={},
+            explanation="fixture",
+            created_at=NOW,
+        )
+        company = Company(
+            code="RACE-CO",
+            name="Race Co",
+            type="listed",
+            created_at=NOW,
+        )
+        bootstrap.add_all([hypothesis, company])
+        bootstrap.flush()
+        stock = Stock(
+            company_id=company.id,
+            code="600009.SH",
+            name="Race Co",
+            market="SSE",
+            created_at=NOW,
+        )
+        fund = Fund(
+            code="000009",
+            name="China race fund",
+            fund_type="equity",
+            scale=None,
+            establish_date=None,
+            management_company_id=None,
+            created_at=NOW,
+        )
+        relation = CompanyImpactRelation(
+            hypothesis_id=hypothesis.id,
+            scope_version_id=scope.id,
+            affected_company_id=company.id,
+            relation_kind="supplier",
+            direction="benefits",
+            mechanism="fixture",
+            status="candidate",
+            source_statement_id=None,
+            created_at=NOW,
+        )
+        bootstrap.add_all([stock, fund, relation])
+        bootstrap.flush()
+        bootstrap.add(
+            HoldingDisclosure(
+                fund_id=fund.id,
+                stock_id=stock.id,
+                weight=Decimal("0.1"),
+                report_period=NOW.date(),
+                published_at=NOW,
+                acquired_at=NOW,
+                source="fixture",
+                created_at=NOW,
+            )
+        )
+        bootstrap.commit()
+        case_id, scope_id = case.id, scope.id
+    finally:
+        bootstrap.close()
+
+    barrier = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.event_impact._before_company_impact_review_insert",
+        lambda: barrier.wait(timeout=5),
+    )
+    errors: list[BaseException] = []
+
+    def schedule() -> None:
+        db = SessionLocal()
+        try:
+            EventImpactResearchService(db).schedule_company_impact_reviews(
+                case_id, scope_version_id=scope_id, as_of=NOW.date()
+            )
+            db.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=schedule), Thread(target=schedule)
+    first.start(); second.start()
+    first.join(timeout=10); second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+
+    verify = SessionLocal()
+    try:
+        tasks = list(
+            verify.scalars(
+                select(TaskItem)
+                .where(TaskItem.task_type == "review_company_impact")
+                .where(TaskItem.scope_version_id == scope_id)
+            )
+        )
+        assert len(tasks) == 1
+        assert tasks[0].research_case_id == case_id
+    finally:
+        verify.close()
 
 
 def test_cancelled_old_scope_impact_task_cannot_write_before_successor_runs(
@@ -3111,6 +3283,45 @@ def test_0023_sqlite_upgrade_and_downgrade_create_assessment_indexes() -> None:
         assert "event_impact_hypothesis_assessments" not in sa.inspect(
             connection
         ).get_table_names()
+
+
+def test_0024_sqlite_scope_bound_review_task_migration_is_unique_and_reversible() -> None:
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text("CREATE TABLE event_research_scope_versions (id VARCHAR(36) PRIMARY KEY)")
+        )
+        connection.execute(
+            sa.text(
+                "CREATE TABLE task_items (id VARCHAR(36) PRIMARY KEY, title TEXT NOT NULL, "
+                "description TEXT, status VARCHAR(32) NOT NULL, priority VARCHAR(16) NOT NULL, "
+                "task_type VARCHAR(32) NOT NULL, ref_type VARCHAR(64), ref_id VARCHAR(36), "
+                "research_case_id VARCHAR(36), assignee VARCHAR(128), created_at DATETIME NOT NULL, "
+                "due_at DATETIME, version INTEGER NOT NULL)"
+            )
+        )
+        migration = _load_migration(MIGRATION_0024_PATH)
+        migration.op = Operations(MigrationContext.configure(connection))
+
+        migration.upgrade()
+        inspector = sa.inspect(connection)
+        assert "scope_version_id" in {
+            column["name"] for column in inspector.get_columns("task_items")
+        }
+        assert any(
+            set(constraint["column_names"]) == {
+                "task_type", "ref_type", "ref_id", "scope_version_id"
+            }
+            for constraint in inspector.get_unique_constraints("task_items")
+        )
+
+        migration.downgrade()
+        assert "scope_version_id" not in {
+            column["name"] for column in sa.inspect(connection).get_columns("task_items")
+        }
 
 
 def test_0021_sqlite_upgrade_backfills_nfkc_aliases_for_legacy_companies() -> None:

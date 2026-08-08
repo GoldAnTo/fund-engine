@@ -21,6 +21,7 @@ from app.repositories.operational import JobRepository
 from app.repositories.outbox import emit_event
 from app.models.operational import ResearchRun, ResearchTask
 from app.models.event_research import EventResearchScopeVersion
+from app.services.auto_research import IMPACT_STAGE_TASK_TYPES
 from app.schemas.v1.common import CursorPage
 from app.schemas.v1.operational import (
     ActivityItemDTO,
@@ -139,6 +140,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
             )
             recovered_impact = False
             recovered_round: int | None = None
+            recovered_scope_id: str | None = None
             for task in db.scalars(
                 select(ResearchTask)
                 .where(ResearchTask.run_id == run.id)
@@ -152,6 +154,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                     task.result = None
                     recovered_impact = True
                     recovered_round = task.round
+                    recovered_scope_id = parts[2]
             # ``execute`` advances a run's round before doing its queued
             # tasks.  A retry of a failed first-round impact task therefore
             # must reopen that round; otherwise the task remains queued but
@@ -159,6 +162,20 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
             # consumed one unit in ``execute``; refund that unit only for the
             # requeued impact task so a budget-bound retry can run it.
             if recovered_impact:
+                # Reopen only dependent work for the same durable scope
+                # handoff.  Stages never become successful stand-ins for a
+                # failed refresh, and a retry must not revive a superseded or
+                # already-completed scope task.
+                for dependent in db.scalars(
+                    select(ResearchTask)
+                    .where(ResearchTask.run_id == run.id)
+                    .where(ResearchTask.task_type.in_(IMPACT_STAGE_TASK_TYPES))
+                    .where(ResearchTask.query.like(f"impact_stage:{recovered_scope_id}:%"))
+                    .where(ResearchTask.status.in_(("queued", "failed", "blocked")))
+                ):
+                    dependent.status = "queued"
+                    dependent.stage = "planned"
+                    dependent.result = None
                 # A late retry may happen after later rounds have already
                 # advanced the run.  Reopen the failed task's own round,
                 # never the current run round.

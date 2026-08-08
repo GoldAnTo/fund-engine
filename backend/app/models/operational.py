@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -165,6 +166,18 @@ class TaskItem(Base):
     """
 
     __tablename__ = "task_items"
+    __table_args__ = (
+        # ``review_company_impact`` uses a non-null scope id, giving the
+        # operational queue a database-enforced idempotency key even when two
+        # workers discover the same candidate concurrently.
+        UniqueConstraint(
+            "task_type",
+            "ref_type",
+            "ref_id",
+            "scope_version_id",
+            name="uq_task_items_type_ref_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -178,6 +191,11 @@ class TaskItem(Base):
     ref_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     research_case_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("research_cases.id"), nullable=True
+    )
+    # Optional for legacy/general operational tasks.  Scope-bound impact
+    # reviews always populate it so a successor scope can close stale work.
+    scope_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=True
     )
     assignee: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

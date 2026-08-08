@@ -156,6 +156,7 @@ class TaskRepository:
         ref_type: str | None = None,
         ref_id: uuid.UUID | None = None,
         research_case_id: uuid.UUID | None = None,
+        scope_version_id: uuid.UUID | None = None,
         assignee: str | None = None,
     ) -> TaskItem:
         task = TaskItem(
@@ -167,6 +168,7 @@ class TaskRepository:
             ref_type=ref_type,
             ref_id=ref_id,
             research_case_id=research_case_id,
+            scope_version_id=scope_version_id,
             assignee=assignee,
             created_at=_utcnow(),
         )

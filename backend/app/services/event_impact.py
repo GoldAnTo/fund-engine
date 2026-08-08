@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Callable, Protocol, Sequence
 from unicodedata import normalize
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -41,8 +41,7 @@ from app.models.ledger import (
     Thesis,
     ValuationSnapshot,
 )
-from app.models.operational import ResearchRun, ResearchTask
-from app.repositories.operational import TaskRepository
+from app.models.operational import ResearchRun, ResearchTask, TaskItem
 from app.services.source_admission import classify_source
 from app.repositories.outbox import emit_event
 from app.services.china_market_data import (
@@ -72,6 +71,10 @@ def _before_company_insert() -> None:
 
 def _before_impact_data_relation_lock() -> None:
     """Test seam for concurrent data-collection lock coverage."""
+
+
+def _before_company_impact_review_insert() -> None:
+    """Test seam for proving the unique review-task race without sleeps."""
 
 
 def _utcnow() -> datetime:
@@ -577,16 +580,16 @@ class EventImpactResearchService:
                 .where(EventImpactHypothesis.statement == thesis.statement)
             )
         )
-        relation_ids = [
-            relation.id
-            for relation in self._session.scalars(
+        relations = list(
+            self._session.scalars(
                 select(CompanyImpactRelation).where(
                     CompanyImpactRelation.hypothesis_id.in_(
                         [row.id for row in hypotheses]
                     )
                 )
             )
-        ] if hypotheses else []
+        ) if hypotheses else []
+        relation_ids = [relation.id for relation in relations]
         if output_slot is not None and not output_slot():
             return {"cancelled": True, "observations_created": 0}
         if stage == "impact_companies":
@@ -609,11 +612,15 @@ class EventImpactResearchService:
             )
             return {"cancelled": False, "observations_created": created}
         if stage == "impact_fund":
-            exposures = sum(
-                len(self.fund_exposure(relation_id, as_of=_utcnow().date()))
-                for relation_id in relation_ids
+            # The classifier's bulk PIT helper loads stocks, holdings and
+            # funds once for all relations.  A stage only needs auditable
+            # coverage work/counts, not an N+1 presentation projection.
+            as_of = _utcnow().date()
+            coverage = self._bulk_fund_coverage(
+                relations,
+                {relation.id: as_of for relation in relations},
             )
-            return {"cancelled": False, "fund_exposures": exposures}
+            return {"cancelled": False, "fund_exposures": len(coverage)}
         assessments = self.classify(
             case_id,
             scope_version_id=scope.id,
@@ -650,6 +657,7 @@ class EventImpactResearchService:
                 EventImpactHypothesis,
                 EventImpactHypothesis.id == CompanyImpactRelation.hypothesis_id,
             )
+            .join(Company, Company.id == CompanyImpactRelation.affected_company_id)
             .join(Stock, Stock.company_id == CompanyImpactRelation.affected_company_id)
             .join(HoldingDisclosure, HoldingDisclosure.stock_id == Stock.id)
             .join(Fund, Fund.id == HoldingDisclosure.fund_id)
@@ -657,6 +665,7 @@ class EventImpactResearchService:
             .where(EventImpactHypothesis.scope_version_id == scope.id)
             .where(CompanyImpactRelation.scope_version_id == scope.id)
             .where(CompanyImpactRelation.status == "candidate")
+            .where(Company.type == "listed")
             .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
             .where(HoldingDisclosure.published_at <= cutoff)
         )
@@ -666,29 +675,60 @@ class EventImpactResearchService:
                 continue
             if is_china_public_fund(fund_code):
                 candidates[relation.id] = relation
-        task_repo = TaskRepository(self._session)
+        existing_refs = set(
+            self._session.scalars(
+                select(TaskItem.ref_id)
+                .where(TaskItem.task_type == "review_company_impact")
+                .where(TaskItem.ref_type == "company_impact_relation")
+                .where(TaskItem.scope_version_id == scope.id)
+                .where(TaskItem.ref_id.in_(candidates))
+            )
+        ) if candidates else set()
         created = 0
         for relation in candidates.values():
-            if task_repo.find_by_ref(
-                task_type="review_company_impact",
-                ref_type="company_impact_relation",
-                ref_id=relation.id,
-            ) is not None:
+            if relation.id in existing_refs:
                 continue
-            task_repo.add_task(
-                title="审核高影响公司传导",
-                description=(
-                    "已解析 A 股且中国基金存在可见持仓，但该候选关系"
-                    "缺少可采纳关系来源；请补充或审核来源后再确认传导。"
-                ),
-                task_type="review_company_impact",
-                ref_type="company_impact_relation",
-                ref_id=relation.id,
-                research_case_id=case_id,
-                priority="high",
-            )
+            try:
+                with self._session.begin_nested():
+                    _before_company_impact_review_insert()
+                    self._session.add(
+                        TaskItem(
+                            title="审核高影响公司传导",
+                            description=(
+                                "已解析 A 股且中国基金存在可见持仓，但该候选关系"
+                                "缺少可采纳关系来源；请补充或审核来源后再确认传导。"
+                            ),
+                            task_type="review_company_impact",
+                            ref_type="company_impact_relation",
+                            ref_id=relation.id,
+                            research_case_id=case_id,
+                            scope_version_id=scope.id,
+                            priority="high",
+                            created_at=_utcnow(),
+                        )
+                    )
+                    self._session.flush()
+            except IntegrityError:
+                # A concurrent scheduler inserted the same scope/ref key.
+                # The unique constraint makes this a normal idempotent race.
+                continue
             created += 1
         return created
+
+    def close_superseded_company_impact_reviews(
+        self, case_id: uuid.UUID, *, keep_scope_version_id: uuid.UUID
+    ) -> int:
+        """Hide open review work for prior scopes after a replacement commits."""
+        result = self._session.execute(
+            update(TaskItem)
+            .where(TaskItem.research_case_id == case_id)
+            .where(TaskItem.task_type == "review_company_impact")
+            .where(TaskItem.scope_version_id.is_not(None))
+            .where(TaskItem.scope_version_id != keep_scope_version_id)
+            .where(TaskItem.status.in_(("open", "in_progress")))
+            .values(status="cancelled")
+        )
+        return result.rowcount or 0
 
     def classify(
         self,

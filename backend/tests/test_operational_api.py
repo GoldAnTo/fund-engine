@@ -17,7 +17,7 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.ledger import ResearchCase
+from app.models.ledger import ResearchCase, Thesis
 from app.models.operational import Job, JobEvent, ResearchTask
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.operational import TaskRepository
@@ -130,6 +130,16 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
             ),
         ]
     )
+    theses = [
+        Thesis(
+            research_case_id=case.id,
+            statement=statement,
+            created_by="tester",
+            created_at=now,
+        )
+        for statement in ("supplier retry factor one", "supplier retry factor two")
+    ]
+    cmd_session.add_all(theses)
     cmd_session.commit()
 
     @dataclass
@@ -155,11 +165,15 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     worker = AutoResearchService(cmd_session, impact_resolver=resolver)
     run = worker.start(
         case.id,
-        max_rounds=3,
-        budget=1,
-        thesis_ids=[],
+        max_rounds=1,
+        budget=20,
+        thesis_ids=[thesis.id for thesis in theses],
         scope_version_id=scope.id,
     )
+    for task in worker.repo.tasks_for_run(run.id):
+        if not task.task_type.startswith("impact_"):
+            task.status = "cancelled"
+    cmd_session.commit()
     worker.execute(run)
     job = AutoResearchRepository(cmd_session).job_for_run(run.id)
     assert job is not None
@@ -177,6 +191,21 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     assert impact_task is not None and impact_task.status == "failed"
     assert run.status == "failed"
     assert run.budget_used == 1
+    dependent_stages = list(
+        cmd_session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.task_type.in_((
+                "impact_companies",
+                "impact_operating",
+                "impact_market",
+                "impact_peer",
+                "impact_fund",
+                "impact_alternative",
+            )))
+        )
+    )
+    assert dependent_stages and all(task.status == "queued" for task in dependent_stages)
     assert list(
         cmd_session.scalars(
             select(EventImpactHypothesis).where(
@@ -203,6 +232,12 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     cmd_session.commit()
     assert resolver.calls == 4
     assert impact_task.status == "done"
+    for task in dependent_stages:
+        cmd_session.refresh(task)
+    assert [(task.task_type, task.status) for task in dependent_stages] == [
+        (task.task_type, "done") for task in dependent_stages
+    ]
+    assert any(task.result for task in dependent_stages)
     outputs = list(
         cmd_session.scalars(
             select(EventImpactHypothesis).where(
