@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.models.event_impact import (
     CompanyImpactObservation,
@@ -193,8 +193,23 @@ def test_trace_review_is_idempotent_and_keeps_source_gap_nonkey_with_pit_funds(
     ])
     cmd_session.commit()
 
-    trace = cmd_client.get(f"/api/v1/event-research/{case_id}/impact-trace")
+    holding_queries: list[tuple[str, object]] = []
+
+    def capture_holding_query(
+        _conn, _cursor, statement, parameters, _context, _executemany
+    ) -> None:
+        if "holding_disclosures" in statement.lower():
+            holding_queries.append((statement, parameters))
+
+    event.listen(cmd_session.bind, "before_cursor_execute", capture_holding_query)
+    try:
+        trace = cmd_client.get(f"/api/v1/event-research/{case_id}/impact-trace")
+    finally:
+        event.remove(cmd_session.bind, "before_cursor_execute", capture_holding_query)
     assert trace.status_code == 200
+    assert len(holding_queries) == 1
+    assert "published_at <=" in holding_queries[0][0].lower()
+    assert "2026-08-08" in str(holding_queries[0][1])
     relation_payload = trace.json()["factors"][0]["relations"][0]
     assert len(relation_payload["fund_exposure"]) == 1
     fund_exposure = relation_payload["fund_exposure"][0]
@@ -203,26 +218,52 @@ def test_trace_review_is_idempotent_and_keeps_source_gap_nonkey_with_pit_funds(
     assert fund_exposure["computable"] is False
     assert fund_exposure["exposure"] is None
     assert fund_exposure["source"] == "visible filing"
+    # SQLite round-trips datetimes without tzinfo; the HTTP contract is still
+    # an explicit UTC timestamp rather than a timezone-ambiguous string.
+    assert fund_exposure["published_at"] == "2026-08-07T08:00:00+00:00"
 
-    payload = {
+    whitespace = cmd_client.post(
+        f"/api/v1/event-research/impact-relations/{relation.id}/review",
+        json={"outcome": "accepted", "reason": "  ", "reviewer": "  "},
+    )
+    assert whitespace.status_code == 422
+    accepted = {
         "outcome": "accepted",
         "reason": "reviewed but source remains absent",
         "reviewer": "tester",
     }
     first = cmd_client.post(
-        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=payload
+        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=accepted
+    )
+    rejected = cmd_client.post(
+        f"/api/v1/event-research/impact-relations/{relation.id}/review",
+        json={
+            "outcome": "rejected",
+            "reason": "initial assessment rejected",
+            "reviewer": "tester",
+        },
     )
     second = cmd_client.post(
-        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=payload
+        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=accepted
     )
-    assert first.status_code == second.status_code == 201
-    assert first.json()["review_id"] == second.json()["review_id"]
+    replay = cmd_client.post(
+        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=accepted
+    )
+    assert (
+        first.status_code
+        == rejected.status_code
+        == second.status_code
+        == replay.status_code
+        == 201
+    )
+    assert first.json()["review_id"] != second.json()["review_id"]
+    assert second.json()["review_id"] == replay.json()["review_id"]
     reviews = cmd_session.scalars(
         select(CompanyImpactRelationReview).where(
             CompanyImpactRelationReview.relation_id == relation.id
         )
     ).all()
-    assert len(reviews) == 1
+    assert len(reviews) == 3
     review_task = cmd_session.scalar(
         select(TaskItem).where(
             TaskItem.task_type == "review_company_impact",
@@ -242,3 +283,107 @@ def test_trace_review_is_idempotent_and_keeps_source_gap_nonkey_with_pit_funds(
     assert assessment is not None
     assert assessment.classification != "key"
     assert assessment.score_components["company"] == 0
+    reviewed_trace = cmd_client.get(f"/api/v1/event-research/{case_id}/impact-trace")
+    review = reviewed_trace.json()["factors"][0]["relations"][0]["review"]
+    assert review["outcome"] == "accepted"
+    assert review["created_at"].endswith("+00:00")
+
+
+def test_trace_without_relation_cutoff_does_not_read_fund_history(
+    cmd_client, cmd_session
+) -> None:
+    """A relation with no dated evidence cannot read unbounded fund history."""
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json={
+            "raw_input": "fixture",
+            "event_title": "No cutoff",
+            "research_question": "why?",
+            "candidate_factors": ["one", "two", "three"],
+            "created_by": "tester",
+        },
+    )
+    case_id = uuid.UUID(created.json()["case_id"])
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    assert scope is not None
+    now = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
+    hypothesis = EventImpactHypothesis(
+        research_case_id=case_id,
+        scope_version_id=scope.id,
+        statement="no dated evidence",
+        classification="candidate",
+        rank=1,
+        score_components={},
+        explanation="no cutoff",
+        created_at=now,
+    )
+    company = Company(
+        code="NO-CUTOFF", name="No cutoff issuer", type="listed", created_at=now
+    )
+    fund = Fund(
+        code="000001",
+        name="China public fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=now,
+    )
+    cmd_session.add_all([hypothesis, company, fund])
+    cmd_session.flush()
+    stock = Stock(
+        company_id=company.id,
+        code="600003",
+        name="No cutoff",
+        market="SSE",
+        created_at=now,
+    )
+    cmd_session.add(stock)
+    cmd_session.flush()
+    relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        scope_version_id=scope.id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="no date",
+        status="candidate",
+        source_statement_id=None,
+        created_at=now,
+    )
+    cmd_session.add(relation)
+    cmd_session.flush()
+    cmd_session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=stock.id,
+            weight=Decimal("0.10"),
+            report_period=date(2026, 6, 30),
+            published_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc),
+            acquired_at=now,
+            source="would leak without cutoff",
+            created_at=now,
+        )
+    )
+    cmd_session.commit()
+
+    holding_queries: list[str] = []
+
+    def capture_holding_query(
+        _conn, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if "holding_disclosures" in statement.lower():
+            holding_queries.append(statement)
+
+    event.listen(cmd_session.bind, "before_cursor_execute", capture_holding_query)
+    try:
+        trace = cmd_client.get(f"/api/v1/event-research/{case_id}/impact-trace")
+    finally:
+        event.remove(cmd_session.bind, "before_cursor_execute", capture_holding_query)
+    assert trace.status_code == 200
+    assert trace.json()["factors"][0]["relations"][0]["fund_exposure"] == []
+    assert holding_queries == []

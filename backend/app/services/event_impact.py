@@ -786,17 +786,19 @@ class EventImpactResearchService:
             .where(TaskItem.scope_version_id == relation.scope_version_id)
         ) is None:
             raise ValidationFailedError("impact relation is not a high-impact source gap")
-        existing = self._session.scalar(
+        latest = self._session.scalar(
             select(CompanyImpactRelationReview)
             .where(CompanyImpactRelationReview.relation_id == relation.id)
-            .where(CompanyImpactRelationReview.outcome == outcome)
-            .where(CompanyImpactRelationReview.reason == reason.strip())
-            .where(CompanyImpactRelationReview.reviewer == reviewer.strip())
             .order_by(CompanyImpactRelationReview.created_at.desc(), CompanyImpactRelationReview.id.desc())
             .limit(1)
         )
-        if existing is not None:
-            return existing
+        if (
+            latest is not None
+            and latest.outcome == outcome
+            and latest.reason == reason.strip()
+            and latest.reviewer == reviewer.strip()
+        ):
+            return latest
         review = CompanyImpactRelationReview(
             relation_id=relation.id, outcome=outcome, reason=reason.strip(), reviewer=reviewer.strip(), created_at=_utcnow()
         )

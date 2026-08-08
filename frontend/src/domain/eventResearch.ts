@@ -103,7 +103,18 @@ export interface EventImpactRelation {
 }
 export interface EventImpactRelationReview { outcome: string; reason: string; reviewer: string; createdAt: string; }
 export interface EventImpactObservation { kind: string; status: string; sourceStatementId: string | null; valuationSnapshotId: string | null; summary: string; asOfDate: string | null; }
-export interface EventImpactFund { fundId?: string; fundCode?: string; fundName?: string; reportPeriod?: string; publishedAt?: string; source?: string; coverageRatio?: string | number; coverageStatus: string; computable: boolean; exposure: string | number | null; }
+export interface EventImpactFund {
+  fundId: string;
+  fundCode: string;
+  fundName: string;
+  reportPeriod: string;
+  publishedAt: string;
+  source: string;
+  coverageRatio: number;
+  coverageStatus: string;
+  computable: boolean;
+  exposure: string | number | null;
+}
 
 export interface EventResearchScopeFactor {
   statement: string;

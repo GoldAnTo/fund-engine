@@ -16,12 +16,12 @@ describe("HttpResearchAdapter", () => {
     vi.unstubAllGlobals();
   });
 
-  it("maps unlisted relations, partial funds, observations and reviews", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ scope_version: 2, as_of: "2026-08-08", progress: {}, alternatives: [], factors: [{ hypothesis_id: "h1", statement: "factor", rank: 1, classification: "candidate", score_components: {}, explanation: "gap", funds: [{ coverage_status: "partial", computable: false, exposure: null }], relations: [{ relation_id: "r1", company_id: "c1", company_name: "Private", company_type: "unlisted_supplier", relation_kind: "supplier", direction: "benefits", mechanism: "m", status: "candidate", effective_status: "verified", source_statement_id: null, stocks: [], fund_exposure: [], review: { outcome: "accepted", reason: "r", reviewer: "u", created_at: "2026-08-08T00:00:00Z" }, observations: [{ kind: "event", status: "verified", source_statement_id: "s1", valuation_snapshot_id: null, summary: "source", as_of_date: "2026-08-08" }] }] }] })));
+  it("maps unlisted relations, complete partial-fund fields, observations and reviews", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ scope_version: 2, as_of: "2026-08-08", progress: {}, alternatives: [], factors: [{ hypothesis_id: "h1", statement: "factor", rank: 1, classification: "candidate", score_components: {}, explanation: "gap", funds: [{ fund_id: "fund-1", fund_code: "000001", fund_name: "China fund", report_period: "2026-06-30", published_at: "2026-08-01T00:00:00+00:00", source: "filing", coverage_ratio: 0.5, coverage_status: "partial", computable: false, exposure: null }], relations: [{ relation_id: "r1", company_id: "c1", company_name: "Private", company_type: "unlisted_supplier", relation_kind: "supplier", direction: "benefits", mechanism: "m", status: "candidate", effective_status: "verified", source_statement_id: null, stocks: [], fund_exposure: [], review: { outcome: "accepted", reason: "r", reviewer: "u", created_at: "2026-08-08T00:00:00Z" }, observations: [{ kind: "event", status: "verified", source_statement_id: "s1", valuation_snapshot_id: null, summary: "source", as_of_date: "2026-08-08" }] }] }] })));
     const trace = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }).getEventImpactTrace("case-1");
     expect(trace.scopeVersion).toBe(2);
     expect(trace.factors[0].relations[0]).toMatchObject({ companyType: "unlisted_supplier", stocks: [], effectiveStatus: "verified" });
-    expect(trace.factors[0].funds[0]).toMatchObject({ computable: false, exposure: null, coverageStatus: "partial" });
+    expect(trace.factors[0].funds[0]).toMatchObject({ fundId: "fund-1", reportPeriod: "2026-06-30", publishedAt: "2026-08-01T00:00:00+00:00", source: "filing", coverageRatio: 0.5, computable: false, exposure: null, coverageStatus: "partial" });
     expect(trace.factors[0].relations[0].observations[0]).toMatchObject({ sourceStatementId: "s1", asOfDate: "2026-08-08" });
   });
 

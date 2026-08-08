@@ -24,6 +24,15 @@ from app.services.china_market_data import CHINA_A_SHARE_MARKETS
 from app.services.china_market_data import is_china_public_fund
 
 
+def _utc_isoformat(value: datetime) -> str:
+    """Serialize ledger timestamps as explicit UTC, including SQLite values."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat()
+
+
 class EventImpactQueries:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -73,16 +82,30 @@ class EventImpactQueries:
                 .order_by(CompanyImpactRelationReview.created_at.desc(), CompanyImpactRelationReview.id.desc())
             ):
                 latest_reviews.setdefault(review.relation_id, review)
+        relation_as_of = {
+            relation.id: max(
+                (observation.as_of_date for observation in observations_by_relation[relation.id]
+                 if observation.as_of_date),
+                default=None,
+            )
+            for relation in relations
+        }
+        max_as_of = max((as_of for as_of in relation_as_of.values() if as_of), default=None)
+        max_cutoff = (
+            datetime.combine(max_as_of, time.max, tzinfo=timezone.utc)
+            if max_as_of is not None else None
+        )
         stock_by_id = {
             stock.id: stock for stocks in stocks_by_company.values() for stock in stocks
         }
         holdings_by_stock: dict[uuid.UUID, list[HoldingDisclosure]] = defaultdict(list)
         funds: dict[uuid.UUID, Fund] = {}
-        if stock_by_id:
+        if stock_by_id and max_cutoff is not None:
             holding_rows = list(self._session.execute(
                 select(HoldingDisclosure, Fund)
                 .join(Fund, Fund.id == HoldingDisclosure.fund_id)
                 .where(HoldingDisclosure.stock_id.in_(stock_by_id))
+                .where(HoldingDisclosure.published_at <= max_cutoff)
             ))
             for holding, fund in holding_rows:
                 if is_china_public_fund(fund.code):
@@ -118,10 +141,7 @@ class EventImpactQueries:
                     "as_of_date": observation.as_of_date.isoformat() if observation.as_of_date else None,
                 })
             relation_stocks = stocks_by_company[company.id] if company.type == "listed" else []
-            as_of = max(
-                (obs.as_of_date for obs in observations_by_relation[relation.id] if obs.as_of_date),
-                default=None,
-            )
+            as_of = relation_as_of[relation.id]
             cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc) if as_of else None
             by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = defaultdict(list)
             latest_visible: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
@@ -153,7 +173,7 @@ class EventImpactQueries:
                 coverage_status = "stale" if stale else ("complete" if ratio >= 0.80 else "partial")
                 computable = coverage_status == "complete"
                 fund_rows.append({"fund_id": str(fund.id), "fund_code": fund.code, "fund_name": fund.name,
-                                  "report_period": latest.report_period.isoformat(), "published_at": latest.published_at.isoformat(),
+                                  "report_period": latest.report_period.isoformat(), "published_at": _utc_isoformat(latest.published_at),
                                   "source": latest.source, "coverage_ratio": ratio, "coverage_status": coverage_status,
                                   "computable": computable, "exposure": str(sum((row.weight for row in holdings), 0)) if computable else None})
             relations_by_hypothesis[relation.hypothesis_id].append({
@@ -162,7 +182,7 @@ class EventImpactQueries:
                 "direction": relation.direction, "mechanism": relation.mechanism,
                 "status": relation.status, "effective_status": effective_status,
                 "source_statement_id": str(relation.source_statement_id) if relation.source_statement_id else None,
-                "review": None if review is None else {"outcome": review.outcome, "reason": review.reason, "reviewer": review.reviewer, "created_at": review.created_at.isoformat()},
+                "review": None if review is None else {"outcome": review.outcome, "reason": review.reason, "reviewer": review.reviewer, "created_at": _utc_isoformat(review.created_at)},
                 "stocks": [{"stock_id": str(stock.id), "code": stock.code, "name": stock.name, "market": stock.market} for stock in relation_stocks],
                 "observations": observations,
                 "fund_exposure": fund_rows,
