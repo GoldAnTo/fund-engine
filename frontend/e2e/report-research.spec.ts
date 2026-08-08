@@ -26,7 +26,7 @@ test.describe("report-first research workspace", () => {
     await expect(page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).resolves.toBe(true);
 
     await page.goto("/embed/reports/report-mock/wiki?client=mock#token=read-only-token");
-    await expect(page.getByRole("heading", { name: "只读研究关系图谱" })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveText(/无法显示嵌入图谱(嵌入API未配置为独立来源|嵌入访问未获授权)/);
     await expect(page.getByRole("button")).toHaveCount(0);
     await expect(page.getByText("read-only-token")).toHaveCount(0);
   });

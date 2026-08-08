@@ -20,12 +20,9 @@ describe("HttpResearchAdapter", () => {
     const fetchMock = vi.fn(async () => jsonResponse({ nodes: [], edges: [], factors: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const rejected = new EmbedResearchAdapter({ baseUrl: "/api/v1", pageOrigin: "http://embed.test" });
-    await expect(rejected.getReportEmbedWiki("case-1", "hash-token")).rejects.toThrow("嵌入API未配置为独立来源");
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    const sameOrigin = new EmbedResearchAdapter({ baseUrl: "http://embed.test/api/v1", pageOrigin: "http://embed.test" });
-    await expect(sameOrigin.getReportEmbedWiki("case-1", "hash-token")).rejects.toThrow("嵌入API未配置为独立来源");
+    for (const baseUrl of ["/api/v1", "http://embed.test/api/v1", "ftp://research-api.test/api/v1", "data:text/plain,embed", "javascript:alert(1)"]) {
+      expect(() => new EmbedResearchAdapter({ baseUrl, pageOrigin: "http://embed.test" })).toThrow("嵌入API未配置为独立来源");
+    }
     expect(fetchMock).not.toHaveBeenCalled();
 
     const adapter = new EmbedResearchAdapter({ baseUrl: "https://research-api.test/api/v1", pageOrigin: "http://embed.test" });

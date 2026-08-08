@@ -79,8 +79,13 @@ export function ReportEmbedScreen({ embedClient }: { embedClient?: Pick<ReturnTy
     const token = readHashToken();
     if (!token || !caseId) { setError("嵌入访问未获授权或已失效。请向提供方获取新的只读链接。"); return; }
     window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
-    const mockClient = new URLSearchParams(window.location.search).get("client") === "mock" ? { getReportEmbedWiki: researchClient.getReportEmbedWiki! } : null;
-    const client = embedClient ?? mockClient ?? configuredEmbedResearchClient();
+    let client: Pick<ReturnType<typeof configuredEmbedResearchClient>, "getReportEmbedWiki">;
+    try {
+      client = embedClient ?? configuredEmbedResearchClient();
+    } catch (reason) {
+      setError(reason instanceof Error && reason.message === EMBED_API_CONFIGURATION_ERROR ? EMBED_API_CONFIGURATION_ERROR : "嵌入访问未获授权或已失效。请向提供方获取新的只读链接。");
+      return;
+    }
     client.getReportEmbedWiki(caseId, token).then(setGraph).catch((reason) => setError(reason instanceof Error && reason.message === EMBED_API_CONFIGURATION_ERROR ? EMBED_API_CONFIGURATION_ERROR : "嵌入访问未获授权或已失效。请向提供方获取新的只读链接。"));
   }, [caseId, embedClient]);
   return <main className="report-embed-screen"><header><p>只读嵌入</p><h1>只读研究关系图谱</h1></header>{error ? <section role="alert"><strong>无法显示嵌入图谱</strong><p>{error}</p></section> : !graph ? <section className="report-skeleton" aria-label="正在加载只读图谱"><span /><span /></section> : <><section className="report-embed-summary"><strong>{graph.factors.some((factor) => factor.classification === "key") ? "存在已验证关键因素" : "当前没有可确认的关键因素"}</strong><span>{graph.factors.length ? graph.factors[0].explanation : "没有可用因素分类。"}</span></section><section><h2>关系路径</h2><ol className="report-embed-paths">{graph.edges.map((edge) => <li key={edge.id}>{edge.kind} · {edge.status === "verified" ? "已验证" : "待核验"}</li>)}</ol>{!graph.edges.length ? <p>当前没有可公开展示的关系路径。</p> : null}</section></>}</main>;

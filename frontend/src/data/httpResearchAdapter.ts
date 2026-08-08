@@ -257,18 +257,22 @@ export const EMBED_API_CONFIGURATION_ERROR = "嵌入API未配置为独立来源"
  * the embed grant policy).
  */
 export class EmbedResearchAdapter {
-  constructor(private readonly options: { baseUrl?: string; pageOrigin?: string } = {}) {}
+  private readonly baseUrl: string;
 
-  private endpoint(caseId: string): string {
-    const pageOrigin = this.options.pageOrigin ?? globalThis.location?.origin;
+  constructor(options: { baseUrl?: string; pageOrigin?: string } = {}) {
+    const pageOrigin = options.pageOrigin ?? globalThis.location?.origin;
     try {
-      if (!this.options.baseUrl || !pageOrigin) throw new Error("missing origin");
-      const baseUrl = new URL(this.options.baseUrl);
-      if (baseUrl.origin === pageOrigin) throw new Error("same origin");
-      return `${baseUrl.toString().replace(/\/$/, "")}/report-research/${encodeURIComponent(caseId)}/embed/wiki`;
+      if (!options.baseUrl || !pageOrigin) throw new Error("missing origin");
+      const baseUrl = new URL(options.baseUrl);
+      if ((baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") || baseUrl.origin === pageOrigin) throw new Error("unsafe origin");
+      this.baseUrl = baseUrl.toString().replace(/\/$/, "");
     } catch {
       throw new Error(EMBED_API_CONFIGURATION_ERROR);
     }
+  }
+
+  private endpoint(caseId: string): string {
+    return `${this.baseUrl}/report-research/${encodeURIComponent(caseId)}/embed/wiki`;
   }
 
   async getReportEmbedWiki(caseId: string, token: string): Promise<ReportEmbedWikiGraph> {

@@ -26,4 +26,13 @@ describe("ReportEmbedScreen", () => {
     render(<MemoryRouter initialEntries={["/embed/reports/report-1/wiki#token=wrong"]}><Routes><Route path="/embed/reports/:caseId/wiki" element={<ReportEmbedScreen embedClient={{ getReportEmbedWiki: (caseId, token) => adapter.getReportEmbedWiki!(caseId, token) }} />} /></Routes></MemoryRouter>);
     expect(await screen.findByRole("alert")).toHaveTextContent("无法显示嵌入图谱");
   });
+
+  it("does not let a URL mock flag select the regular mock client", async () => {
+    const mockRead = vi.spyOn(adapter, "getReportEmbedWiki");
+    window.history.replaceState(null, "", "/embed/reports/report-1/wiki?client=mock#token=untrusted-url-token");
+    render(<MemoryRouter initialEntries={["/embed/reports/report-1/wiki?client=mock#token=untrusted-url-token"]}><Routes><Route path="/embed/reports/:caseId/wiki" element={<ReportEmbedScreen />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole("alert")).toHaveTextContent("嵌入API未配置为独立来源");
+    expect(mockRead).not.toHaveBeenCalled();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
 });
