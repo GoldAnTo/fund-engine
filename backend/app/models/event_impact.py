@@ -196,6 +196,23 @@ class EventImpactRefreshClaim(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CompanyIdentityAlias(Base):
+    """Append-only indexed canonical identity for an immutable legacy Company."""
+
+    __tablename__ = "company_identity_aliases"
+    __table_args__ = (
+        UniqueConstraint("company_type", "canonical_identity", name="uq_company_identity_alias"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("companies.id"), nullable=False
+    )
+    company_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_identity: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 @event.listens_for(Session, "before_flush")
 def _derive_relation_scopes_before_flush(session, _flush_context, _instances) -> None:
     """Bind pending relations to their parent's scope before inserts begin."""

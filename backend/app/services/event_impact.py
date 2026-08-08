@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Protocol, Sequence
 from unicodedata import normalize
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_impact import (
     CompanyImpactObservation,
     CompanyImpactRelation,
+    CompanyIdentityAlias,
     EventImpactRefreshClaim,
     EventImpactHypothesis,
 )
@@ -444,11 +445,29 @@ class EventImpactResearchService:
         if not keys:
             return {}
         identities = {key[1] for key in keys}
+        raw_names = {candidate.company_name.strip() for candidate in candidates}
         company_types = {candidate.type for candidate in candidates}
         existing = self._session.scalars(
             select(Company)
+            .outerjoin(CompanyIdentityAlias, CompanyIdentityAlias.company_id == Company.id)
             .where(Company.type.in_(company_types))
-            .where(Company.canonical_identity.in_(identities))
+            .where(
+                or_(
+                    Company.canonical_identity.in_(identities),
+                    and_(
+                        CompanyIdentityAlias.company_type.in_(company_types),
+                        CompanyIdentityAlias.canonical_identity.in_(identities),
+                    ),
+                    and_(
+                        Company.canonical_identity.is_(None),
+                        func.lower(func.trim(Company.name)).in_(identities),
+                    ),
+                    and_(
+                        Company.canonical_identity.is_(None),
+                        Company.name.in_(raw_names),
+                    ),
+                )
+            )
         )
         companies: dict[tuple[str, str, str], Company] = {}
         for company in existing:
@@ -462,7 +481,26 @@ class EventImpactResearchService:
                 ),
                 company,
             )
+            if company.canonical_identity is None:
+                identity = self._company_key(company.name, company.type)[1]
+                if identity in identities:
+                    self._append_legacy_alias(company, identity)
         return companies
+
+    def _append_legacy_alias(self, company: Company, identity: str) -> None:
+        try:
+            with self._session.begin_nested():
+                self._session.add(
+                    CompanyIdentityAlias(
+                        company_id=company.id,
+                        company_type=company.type,
+                        canonical_identity=identity,
+                        created_at=_utcnow(),
+                    )
+                )
+                self._session.flush()
+        except IntegrityError:
+            pass
 
     def _resolve_or_create_company(
         self,

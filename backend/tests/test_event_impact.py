@@ -5,18 +5,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from threading import Barrier, Thread
 from types import SimpleNamespace
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 import app.models as models
 from app.models.event_impact import (
     CompanyImpactObservation,
     CompanyImpactRelation,
     CompanyImpactRelationReview,
+    CompanyIdentityAlias,
     EventImpactRefreshClaim,
     EventImpactHypothesis,
 )
@@ -31,6 +34,7 @@ from app.models.ledger import (
     DocumentVersion,
     EvidenceLink,
     ImmutableLedgerError,
+    ResearchCase,
     SourceSpan,
     SourceStatement,
     Stock,
@@ -43,6 +47,7 @@ from app.services.event_impact import (
 from app.errors import ValidationFailedError
 from app.models.events import DomainEvent
 from app.models.operational import ResearchRun, ResearchTask
+from app.services.auto_research import AutoResearchService
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -444,6 +449,87 @@ def test_schedule_refresh_is_idempotent_for_one_exact_scope(session, research_ca
     assert str(scope.id) in tasks[0].query
 
 
+@pytest.mark.pg_only
+def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(engine) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        case = ResearchCase(
+            title="impact schedule race",
+            industry_topic="event",
+            created_by="tester",
+            created_at=NOW,
+        )
+        bootstrap.add(case)
+        bootstrap.flush()
+        bootstrap.add(
+            EventResearchBrief(
+                research_case_id=case.id,
+                raw_input="fixture",
+                source_url=None,
+                event_title="fixture",
+                company_name=None,
+                ticker=None,
+                event_at=None,
+                market_reaction=None,
+                research_question="fixture",
+                extraction_state="human_confirmed",
+                created_at=NOW,
+            )
+        )
+        scope = EventResearchScopeVersion(
+            research_case_id=case.id,
+            version=1,
+            changed_by="tester",
+            change_summary="fixture",
+            created_at=NOW,
+        )
+        run = ResearchRun(
+            research_case_id=case.id,
+            status="queued",
+            stage="planning",
+            round=0,
+            max_rounds=1,
+            budget=1,
+            budget_used=0,
+            scope_thesis_ids=[],
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        bootstrap.add_all([scope, run])
+        bootstrap.commit()
+        case_id, scope_id, run_id = case.id, scope.id, run.id
+    finally:
+        bootstrap.close()
+
+    barrier = Barrier(2)
+    errors: list[BaseException] = []
+
+    def schedule() -> None:
+        db = SessionLocal()
+        try:
+            barrier.wait(timeout=5)
+            EventImpactResearchService(db).schedule_refresh(case_id, scope_id, run_id)
+            db.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=schedule), Thread(target=schedule)
+    first.start(); second.start()
+    first.join(timeout=10); second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    verify = SessionLocal()
+    try:
+        assert verify.scalar(select(sa.func.count()).select_from(EventImpactRefreshClaim)) == 1
+        assert verify.scalar(select(sa.func.count()).select_from(ResearchTask)) == 1
+    finally:
+        verify.close()
+
+
 def test_refresh_retry_is_idempotent_for_scope_initial_key(session, research_case) -> None:
     factor = "supplier impact"
     scope = _event_scope(session, research_case, factors=[factor])
@@ -501,6 +587,82 @@ def test_refresh_reuses_canonical_company_identity(session, research_case) -> No
     relations = list(session.scalars(select(CompanyImpactRelation)))
     assert [company.id for company in companies] == [existing.id]
     assert {relation.affected_company_id for relation in relations} == {existing.id}
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "candidate_name"),
+    [
+        ("ACME SUPPLIER", "acme supplier"),
+        ("Ａｃｍｅ　Supplier", "Ａｃｍｅ　Supplier"),
+    ],
+)
+def test_refresh_reconciles_legacy_company_identity_with_alias(
+    session, research_case, legacy_name, candidate_name
+) -> None:
+    factor = "supplier impact"
+    _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    legacy_id = uuid.uuid4()
+    session.execute(
+        Company.__table__.insert().values(
+            id=legacy_id,
+            code=legacy_name,
+            name=legacy_name,
+            type="listed",
+            canonical_identity=None,
+            created_at=NOW,
+        )
+    )
+    session.commit()
+
+    EventImpactResearchService(
+        session,
+        _FakeImpactResolver(
+            {
+                factor: [
+                    _candidate(
+                        company_name=candidate_name,
+                        source_statement_id=statement.id,
+                    )
+                ]
+            }
+        ),
+    ).refresh(research_case.id)
+    session.commit()
+
+    assert [company.id for company in session.scalars(select(Company))] == [legacy_id]
+    alias = session.scalar(
+        select(CompanyIdentityAlias).where(CompanyIdentityAlias.company_id == legacy_id)
+    )
+    assert alias is not None and alias.canonical_identity == "acme supplier"
+
+
+def test_impact_refresh_task_executes_with_injected_resolver(session, research_case) -> None:
+    factor = "supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    resolver = _FakeImpactResolver(
+        {factor: [_candidate(source_statement_id=statement.id)]}
+    )
+    worker = AutoResearchService(session, impact_resolver=resolver)
+    run = worker.start(
+        research_case.id,
+        max_rounds=1,
+        budget=10,
+        thesis_ids=[],
+        scope_version_id=scope.id,
+    )
+
+    worker.execute(run)
+    session.commit()
+
+    task = next(
+        task for task in worker.repo.tasks_for_run(run.id)
+        if task.task_type == "impact_refresh"
+    )
+    assert task.status == "done"
+    assert task.result is not None and task.result["relations_created"] == 1
+    assert session.scalar(select(EventImpactHypothesis)).scope_version_id == scope.id
 
 
 def test_refresh_appends_new_scope_rows_without_mutating_prior_scope_rows(

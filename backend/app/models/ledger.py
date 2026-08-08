@@ -65,6 +65,7 @@ IMMUTABLE_TABLES = frozenset(
         "review_decisions",
         "evidence_reviews",
         "companies",
+        "company_identity_aliases",
         "stocks",
         "fund_companies",
         "funds",

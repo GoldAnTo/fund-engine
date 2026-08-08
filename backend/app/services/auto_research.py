@@ -31,11 +31,12 @@ from app.services.event_research_scope_evidence import (
 
 
 class AutoResearchService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, impact_resolver=None) -> None:
         self.session = session
         self.repo = AutoResearchRepository(session)
         self.task_repo = TaskRepository(session)
         self.client = LLMClient.from_env()
+        self._impact_resolver = impact_resolver
 
     def start(
         self,
@@ -140,7 +141,9 @@ class AutoResearchService:
                 try:
                     if task.task_type == "impact_refresh":
                         _, _claim_id, scope_id, refresh_key = task.query.split(":", 3)
-                        impact = EventImpactResearchService(self.session).refresh(
+                        impact = EventImpactResearchService(
+                            self.session, resolver=self._impact_resolver
+                        ).refresh(
                             run.research_case_id,
                             scope_version_id=uuid.UUID(scope_id),
                             refresh_key=refresh_key,
