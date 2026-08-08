@@ -64,6 +64,69 @@ class ExtractedReportClaim:
     relations: tuple[ExtractedReportRelation, ...] = ()
 
 
+@dataclass(frozen=True)
+class ReportFactorAssessment:
+    """A conservative, explainable gate for a report's proposed factor.
+
+    A broker's assertion stays a ``report_claim`` in the ledger.  The graph
+    may promote its *research priority* to ``key`` only after independent
+    company, operating, market, peer and confounder checks are all present.
+    This is intentionally a projection, not a mutation of the original
+    claim, so a later collection run cannot rewrite what the report said.
+    """
+
+    classification: str
+    components: dict[str, bool]
+    explanation: str
+
+
+class ReportFactorClassifier:
+    """Classify a report factor without conflating opinion with verified fact."""
+
+    @staticmethod
+    def classify(
+        *,
+        report_source: bool,
+        company_relation: bool,
+        operating: bool,
+        market: bool,
+        peer: bool,
+        confounder: bool,
+    ) -> ReportFactorAssessment:
+        components = {
+            "report_source": report_source,
+            "company_relation": company_relation,
+            "operating": operating,
+            "market": market,
+            "peer": peer,
+            "confounder": confounder,
+        }
+        if all(components.values()):
+            return ReportFactorAssessment(
+                classification="key",
+                components=components,
+                explanation=(
+                    "研报主张、独立公司关系、经营、市场、同业控制和同期混杂"
+                    "因素评估均已具备；该因素可作为待审阅的关键因素。"
+                ),
+            )
+        if confounder and (market or peer):
+            return ReportFactorAssessment(
+                classification="alternative",
+                components=components,
+                explanation=(
+                    "同期存在可审计混杂因素，且市场或同业观察不能单独归因于研报；"
+                    "应将其作为替代解释竞争，而非关键因素。"
+                ),
+            )
+        missing = [label for label, present in components.items() if not present]
+        return ReportFactorAssessment(
+            classification="evidence_gap",
+            components=components,
+            explanation="证据不足：尚缺 " + "、".join(missing) + "。",
+        )
+
+
 class ReportContentExtractor(Protocol):
     def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]: ...
 

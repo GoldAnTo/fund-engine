@@ -17,7 +17,9 @@ from app.schemas.v1.report_research import (
     ReportResearchCreatedResponse,
     ReportResearchCaseDTO,
     ReportResearchDocumentDTO,
+    ReportWikiGraphDTO,
 )
+from app.queries.report_wiki import ReportWikiQueries
 from app.services.report_research import CreatedReportResearch, ReportResearchService
 from app.services.document_blobs import LocalImmutableBlobStore
 
@@ -79,6 +81,23 @@ def upload_pdf_report(
         created_by=created_by,
     )
     return _response(created)
+
+
+@router.get("/{case_id}/wiki", response_model=ReportWikiGraphDTO)
+def report_wiki_graph(
+    case_id: uuid.UUID,
+    scope_version: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ReportWikiGraphDTO:
+    """Return one document version of a report Wiki graph.
+
+    The default is the latest attached report document.  A caller that already
+    has access to this case may select an older immutable document id through
+    ``scope_version``; no response ever combines multiple report revisions.
+    Case-level authorization is supplied by the hosting application boundary,
+    just as it is for the existing case read endpoints.
+    """
+    return ReportWikiQueries(db).graph(case_id, scope_version_id=scope_version)
 
 
 @router.get("/documents/{document_id}/original")

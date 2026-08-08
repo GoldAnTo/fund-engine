@@ -64,3 +64,57 @@ class ReportResearchCreatedResponse(V1Model):
     state: ReportResearchState
     needs_text_or_pages: bool = False
     source_statement_ids: list[uuid.UUID]
+
+
+ReportWikiNodeKind = Literal[
+    "report_claim", "company", "evidence", "market_window", "fund"
+]
+ReportWikiNodeStatus = Literal[
+    "report_claim", "verified", "candidate", "rejected", "market_observation"
+]
+ReportFactorClassification = Literal["key", "alternative", "evidence_gap"]
+
+
+class ReportWikiNodeDTO(V1Model):
+    """One source-addressable node in a report's read-only Wiki graph.
+
+    Company names that cannot safely resolve to a ledger company deliberately
+    use a stable synthetic identifier.  Their source locator is still the
+    exact report span that asserted the name.
+    """
+
+    id: str
+    kind: ReportWikiNodeKind
+    label: str
+    status: ReportWikiNodeStatus
+    source_locator: str | None = None
+    scope_version: str
+
+
+class ReportWikiEdgeDTO(V1Model):
+    id: str
+    source_id: str
+    target_id: str
+    kind: str
+    status: ReportWikiNodeStatus
+    source_locator: str | None = None
+    scope_version: str
+
+
+class ReportFactorDTO(V1Model):
+    claim_id: uuid.UUID
+    statement: str
+    classification: ReportFactorClassification
+    components: dict[str, bool]
+    explanation: str
+
+
+class ReportWikiGraphDTO(V1Model):
+    """The selected report-document scope, never a mixed history view."""
+
+    research_case_id: uuid.UUID
+    scope_version: str
+    document_id: uuid.UUID
+    nodes: list[ReportWikiNodeDTO]
+    edges: list[ReportWikiEdgeDTO]
+    factors: list[ReportFactorDTO]
