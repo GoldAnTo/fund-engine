@@ -50,7 +50,7 @@ from app.services.china_market_data import (
 _WINDOWS: tuple[tuple[str, int], ...] = (("1d", 0), ("5d", 4))
 
 
-def _before_report_market_unique_insert() -> None:
+def _before_report_market_unique_insert(_model, _key: str) -> None:
     """Test seam for the database unique-key collection race."""
 
 
@@ -208,30 +208,27 @@ class ReportMarketImpactService:
         as_of: date,
     ) -> ReportFundExposure:
         key = self._key(claim.id, relation.id, window, "fund", stock.id, holding.id)
-        existing = self._session.scalar(
-            select(ReportFundExposure).where(ReportFundExposure.collection_key == key)
-        )
-        if existing is not None:
-            return existing
-        row = ReportFundExposure(
-            research_case_id=claim.research_case_id,
-            report_claim_id=claim.id,
-            report_relation_id=relation.id,
-            stock_id=stock.id,
-            fund_id=holding.fund_id,
-            holding_disclosure_id=holding.id,
-            window=window,
-            as_of_date=as_of,
-            status="verified",
-            weight=holding.weight,
-            summary=(
-                f"可见持仓披露：报告期 {holding.report_period.isoformat()}，"
-                f"权重 {holding.weight}，来源 {holding.source}。"
+        return self._persist_unique(
+            ReportFundExposure,
+            key,
+            lambda: ReportFundExposure(
+                research_case_id=claim.research_case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=stock.id,
+                fund_id=holding.fund_id,
+                holding_disclosure_id=holding.id,
+                window=window,
+                as_of_date=as_of,
+                status="verified",
+                weight=holding.weight,
+                summary=(
+                    f"可见持仓披露：报告期 {holding.report_period.isoformat()}，"
+                    f"权重 {holding.weight}，来源 {holding.source}。"
+                ),
+                collection_key=key,
             ),
-            collection_key=key,
         )
-        self._session.add(row)
-        return row
 
     def _append_fund_insufficient(
         self,
@@ -244,27 +241,24 @@ class ReportMarketImpactService:
         summary: str,
     ) -> ReportFundExposure:
         key = self._key(claim.id, relation.id, window, "fund-gap", stock.id)
-        existing = self._session.scalar(
-            select(ReportFundExposure).where(ReportFundExposure.collection_key == key)
+        return self._persist_unique(
+            ReportFundExposure,
+            key,
+            lambda: ReportFundExposure(
+                research_case_id=claim.research_case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=stock.id,
+                fund_id=None,
+                holding_disclosure_id=None,
+                window=window,
+                as_of_date=as_of,
+                status="insufficient",
+                weight=None,
+                summary=summary,
+                collection_key=key,
+            ),
         )
-        if existing is not None:
-            return existing
-        row = ReportFundExposure(
-            research_case_id=claim.research_case_id,
-            report_claim_id=claim.id,
-            report_relation_id=relation.id,
-            stock_id=stock.id,
-            fund_id=None,
-            holding_disclosure_id=None,
-            window=window,
-            as_of_date=as_of,
-            status="insufficient",
-            weight=None,
-            summary=summary,
-            collection_key=key,
-        )
-        self._session.add(row)
-        return row
 
     def _append_calendar_gap(
         self, claim: ReportClaim, targets: Sequence[_Target]
@@ -711,7 +705,7 @@ class ReportMarketImpactService:
             return existing
         try:
             with self._session.begin_nested():
-                _before_report_market_unique_insert()
+                _before_report_market_unique_insert(model, key)
                 created = factory()
                 self._session.add(created)
                 self._session.flush()

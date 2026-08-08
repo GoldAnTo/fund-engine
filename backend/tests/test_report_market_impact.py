@@ -467,9 +467,29 @@ def test_postgres_concurrent_collection_reuses_unique_observations(engine, monke
     bootstrap = SessionLocal()
     try:
         _case, claim = _report_claim(bootstrap)
+        target, stock = _company_stock(bootstrap, name="竞态基金映射公司", code="600088")
+        _mapped_relation(bootstrap, claim, target=target)
         _calendar_days(bootstrap)
         bootstrap.commit()
+        # Materialize every non-fund collection record first.  The two
+        # sessions below then race precisely on the new fund exposure key.
+        ReportMarketImpactService(bootstrap).collect(claim.id)
+        bootstrap.commit()
+        fund = Fund(
+            id=uuid.uuid4(), code="000088", name="竞态公募基金", fund_type="equity", created_at=NOW
+        )
+        bootstrap.add(fund)
+        bootstrap.flush()
+        bootstrap.add(HoldingDisclosure(
+            id=uuid.uuid4(), fund_id=fund.id, stock_id=stock.id, weight=Decimal("2.50"),
+            report_period=date(2026, 6, 30),
+            published_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            acquired_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            source="race-fixture", created_at=NOW,
+        ))
+        bootstrap.commit()
         claim_id = claim.id
+        fund_id = fund.id
     finally:
         bootstrap.close()
 
@@ -477,8 +497,10 @@ def test_postgres_concurrent_collection_reuses_unique_observations(engine, monke
     gate_lock = Lock()
     gate_count = 0
 
-    def _gate() -> None:
+    def _gate(model, _key: str) -> None:
         nonlocal gate_count
+        if model is not ReportFundExposure:
+            return
         with gate_lock:
             should_wait = gate_count < 2
             gate_count += 1
@@ -515,7 +537,21 @@ def test_postgres_concurrent_collection_reuses_unique_observations(engine, monke
                 )
             )
         )
-        assert len(rows) == 2  # one target-mapping gap for each 1d/5d window
+        assert len(rows) > 2
+        exposures = list(
+            verify.scalars(
+                select(ReportFundExposure).where(
+                    ReportFundExposure.report_claim_id == claim_id
+                )
+            )
+        )
+        assert [
+            (row.window, row.status, row.fund_id)
+            for row in exposures
+            if row.status == "verified"
+        ] == [
+            ("1d", "verified", fund_id), ("5d", "verified", fund_id)
+        ]
     finally:
         verify.close()
 
