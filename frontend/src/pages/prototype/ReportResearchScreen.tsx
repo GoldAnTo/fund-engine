@@ -41,6 +41,14 @@ function nonEmptyLines(value: string): string[] {
   return value.split("\n").map((item) => item.trim()).filter(Boolean);
 }
 
+function scopeAudit(scope: ReportResearchScope): string {
+  const createdAt = new Date(scope.createdAt);
+  const time = Number.isNaN(createdAt.valueOf())
+    ? scope.createdAt
+    : createdAt.toLocaleString("zh-CN", { hour12: false });
+  return `${scope.changedBy} · ${scope.changeSummary} · ${time}`;
+}
+
 function ScopeControls({
   caseId, graph, scopes, selectedVersion, onSelect, onSaved,
 }: {
@@ -86,11 +94,13 @@ function ScopeControls({
       setError(reason instanceof Error ? reason.message : "无法创建新的研究范围，请重试。");
     } finally { setSaving(false); }
   };
+  const currentScope = scopes.find((scope) => scope.version === selectedVersion) ?? graph.scope;
   return <section className="report-section report-scope-controls" aria-labelledby="report-scope-title">
     <header><div><p className="section-kicker">可重复研究</p><h2 id="report-scope-title">研究范围</h2></div><span>历史不会被覆盖</span></header>
     <p>当前正在查看范围 v{selectedVersion}</p>
+    <p className="report-scope-audit">{scopeAudit(currentScope)}</p>
     <label>查看研究范围版本<select value={selectedVersion} onChange={(event) => onSelect(Number(event.target.value))}>{scopes.map((scope) => <option key={scope.version} value={scope.version}>范围 v{scope.version} · {scope.researchQuestion}</option>)}</select></label>
-    <ul className="report-scope-history">{scopes.filter((scope) => scope.version !== selectedVersion).map((scope) => <li key={scope.version}>历史范围 v{scope.version} · {scope.researchQuestion}</li>)}</ul>
+    <ul className="report-scope-history">{scopes.filter((scope) => scope.version !== selectedVersion).map((scope) => <li key={scope.version}><span>历史范围 v{scope.version} · {scope.researchQuestion}</span><small>{scopeAudit(scope)}</small></li>)}</ul>
     {!editing ? <button className="prototype-button" type="button" onClick={begin}>创建新的研究范围</button> : <form className="report-scope-form" onSubmit={(event) => void save(event)}>
       <p>保存会追加范围版本，不会修改当前或历史研究记录。</p>
       <label>研究问题<textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} /></label>

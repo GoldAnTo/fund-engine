@@ -9,7 +9,7 @@ import { ReportWikiGraphScreen } from "../pages/prototype/ReportWikiGraphScreen"
 
 const graph: ReportWikiGraph = {
   researchCaseId: "report-1", scopeVersion: 1, documentId: "doc-1",
-  scope: { version: 1, documentId: "doc-1", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "供应链影响？", factorSelection: [], evidencePlan: [], selectedClaimIds: ["claim-1"], selectedRelationIds: ["relation-1", "relation-2"] },
+  scope: { version: 1, documentId: "doc-1", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "供应链影响？", factorSelection: [], evidencePlan: [], selectedClaimIds: ["claim-1"], selectedRelationIds: ["relation-1", "relation-2"], changedBy: "report-research-system", changeSummary: "初始研报研究范围", createdAt: "2026-08-08T00:00:00Z" },
   nodes: [
     { id: "claim:1", kind: "report_claim", label: "研报主张", status: "report_claim", sourceLocator: '{"page":3,"paragraph":1}', scopeVersion: 1 },
     { id: "company:1", kind: "company", label: "示例公司", status: "verified", sourceLocator: null, scopeVersion: 1 },

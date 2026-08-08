@@ -63,6 +63,10 @@ class ReportResearchCreatedResponse(V1Model):
     document: ReportResearchDocumentDTO
     state: ReportResearchState
     needs_text_or_pages: bool = False
+    # Intake succeeds before a usable workbench exists.  This explicit
+    # indicator prevents clients from probing Wiki after a parser/no-claim
+    # outcome and mistaking a normal recovery state for a failed research.
+    initial_scope_version: int | None = None
     source_statement_ids: list[uuid.UUID]
 
 
@@ -132,6 +136,9 @@ class ReportResearchScopeDTO(V1Model):
     evidence_plan: list[str]
     selected_claim_ids: list[uuid.UUID]
     selected_relation_ids: list[uuid.UUID]
+    changed_by: str
+    change_summary: str
+    created_at: datetime
 
 
 class AppendReportResearchScopeRequest(V1Model):

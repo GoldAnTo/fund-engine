@@ -72,9 +72,9 @@ describe("HttpResearchAdapter", () => {
 
   it("maps report intake and immutable scope commands without using form multipart", async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/pdf?")) return jsonResponse({ case: { id: "case-pdf" }, document: { id: "doc-pdf" }, state: "ready_to_extract", needs_text_or_pages: false });
-      if (url.endsWith("/scopes")) return jsonResponse({ items: [{ version: 1, document_id: "doc-1", visibility_cutoff_at: "2026-08-08T00:00:00Z", research_question: "原问题", factor_selection: [], evidence_plan: [], selected_claim_ids: ["claim-1"], selected_relation_ids: ["relation-1"] }], current_scope_version: 1 });
-      return jsonResponse({ case: { id: "case-text" }, document: { id: "doc-text" }, state: "ready_to_extract", needs_text_or_pages: false });
+      if (url.includes("/pdf?")) return jsonResponse({ case: { id: "case-pdf" }, document: { id: "doc-pdf" }, state: "ready_to_extract", needs_text_or_pages: false, initial_scope_version: 1 });
+      if (url.endsWith("/scopes")) return jsonResponse({ items: [{ version: 1, document_id: "doc-1", visibility_cutoff_at: "2026-08-08T00:00:00Z", research_question: "原问题", factor_selection: [], evidence_plan: [], selected_claim_ids: ["claim-1"], selected_relation_ids: ["relation-1"], changed_by: "report-research-system", change_summary: "初始研报研究范围", created_at: "2026-08-08T00:00:00Z" }], current_scope_version: 1 });
+      return jsonResponse({ case: { id: "case-text" }, document: { id: "doc-text" }, state: "ready_to_extract", needs_text_or_pages: false, initial_scope_version: 1 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
@@ -84,9 +84,9 @@ describe("HttpResearchAdapter", () => {
     const pdf = await adapter.createReportResearchPdf({ title: "PDF 研报", file: pdfFile });
     const scopes = await adapter.listReportResearchScopes("case-text");
 
-    expect(pasted).toMatchObject({ caseId: "case-text", documentId: "doc-text" });
-    expect(pdf).toMatchObject({ caseId: "case-pdf", documentId: "doc-pdf" });
-    expect(scopes).toMatchObject({ currentScopeVersion: 1, items: [expect.objectContaining({ documentId: "doc-1", selectedClaimIds: ["claim-1"] })] });
+    expect(pasted).toMatchObject({ caseId: "case-text", documentId: "doc-text", initialScopeVersion: 1 });
+    expect(pdf).toMatchObject({ caseId: "case-pdf", documentId: "doc-pdf", initialScopeVersion: 1 });
+    expect(scopes).toMatchObject({ currentScopeVersion: 1, items: [expect.objectContaining({ documentId: "doc-1", selectedClaimIds: ["claim-1"], changedBy: "report-research-system", changeSummary: "初始研报研究范围", createdAt: "2026-08-08T00:00:00Z" })] });
     expect(fetchMock).toHaveBeenNthCalledWith(1, "http://api.test/api/v1/report-research", expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Content-Type": "application/json" }) }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, expect.stringContaining("/report-research/pdf?title=PDF+%E7%A0%94%E6%8A%A5&filename=report.pdf"), expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Content-Type": "application/pdf" }), body: pdfFile }));
     expect(fetchMock).toHaveBeenNthCalledWith(3, "http://api.test/api/v1/report-research/case-text/scopes", expect.anything());

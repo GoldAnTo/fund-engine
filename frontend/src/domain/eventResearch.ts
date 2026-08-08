@@ -160,6 +160,9 @@ export interface ReportResearchScope {
   evidencePlan: string[];
   selectedClaimIds: string[];
   selectedRelationIds: string[];
+  changedBy: string;
+  changeSummary: string;
+  createdAt: string;
 }
 
 export type ReportResearchInputKind = "pasted_text" | "web_content";
@@ -185,6 +188,8 @@ export interface CreatedReportResearch {
   documentId: string;
   state: "ready_to_extract" | "needs_text_or_pages";
   needsTextOrPages: boolean;
+  /** Present only when the backend created a usable immutable scope. */
+  initialScopeVersion: number | null;
 }
 
 export interface AppendReportResearchScopeInput {

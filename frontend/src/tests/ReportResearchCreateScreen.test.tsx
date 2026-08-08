@@ -34,7 +34,7 @@ describe("ReportResearchCreateScreen", () => {
   it("creates pasted report research and opens the returned case workbench", async () => {
     const user = userEvent.setup();
     const create = vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
-      caseId: "report-paste-1", documentId: "document-paste-1", state: "ready_to_extract", needsTextOrPages: false,
+      caseId: "report-paste-1", documentId: "document-paste-1", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
     });
     renderCreate();
 
@@ -53,7 +53,7 @@ describe("ReportResearchCreateScreen", () => {
   it("submits web text and retains its publisher, publication time, and source URL", async () => {
     const user = userEvent.setup();
     const create = vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
-      caseId: "report-web-1", documentId: "document-web-1", state: "ready_to_extract", needsTextOrPages: false,
+      caseId: "report-web-1", documentId: "document-web-1", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
     });
     renderCreate();
 
@@ -76,7 +76,7 @@ describe("ReportResearchCreateScreen", () => {
     const user = userEvent.setup();
     const createPdf = vi.spyOn(adapter, "createReportResearchPdf")
       .mockRejectedValueOnce(new Error("PDF 解析服务暂不可用"))
-      .mockResolvedValueOnce({ caseId: "report-pdf-1", documentId: "document-pdf-1", state: "ready_to_extract", needsTextOrPages: false });
+      .mockResolvedValueOnce({ caseId: "report-pdf-1", documentId: "document-pdf-1", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1 });
     renderCreate();
 
     await user.selectOptions(screen.getByLabelText("研报输入方式"), "pdf_upload");
@@ -89,5 +89,45 @@ describe("ReportResearchCreateScreen", () => {
     await user.click(screen.getByRole("button", { name: "重试提交" }));
     expect(createPdf).toHaveBeenLastCalledWith(expect.objectContaining({ title: "上传 PDF 研报", file }));
     expect(await screen.findByText("已进入研报工作台：report-pdf-1")).toBeVisible();
+  });
+
+  it("keeps a PDF that needs pages in recoverable intake instead of opening an empty workbench", async () => {
+    const user = userEvent.setup();
+    const createPdf = vi.spyOn(adapter, "createReportResearchPdf").mockResolvedValue({
+      caseId: "report-pdf-needs-text", documentId: "document-pdf-needs-text", state: "needs_text_or_pages", needsTextOrPages: true, initialScopeVersion: null,
+    });
+    const graph = vi.spyOn(adapter, "getReportWikiGraph");
+    renderCreate();
+
+    await user.selectOptions(screen.getByLabelText("研报输入方式"), "pdf_upload");
+    await user.type(screen.getByLabelText("研报标题"), "扫描版 PDF 研报");
+    await user.upload(screen.getByLabelText("PDF 文件"), new File(["%PDF-1.4"], "scan.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    expect(createPdf).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("status")).toHaveTextContent("原件已冻结，等待补充");
+    expect(screen.getByRole("button", { name: "补充正文或页码" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新提交当前 PDF" })).toBeVisible();
+    expect(screen.queryByText("已进入研报工作台：report-pdf-needs-text")).not.toBeInTheDocument();
+    expect(graph).not.toHaveBeenCalled();
+  });
+
+  it("keeps text research in intake when no claims produced an initial scope", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
+      caseId: "report-no-claims", documentId: "document-no-claims", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: null,
+    });
+    const graph = vi.spyOn(adapter, "getReportWikiGraph");
+    renderCreate();
+
+    await user.type(screen.getByLabelText("研报标题"), "只有资料描述的研报");
+    await user.type(screen.getByLabelText("研报正文"), "资料描述：行业近期存在订单变化。");
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("原件已冻结，尚未解析主张");
+    expect(screen.getByRole("button", { name: "修改内容后继续解析" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新提交当前内容" })).toBeVisible();
+    expect(screen.queryByText("已进入研报工作台：report-no-claims")).not.toBeInTheDocument();
+    expect(graph).not.toHaveBeenCalled();
   });
 });

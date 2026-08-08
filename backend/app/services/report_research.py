@@ -458,6 +458,7 @@ class CreatedReportResearch:
     input_kind: str
     publisher: str | None
     state: str
+    initial_scope_version: int | None
     source_statement_ids: list
 
 
@@ -515,7 +516,7 @@ class ReportResearchService:
             publisher=request.publisher,
         )
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
-        self._create_initial_scope(
+        initial_scope = self._create_initial_scope(
             case.id, document.id, request.created_by, case.core_question
         )
         self._schedule_market_impact(case.id)
@@ -526,6 +527,7 @@ class ReportResearchService:
             input_kind=request.input_kind,
             publisher=request.publisher,
             state="ready_to_extract",
+            initial_scope_version=initial_scope.version if initial_scope else None,
             source_statement_ids=statement_ids,
         )
 
@@ -602,7 +604,9 @@ class ReportResearchService:
             )
             statement_ids.append(statement.id)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
-        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
+        initial_scope = self._create_initial_scope(
+            case.id, document.id, created_by, case.core_question
+        )
         self._schedule_market_impact(case.id)
         self._session.commit()
         return CreatedReportResearch(
@@ -611,6 +615,7 @@ class ReportResearchService:
             input_kind="pdf_upload",
             publisher=normalized_publisher,
             state="ready_to_extract",
+            initial_scope_version=initial_scope.version if initial_scope else None,
             source_statement_ids=statement_ids,
         )
 
@@ -670,6 +675,7 @@ class ReportResearchService:
             input_kind="pdf_upload",
             publisher=publisher,
             state="needs_text_or_pages",
+            initial_scope_version=None,
             source_statement_ids=[statement.id],
         )
 

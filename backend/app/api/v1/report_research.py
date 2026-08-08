@@ -51,6 +51,7 @@ def _response(created: CreatedReportResearch) -> ReportResearchCreatedResponse:
         ),
         state=created.state,
         needs_text_or_pages=created.state == "needs_text_or_pages",
+        initial_scope_version=created.initial_scope_version,
         source_statement_ids=created.source_statement_ids,
     )
 
@@ -65,6 +66,9 @@ def _scope_response(scope) -> ReportResearchScopeDTO:
         evidence_plan=list(scope.scope.evidence_plan),
         selected_claim_ids=list(scope.selected_claim_ids),
         selected_relation_ids=list(scope.selected_relation_ids),
+        changed_by=scope.scope.changed_by,
+        change_summary=scope.scope.change_summary,
+        created_at=scope.scope.created_at,
     )
 
 

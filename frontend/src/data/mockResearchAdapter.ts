@@ -3806,14 +3806,14 @@ export class MockResearchAdapter implements ResearchClient {
     const caseId = `report-${input.inputKind}-mock`;
     const documentId = `document-${input.inputKind}-mock`;
     this.reportScopes.set(caseId, [this.defaultReportScope(documentId)]);
-    return simulateLatency({ caseId, documentId, state: "ready_to_extract", needsTextOrPages: false });
+    return simulateLatency({ caseId, documentId, state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1 });
   }
 
   async createReportResearchPdf(input: import("../domain/eventResearch").CreateReportResearchPdfInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
     this.throwIfOffline();
     if (input.file.type !== "application/pdf") throw new Error("请选择 PDF 文件");
     this.reportScopes.set("report-pdf-mock", [this.defaultReportScope("document-pdf-mock")]);
-    return simulateLatency({ caseId: "report-pdf-mock", documentId: "document-pdf-mock", state: "ready_to_extract", needsTextOrPages: false });
+    return simulateLatency({ caseId: "report-pdf-mock", documentId: "document-pdf-mock", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1 });
   }
 
   async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
@@ -3823,13 +3823,13 @@ export class MockResearchAdapter implements ResearchClient {
 
   async appendReportResearchScope(input: import("../domain/eventResearch").AppendReportResearchScopeInput): Promise<import("../domain/eventResearch").ReportResearchScope> {
     const previous = this.reportScopes.get(input.caseId) ?? [this.defaultReportScope(input.documentId)];
-    const next = { version: previous[previous.length - 1].version + 1, documentId: input.documentId, visibilityCutoffAt: new Date().toISOString(), researchQuestion: input.researchQuestion, factorSelection: input.factorSelection, evidencePlan: input.evidencePlan, selectedClaimIds: input.selectedClaimIds, selectedRelationIds: input.selectedRelationIds };
+    const next = { version: previous[previous.length - 1].version + 1, documentId: input.documentId, visibilityCutoffAt: new Date().toISOString(), researchQuestion: input.researchQuestion, factorSelection: input.factorSelection, evidencePlan: input.evidencePlan, selectedClaimIds: input.selectedClaimIds, selectedRelationIds: input.selectedRelationIds, changedBy: input.changedBy || "report-research-user", changeSummary: input.changeSummary || "研究者创建新的研究范围", createdAt: new Date().toISOString() };
     this.reportScopes.set(input.caseId, [...previous, next]);
     return simulateLatency(next);
   }
 
   private defaultReportScope(documentId: string): import("../domain/eventResearch").ReportResearchScope {
-    return { version: 1, documentId, visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"] };
+    return { version: 1, documentId, visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"], changedBy: "report-research-system", changeSummary: "初始研报研究范围", createdAt: "2026-08-08T00:00:00Z" };
   }
 
   async getReportWikiGraph(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph> {

@@ -9,7 +9,7 @@ import { ReportResearchScreen } from "../pages/prototype/ReportResearchScreen";
 
 const graph: ReportWikiGraph = {
   researchCaseId: "report-1", scopeVersion: 1, documentId: "doc-1",
-  scope: { version: 1, documentId: "doc-1", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "上调资本开支会否压低供应商的现金流预期？", factorSelection: ["现金流"], evidencePlan: [], selectedClaimIds: ["claim-1"], selectedRelationIds: ["relation-1"] },
+  scope: { version: 1, documentId: "doc-1", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "上调资本开支会否压低供应商的现金流预期？", factorSelection: ["现金流"], evidencePlan: [], selectedClaimIds: ["claim-1"], selectedRelationIds: ["relation-1"], changedBy: "report-research-system", changeSummary: "初始研报研究范围", createdAt: "2026-08-08T00:00:00Z" },
   nodes: [
     { id: "claim:1", kind: "report_claim", label: "全年资本开支上调", status: "report_claim", sourceLocator: "https://source.test/report", scopeVersion: 1 },
     { id: "evidence:1", kind: "evidence", label: "尚无独立经营数据可验证", status: "candidate", sourceLocator: "valuation_snapshot:private-id", scopeVersion: 1 },
@@ -76,6 +76,9 @@ describe("ReportResearchScreen", () => {
       researchQuestion: "只验证供应商路径是否存在，并保留市场证据缺口。",
       factorSelection: ["供应链"],
       evidencePlan: ["公司公告"],
+      changedBy: "alice",
+      changeSummary: "改为只验证供应链路径",
+      createdAt: "2026-08-08T01:00:00Z",
     };
     let scopes = [first.scope];
     vi.spyOn(adapter, "listReportResearchScopes").mockImplementation(async () => ({ items: scopes, currentScopeVersion: scopes[scopes.length - 1]?.version ?? null }));
@@ -103,7 +106,9 @@ describe("ReportResearchScreen", () => {
     }));
     expect(await screen.findByText("当前正在查看范围 v2")).toBeVisible();
     expect(screen.getByText(/历史范围/)).toBeVisible();
+    expect(screen.getByText(/alice · 改为只验证供应链路径/)).toBeVisible();
     await user.selectOptions(screen.getByLabelText("查看研究范围版本"), "1");
     expect(await screen.findByText("上调资本开支会否压低供应商的现金流预期？")).toBeVisible();
+    expect(screen.getByText(/report-research-system · 初始研报研究范围/)).toBeVisible();
   });
 });

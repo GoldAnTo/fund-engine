@@ -30,6 +30,9 @@ def test_scope_api_lists_current_scope_and_appends_a_successor(cmd_client) -> No
     source_scope = initial["items"][0]
     assert source_scope["selected_claim_ids"]
     assert source_scope["selected_relation_ids"]
+    assert source_scope["changed_by"] == "report-research-system"
+    assert source_scope["change_summary"] == "初始研报研究范围"
+    assert source_scope["created_at"]
 
     appended = cmd_client.post(
         f"/api/v1/report-research/{case_id}/scopes",
@@ -40,6 +43,8 @@ def test_scope_api_lists_current_scope_and_appends_a_successor(cmd_client) -> No
             "evidence_plan": ["核对公告", "核对 1D / 5D 市场窗口"],
             "selected_claim_ids": source_scope["selected_claim_ids"],
             "selected_relation_ids": source_scope["selected_relation_ids"],
+            "changed_by": "alice",
+            "change_summary": "改为只验证供应链路径",
         },
     )
 
@@ -49,6 +54,9 @@ def test_scope_api_lists_current_scope_and_appends_a_successor(cmd_client) -> No
     assert successor["research_question"] == "供应商关系是否足以解释目标公司的发布后波动？"
     assert successor["factor_selection"] == ["供应链传导"]
     assert successor["selected_claim_ids"] == source_scope["selected_claim_ids"]
+    assert successor["changed_by"] == "alice"
+    assert successor["change_summary"] == "改为只验证供应链路径"
+    assert successor["created_at"]
 
     after = cmd_client.get(f"/api/v1/report-research/{case_id}/scopes")
     assert after.status_code == 200
@@ -60,6 +68,9 @@ def test_scope_api_lists_current_scope_and_appends_a_successor(cmd_client) -> No
     current = cmd_client.get(f"/api/v1/report-research/{case_id}/scopes/current")
     assert current.status_code == 200
     assert current.json()["version"] == 2
+    assert current.json()["changed_by"] == "alice"
+    assert current.json()["change_summary"] == "改为只验证供应链路径"
+    assert current.json()["created_at"] == successor["created_at"]
 
 
 def test_scope_api_rejects_foreign_claim_or_relation_selection(cmd_client) -> None:

@@ -2934,6 +2934,7 @@ export class HttpResearchAdapter implements ResearchClient {
     const dto = await this.post<{
       case: { id: string }; document: { id: string };
       state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean;
+      initial_scope_version?: number | null;
     }>("/report-research", {
       input_kind: input.inputKind,
       title: input.title,
@@ -2942,7 +2943,7 @@ export class HttpResearchAdapter implements ResearchClient {
       source_url: input.sourceUrl || null,
       content: input.content,
     });
-    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true };
+    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true, initialScopeVersion: dto.initial_scope_version ?? null };
   }
 
   async createReportResearchPdf(input: import("../domain/eventResearch").CreateReportResearchPdfInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
@@ -2961,26 +2962,26 @@ export class HttpResearchAdapter implements ResearchClient {
       const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
       throw new PageStateError(asPageStateErrorKind(payload?.error?.code), payload?.error?.message);
     }
-    const dto = await response.json() as { case: { id: string }; document: { id: string }; state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean };
-    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true };
+    const dto = await response.json() as { case: { id: string }; document: { id: string }; state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean; initial_scope_version?: number | null };
+    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true, initialScopeVersion: dto.initial_scope_version ?? null };
   }
 
   async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
-    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[] };
+    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[]; changed_by: string; change_summary: string; created_at: string };
     const dto = await this.get<{ items: WireScope[]; current_scope_version: number | null }>(`/report-research/${encodeURIComponent(caseId)}/scopes`);
-    const map = (scope: WireScope) => ({ version: scope.version, documentId: scope.document_id, visibilityCutoffAt: scope.visibility_cutoff_at, researchQuestion: scope.research_question, factorSelection: scope.factor_selection, evidencePlan: scope.evidence_plan, selectedClaimIds: scope.selected_claim_ids, selectedRelationIds: scope.selected_relation_ids });
+    const map = (scope: WireScope) => ({ version: scope.version, documentId: scope.document_id, visibilityCutoffAt: scope.visibility_cutoff_at, researchQuestion: scope.research_question, factorSelection: scope.factor_selection, evidencePlan: scope.evidence_plan, selectedClaimIds: scope.selected_claim_ids, selectedRelationIds: scope.selected_relation_ids, changedBy: scope.changed_by, changeSummary: scope.change_summary, createdAt: scope.created_at });
     return { items: dto.items.map(map), currentScopeVersion: dto.current_scope_version };
   }
 
   async appendReportResearchScope(input: import("../domain/eventResearch").AppendReportResearchScopeInput): Promise<import("../domain/eventResearch").ReportResearchScope> {
-    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[] };
+    type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[]; changed_by: string; change_summary: string; created_at: string };
     const dto = await this.post<WireScope>(`/report-research/${encodeURIComponent(input.caseId)}/scopes`, {
       document_id: input.documentId, research_question: input.researchQuestion,
       factor_selection: input.factorSelection, evidence_plan: input.evidencePlan,
       selected_claim_ids: input.selectedClaimIds, selected_relation_ids: input.selectedRelationIds,
       changed_by: input.changedBy || "report-research-user", change_summary: input.changeSummary || "研究者创建新的研究范围",
     });
-    return { version: dto.version, documentId: dto.document_id, visibilityCutoffAt: dto.visibility_cutoff_at, researchQuestion: dto.research_question, factorSelection: dto.factor_selection, evidencePlan: dto.evidence_plan, selectedClaimIds: dto.selected_claim_ids, selectedRelationIds: dto.selected_relation_ids };
+    return { version: dto.version, documentId: dto.document_id, visibilityCutoffAt: dto.visibility_cutoff_at, researchQuestion: dto.research_question, factorSelection: dto.factor_selection, evidencePlan: dto.evidence_plan, selectedClaimIds: dto.selected_claim_ids, selectedRelationIds: dto.selected_relation_ids, changedBy: dto.changed_by, changeSummary: dto.change_summary, createdAt: dto.created_at };
   }
 
   async getReportWikiGraph(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph> {
@@ -2988,7 +2989,7 @@ export class HttpResearchAdapter implements ResearchClient {
     type WireEdge = { id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus; relation_id?: string | null; source_locator?: string | null; scope_version: number };
     type Wire = {
       research_case_id: string; scope_version: number; document_id: string;
-      scope: { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection?: string[]; evidence_plan?: string[]; selected_claim_ids?: string[]; selected_relation_ids?: string[] };
+      scope: { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection?: string[]; evidence_plan?: string[]; selected_claim_ids?: string[]; selected_relation_ids?: string[]; changed_by: string; change_summary: string; created_at: string };
       nodes: WireNode[]; edges: WireEdge[];
       factors: Array<{ claim_id: string; relation_id?: string | null; statement: string; classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
     };
@@ -3010,6 +3011,9 @@ export class HttpResearchAdapter implements ResearchClient {
         evidencePlan: dto.scope.evidence_plan ?? [],
         selectedClaimIds: dto.scope.selected_claim_ids ?? [],
         selectedRelationIds: dto.scope.selected_relation_ids ?? [],
+        changedBy: dto.scope.changed_by,
+        changeSummary: dto.scope.change_summary,
+        createdAt: dto.scope.created_at,
       },
       nodes: dto.nodes.map((node) => ({ id: node.id, kind: node.kind, label: node.label, status: node.status, sourceLocator: node.source_locator ?? null, assetMapping: node.asset_mapping ? { companyKind: node.asset_mapping.company_kind ?? null, aShareCodes: node.asset_mapping.a_share_codes ?? [], fundCoverage: node.asset_mapping.fund_coverage ?? null, computable: node.asset_mapping.computable ?? null } : null, scopeVersion: node.scope_version })),
       edges: dto.edges.map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status, relationId: edge.relation_id ?? null, sourceLocator: edge.source_locator ?? null, scopeVersion: edge.scope_version })),

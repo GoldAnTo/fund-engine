@@ -40,7 +40,7 @@ def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> No
             "title": "服务器产业链更新",
             "publisher": "某券商",
             "published_at": published_at,
-            "content": "核心观点：订单增长。",
+            "content": "资料描述：订单增长。",
         },
     )
 
@@ -53,6 +53,7 @@ def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> No
         timezone.utc
     ) == datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
     assert body["state"] == "ready_to_extract"
+    assert body["initial_scope_version"] is None
 
     case_id = uuid.UUID(body["case"]["id"])
     document_id = uuid.UUID(body["document"]["id"])
@@ -85,7 +86,7 @@ def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> No
         select(SourceStatement).where(SourceStatement.source_span_id == span.id)
     )
     assert statement is not None
-    assert statement.normalized_text == "核心观点：订单增长。"
+    assert statement.normalized_text == "资料描述：订单增长。"
 
 
 def test_web_report_preserves_origin_url_and_creates_auditable_statement(
@@ -133,6 +134,7 @@ def test_created_report_automatically_extracts_claim_and_safe_named_relation(
     )
 
     assert response.status_code == 201
+    assert response.json()["initial_scope_version"] == 1
     case_id = uuid.UUID(response.json()["case"]["id"])
     claim = cmd_session.scalar(
         select(ReportClaim).where(ReportClaim.research_case_id == case_id)
