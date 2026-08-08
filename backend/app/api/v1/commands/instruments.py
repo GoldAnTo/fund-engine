@@ -198,6 +198,7 @@ def create_valuation_snapshot(
             "metric_value": payload.metric_value,
             "source": payload.source,
             "definition": payload.definition,
+            "available_at": payload.available_at,
         },
     )
     commit_or_rollback(db)

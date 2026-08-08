@@ -86,6 +86,7 @@ class CreateValuationSnapshotRequest(V1Model):
     metric_value: Decimal
     source: str
     definition: str
+    available_at: datetime | None = None
 
 
 class ValuationSnapshotDTO(V1Model):
@@ -96,6 +97,7 @@ class ValuationSnapshotDTO(V1Model):
     metric_value: Decimal
     source: str
     definition: str
+    available_at: datetime | None = None
     created_at: datetime
 
 
