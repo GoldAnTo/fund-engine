@@ -43,7 +43,12 @@ from app.models.ledger import (
 from app.models.operational import ResearchRun, ResearchTask
 from app.services.source_admission import classify_source
 from app.repositories.outbox import emit_event
-from app.services.china_market_data import ChinaMarketData, LedgerChinaMarketData
+from app.services.china_market_data import (
+    CHINA_A_SHARE_MARKETS,
+    ChinaMarketData,
+    LedgerChinaMarketData,
+    is_china_public_fund,
+)
 
 
 _INITIAL_REFRESH_KEY_SUFFIX = "initial"
@@ -60,6 +65,10 @@ def _before_refresh_claim_lock() -> None:
 
 def _before_company_insert() -> None:
     """Test seam for proving cross-case canonical-company races without sleeps."""
+
+
+def _before_impact_data_relation_lock() -> None:
+    """Test seam for concurrent data-collection lock coverage."""
 
 
 def _utcnow() -> datetime:
@@ -328,25 +337,51 @@ class EventImpactResearchService:
         This service never calls a provider.  Missing ledger coverage is an
         explicit ``insufficient`` observation, not a synthetic market fact.
         """
-        relation = self._session.get(CompanyImpactRelation, relation_id)
+        _before_impact_data_relation_lock()
+        relation = self._session.scalar(
+            select(CompanyImpactRelation)
+            .where(CompanyImpactRelation.id == relation_id)
+            .with_for_update()
+        )
         if relation is None:
             raise NotFoundError(f"impact relation {relation_id} not found")
         company = self._session.get(Company, relation.affected_company_id)
         if company is None:
             raise ValidationFailedError("impact relation company not found")
-        existing_kinds = {
+        existing_snapshot_ids = {
+            snapshot_id
+            for snapshot_id in self._session.scalars(
+                select(CompanyImpactObservation.valuation_snapshot_id)
+                .where(CompanyImpactObservation.relation_id == relation.id)
+                .where(CompanyImpactObservation.as_of_date == as_of)
+                .where(CompanyImpactObservation.kind.in_(("operating", "market", "peer_control")))
+                .where(CompanyImpactObservation.valuation_snapshot_id.is_not(None))
+            )
+        }
+        existing_insufficient_kinds = {
             kind
             for kind in self._session.scalars(
                 select(CompanyImpactObservation.kind)
                 .where(CompanyImpactObservation.relation_id == relation.id)
                 .where(CompanyImpactObservation.as_of_date == as_of)
-                .where(CompanyImpactObservation.kind.in_(("operating", "market", "peer_control")))
+                .where(CompanyImpactObservation.status == "insufficient")
+                .where(CompanyImpactObservation.valuation_snapshot_id.is_(None))
+            )
+        }
+        existing_verified_kinds = {
+            kind
+            for kind in self._session.scalars(
+                select(CompanyImpactObservation.kind)
+                .where(CompanyImpactObservation.relation_id == relation.id)
+                .where(CompanyImpactObservation.as_of_date == as_of)
+                .where(CompanyImpactObservation.status == "verified")
+                .where(CompanyImpactObservation.valuation_snapshot_id.is_not(None))
             )
         }
         if company.type != "listed":
             created = self._append_insufficient_data_observation(
                 relation, "operating", as_of, "Company is unlisted; no A-share operating ledger coverage."
-            ) if "operating" not in existing_kinds else False
+            ) if "operating" not in existing_insufficient_kinds else False
             return ImpactDataCollectionResult(
                 observations_created=int(created),
                 insufficient_kinds=("operating",) if created else (),
@@ -354,7 +389,9 @@ class EventImpactResearchService:
 
         stocks = list(
             self._session.scalars(
-                select(Stock).where(Stock.company_id == company.id)
+                select(Stock)
+                .where(Stock.company_id == company.id)
+                .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
             )
         )
         sources = (
@@ -365,38 +402,42 @@ class EventImpactResearchService:
         created = 0
         insufficient: list[str] = []
         for kind, loader in sources:
-            if kind in existing_kinds:
-                continue
-            snapshots = [snapshot for stock in stocks for snapshot in loader(stock, as_of=as_of)]
+            snapshots = {
+                snapshot.id: snapshot
+                for stock in stocks
+                for snapshot in loader(stock, as_of=as_of)
+            }
             if not snapshots:
-                self._append_insufficient_data_observation(
-                    relation,
-                    kind,
-                    as_of,
-                    f"No ledger-backed {kind} metric is available by {as_of.isoformat()}.",
+                if kind not in existing_insufficient_kinds and kind not in existing_verified_kinds:
+                    self._append_insufficient_data_observation(
+                        relation,
+                        kind,
+                        as_of,
+                        f"No ledger-backed {kind} metric is available by {as_of.isoformat()}.",
+                    )
+                    created += 1
+                    insufficient.append(kind)
+                continue
+            for snapshot in snapshots.values():
+                if snapshot.id in existing_snapshot_ids:
+                    continue
+                self._session.add(
+                    CompanyImpactObservation(
+                        relation_id=relation.id,
+                        kind=kind,
+                        status="verified",
+                        source_statement_id=None,
+                        valuation_snapshot_id=snapshot.id,
+                        summary=(
+                            f"Ledger {kind} metric {snapshot.metric_name}="
+                            f"{snapshot.metric_value} ({snapshot.source}; "
+                            f"{snapshot.definition})"
+                        ),
+                        as_of_date=as_of,
+                        created_at=_utcnow(),
+                    )
                 )
                 created += 1
-                insufficient.append(kind)
-                continue
-            latest = max(snapshots, key=lambda snapshot: snapshot.as_of_date)
-            metrics = "; ".join(
-                f"{snapshot.metric_name}={snapshot.metric_value} "
-                f"({snapshot.source}; {snapshot.definition})"
-                for snapshot in snapshots
-            )
-            self._session.add(
-                CompanyImpactObservation(
-                    relation_id=relation.id,
-                    kind=kind,
-                    status="verified",
-                    source_statement_id=None,
-                    valuation_snapshot_id=latest.id,
-                    summary=f"Ledger {kind} metrics: {metrics}",
-                    as_of_date=as_of,
-                    created_at=_utcnow(),
-                )
-            )
-            created += 1
         return ImpactDataCollectionResult(created, tuple(insufficient))
 
     def fund_exposure(
@@ -411,7 +452,13 @@ class EventImpactResearchService:
         company = self._session.get(Company, relation.affected_company_id)
         if company is None or company.type != "listed":
             return []
-        stocks = list(self._session.scalars(select(Stock).where(Stock.company_id == company.id)))
+        stocks = list(
+            self._session.scalars(
+                select(Stock)
+                .where(Stock.company_id == company.id)
+                .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
+            )
+        )
         if not stocks:
             return []
         stock_by_id = {stock.id: stock for stock in stocks}
@@ -426,7 +473,7 @@ class EventImpactResearchService:
         results: list[FundImpactExposure] = []
         for fund_id, disclosures in by_fund.items():
             fund = funds.get(fund_id)
-            if fund is None:
+            if fund is None or not is_china_public_fund(fund.code):
                 continue
             positions = tuple(
                 FundImpactPosition(

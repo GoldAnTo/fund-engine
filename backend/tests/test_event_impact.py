@@ -264,7 +264,7 @@ def _listed_relation_with_stock(session, research_case):
         company_id=company.id,
         code="600001.SH",
         name="A-share Co",
-        market="CN-A",
+        market="SSE",
         created_at=NOW,
     )
     session.add(stock)
@@ -377,6 +377,95 @@ def test_collect_data_without_ledger_metrics_records_insufficient_not_fabricated
         ("peer_control", "insufficient", None),
     }
 
+    snapshot = _snapshot(session, _stock, metric_name="REVENUE_YOY")
+    EventImpactResearchService(session).collect_data(relation.id, as_of=date(2026, 8, 8))
+    session.commit()
+    operating = list(
+        session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id,
+                CompanyImpactObservation.kind == "operating",
+            )
+        )
+    )
+    assert {(row.status, row.valuation_snapshot_id) for row in operating} == {
+        ("insufficient", None),
+        ("verified", snapshot.id),
+    }
+
+
+def test_collect_data_appends_one_auditable_observation_per_new_metric_snapshot(
+    session, research_case
+) -> None:
+    relation, _company_row, stock = _listed_relation_with_stock(session, research_case)
+    revenue = _snapshot(session, stock, metric_name="REVENUE_YOY")
+    margin = _snapshot(session, stock, metric_name="GROSS_MARGIN")
+
+    service = EventImpactResearchService(session)
+    service.collect_data(relation.id, as_of=date(2026, 8, 8))
+    service.collect_data(relation.id, as_of=date(2026, 8, 8))
+    session.commit()
+    operating = list(
+        session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id,
+                CompanyImpactObservation.kind == "operating",
+                CompanyImpactObservation.status == "verified",
+            )
+        )
+    )
+    assert {row.valuation_snapshot_id for row in operating} == {revenue.id, margin.id}
+
+    guidance = _snapshot(session, stock, metric_name="ORDER_GUIDANCE")
+    service.collect_data(relation.id, as_of=date(2026, 8, 8))
+    session.commit()
+    assert {
+        row.valuation_snapshot_id
+        for row in session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id,
+                CompanyImpactObservation.kind == "operating",
+                CompanyImpactObservation.status == "verified",
+            )
+        )
+    } == {revenue.id, margin.id, guidance.id}
+
+
+def test_collect_data_excludes_foreign_listing_of_the_same_company(
+    session, research_case
+) -> None:
+    relation, company, _china_stock = _listed_relation_with_stock(session, research_case)
+    foreign_stock = Stock(
+        company_id=company.id,
+        code="000660.KS",
+        name="Foreign listing",
+        market="KRX",
+        created_at=NOW,
+    )
+    session.add(foreign_stock)
+    session.commit()
+    _snapshot(session, foreign_stock, metric_name="REVENUE_YOY")
+    _snapshot(session, foreign_stock, metric_name="EVENT_RETURN_1D")
+    _snapshot(session, foreign_stock, metric_name="PEER_RETURN_1D")
+
+    EventImpactResearchService(session).collect_data(
+        relation.id, as_of=date(2026, 8, 8)
+    )
+    session.commit()
+
+    assert {
+        (row.kind, row.status)
+        for row in session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.relation_id == relation.id
+            )
+        )
+    } == {
+        ("operating", "insufficient"),
+        ("market", "insufficient"),
+        ("peer_control", "insufficient"),
+    }
+
 
 def test_fund_exposure_marks_partial_visible_holdings_not_computable(
     session, research_case
@@ -386,7 +475,7 @@ def test_fund_exposure_marks_partial_visible_holdings_not_computable(
         company_id=company.id,
         code="600002.SH",
         name="A-share Co second listing",
-        market="CN-A",
+        market="SSE",
         created_at=NOW,
     )
     session.add(second_stock)
@@ -436,6 +525,63 @@ def test_fund_exposure_marks_partial_visible_holdings_not_computable(
     assert coverage[0].exposure is None
     assert coverage[0].coverage_status == "partial"
     assert coverage[0].coverage_ratio == Decimal("0.5")
+
+
+def test_fund_exposure_excludes_non_china_fund_disclosures(
+    session, research_case
+) -> None:
+    relation, company, stock = _listed_relation_with_stock(session, research_case)
+    verified_relation = CompanyImpactRelation(
+        hypothesis_id=relation.hypothesis_id,
+        scope_version_id=relation.scope_version_id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="verified fixture",
+        status="verified",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+    china_fund = Fund(
+        code="000002",
+        name="China public fund",
+        fund_type="equity",
+        management_company_id=None,
+        scale=None,
+        establish_date=None,
+        created_at=NOW,
+    )
+    foreign_fund = Fund(
+        code="HK-ETF-001",
+        name="Foreign fund",
+        fund_type="equity",
+        management_company_id=None,
+        scale=None,
+        establish_date=None,
+        created_at=NOW,
+    )
+    session.add_all([verified_relation, china_fund, foreign_fund])
+    session.flush()
+    for fund in (china_fund, foreign_fund):
+        session.add(
+            HoldingDisclosure(
+                fund_id=fund.id,
+                stock_id=stock.id,
+                weight=Decimal("2.5"),
+                report_period=date(2026, 6, 30),
+                published_at=NOW,
+                acquired_at=NOW,
+                source="fund-report-fixture",
+                created_at=NOW,
+            )
+        )
+    session.commit()
+
+    coverage = EventImpactResearchService(session).fund_exposure(
+        verified_relation.id, as_of=date(2026, 8, 8)
+    )
+
+    assert [item.fund_id for item in coverage] == [china_fund.id]
 
 
 def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_source(
@@ -930,6 +1076,68 @@ def test_postgres_concurrent_cases_reuse_one_canonical_company_without_leaks(
                     CompanyImpactRelation.scope_version_id == scope_id,
                 )
             ) == 1
+    finally:
+        verify.close()
+
+
+@pytest.mark.pg_only
+def test_postgres_concurrent_collect_data_appends_each_snapshot_once(
+    engine, monkeypatch
+) -> None:
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        case = ResearchCase(
+            title="impact data race",
+            industry_topic="event",
+            created_by="tester",
+            created_at=NOW,
+        )
+        bootstrap.add(case)
+        bootstrap.commit()
+        relation, _company_row, stock = _listed_relation_with_stock(bootstrap, case)
+        snapshot = _snapshot(bootstrap, stock, metric_name="REVENUE_YOY")
+        relation_id, snapshot_id = relation.id, snapshot.id
+    finally:
+        bootstrap.close()
+
+    start_barrier = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.event_impact._before_impact_data_relation_lock",
+        lambda: start_barrier.wait(timeout=5),
+    )
+    errors: list[BaseException] = []
+
+    def collect() -> None:
+        db = SessionLocal()
+        try:
+            EventImpactResearchService(db).collect_data(
+                relation_id, as_of=date(2026, 8, 8)
+            )
+            db.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=collect), Thread(target=collect)
+    first.start(); second.start()
+    first.join(timeout=10); second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+
+    verify = SessionLocal()
+    try:
+        observations = list(
+            verify.scalars(
+                select(CompanyImpactObservation).where(
+                    CompanyImpactObservation.relation_id == relation_id
+                )
+            )
+        )
+        assert [row.valuation_snapshot_id for row in observations if row.status == "verified"] == [snapshot_id]
+        assert len(observations) == 3
     finally:
         verify.close()
 
