@@ -28,13 +28,7 @@ function relationStatus(relation: EventImpactRelation) {
 }
 
 function isReviewable(relation: EventImpactRelation) {
-  return (
-    relation.companyType === "listed"
-    && relation.stocks.length > 0
-    && relation.sourceStatementId === null
-    && relation.fundExposure.some((fund) => fund.computable)
-    && (relation.status === "candidate" || relation.status === "unresolved")
-  );
+  return relation.isHighImpact && relation.isReviewable && relation.effectiveStatus === "candidate";
 }
 
 function ReviewDialog({
@@ -214,19 +208,29 @@ function EvidenceLayer({ trace }: { trace: EventImpactTrace }) {
 }
 
 function FundRow({ fund }: { fund: EventImpactFund }) {
-  const source = safeExternalHref(fund.source);
+  const sourceValue = typeof fund.source === "string" && fund.source.trim()
+    ? fund.source.trim() : "来源待补充";
+  const source = safeExternalHref(sourceValue);
+  const coverageRatio = Number.isFinite(fund.coverageRatio) ? fund.coverageRatio : 0;
+  const coverageState = fund.coverageStatus === "stale"
+    ? "披露已过时，不计算敞口"
+    : fund.coverageStatus === "partial"
+      ? "覆盖不完整，不计算敞口"
+      : fund.computable
+        ? "覆盖完整，敞口可计算"
+        : "覆盖不足，不计算敞口";
   return (
     <article className="impact-fund-row">
       <div>
-        <strong>{fund.fundName}</strong>
-        <span>{fund.fundCode} · 截至 {fund.reportPeriod}</span>
+        <strong>{fund.fundName || "基金名称待补"}</strong>
+        <span>{fund.fundCode || "代码待补"} · 截至 {fund.reportPeriod || "日期待补"}</span>
       </div>
       <dl>
-        <div><dt>覆盖</dt><dd>{Math.round(fund.coverageRatio * 100)}% · {fund.coverageStatus}</dd></div>
+        <div><dt>覆盖</dt><dd>{Math.round(coverageRatio * 100)}% · {coverageState}</dd></div>
         <div><dt>敞口</dt><dd>{fund.computable ? fund.exposure ?? "未计算" : "覆盖不足，不计算"}</dd></div>
-        <div><dt>可见时间</dt><dd>{fund.publishedAt}</dd></div>
+        <div><dt>可见时间</dt><dd>{fund.publishedAt || "时间待补"}</dd></div>
       </dl>
-      {source ? <a href={source} target="_blank" rel="noopener noreferrer">查看披露来源</a> : <small>{fund.source}</small>}
+      {source ? <a href={source} target="_blank" rel="noopener noreferrer">查看披露来源</a> : <small>{sourceValue}</small>}
     </article>
   );
 }
@@ -241,6 +245,7 @@ export function EventImpactTraceScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const reviewTrigger = useRef<HTMLButtonElement | null>(null);
+  const [selectedFactorId, setSelectedFactorId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!caseId) return;
@@ -252,6 +257,11 @@ export function EventImpactTraceScreen() {
       ]);
       setWorkbench(nextWorkbench);
       setTrace(nextTrace);
+      const currentScopeFactors = [...nextTrace.factors, ...nextTrace.alternatives];
+      setSelectedFactorId((current) => (
+        current && currentScopeFactors.some((factor) => factor.hypothesisId === current)
+          ? current : nextTrace.factors[0]?.hypothesisId ?? null
+      ));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "请稍后重试");
     }
@@ -265,9 +275,10 @@ export function EventImpactTraceScreen() {
     setReviewError(null);
     try {
       await researchClient.reviewEventImpactRelation!({ relationId: reviewing.relationId, outcome, reason: reason.trim(), reviewer: reviewer.trim() });
-      setReviewing(null);
       setStatus("已记录审核结果。关系仍需遵循其来源和当前 scope 的边界。");
       await load();
+      setReviewing(null);
+      window.setTimeout(() => reviewTrigger.current?.focus(), 0);
     } catch (reason) {
       setReviewError(reason instanceof Error ? reason.message : "请检查审核内容后重试");
     } finally {
@@ -277,7 +288,10 @@ export function EventImpactTraceScreen() {
 
   if (error) return <main className="prototype-screen"><p className="form-error">影响传导加载失败：{error}</p><button className="prototype-button" type="button" onClick={() => void load()}>重试</button></main>;
   if (!workbench || !trace) return <main className="prototype-screen impact-trace-screen"><p>正在整理影响传导…</p></main>;
-  const allFunds = trace.factors.flatMap((factor) => factor.funds);
+  const currentScopeFactors = [...trace.factors, ...trace.alternatives];
+  const selectedFactor = currentScopeFactors.find((factor) => factor.hypothesisId === selectedFactorId)
+    ?? currentScopeFactors[0]
+    ?? null;
 
   return <main className="prototype-screen impact-trace-screen" data-layout="conclusion-first">
     <header className="event-page-header">
@@ -288,19 +302,22 @@ export function EventImpactTraceScreen() {
       <p className="section-kicker">第一层 · 当前判断</p>
       <h2 id="impact-conclusion-title">当前判断</h2>
       <p>{workbench.conclusion.text}</p>
-      <div className="impact-conclusion__meta"><span>置信度：{workbench.conclusion.confidence === "high" ? "高" : workbench.conclusion.confidence === "medium" ? "中" : "低"}</span><span>当前缺口：{workbench.progress.currentGap ?? "未发现明确缺口"}</span></div>
+      <div className="impact-conclusion__meta"><span>置信度：{workbench.conclusion.confidence === "high" ? "高" : workbench.conclusion.confidence === "medium" ? "中" : "低"}</span><span>当前缺口：{workbench.progress.currentGap ?? "未发现明确缺口"}</span>{selectedFactor ? <span>当前查看：{selectedFactor.statement}</span> : null}</div>
     </section>
     {status ? <p className="impact-review-status" role="status">{status}</p> : null}
     <section className="impact-layer impact-transmission" aria-labelledby="impact-transmission-title">
       <div className="impact-layer__heading"><div><p className="section-kicker">第二层</p><h2 id="impact-transmission-title">传导关系</h2></div><span>{trace.progress.relations} 条当前关系</span></div>
-      {trace.factors.map((factor) => <FactorRelations key={factor.hypothesisId} factor={factor} onReview={(relation) => { reviewTrigger.current = document.activeElement as HTMLButtonElement; setReviewError(null); setReviewing(relation); }} />)}
-      {!trace.factors.length ? <p className="impact-empty">当前 scope 尚未形成影响假设，系统不会用旧范围替代。</p> : null}
+      <div className="impact-factor-selector" role="group" aria-label="选择影响因素">
+        {currentScopeFactors.map((factor) => <button key={factor.hypothesisId} type="button" aria-pressed={factor.hypothesisId === selectedFactor?.hypothesisId} onClick={() => setSelectedFactorId(factor.hypothesisId)}>{factor.statement}</button>)}
+      </div>
+      {selectedFactor ? <FactorRelations factor={selectedFactor} onReview={(relation) => { reviewTrigger.current = document.activeElement as HTMLButtonElement; setReviewError(null); setReviewing(relation); }} /> : null}
+      {!currentScopeFactors.length ? <p className="impact-empty">当前 scope 尚未形成影响假设，系统不会用旧范围替代。</p> : null}
     </section>
-    <EvidenceLayer trace={trace} />
+    <EvidenceLayer trace={{ ...trace, factors: selectedFactor ? [selectedFactor] : [] }} />
     <section className="impact-layer impact-funds" aria-labelledby="impact-funds-title">
       <div className="impact-layer__heading"><div><p className="section-kicker">第四层</p><h2 id="impact-funds-title">基金披露覆盖</h2></div><span>只纳入中国基金、可见的 A 股持仓</span></div>
-      {allFunds.map((fund) => <FundRow key={`${fund.fundId}-${fund.reportPeriod}`} fund={fund} />)}
-      {!allFunds.length ? <p className="impact-empty">当前没有满足时点和市场边界的基金披露，因此不展示敞口。</p> : null}
+      {selectedFactor?.funds.map((fund) => <FundRow key={`${fund.fundId}-${fund.reportPeriod}`} fund={fund} />)}
+      {!selectedFactor?.funds.length ? <p className="impact-empty">当前没有满足时点和市场边界的基金披露，因此不展示敞口。</p> : null}
     </section>
     {reviewing ? <ReviewDialog relation={reviewing} submitting={submitting} error={reviewError} onSubmit={(outcome, reason, reviewer) => void submitReview(outcome, reason, reviewer)} onClose={() => { setReviewing(null); window.setTimeout(() => reviewTrigger.current?.focus(), 0); }} /> : null}
   </main>;

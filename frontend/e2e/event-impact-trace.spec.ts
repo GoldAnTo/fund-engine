@@ -12,6 +12,12 @@ test.describe("event impact trace", () => {
     await expect(page.getByRole("heading", { name: "证据与边界" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "基金披露覆盖" })).toBeVisible();
     await expect(page.getByText("未上市主体不映射股票或基金敞口。")).toBeVisible();
+    const alternative = page.getByRole("button", { name: "市场替代解释" });
+    await expect(alternative).toHaveAttribute("aria-pressed", "false");
+    await alternative.click();
+    await expect(alternative).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("heading", { name: "市场替代解释" })).toBeVisible();
+    await expect(page.getByText("当前没有满足时点和市场边界的基金披露，因此不展示敞口。")).toBeVisible();
     await expect(page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).resolves.toBe(true);
   });
 

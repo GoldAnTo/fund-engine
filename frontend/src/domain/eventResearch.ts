@@ -97,6 +97,7 @@ export interface EventImpactFactor {
 export interface EventImpactRelation {
   relationId: string; companyId: string; companyName: string; companyType: string;
   relationKind: string; direction: string; mechanism: string; status: string; effectiveStatus: string;
+  isHighImpact: boolean; isReviewable: boolean;
   sourceStatementId: string | null; stocks: Array<{ stockId: string; code: string; name: string; market: string }>;
   review: EventImpactRelationReview | null;
   observations: EventImpactObservation[]; fundExposure: EventImpactFund[];

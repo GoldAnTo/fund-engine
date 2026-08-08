@@ -68,6 +68,8 @@ def test_trace_excludes_predecessor_and_keeps_unlisted_boundary(cmd_client, cmd_
     assert [factor["statement"] for factor in body["factors"]] == ["current"]
     relation = body["factors"][0]["relations"][0]
     assert relation["company_type"] == "unlisted_supplier"
+    assert relation["is_high_impact"] is False
+    assert relation["is_reviewable"] is False
     assert relation["stocks"] == [] and relation["fund_exposure"] == []
     stale = cmd_client.post(
         f"/api/v1/event-research/impact-relations/{old_relation.id}/review",
@@ -218,6 +220,8 @@ def test_trace_review_is_idempotent_and_keeps_source_gap_nonkey_with_pit_funds(
     assert fund_exposure["computable"] is False
     assert fund_exposure["exposure"] is None
     assert fund_exposure["source"] == "visible filing"
+    assert relation_payload["is_high_impact"] is True
+    assert relation_payload["is_reviewable"] is True
     # SQLite round-trips datetimes without tzinfo; the HTTP contract is still
     # an explicit UTC timestamp rather than a timezone-ambiguous string.
     assert fund_exposure["published_at"] == "2026-08-07T08:00:00+00:00"

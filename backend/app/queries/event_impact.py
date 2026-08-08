@@ -176,11 +176,22 @@ class EventImpactQueries:
                                   "report_period": latest.report_period.isoformat(), "published_at": _utc_isoformat(latest.published_at),
                                   "source": latest.source, "coverage_ratio": ratio, "coverage_status": coverage_status,
                                   "computable": computable, "exposure": str(sum((row.weight for row in holdings), 0)) if computable else None})
+            is_high_impact = (
+                company.type == "listed" and bool(relation_stocks) and bool(fund_rows)
+            )
             relations_by_hypothesis[relation.hypothesis_id].append({
                 "relation_id": str(relation.id), "company_id": str(company.id), "company_name": company.name,
                 "company_type": company.type, "relation_kind": relation.relation_kind,
                 "direction": relation.direction, "mechanism": relation.mechanism,
                 "status": relation.status, "effective_status": effective_status,
+                # Material review work requires a listed A-share relation and
+                # at least one point-in-time visible Chinese-fund disclosure.
+                "is_high_impact": is_high_impact,
+                "is_reviewable": (
+                    is_high_impact
+                    and relation.status in {"candidate", "unresolved"}
+                    and relation.source_statement_id is None
+                ),
                 "source_statement_id": str(relation.source_statement_id) if relation.source_statement_id else None,
                 "review": None if review is None else {"outcome": review.outcome, "reason": review.reason, "reviewer": review.reviewer, "created_at": _utc_isoformat(review.created_at)},
                 "stocks": [{"stock_id": str(stock.id), "code": stock.code, "name": stock.name, "market": stock.market} for stock in relation_stocks],
