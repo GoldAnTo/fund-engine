@@ -112,6 +112,44 @@ def test_web_report_preserves_origin_url_and_creates_auditable_statement(
     ) is not None
 
 
+def test_created_report_automatically_extracts_claim_and_safe_named_relation(
+    cmd_client, cmd_session
+) -> None:
+    """The report intake path must immediately populate the research ledger."""
+    response = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "服务器供应链观点",
+            "publisher": "某券商",
+            "content": "研报观点：未上市供应商甲是星海科技的供应商。",
+        },
+    )
+
+    assert response.status_code == 201
+    case_id = uuid.UUID(response.json()["case"]["id"])
+    claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == case_id)
+    )
+    assert claim is not None
+    assert claim.kind == "report_opinion"
+    span = cmd_session.get(SourceSpan, claim.source_span_id)
+    assert span is not None
+    assert span.locator["paragraph"] == 1
+    statement = cmd_session.get(SourceStatement, claim.source_statement_id)
+    assert statement is not None
+    assert statement.source_span_id == span.id
+    relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert relation is not None
+    assert relation.relation_kind == "supplier"
+    assert relation.subject_name == "未上市供应商甲"
+    assert relation.object_name == "星海科技"
+    assert relation.subject_company_id is None
+    assert relation.object_company_id is None
+
+
 def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
     cmd_client, cmd_session, monkeypatch, tmp_path
 ) -> None:

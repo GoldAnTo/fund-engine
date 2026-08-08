@@ -71,6 +71,14 @@ class RuleBasedReportContentExtractor:
     """
 
     _sentences = re.compile(r"(?<=[。！？；;\n])")
+    _company_name = r"[\u4e00-\u9fffA-Za-z0-9]{2,64}"
+    _role_relation = re.compile(
+        rf"(?P<subject>{_company_name})\s*(?:是|为)\s*"
+        rf"(?P<object>{_company_name})的(?P<role>供应商|客户|竞争对手)"
+    )
+    _competitor_relation = re.compile(
+        rf"(?P<subject>{_company_name})与(?P<object>{_company_name})(?:存在)?竞争"
+    )
 
     def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]:
         extracted: list[ExtractedReportClaim] = []
@@ -80,8 +88,49 @@ class RuleBasedReportContentExtractor:
                 continue
             kind = self._kind_for(statement)
             if kind is not None:
-                extracted.append(ExtractedReportClaim(kind=kind, statement=statement))
+                extracted.append(
+                    ExtractedReportClaim(
+                        kind=kind,
+                        statement=statement,
+                        relations=tuple(self._relations_for(statement)),
+                    )
+                )
         return extracted
+
+    def _relations_for(self, statement: str) -> Sequence[ExtractedReportRelation]:
+        """Extract only explicit named relationships, retaining names as nodes.
+
+        This rule never resolves or inserts a Company.  It intentionally
+        recognizes a narrow, easily reviewable set of Chinese report phrases;
+        broader entity resolution belongs behind an injected parser boundary.
+        """
+        role_match = self._role_relation.search(statement)
+        if role_match is not None:
+            role = role_match.group("role")
+            kind = {
+                "供应商": "supplier",
+                "客户": "customer",
+                "竞争对手": "competitor",
+            }[role]
+            return (
+                ExtractedReportRelation(
+                    subject_name=role_match.group("subject"),
+                    object_name=role_match.group("object"),
+                    relation_kind=kind,
+                    mechanism=f"研报明确称为{role}",
+                ),
+            )
+        competitor_match = self._competitor_relation.search(statement)
+        if competitor_match is not None:
+            return (
+                ExtractedReportRelation(
+                    subject_name=competitor_match.group("subject"),
+                    object_name=competitor_match.group("object"),
+                    relation_kind="competitor",
+                    mechanism="研报明确称双方存在竞争关系",
+                ),
+            )
+        return ()
 
     @staticmethod
     def _kind_for(statement: str) -> str | None:
@@ -268,6 +317,7 @@ class ReportResearchService:
             input_kind=request.input_kind,
             publisher=request.publisher,
         )
+        statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._session.commit()
         return CreatedReportResearch(
             case=case,
@@ -349,6 +399,7 @@ class ReportResearchService:
                 span.id, parsed.verbatim_text, kind="research_opinion"
             )
             statement_ids.append(statement.id)
+        statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._session.commit()
         return CreatedReportResearch(
             case=case,
@@ -440,6 +491,16 @@ class ReportResearchService:
             span.id, content, kind="research_opinion"
         )
         return [statement.id]
+
+    def _extract_claim_statement_ids(self, research_case_id: uuid.UUID) -> list:
+        """Run the default report parser immediately after source intake.
+
+        The input and every original span are already frozen at this point.
+        Extraction appends its own narrow SourceStatements and cannot mutate
+        either original text or page/paragraph locators.
+        """
+        claims = ReportClaimExtractor(self._session).extract(research_case_id)
+        return [claim.source_statement_id for claim in claims]
 
     def _create_case(
         self, title: str, publisher: str | None, created_by: str
