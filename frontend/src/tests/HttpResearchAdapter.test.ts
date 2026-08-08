@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { HttpResearchAdapter } from "../data/httpResearchAdapter";
+import { EmbedResearchAdapter, HttpResearchAdapter } from "../data/httpResearchAdapter";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { PageStateError } from "../domain/types";
 
@@ -14,6 +14,26 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 describe("HttpResearchAdapter", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("uses only an explicitly configured cross-origin API for embeds", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ nodes: [], edges: [], factors: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rejected = new EmbedResearchAdapter({ baseUrl: "/api/v1", pageOrigin: "http://embed.test" });
+    await expect(rejected.getReportEmbedWiki("case-1", "hash-token")).rejects.toThrow("嵌入API未配置为独立来源");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const sameOrigin = new EmbedResearchAdapter({ baseUrl: "http://embed.test/api/v1", pageOrigin: "http://embed.test" });
+    await expect(sameOrigin.getReportEmbedWiki("case-1", "hash-token")).rejects.toThrow("嵌入API未配置为独立来源");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const adapter = new EmbedResearchAdapter({ baseUrl: "https://research-api.test/api/v1", pageOrigin: "http://embed.test" });
+    await adapter.getReportEmbedWiki("case-1", "hash-token");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://research-api.test/api/v1/report-research/case-1/embed/wiki",
+      expect.objectContaining({ headers: expect.objectContaining({ "X-Embed-Token": "hash-token" }) }),
+    );
   });
 
   it("maps report wiki snake-case DTOs and sends embed tokens in a header", async () => {

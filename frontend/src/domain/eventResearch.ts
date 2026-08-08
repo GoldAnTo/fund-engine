@@ -120,6 +120,15 @@ export interface EventImpactFund {
 export type ReportWikiNodeKind = "report_claim" | "company" | "evidence" | "market_window" | "fund";
 export type ReportWikiNodeStatus = "report_claim" | "verified" | "candidate" | "rejected" | "market_observation";
 export type ReportFactorClassification = "key" | "alternative" | "evidence_gap";
+export type ReportWikiCompanyKind = "listed_a_share" | "unlisted_transmission";
+export type ReportWikiFundCoverage = "complete" | "partial" | "stale" | "insufficient";
+
+export interface ReportWikiAssetMapping {
+  companyKind?: ReportWikiCompanyKind | null;
+  aShareCodes?: string[];
+  fundCoverage?: ReportWikiFundCoverage | null;
+  computable?: boolean | null;
+}
 
 export interface ReportWikiNode {
   id: string;
@@ -127,6 +136,7 @@ export interface ReportWikiNode {
   label: string;
   status: ReportWikiNodeStatus;
   sourceLocator: string | null;
+  assetMapping?: ReportWikiAssetMapping | null;
   scopeVersion: number;
 }
 

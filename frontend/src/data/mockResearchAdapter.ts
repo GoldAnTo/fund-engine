@@ -3805,16 +3805,18 @@ export class MockResearchAdapter implements ResearchClient {
       researchCaseId: "report-mock", scopeVersion: 1, documentId: "report-document-mock",
       scope: { version: 1, documentId: "report-document-mock", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"] },
       nodes: [
-        { id: "claim-mock", kind: "report_claim", label: "报告认为资本开支上调会压低自由现金流预期", status: "report_claim", sourceLocator: "第 3 页 · 资本开支段", scopeVersion: 1 },
-        { id: "company-mock", kind: "company", label: "示例 A 股服务器供应商", status: "verified", sourceLocator: null, scopeVersion: 1 },
-        { id: "evidence-mock", kind: "evidence", label: "经营端独立证据仍不足", status: "candidate", sourceLocator: null, scopeVersion: 1 },
+        { id: "claim-mock", kind: "report_claim", label: "报告认为资本开支上调会压低自由现金流预期", status: "report_claim", sourceLocator: '{"page":3,"paragraph":2}', scopeVersion: 1 },
+        { id: "company-mock", kind: "company", label: "示例 A 股服务器供应商", status: "verified", sourceLocator: null, assetMapping: { companyKind: "listed_a_share", aShareCodes: ["600001.SH"] }, scopeVersion: 1 },
+        { id: "company-unlisted", kind: "company", label: "未上市液冷供应商", status: "report_claim", sourceLocator: '{"page":4,"paragraph":1}', assetMapping: { companyKind: "unlisted_transmission", aShareCodes: [] }, scopeVersion: 1 },
+        { id: "evidence-mock", kind: "evidence", label: "经营端独立证据仍不足", status: "candidate", sourceLocator: "report_market_observation:mock", scopeVersion: 1 },
         { id: "market-1d", kind: "market_window", label: "发布后 1 个交易日，证据不足", status: "market_observation", sourceLocator: null, scopeVersion: 1 },
         { id: "market-5d", kind: "market_window", label: "发布后 5 个交易日，尚待验证", status: "market_observation", sourceLocator: null, scopeVersion: 1 },
-        { id: "fund-mock", kind: "fund", label: "示例中国基金，持仓披露过期", status: "candidate", sourceLocator: null, scopeVersion: 1 },
+        { id: "fund-mock", kind: "fund", label: "示例中国基金，持仓披露过期", status: "candidate", sourceLocator: "report_fund_exposure:mock", assetMapping: { fundCoverage: "stale", computable: false }, scopeVersion: 1 },
       ],
       edges: [
-        { id: "edge-mock-1", sourceId: "claim-mock", targetId: "company-mock", kind: "供应链影响", status: "verified", relationId: "relation-mock", sourceLocator: "第 3 页 · 资本开支段", scopeVersion: 1 },
+        { id: "edge-mock-1", sourceId: "claim-mock", targetId: "company-mock", kind: "供应链影响", status: "verified", relationId: "relation-mock", sourceLocator: '{"page":3,"paragraph":2}', scopeVersion: 1 },
         { id: "edge-mock-2", sourceId: "company-mock", targetId: "evidence-mock", kind: "需要验证", status: "candidate", relationId: "relation-mock", sourceLocator: null, scopeVersion: 1 },
+        { id: "edge-mock-3", sourceId: "claim-mock", targetId: "evidence-mock", kind: "confounder:earnings", status: "candidate", relationId: "relation-mock", sourceLocator: "report_market_observation:mock", scopeVersion: 1 },
       ],
       factors: [{ claimId: "claim-mock", relationId: "relation-mock", statement: "资本开支上调压低自由现金流预期", classification: "evidence_gap", components: { report_claim: true, operating_evidence: false, market_evidence: false, confounder_assessed: false }, explanation: "尚缺独立经营数据和发布期混杂因素核对，不能归为关键因素。" }],
     });

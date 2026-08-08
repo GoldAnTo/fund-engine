@@ -248,6 +248,64 @@ function asPageStateErrorKind(
   return "backend_unavailable";
 }
 
+export const EMBED_API_CONFIGURATION_ERROR = "嵌入API未配置为独立来源";
+
+/**
+ * Narrow client for an external, read-only iframe.  It refuses relative and
+ * same-origin URLs so a static embed host can never silently call its own
+ * `/api/v1` endpoint (which has no CORS Origin and is correctly rejected by
+ * the embed grant policy).
+ */
+export class EmbedResearchAdapter {
+  constructor(private readonly options: { baseUrl?: string; pageOrigin?: string } = {}) {}
+
+  private endpoint(caseId: string): string {
+    const pageOrigin = this.options.pageOrigin ?? globalThis.location?.origin;
+    try {
+      if (!this.options.baseUrl || !pageOrigin) throw new Error("missing origin");
+      const baseUrl = new URL(this.options.baseUrl);
+      if (baseUrl.origin === pageOrigin) throw new Error("same origin");
+      return `${baseUrl.toString().replace(/\/$/, "")}/report-research/${encodeURIComponent(caseId)}/embed/wiki`;
+    } catch {
+      throw new Error(EMBED_API_CONFIGURATION_ERROR);
+    }
+  }
+
+  async getReportEmbedWiki(caseId: string, token: string): Promise<ReportEmbedWikiGraph> {
+    const endpoint = this.endpoint(caseId);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        headers: { Accept: "application/json", "X-Embed-Token": token },
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      throw new PageStateError(
+        response.status === 401 || response.status === 403 ? "permission_denied" : "backend_unavailable",
+        "嵌入访问未获授权或已失效",
+      );
+    }
+    const dto = await response.json() as {
+      nodes?: Array<{ id: string; kind: ReportEmbedWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus }>;
+      edges?: Array<{ id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus }>;
+      factors?: Array<{ classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
+    };
+    return {
+      nodes: (dto.nodes ?? []).map((node) => ({ ...node })),
+      edges: (dto.edges ?? []).map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status })),
+      factors: (dto.factors ?? []).map((factor) => ({ classification: factor.classification, components: factor.components ?? {}, explanation: factor.explanation })),
+    };
+  }
+}
+
+export function configuredEmbedResearchClient(
+  configuredBaseUrl = import.meta.env.VITE_EMBED_RESEARCH_API_URL,
+): EmbedResearchAdapter {
+  return new EmbedResearchAdapter({ baseUrl: configuredBaseUrl });
+}
+
 const EMPTY_METRIC_DETAIL: DataCenterView["selectedMetric"] = {
   id: "",
   name: "（暂无指标）",
@@ -2869,7 +2927,7 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async getReportWikiGraph(caseId: string, options?: { relationId?: string }): Promise<ReportWikiGraph> {
-    type WireNode = { id: string; kind: ReportWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus; source_locator?: string | null; scope_version: number };
+    type WireNode = { id: string; kind: ReportWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus; source_locator?: string | null; asset_mapping?: { company_kind?: "listed_a_share" | "unlisted_transmission" | null; a_share_codes?: string[]; fund_coverage?: "complete" | "partial" | "stale" | "insufficient" | null; computable?: boolean | null } | null; scope_version: number };
     type WireEdge = { id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus; relation_id?: string | null; source_locator?: string | null; scope_version: number };
     type Wire = {
       research_case_id: string; scope_version: number; document_id: string;
@@ -2893,34 +2951,14 @@ export class HttpResearchAdapter implements ResearchClient {
         selectedClaimIds: dto.scope.selected_claim_ids ?? [],
         selectedRelationIds: dto.scope.selected_relation_ids ?? [],
       },
-      nodes: dto.nodes.map((node) => ({ id: node.id, kind: node.kind, label: node.label, status: node.status, sourceLocator: node.source_locator ?? null, scopeVersion: node.scope_version })),
+      nodes: dto.nodes.map((node) => ({ id: node.id, kind: node.kind, label: node.label, status: node.status, sourceLocator: node.source_locator ?? null, assetMapping: node.asset_mapping ? { companyKind: node.asset_mapping.company_kind ?? null, aShareCodes: node.asset_mapping.a_share_codes ?? [], fundCoverage: node.asset_mapping.fund_coverage ?? null, computable: node.asset_mapping.computable ?? null } : null, scopeVersion: node.scope_version })),
       edges: dto.edges.map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status, relationId: edge.relation_id ?? null, sourceLocator: edge.source_locator ?? null, scopeVersion: edge.scope_version })),
       factors: dto.factors.map((factor) => ({ claimId: factor.claim_id, relationId: factor.relation_id ?? null, statement: factor.statement, classification: factor.classification, components: factor.components ?? {}, explanation: factor.explanation })),
     };
   }
 
   async getReportEmbedWiki(caseId: string, token: string): Promise<ReportEmbedWikiGraph> {
-    let response: Response;
-    try {
-      response = await fetch(`${this.options.baseUrl}/report-research/${encodeURIComponent(caseId)}/embed/wiki`, {
-        headers: { Accept: "application/json", "X-Embed-Token": token },
-      });
-    } catch {
-      throw new PageStateError("backend_unavailable");
-    }
-    if (!response.ok) {
-      throw new PageStateError(response.status === 401 || response.status === 403 ? "permission_denied" : "backend_unavailable", "嵌入访问未获授权或已失效");
-    }
-    const dto = await response.json() as {
-      nodes?: Array<{ id: string; kind: ReportEmbedWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus }>;
-      edges?: Array<{ id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus }>;
-      factors?: Array<{ classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
-    };
-    return {
-      nodes: (dto.nodes ?? []).map((node) => ({ ...node })),
-      edges: (dto.edges ?? []).map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status })),
-      factors: (dto.factors ?? []).map((factor) => ({ classification: factor.classification, components: factor.components ?? {}, explanation: factor.explanation })),
-    };
+    return new EmbedResearchAdapter({ baseUrl: this.options.baseUrl }).getReportEmbedWiki(caseId, token);
   }
 
   async reviewEventImpactRelation(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }> {

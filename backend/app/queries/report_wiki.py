@@ -29,6 +29,7 @@ from app.models.ledger import (
     ResearchCase,
     SourceSpan,
     SourceStatement,
+    Stock,
 )
 from app.models.report_research import (
     ReportCaseSourceSpan,
@@ -51,6 +52,7 @@ from app.schemas.v1.report_research import (
     ReportEmbedWikiNodeDTO,
     ReportWikiEdgeDTO,
     ReportWikiGraphDTO,
+    ReportWikiAssetMappingDTO,
     ReportWikiNodeDTO,
 )
 from app.services.report_research import ReportFactorClassifier
@@ -149,6 +151,7 @@ class ReportWikiQueries:
         for relation in relations:
             relations_by_claim[relation.claim_id].append(relation)
         companies = self._companies(relations)
+        stocks_by_company = self._a_share_stocks_by_company(companies)
         observations_by_claim = self._observations(claim_ids, selected_relation_ids)
         confounders_by_claim = self._confounders(claim_ids)
         confounder_sources = self._confounder_sources(
@@ -256,6 +259,9 @@ class ReportWikiQueries:
                         label=subject_label,
                         status="report_claim",
                         source_locator=locator,
+                        asset_mapping=self._company_asset_mapping(
+                            relation.subject_company_id, stocks_by_company
+                        ),
                         scope_version=current_scope_version,
                     )
                 )
@@ -266,6 +272,9 @@ class ReportWikiQueries:
                         label=object_label,
                         status="report_claim",
                         source_locator=locator,
+                        asset_mapping=self._company_asset_mapping(
+                            relation.object_company_id, stocks_by_company
+                        ),
                         scope_version=current_scope_version,
                     )
                 )
@@ -429,6 +438,7 @@ class ReportWikiQueries:
                         label=fund_label,
                         status="verified" if exposure.status == "verified" else "candidate",
                         source_locator=fund_locator,
+                        asset_mapping=self._fund_asset_mapping(exposure),
                         scope_version=current_scope_version,
                     )
                 )
@@ -785,6 +795,60 @@ class ReportWikiQueries:
             fund.id: fund
             for fund in self._session.scalars(select(Fund).where(Fund.id.in_(fund_ids)))
         }
+
+    def _a_share_stocks_by_company(
+        self, companies: dict[uuid.UUID, Company]
+    ) -> dict[uuid.UUID, tuple[Stock, ...]]:
+        if not companies:
+            return {}
+        # The report workspace is explicitly China-only at this layer.  Do
+        # not turn a foreign listing into an A-share mapping by name alone.
+        rows = self._session.scalars(
+            select(Stock)
+            .where(Stock.company_id.in_(set(companies)))
+            .where(Stock.market.in_(("SSE", "SZSE", "SH", "SZ", "A_SHARE")))
+            .order_by(Stock.code, Stock.id)
+        )
+        grouped: dict[uuid.UUID, list[Stock]] = defaultdict(list)
+        for stock in rows:
+            grouped[stock.company_id].append(stock)
+        return {company_id: tuple(items) for company_id, items in grouped.items()}
+
+    @staticmethod
+    def _a_share_display_code(stock: Stock) -> str:
+        suffix = "SH" if stock.market in {"SSE", "SH"} else "SZ"
+        return f"{stock.code}.{suffix}"
+
+    def _company_asset_mapping(
+        self,
+        company_id: uuid.UUID | None,
+        stocks_by_company: dict[uuid.UUID, tuple[Stock, ...]],
+    ) -> ReportWikiAssetMappingDTO:
+        stocks = stocks_by_company.get(company_id, ()) if company_id is not None else ()
+        return ReportWikiAssetMappingDTO(
+            company_kind="listed_a_share" if stocks else "unlisted_transmission",
+            a_share_codes=[self._a_share_display_code(stock) for stock in stocks],
+        )
+
+    @staticmethod
+    def _fund_asset_mapping(exposure: ReportFundExposure) -> ReportWikiAssetMappingDTO:
+        summary = exposure.summary.casefold()
+        if exposure.status == "verified":
+            coverage = "complete"
+            computable = True
+        elif "partial" in summary or "部分" in summary or "覆盖不足" in summary:
+            coverage = "partial"
+            computable = False
+        elif "stale" in summary or "过期" in summary:
+            coverage = "stale"
+            computable = False
+        else:
+            coverage = "insufficient"
+            computable = False
+        return ReportWikiAssetMappingDTO(
+            fund_coverage=coverage,
+            computable=computable,
+        )
 
     def _independent_case_evidence(
         self,

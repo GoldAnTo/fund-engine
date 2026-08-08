@@ -73,6 +73,17 @@ ReportWikiNodeStatus = Literal[
     "report_claim", "verified", "candidate", "rejected", "market_observation"
 ]
 ReportFactorClassification = Literal["key", "alternative", "evidence_gap"]
+ReportWikiCompanyKind = Literal["listed_a_share", "unlisted_transmission"]
+ReportWikiFundCoverage = Literal["complete", "partial", "stale", "insufficient"]
+
+
+class ReportWikiAssetMappingDTO(V1Model):
+    """Safe asset-readiness projection; intentionally contains no ledger ids."""
+
+    company_kind: ReportWikiCompanyKind | None = None
+    a_share_codes: list[str] = Field(default_factory=list)
+    fund_coverage: ReportWikiFundCoverage | None = None
+    computable: bool | None = None
 
 
 class ReportWikiNodeDTO(V1Model):
@@ -88,6 +99,7 @@ class ReportWikiNodeDTO(V1Model):
     label: str
     status: ReportWikiNodeStatus
     source_locator: str | None = None
+    asset_mapping: ReportWikiAssetMappingDTO | None = None
     scope_version: int
 
 

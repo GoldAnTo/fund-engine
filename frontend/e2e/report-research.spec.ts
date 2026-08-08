@@ -7,11 +7,12 @@ test.describe("report-first research workspace", () => {
     await expect(page.getByRole("heading", { name: "研报主张" })).toBeVisible();
     await expect(page.getByText("发布后 1 个交易日，证据不足")).toBeVisible();
     await expect(page.getByText("发布后 5 个交易日，尚待验证")).toBeVisible();
-    await page.screenshot({ path: "test-results/report-workspace-desktop.png", fullPage: true });
+    await expect(page).toHaveScreenshot("report-workspace-desktop.png", { fullPage: true });
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole("heading", { name: "当前判断" })).toBeVisible();
     await expect(page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).resolves.toBe(true);
+    await expect(page).toHaveScreenshot("report-workspace-390.png", { fullPage: true });
   });
 
   test("uses a selected path by default, offers structured navigation, and keeps the embed read-only", async ({ page }) => {

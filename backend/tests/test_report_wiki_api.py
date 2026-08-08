@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from threading import Barrier, Thread
 
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
 
-from app.models.ledger import Company, DocumentVersion, SourceSpan, SourceStatement, Stock
+from app.models.ledger import Company, DocumentVersion, Fund, SourceSpan, SourceStatement, Stock
 from app.models.report_research import (
     ReportCaseSourceSpan,
     ReportClaim,
@@ -221,6 +221,78 @@ def test_wiki_graph_returns_only_the_current_report_scope_and_source_locators(
     assert graph["edges"]
     assert all(edge["scope_version"] == graph["scope_version"] for edge in graph["edges"])
     assert all(edge["source_locator"] for edge in graph["edges"])
+
+
+def test_wiki_exposes_non_sensitive_a_share_and_fund_coverage_mapping(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="资产映射研报",
+        content="研报观点：A 股公司甲受益于需求增长。",
+    )
+    now = datetime.now(timezone.utc)
+    listed = Company(code="company-a", name="A 股公司甲", type="issuer", created_at=now)
+    private = Company(code="company-b", name="未上市供应商乙", type="supplier", created_at=now)
+    cmd_session.add_all([listed, private])
+    cmd_session.flush()
+    stock = Stock(company_id=listed.id, code="600000", name="A 股公司甲", market="SSE", created_at=now)
+    fund = Fund(code="000001", name="示例中国基金", fund_type="equity", created_at=now)
+    cmd_session.add_all([stock, fund])
+    cmd_session.flush()
+    document, _span, _statement, claim = _append_report_claim(
+        cmd_session,
+        case_id=case_id,
+        statement="A 股公司甲与未上市供应商乙存在供应链传导。",
+        source_url="https://research.example/report",
+        subject_company_id=listed.id,
+        object_company_id=private.id,
+        create_scope=True,
+    )
+    relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert relation is not None
+    cmd_session.add(
+        ReportFundExposure(
+            research_case_id=case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            stock_id=stock.id,
+            fund_id=fund.id,
+            holding_disclosure_id=None,
+            window="1d",
+            as_of_date=date(2026, 8, 3),
+            status="insufficient",
+            weight=None,
+            summary="基金披露过期，无法计算暴露。",
+            collection_key="asset-mapping-fixture",
+        )
+    )
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+
+    assert response.status_code == 200
+    nodes = response.json()["nodes"]
+    listed_node = next(node for node in nodes if node["label"] == "A 股公司甲")
+    private_node = next(node for node in nodes if node["label"] == "未上市供应商乙")
+    fund_node = next(node for node in nodes if node["label"] == "000001 示例中国基金")
+    assert listed_node["asset_mapping"] == {
+        "company_kind": "listed_a_share",
+        "a_share_codes": ["600000.SH"],
+        "fund_coverage": None,
+        "computable": None,
+    }
+    assert private_node["asset_mapping"]["company_kind"] == "unlisted_transmission"
+    assert fund_node["asset_mapping"] == {
+        "company_kind": None,
+        "a_share_codes": [],
+        "fund_coverage": "stale",
+        "computable": False,
+    }
+    assert str(stock.id) not in str(listed_node["asset_mapping"])
+    assert str(fund.id) not in str(fund_node["asset_mapping"])
 
 
 def test_report_factor_without_independent_verification_is_an_evidence_gap(
