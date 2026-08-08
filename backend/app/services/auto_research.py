@@ -25,6 +25,7 @@ from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_impact import EventImpactResearchService
+from app.services.report_market_impact import ReportMarketImpactService
 from app.services.event_research_scope_evidence import (
     lock_event_research_lifecycle,
 )
@@ -184,6 +185,11 @@ class AutoResearchService:
                             refresh_key=refresh_key,
                             output_slot=lambda: self._claim_task_output_slot(run, task),
                         )
+                    elif task.task_type == "report_market_impact":
+                        _, claim_id = task.query.split(":", 1)
+                        market_impact = ReportMarketImpactService(self.session).collect(
+                            uuid.UUID(claim_id)
+                        )
                     elif task.task_type in IMPACT_STAGE_TASK_TYPES:
                         _, scope_id, stage = task.query.split(":", 2)
                         impact = EventImpactResearchService(
@@ -222,6 +228,14 @@ class AutoResearchService:
                             "task_type": task.task_type,
                             "hypotheses_created": impact.hypotheses_created,
                             "relations_created": impact.relations_created,
+                        }
+                    elif task.task_type == "report_market_impact":
+                        task.result = {
+                            "task_type": task.task_type,
+                            "windows": market_impact.windows,
+                            "gaps": list(market_impact.gaps),
+                            "observations": len(market_impact.observations),
+                            "fund_exposures": len(market_impact.fund_exposures),
                         }
                     elif task.task_type in IMPACT_STAGE_TASK_TYPES:
                         task.result = {"task_type": task.task_type, **impact}

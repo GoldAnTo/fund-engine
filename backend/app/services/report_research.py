@@ -28,6 +28,7 @@ from app.models.report_research import (
 )
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
+from app.repositories.auto_research import AutoResearchRepository
 from app.schemas.v1.report_research import CreateReportResearchRequest
 from app.services.ingest import DocumentService
 from app.services.document_blobs import LocalImmutableBlobStore
@@ -429,6 +430,7 @@ class ReportResearchService:
             publisher=request.publisher,
         )
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
+        self._schedule_market_impact(case.id)
         self._session.commit()
         return CreatedReportResearch(
             case=case,
@@ -512,6 +514,7 @@ class ReportResearchService:
             )
             statement_ids.append(statement.id)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
+        self._schedule_market_impact(case.id)
         self._session.commit()
         return CreatedReportResearch(
             case=case,
@@ -631,6 +634,37 @@ class ReportResearchService:
         """
         claims = ReportClaimExtractor(self._session).extract(research_case_id)
         return [claim.source_statement_id for claim in claims]
+
+    def _schedule_market_impact(self, research_case_id: uuid.UUID) -> None:
+        """Queue report market collection after immutable claim extraction.
+
+        The worker owns execution; intake only writes a durable run/job/task
+        handoff.  A claim without mapped China assets still runs and appends a
+        visible evidence gap instead of silently disappearing.
+        """
+        claims = list(
+            self._session.scalars(
+                select(ReportClaim).where(ReportClaim.research_case_id == research_case_id)
+            )
+        )
+        if not claims:
+            return
+        repository = AutoResearchRepository(self._session)
+        run = repository.create_run(
+            research_case_id=research_case_id,
+            max_rounds=1,
+            budget=max(1, len(claims)),
+            scope_thesis_ids=[],
+        )
+        for claim in claims:
+            repository.create_task(
+                run_id=run.id,
+                research_case_id=research_case_id,
+                thesis_id=None,
+                task_type="report_market_impact",
+                query=f"report_market_impact:{claim.id}",
+            )
+        repository.enqueue_run_job(run)
 
     def _create_case(
         self, title: str, publisher: str | None, created_by: str

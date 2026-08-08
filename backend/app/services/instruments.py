@@ -178,6 +178,7 @@ class InstrumentService:
         metric_value: Decimal,
         source: str,
         definition: str,
+        available_at: datetime | None = None,
     ) -> ValuationSnapshot:
         metric_name = _require_non_empty(metric_name, "metric_name", 64)
         source = _require_non_empty(source, "source", 128)
@@ -210,6 +211,7 @@ class InstrumentService:
             metric_value=metric_value,
             source=source,
             definition=definition,
+            available_at=available_at,
         )
 
     def add_theme_role(

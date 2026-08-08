@@ -14,6 +14,7 @@ from datetime import date, datetime, time, timezone
 from typing import Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
@@ -30,6 +31,7 @@ from app.models.report_research import (
     ReportClaim,
     ReportMarketConfounder,
     ReportMarketObservation,
+    ReportFundExposure,
     ReportRelation,
 )
 from app.services.china_market_data import (
@@ -55,6 +57,7 @@ class MarketImpactResult:
     gaps: tuple[str, ...]
     observations: tuple[ReportMarketObservation, ...]
     confounders: tuple[ReportMarketConfounder, ...] = ()
+    fund_exposures: tuple[ReportFundExposure, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ class ReportMarketImpactService:
 
         observations: list[ReportMarketObservation] = []
         confounders: list[ReportMarketConfounder] = []
+        fund_exposures: list[ReportFundExposure] = []
         gaps: list[str] = []
         windows: dict[str, str] = {}
         window_days: dict[str, date] = {}
@@ -130,13 +134,133 @@ class ReportMarketImpactService:
                     end=as_of,
                 )
             )
+            fund_exposures.extend(
+                self._collect_fund_exposures(
+                    claim=claim, targets=targets, window=window, as_of=as_of
+                )
+            )
         return MarketImpactResult(
             windows=windows,
             trading_days=window_days,
             gaps=tuple(dict.fromkeys(gaps)),
             observations=tuple(observations),
             confounders=tuple(confounders),
+            fund_exposures=tuple(fund_exposures),
         )
+
+    def _collect_fund_exposures(
+        self,
+        *,
+        claim: ReportClaim,
+        targets: Sequence[_Target],
+        window: str,
+        as_of: date,
+    ) -> list[ReportFundExposure]:
+        """Map only visible China public-fund holdings for listed A-shares."""
+        rows: list[ReportFundExposure] = []
+        for target in targets:
+            if target.company.type != "listed":
+                # An unlisted company is a transmission node, never a fake
+                # fund exposure.  Its market gap above is the complete record.
+                continue
+            for stock in self._china_stocks(target.company):
+                holdings = self._market_data.fund_holdings([stock.id], as_of=as_of)
+                if not holdings:
+                    rows.append(
+                        self._append_fund_insufficient(
+                            claim=claim,
+                            relation=target.relation,
+                            stock=stock,
+                            window=window,
+                            as_of=as_of,
+                            summary=(
+                                f"{stock.code} 在 {as_of.isoformat()} 没有当时可见的"
+                                "中国公募基金持仓披露；不计算基金暴露。"
+                            ),
+                        )
+                    )
+                    continue
+                for holding in holdings:
+                    rows.append(
+                        self._append_fund_holding(
+                            claim=claim,
+                            relation=target.relation,
+                            stock=stock,
+                            holding=holding,
+                            window=window,
+                            as_of=as_of,
+                        )
+                    )
+        return rows
+
+    def _append_fund_holding(
+        self,
+        *,
+        claim: ReportClaim,
+        relation: ReportRelation,
+        stock: Stock,
+        holding,
+        window: str,
+        as_of: date,
+    ) -> ReportFundExposure:
+        key = self._key(claim.id, relation.id, window, "fund", stock.id, holding.id)
+        existing = self._session.scalar(
+            select(ReportFundExposure).where(ReportFundExposure.collection_key == key)
+        )
+        if existing is not None:
+            return existing
+        row = ReportFundExposure(
+            research_case_id=claim.research_case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            stock_id=stock.id,
+            fund_id=holding.fund_id,
+            holding_disclosure_id=holding.id,
+            window=window,
+            as_of_date=as_of,
+            status="verified",
+            weight=holding.weight,
+            summary=(
+                f"可见持仓披露：报告期 {holding.report_period.isoformat()}，"
+                f"权重 {holding.weight}，来源 {holding.source}。"
+            ),
+            collection_key=key,
+        )
+        self._session.add(row)
+        return row
+
+    def _append_fund_insufficient(
+        self,
+        *,
+        claim: ReportClaim,
+        relation: ReportRelation,
+        stock: Stock,
+        window: str,
+        as_of: date,
+        summary: str,
+    ) -> ReportFundExposure:
+        key = self._key(claim.id, relation.id, window, "fund-gap", stock.id)
+        existing = self._session.scalar(
+            select(ReportFundExposure).where(ReportFundExposure.collection_key == key)
+        )
+        if existing is not None:
+            return existing
+        row = ReportFundExposure(
+            research_case_id=claim.research_case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            stock_id=stock.id,
+            fund_id=None,
+            holding_disclosure_id=None,
+            window=window,
+            as_of_date=as_of,
+            status="insufficient",
+            weight=None,
+            summary=summary,
+            collection_key=key,
+        )
+        self._session.add(row)
+        return row
 
     def _append_calendar_gap(
         self, claim: ReportClaim, targets: Sequence[_Target]
@@ -309,26 +433,31 @@ class ReportMarketImpactService:
                     )
                     gaps.append(f"{window}：{stock.code} 缺少 {metric}")
 
-                industry = self._market_data.report_industry_observations(
-                    stock, as_of=as_of, window=window
-                )
-                observations.extend(
-                    self._append_control_rows(
+                # A metric carried on the target stock is not an industry
+                # index.  The current ledger has no index entity/snapshot
+                # table, so treating INDUSTRY_RETURN_* on a stock as an index
+                # would falsely strengthen attribution.  Preserve the gap
+                # until a real index ledger source is introduced.
+                observations.append(
+                    self._append_insufficient(
                         claim=claim,
                         relation=target.relation,
                         stock=stock,
-                        snapshots=industry,
-                        expected=(
-                            REPORT_INDUSTRY_METRICS_1D
-                            if window == "1d"
-                            else REPORT_INDUSTRY_METRICS_5D
-                        ),
                         window=window,
                         kind="industry_control",
                         as_of=as_of,
-                        gaps=gaps,
+                        metric_name=(
+                            "INDUSTRY_RETURN_1D"
+                            if window == "1d"
+                            else "INDUSTRY_RETURN_5D"
+                        ),
+                        summary=(
+                            "当前账本没有可审计的行业指数实体与快照；"
+                            "不将目标股票上的行业代理指标冒充为行业控制。"
+                        ),
                     )
                 )
+                gaps.append(f"{window}：缺少可审计行业指数控制")
 
         if not peers:
             observations.append(
@@ -454,32 +583,27 @@ class ReportMarketImpactService:
         key = self._key(
             claim.id, relation.id, window, kind, stock.id, snapshot.id, snapshot.metric_name
         )
-        existing = self._session.scalar(
-            select(ReportMarketObservation).where(
-                ReportMarketObservation.collection_key == key
-            )
-        )
-        if existing is not None:
-            return existing
-        observation = ReportMarketObservation(
-            research_case_id=claim.research_case_id,
-            report_claim_id=claim.id,
-            report_relation_id=relation.id,
-            stock_id=stock.id,
-            valuation_snapshot_id=snapshot.id,
-            window=window,
-            kind=kind,
-            status="verified",
-            as_of_date=snapshot.as_of_date,
-            metric_name=snapshot.metric_name,
-            summary=(
-                f"账本指标 {snapshot.metric_name}={snapshot.metric_value} "
-                f"({snapshot.source}; {snapshot.definition})"
+        return self._persist_unique(
+            ReportMarketObservation,
+            key,
+            lambda: ReportMarketObservation(
+                research_case_id=claim.research_case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id,
+                stock_id=stock.id,
+                valuation_snapshot_id=snapshot.id,
+                window=window,
+                kind=kind,
+                status="verified",
+                as_of_date=snapshot.as_of_date,
+                metric_name=snapshot.metric_name,
+                summary=(
+                    f"账本指标 {snapshot.metric_name}={snapshot.metric_value} "
+                    f"({snapshot.source}; {snapshot.definition})"
+                ),
+                collection_key=key,
             ),
-            collection_key=key,
         )
-        self._session.add(observation)
-        return observation
 
     def _append_insufficient(
         self,
@@ -502,29 +626,24 @@ class ReportMarketImpactService:
             None,
             metric_name,
         )
-        existing = self._session.scalar(
-            select(ReportMarketObservation).where(
-                ReportMarketObservation.collection_key == key
-            )
+        return self._persist_unique(
+            ReportMarketObservation,
+            key,
+            lambda: ReportMarketObservation(
+                research_case_id=claim.research_case_id,
+                report_claim_id=claim.id,
+                report_relation_id=relation.id if relation is not None else None,
+                stock_id=stock.id if stock is not None else None,
+                valuation_snapshot_id=None,
+                window=window,
+                kind=kind,
+                status="insufficient",
+                as_of_date=as_of,
+                metric_name=metric_name,
+                summary=summary,
+                collection_key=key,
+            ),
         )
-        if existing is not None:
-            return existing
-        observation = ReportMarketObservation(
-            research_case_id=claim.research_case_id,
-            report_claim_id=claim.id,
-            report_relation_id=relation.id if relation is not None else None,
-            stock_id=stock.id if stock is not None else None,
-            valuation_snapshot_id=None,
-            window=window,
-            kind=kind,
-            status="insufficient",
-            as_of_date=as_of,
-            metric_name=metric_name,
-            summary=summary,
-            collection_key=key,
-        )
-        self._session.add(observation)
-        return observation
 
     def _collect_confounders(
         self,
@@ -557,27 +676,48 @@ class ReportMarketImpactService:
             if kind is None:
                 continue
             key = self._key(claim.id, statement.id, window, kind)
-            existing = self._session.scalar(
-                select(ReportMarketConfounder).where(
-                    ReportMarketConfounder.collection_key == key
-                )
+            confounder = self._persist_unique(
+                ReportMarketConfounder,
+                key,
+                lambda: ReportMarketConfounder(
+                    research_case_id=claim.research_case_id,
+                    report_claim_id=claim.id,
+                    source_statement_id=statement.id,
+                    window=window,
+                    kind=kind,
+                    as_of_date=document.published_at.date(),
+                    summary=statement.normalized_text,
+                    collection_key=key,
+                ),
             )
-            if existing is not None:
-                confounders.append(existing)
-                continue
-            confounder = ReportMarketConfounder(
-                research_case_id=claim.research_case_id,
-                report_claim_id=claim.id,
-                source_statement_id=statement.id,
-                window=window,
-                kind=kind,
-                as_of_date=document.published_at.date(),
-                summary=statement.normalized_text,
-                collection_key=key,
-            )
-            self._session.add(confounder)
             confounders.append(confounder)
         return confounders
+
+    def _persist_unique(self, model, key: str, factory):
+        """Insert one immutable collection row or safely re-read its winner.
+
+        The unique collection key is the correctness boundary across workers.
+        A failed insert is isolated in a savepoint so PostgreSQL's outer task
+        transaction stays usable for the remaining collection records.
+        """
+        existing = self._session.scalar(
+            select(model).where(model.collection_key == key)
+        )
+        if existing is not None:
+            return existing
+        try:
+            with self._session.begin_nested():
+                created = factory()
+                self._session.add(created)
+                self._session.flush()
+            return created
+        except IntegrityError:
+            winner = self._session.scalar(
+                select(model).where(model.collection_key == key)
+            )
+            if winner is None:
+                raise
+            return winner
 
     @staticmethod
     def _confounder_kind(text: str, title: str | None) -> str | None:

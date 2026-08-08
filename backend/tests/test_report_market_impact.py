@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from app.models.ledger import (
     CaseDocumentVersion,
     Company,
     DocumentVersion,
+    Fund,
+    HoldingDisclosure,
     ResearchCase,
     SourceSpan,
     SourceStatement,
@@ -22,6 +25,7 @@ from app.models.report_research import (
     ReportClaim,
     ReportMarketConfounder,
     ReportMarketObservation,
+    ReportFundExposure,
     ReportRelation,
 )
 from app.services.report_market_impact import ReportMarketImpactService
@@ -121,7 +125,15 @@ def _company_stock(session, *, name: str, code: str, market: str = "SSE"):
     return company, stock
 
 
-def _snapshot(session, stock: Stock, *, as_of: date, metric: str, value: str = "1"):
+def _snapshot(
+    session,
+    stock: Stock,
+    *,
+    as_of: date,
+    metric: str,
+    value: str = "1",
+    available_at: datetime | None = None,
+):
     snapshot = ValuationSnapshot(
         id=uuid.uuid4(),
         stock_id=stock.id,
@@ -130,6 +142,7 @@ def _snapshot(session, stock: Stock, *, as_of: date, metric: str, value: str = "
         metric_value=Decimal(value),
         source="ledger-fixture",
         definition=f"fixture {metric}",
+        available_at=available_at or datetime.combine(as_of, time.max, tzinfo=timezone.utc),
         created_at=NOW,
     )
     session.add(snapshot)
@@ -183,7 +196,16 @@ def test_report_market_window_uses_next_trading_days_and_ledger_metrics(session)
         "peer_control",
         "industry_control",
     }
-    assert all(observation.status == "verified" for observation in result.observations)
+    assert all(
+        observation.status == "verified"
+        for observation in result.observations
+        if observation.kind != "industry_control"
+    )
+    assert {
+        observation.status
+        for observation in result.observations
+        if observation.kind == "industry_control"
+    } == {"insufficient"}
     persisted = list(
         session.scalars(
             select(ReportMarketObservation).where(
@@ -271,6 +293,73 @@ def test_missing_trading_calendar_appends_insufficient_not_an_empty_result(sessi
     assert {row.window for row in result.observations} == {"1d", "5d"}
 
 
+def test_late_backfilled_market_snapshot_is_not_point_in_time_evidence(session):
+    _case, claim = _report_claim(session)
+    target, stock = _company_stock(session, name="回填公司", code="600005")
+    _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    for metric in ("EVENT_RETURN_1D", "VOLUME", "TURNOVER_RATE", "VOLATILITY", "PE_TTM"):
+        _snapshot(
+            session,
+            stock,
+            as_of=TRADING_DAYS[0],
+            metric=metric,
+            available_at=NOW,
+        )
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    assert result.windows["1d"] == "insufficient"
+    assert not [
+        row
+        for row in result.observations
+        if row.window == "1d" and row.status == "verified"
+    ]
+
+
+def test_visible_china_fund_holding_is_mapped_only_for_listed_target(session):
+    _case, claim = _report_claim(session)
+    target, stock = _company_stock(session, name="基金映射公司", code="600006")
+    _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    fund = Fund(
+        id=uuid.uuid4(),
+        code="000001",
+        name="中国公募基金",
+        fund_type="equity",
+        created_at=NOW,
+    )
+    disclosure = HoldingDisclosure(
+        id=uuid.uuid4(),
+        fund_id=fund.id,
+        stock_id=stock.id,
+        weight=Decimal("3.25"),
+        report_period=date(2026, 6, 30),
+        published_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+        acquired_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+        source="fund-fixture",
+        created_at=NOW,
+    )
+    session.add_all([fund, disclosure])
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+    session.commit()
+
+    assert [(row.window, row.status, row.fund_id, row.weight) for row in result.fund_exposures] == [
+        ("1d", "verified", fund.id, Decimal("3.25")),
+        ("5d", "verified", fund.id, Decimal("3.25")),
+    ]
+    assert len(
+        list(
+            session.scalars(
+                select(ReportFundExposure).where(ReportFundExposure.report_claim_id == claim.id)
+            )
+        )
+    ) == 2
+
+
 def test_collects_only_same_case_confounder_visible_in_market_window(session):
     case, claim = _report_claim(session)
     unlisted = Company(
@@ -331,6 +420,42 @@ def test_collects_only_same_case_confounder_visible_in_market_window(session):
             ReportMarketConfounder.source_statement_id == statement.id
         )
     ) is not None
+
+
+def test_cross_case_confounder_source_is_rejected_by_ledger_validation(session):
+    _case, claim = _report_claim(session)
+    other_case = ResearchCase(
+        id=uuid.uuid4(), title="其他研究", industry_topic="其他", created_at=NOW, created_by="test"
+    )
+    other_document = DocumentVersion(
+        id=uuid.uuid4(), content_sha256=uuid.uuid4().hex + uuid.uuid4().hex[:32],
+        source_url="news://other-case", published_at=PUBLISHED_AT,
+        available_at=PUBLISHED_AT, acquired_at=PUBLISHED_AT, parser_version="fixture",
+    )
+    other_span = SourceSpan(
+        id=uuid.uuid4(), document_version_id=other_document.id,
+        locator={"page": 1}, verbatim_text="其他案例的公告。",
+    )
+    other_statement = SourceStatement(
+        id=uuid.uuid4(), source_span_id=other_span.id, kind="disclosed_fact",
+        normalized_text=other_span.verbatim_text, observed_period=None, created_at=NOW,
+    )
+    session.add_all([other_case, other_document, other_span, other_statement])
+    session.flush()
+    session.add(CaseDocumentVersion(
+        id=uuid.uuid4(), research_case_id=other_case.id,
+        document_version_id=other_document.id, linked_at=NOW,
+    ))
+    session.commit()
+
+    session.add(ReportMarketConfounder(
+        id=uuid.uuid4(), research_case_id=claim.research_case_id,
+        report_claim_id=claim.id, source_statement_id=other_statement.id,
+        window="1d", kind="announcement", as_of_date=TRADING_DAYS[0],
+        summary="forged cross-case source", collection_key=uuid.uuid4().hex, created_at=NOW,
+    ))
+    with pytest.raises(ValueError, match="attached to its claim case"):
+        session.flush()
 
 
 def _calendar_days(session) -> None:

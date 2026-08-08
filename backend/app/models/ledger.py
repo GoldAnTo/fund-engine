@@ -61,6 +61,7 @@ IMMUTABLE_TABLES = frozenset(
         "report_relations",
         "report_market_observations",
         "report_market_confounders",
+        "report_fund_exposures",
         "source_spans",
         "research_cases",
         "theses",
@@ -555,6 +556,13 @@ class ValuationSnapshot(Base):
     metric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
+    # The first time the normalized metric was externally visible.  Legacy
+    # snapshots intentionally remain NULL after migration: a historical
+    # backfill is useful context, but cannot prove what was knowable inside an
+    # event window.
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

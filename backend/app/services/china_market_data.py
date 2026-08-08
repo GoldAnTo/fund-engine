@@ -157,6 +157,7 @@ class LedgerChinaMarketData:
             .where(HoldingDisclosure.stock_id.in_(stock_ids))
             .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
             .where(HoldingDisclosure.published_at <= cutoff)
+            .where(HoldingDisclosure.acquired_at <= cutoff)
             .order_by(
                 HoldingDisclosure.report_period.desc(),
                 HoldingDisclosure.published_at.desc(),
@@ -239,12 +240,15 @@ class LedgerChinaMarketData:
     ) -> list[ValuationSnapshot]:
         if not is_china_a_share(stock):
             return []
+        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
         return list(
             self._session.scalars(
                 select(ValuationSnapshot)
                 .where(ValuationSnapshot.stock_id == stock.id)
                 .where(ValuationSnapshot.as_of_date == as_of)
                 .where(ValuationSnapshot.metric_name.in_(metric_names))
+                .where(ValuationSnapshot.available_at.is_not(None))
+                .where(ValuationSnapshot.available_at <= cutoff)
                 .order_by(ValuationSnapshot.metric_name)
             )
         )

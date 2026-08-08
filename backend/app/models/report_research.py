@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -287,6 +289,46 @@ class ReportMarketConfounder(Base):
     )
 
 
+class ReportFundExposure(Base):
+    """Point-in-time China public-fund holding mapped to a report relation."""
+
+    __tablename__ = "report_fund_exposures"
+    __table_args__ = (
+        CheckConstraint('"window" IN (\'1d\', \'5d\')', name="ck_report_fund_window"),
+        CheckConstraint(
+            "status IN ('verified', 'insufficient')",
+            name="ck_report_fund_exposure_status",
+        ),
+        UniqueConstraint("collection_key", name="uq_report_fund_exposure_key"),
+        Index("ix_report_fund_exposures_claim_window", "report_claim_id", "window"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_claims.id"), nullable=False
+    )
+    report_relation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("report_relations.id"), nullable=False
+    )
+    stock_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("stocks.id"), nullable=False)
+    fund_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("funds.id"), nullable=True)
+    holding_disclosure_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("holding_disclosures.id"), nullable=True
+    )
+    window: Mapped[str] = mapped_column(String(8), nullable=False)
+    as_of_date: Mapped[date] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    weight: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    collection_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 @event.listens_for(Session, "before_flush")
 def _validate_report_ledger_provenance(session, _flush_context, _instances) -> None:
     """Keep denormalized graph keys bound to their immutable source ledger.
@@ -390,3 +432,34 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
         )
         if claim is None or claim.research_case_id != confounder.research_case_id:
             raise ValueError("report market confounder must belong to its claim case")
+        document_id = session.scalar(
+            select(SourceSpan.document_version_id)
+            .join(SourceStatement, SourceStatement.source_span_id == SourceSpan.id)
+            .where(SourceStatement.id == confounder.source_statement_id)
+        )
+        attached = (
+            session.scalar(
+                select(CaseDocumentVersion.id)
+                .where(CaseDocumentVersion.research_case_id == claim.research_case_id)
+                .where(CaseDocumentVersion.document_version_id == document_id)
+            )
+            if document_id is not None
+            else None
+        )
+        if attached is None:
+            raise ValueError("report market confounder source must be attached to its claim case")
+
+    for exposure in session.new:
+        if not isinstance(exposure, ReportFundExposure):
+            continue
+        claim = pending_claims.get(exposure.report_claim_id) or session.get(
+            ReportClaim, exposure.report_claim_id
+        )
+        relation = session.get(ReportRelation, exposure.report_relation_id)
+        if (
+            claim is None
+            or relation is None
+            or claim.research_case_id != exposure.research_case_id
+            or relation.claim_id != claim.id
+        ):
+            raise ValueError("report fund exposure must belong to its claim relation")

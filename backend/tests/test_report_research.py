@@ -28,6 +28,7 @@ from app.models.report_research import (
     ReportExtractionClaim,
     ReportRelation,
 )
+from app.models.operational import ResearchTask
 
 
 def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> None:
@@ -153,6 +154,14 @@ def test_created_report_automatically_extracts_claim_and_safe_named_relation(
     assert relation.object_name == "星海科技"
     assert relation.subject_company_id is None
     assert relation.object_company_id is None
+    task = cmd_session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.research_case_id == case_id,
+            ResearchTask.task_type == "report_market_impact",
+        )
+    )
+    assert task is not None
+    assert task.query == f"report_market_impact:{claim.id}"
 
 
 def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(

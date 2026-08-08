@@ -125,6 +125,7 @@ class InstrumentRepository:
         metric_value: Decimal,
         source: str,
         definition: str,
+        available_at: datetime | None = None,
     ) -> ValuationSnapshot:
         snapshot = ValuationSnapshot(
             stock_id=stock_id,
@@ -133,6 +134,7 @@ class InstrumentRepository:
             metric_value=metric_value,
             source=source,
             definition=definition,
+            available_at=available_at or _utcnow(),
             created_at=_utcnow(),
         )
         self._session.add(snapshot)
