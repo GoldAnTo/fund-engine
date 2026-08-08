@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -76,6 +77,14 @@ _RELATION_TERMS = {
 class _IndependentEvidence:
     statement: SourceStatement
     span: SourceSpan
+
+
+@dataclass(frozen=True)
+class _IndependentEvidenceIndex:
+    """One-pass entity index for admitted case evidence."""
+
+    by_entity: dict[str, tuple[_IndependentEvidence, ...]]
+    scan_iterations: int
 
 
 class ReportWikiQueries:
@@ -214,8 +223,11 @@ class ReportWikiQueries:
             claim_relations = relations_by_claim[claim.id]
             relation_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
             operating_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
+            evidence_index = self._independent_evidence_index(
+                independent_evidence, claim_relations, companies
+            )
             path_evidence: dict[
-                uuid.UUID, tuple[bool, tuple[_IndependentEvidence, ...]]
+                uuid.UUID, tuple[_IndependentEvidence | None, tuple[_IndependentEvidence, ...]]
             ] = {}
             for relation in claim_relations:
                 subject_id, subject_label = self._company_node(
@@ -263,9 +275,9 @@ class ReportWikiQueries:
                 verified, operating_rows = self._independent_relation_evidence(
                     relation=relation,
                     companies=companies,
-                    evidence=independent_evidence,
+                    evidence_index=evidence_index,
                 )
-                path_evidence[relation.id] = (verified is not None, operating_rows)
+                path_evidence[relation.id] = (verified, operating_rows)
                 if verified is not None:
                     relation_evidence[verified.statement.id] = verified
                 for row in operating_rows:
@@ -285,17 +297,12 @@ class ReportWikiQueries:
                     )
                 )
             for relation in claim_relations:
-                _verified, operating_rows = path_evidence[relation.id]
+                relation_proof, operating_rows = path_evidence[relation.id]
                 relation_rows = [
                     row
                     for row in operating_rows
                     if row.statement.id in operating_evidence
                 ]
-                relation_proof, _ = self._independent_relation_evidence(
-                    relation=relation,
-                    companies=companies,
-                    evidence=independent_evidence,
-                )
                 if relation_proof is not None:
                     relation_rows.append(relation_proof)
                 for row in {item.statement.id: item for item in relation_rows}.values():
@@ -435,10 +442,10 @@ class ReportWikiQueries:
             factor_paths: list[ReportRelation | None] = claim_relations or [None]
             for relation in factor_paths:
                 path_relation_id = relation.id if relation is not None else None
-                relation_verified, operating_rows = (
-                    path_evidence.get(path_relation_id, (False, ()))
+                relation_proof, operating_rows = (
+                    path_evidence.get(path_relation_id, (None, ()))
                     if path_relation_id is not None
-                    else (False, ())
+                    else (None, ())
                 )
                 path_observations = [
                     row
@@ -471,7 +478,7 @@ class ReportWikiQueries:
                 )
                 assessment = ReportFactorClassifier.classify(
                     report_source=True,
-                    company_relation=relation_verified,
+                    company_relation=relation_proof is not None,
                     operating=bool(operating_rows),
                     market=path_market,
                     peer=path_peer,
@@ -796,7 +803,7 @@ class ReportWikiQueries:
         *,
         relation: ReportRelation,
         companies: dict[uuid.UUID, Company],
-        evidence: tuple[_IndependentEvidence, ...],
+        evidence_index: _IndependentEvidenceIndex,
     ) -> tuple[_IndependentEvidence | None, tuple[_IndependentEvidence, ...]]:
         subject = self._relation_label(
             relation.subject_company_id, relation.subject_name, companies
@@ -809,7 +816,12 @@ class ReportWikiQueries:
         relation_terms = _RELATION_TERMS.get(relation.relation_kind, (relation.relation_kind,))
         relation_row: _IndependentEvidence | None = None
         operating_rows: list[_IndependentEvidence] = []
-        for row in evidence:
+        candidates = {
+            row.statement.id: row
+            for label in (subject, obj)
+            for row in evidence_index.by_entity.get(label, ())
+        }
+        for row in candidates.values():
             text = row.statement.normalized_text
             if subject in text or obj in text:
                 if any(term in text for term in _OPERATING_TERMS):
@@ -822,6 +834,32 @@ class ReportWikiQueries:
             ):
                 relation_row = row
         return relation_row, tuple(operating_rows)
+
+    def _independent_evidence_index(
+        self,
+        evidence: tuple[_IndependentEvidence, ...],
+        relations: list[ReportRelation],
+        companies: dict[uuid.UUID, Company],
+    ) -> _IndependentEvidenceIndex:
+        labels = {
+            label
+            for relation in relations
+            for label in (
+                self._relation_label(relation.subject_company_id, relation.subject_name, companies),
+                self._relation_label(relation.object_company_id, relation.object_name, companies),
+            )
+            if label
+        }
+        if not labels:
+            return _IndependentEvidenceIndex({}, len(evidence))
+        matcher = re.compile("|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True)))
+        buckets: dict[str, list[_IndependentEvidence]] = defaultdict(list)
+        for row in evidence:
+            for match in set(matcher.findall(row.statement.normalized_text)):
+                buckets[match].append(row)
+        return _IndependentEvidenceIndex(
+            {label: tuple(rows) for label, rows in buckets.items()}, len(evidence)
+        )
 
     @staticmethod
     def _relation_label(

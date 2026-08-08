@@ -25,6 +25,7 @@ from app.repositories.research import ResearchRepository
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
 from app.services.report_research import ReportResearchService
+from app.queries.report_wiki import ReportWikiQueries, _IndependentEvidence
 
 
 def _create_report(cmd_client, *, title: str, content: str) -> uuid.UUID:
@@ -1194,6 +1195,35 @@ def test_scope_hides_unselected_relation_market_and_fund_edges_but_keeps_claim_g
         for edge in body["edges"]
     )
     assert "观点级市场数据不足" in graph.text
+
+
+def test_independent_evidence_index_scans_each_record_once_for_many_relations() -> None:
+    companies = {
+        uuid.uuid4(): Company(id=uuid.uuid4(), code=f"IDX-{number}", name=f"实体{number}", type="listed", created_at=datetime.now(timezone.utc))
+        for number in range(24)
+    }
+    company_values = list(companies.values())
+    relations = [
+        ReportRelation(
+            id=uuid.uuid4(), claim_id=uuid.uuid4(), research_case_id=uuid.uuid4(),
+            source_span_id=uuid.uuid4(), source_statement_id=uuid.uuid4(),
+            subject_company_id=company_values[number].id, object_company_id=company_values[number + 1].id,
+            subject_name=None, object_name=None, relation_kind="supplier", mechanism="fixture", status="report_claim",
+        )
+        for number in range(0, 22, 2)
+    ]
+    evidence = tuple(
+        _IndependentEvidence(
+            SourceStatement(id=uuid.uuid4(), source_span_id=uuid.uuid4(), kind="disclosed_fact", normalized_text=f"实体{number % 24} 订单增长", created_at=datetime.now(timezone.utc)),
+            SourceSpan(id=uuid.uuid4(), document_version_id=uuid.uuid4(), locator={"fixture": number}, verbatim_text="fixture"),
+        )
+        for number in range(240)
+    )
+    index = ReportWikiQueries.__new__(ReportWikiQueries)._independent_evidence_index(
+        evidence, relations, {company.id: company for company in company_values}
+    )
+    assert index.scan_iterations == len(evidence)
+    assert sum(len(rows) for rows in index.by_entity.values()) <= len(evidence)
 
 
 @pytest.mark.pg_only
