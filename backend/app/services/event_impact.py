@@ -43,6 +43,14 @@ _INITIAL_REFRESH_KEY_SUFFIX = "initial"
 _REFRESH_REQUEST_EVENT_TYPE = "event_impact_refresh_requested"
 
 
+def _before_refresh_claim_insert() -> None:
+    """Test seam for proving the unique-claim race without sleeps."""
+
+
+def _before_refresh_claim_lock() -> None:
+    """Test seam for synchronizing competing worker execution attempts."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -110,6 +118,7 @@ class EventImpactResearchService:
         # This row is the durable execution mutex.  The lock covers resolver
         # output through the caller's commit, so competing workers observe the
         # completed append-only trace instead of writing a second one.
+        _before_refresh_claim_lock()
         self._session.scalar(
             select(EventImpactRefreshClaim)
             .where(EventImpactRefreshClaim.scope_version_id == scope.id)
@@ -339,6 +348,7 @@ class EventImpactResearchService:
         if existing is not None:
             return existing, False
         try:
+            _before_refresh_claim_insert()
             with self._session.begin_nested():
                 claim = EventImpactRefreshClaim(
                     research_case_id=case_id,
@@ -464,30 +474,41 @@ class EventImpactResearchService:
         identities = {key[1] for key in keys}
         raw_names = {candidate.company_name.strip() for candidate in candidates}
         company_types = {candidate.type for candidate in candidates}
-        existing = self._session.scalars(
-            select(Company)
-            .outerjoin(CompanyIdentityAlias, CompanyIdentityAlias.company_id == Company.id)
-            .where(Company.type.in_(company_types))
-            .where(
-                or_(
-                    Company.canonical_identity.in_(identities),
-                    and_(
-                        CompanyIdentityAlias.company_type.in_(company_types),
-                        CompanyIdentityAlias.canonical_identity.in_(identities),
-                    ),
-                    and_(
-                        Company.canonical_identity.is_(None),
+        # Three bounded queries keep the indexed steady-state path free of a
+        # type-wide scan and keep legacy reconciliation isolated.
+        existing = list(
+            self._session.scalars(
+                select(Company)
+                .where(Company.type.in_(company_types))
+                .where(Company.canonical_identity.in_(identities))
+            )
+        )
+        existing.extend(
+            self._session.scalars(
+                select(Company)
+                .join(
+                    CompanyIdentityAlias,
+                    CompanyIdentityAlias.company_id == Company.id,
+                )
+                .where(CompanyIdentityAlias.company_type.in_(company_types))
+                .where(CompanyIdentityAlias.canonical_identity.in_(identities))
+            )
+        )
+        existing.extend(
+            self._session.scalars(
+                select(Company)
+                .where(Company.type.in_(company_types))
+                .where(Company.canonical_identity.is_(None))
+                .where(
+                    or_(
                         func.lower(func.trim(Company.name)).in_(identities),
-                    ),
-                    and_(
-                        Company.canonical_identity.is_(None),
                         Company.name.in_(raw_names),
-                    ),
+                    )
                 )
             )
         )
         companies: dict[tuple[str, str, str], Company] = {}
-        for company in existing:
+        for company in {company.id: company for company in existing}.values():
             companies.setdefault(self._company_key(company.name, company.type), company)
             code_identity = self._canonical_identity(company.code.replace("-", " "))
             companies.setdefault(
@@ -534,9 +555,23 @@ class EventImpactResearchService:
             type=candidate.type,
             created_at=_utcnow(),
         )
-        self._session.add(company)
-        companies[key] = company
-        return company
+        try:
+            with self._session.begin_nested():
+                self._session.add(company)
+                self._session.flush()
+            companies[key] = company
+            return company
+        except IntegrityError:
+            winner = self._session.scalar(
+                select(Company)
+                .where(Company.type == candidate.type)
+                .where(Company.canonical_identity == key[1])
+                .limit(1)
+            )
+            if winner is None:
+                raise
+            companies[key] = winner
+            return winner
 
     @staticmethod
     def _company_key(

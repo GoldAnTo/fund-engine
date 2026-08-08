@@ -451,7 +451,9 @@ def test_schedule_refresh_is_idempotent_for_one_exact_scope(session, research_ca
 
 
 @pytest.mark.pg_only
-def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(engine) -> None:
+def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(
+    engine, monkeypatch
+) -> None:
     SessionLocal = sessionmaker(bind=engine, future=True)
     bootstrap = SessionLocal()
     try:
@@ -498,12 +500,26 @@ def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(engine)
             updated_at=NOW,
         )
         bootstrap.add_all([scope, run])
+        bootstrap.flush()
+        bootstrap.add(
+            EventResearchScopeFactor(
+                scope_version_id=scope.id,
+                statement="concurrent factor",
+                description=None,
+                position=1,
+            )
+        )
         bootstrap.commit()
         case_id, scope_id, run_id = case.id, scope.id, run.id
     finally:
         bootstrap.close()
 
     barrier = Barrier(2)
+    claim_insert_barrier = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.event_impact._before_refresh_claim_insert",
+        lambda: claim_insert_barrier.wait(timeout=5),
+    )
     errors: list[BaseException] = []
 
     def schedule() -> None:
@@ -527,6 +543,37 @@ def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(engine)
     try:
         assert verify.scalar(select(sa.func.count()).select_from(EventImpactRefreshClaim)) == 1
         assert verify.scalar(select(sa.func.count()).select_from(ResearchTask)) == 1
+    finally:
+        verify.close()
+
+    refresh_barrier = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.event_impact._before_refresh_claim_lock",
+        lambda: refresh_barrier.wait(timeout=5),
+    )
+    refresh_errors: list[BaseException] = []
+
+    def refresh() -> None:
+        db = SessionLocal()
+        try:
+            EventImpactResearchService(db).refresh(
+                case_id, scope_version_id=scope_id
+            )
+            db.commit()
+        except BaseException as exc:
+            refresh_errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=refresh), Thread(target=refresh)
+    first.start(); second.start()
+    first.join(timeout=10); second.join(timeout=10)
+    assert not first.is_alive() and not second.is_alive()
+    assert refresh_errors == []
+    verify = SessionLocal()
+    try:
+        assert verify.scalar(select(sa.func.count()).select_from(EventImpactHypothesis)) == 1
     finally:
         verify.close()
 
