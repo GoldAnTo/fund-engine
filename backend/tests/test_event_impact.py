@@ -137,6 +137,61 @@ def test_relation_derives_hypothesis_scope_and_rejects_mismatch(session, researc
     session.rollback()
 
 
+def test_new_hypothesis_and_relation_commit_atomically(session, research_case) -> None:
+    scope = _scope(session, research_case)
+    company = _company(session, code="ATOMIC-COMPANY", company_type="unlisted_supplier")
+    hypothesis = EventImpactHypothesis(
+        research_case_id=research_case.id,
+        scope_version_id=scope.id,
+        statement="资本开支增加会提高中国供应商订单",
+        classification="candidate",
+        rank=1,
+        score_components={"event_relevance": 0.5},
+        explanation="等待验证",
+        created_at=NOW,
+    )
+    relation = CompanyImpactRelation(
+        hypothesis=hypothesis,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        status="candidate",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+
+    session.add_all([hypothesis, relation])
+    session.commit()
+
+    assert relation.hypothesis_id == hypothesis.id
+    assert relation.scope_version_id == scope.id
+
+
+def test_hypothesis_rejects_scope_from_another_case(
+    session, research_case, research_service
+) -> None:
+    other_case = research_service.add_case(
+        title="Other case", industry_topic="other", created_by="tester"
+    )
+    other_scope = _scope(session, other_case)
+    hypothesis = EventImpactHypothesis(
+        research_case_id=research_case.id,
+        scope_version_id=other_scope.id,
+        statement="cross-case scope must not persist",
+        classification="candidate",
+        rank=1,
+        score_components={},
+        explanation="invalid ownership",
+        created_at=NOW,
+    )
+
+    session.add(hypothesis)
+    with pytest.raises(ValueError, match="scope_version_id must belong"):
+        session.commit()
+    session.rollback()
+
+
 def test_unlisted_company_can_be_relation_target_without_stock(session, research_case) -> None:
     scope = _scope(session, research_case)
     company = _company(session, code="UNLISTED-ODM", company_type="unlisted_supplier")
@@ -246,6 +301,8 @@ class _OperationsRecorder:
         self.tables: list[tuple] = []
         self.indexes: list[tuple] = []
         self.executed: list[str] = []
+        self.dropped_indexes: list[tuple] = []
+        self.dropped_tables: list[tuple] = []
 
     def get_bind(self):
         return SimpleNamespace(dialect=SimpleNamespace(name=self._dialect))
@@ -260,10 +317,10 @@ class _OperationsRecorder:
         self.executed.append(statement)
 
     def drop_index(self, *args, **kwargs) -> None:
-        pass
+        self.dropped_indexes.append(args)
 
     def drop_table(self, *args, **kwargs) -> None:
-        pass
+        self.dropped_tables.append(args)
 
 
 def _load_migration():
@@ -283,6 +340,40 @@ def _checks(table_args: tuple) -> set[str]:
         str(constraint.sqltext)
         for constraint in table_args[1:]
         if isinstance(constraint, sa.CheckConstraint)
+    }
+
+
+def test_impact_model_indexes_match_the_migration_contract() -> None:
+    impact_tables = (
+        EventImpactHypothesis.__table__,
+        CompanyImpactRelation.__table__,
+        CompanyImpactRelationReview.__table__,
+        CompanyImpactObservation.__table__,
+    )
+
+    assert {
+        index.name: tuple(column.name for column in index.columns)
+        for table in impact_tables
+        for index in table.indexes
+    } == {
+        "ix_event_impact_hypotheses_case_scope_rank": (
+            "research_case_id",
+            "scope_version_id",
+            "rank",
+        ),
+        "ix_company_impact_relations_hypothesis_company": (
+            "hypothesis_id",
+            "affected_company_id",
+        ),
+        "ix_company_impact_relation_reviews_relation_created": (
+            "relation_id",
+            "created_at",
+        ),
+        "ix_company_impact_observations_relation_kind_status": (
+            "relation_id",
+            "kind",
+            "status",
+        ),
     }
 
 
@@ -338,3 +429,29 @@ def test_impact_migration_skips_postgres_triggers_on_sqlite() -> None:
 
     assert len(operations.tables) == 4
     assert operations.executed == []
+
+
+def test_impact_migration_downgrade_drops_triggers_indexes_and_tables() -> None:
+    migration = _load_migration()
+    operations = _OperationsRecorder("postgresql")
+    migration.op = operations
+
+    migration.downgrade()
+
+    assert operations.executed == [
+        f"DROP TRIGGER IF EXISTS no_{action}_{table} ON {table};"
+        for table in reversed(migration._IMMUTABLE_TABLES)
+        for action in ("update", "delete")
+    ]
+    assert operations.dropped_indexes == [
+        ("ix_company_impact_observations_relation_kind_status",),
+        ("ix_company_impact_relation_reviews_relation_created",),
+        ("ix_company_impact_relations_hypothesis_company",),
+        ("ix_event_impact_hypotheses_case_scope_rank",),
+    ]
+    assert operations.dropped_tables == [
+        ("company_impact_observations",),
+        ("company_impact_relation_reviews",),
+        ("company_impact_relations",),
+        ("event_impact_hypotheses",),
+    ]
