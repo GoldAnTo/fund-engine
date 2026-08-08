@@ -31,6 +31,7 @@ export const researchClient: ResearchClient = {
   getEventImpactTrace: (caseId) => _client.getEventImpactTrace!(caseId),
   createReportResearch: (input) => _client.createReportResearch!(input),
   createReportResearchPdf: (input) => _client.createReportResearchPdf!(input),
+  supplementReportResearch: (input) => _client.supplementReportResearch!(input),
   listReportResearchScopes: (caseId) => _client.listReportResearchScopes!(caseId),
   appendReportResearchScope: (input) => _client.appendReportResearchScope!(input),
   getReportWikiGraph: (caseId, options) => _client.getReportWikiGraph!(caseId, options),

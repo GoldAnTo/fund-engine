@@ -42,6 +42,24 @@ class CreateReportResearchRequest(V1Model):
         return self
 
 
+class SupplementReportResearchRequest(V1Model):
+    """Append readable text to an already frozen, unresolved report source."""
+
+    content: str = Field(min_length=1)
+    page_reference: str | None = Field(default=None, max_length=200)
+    created_by: str = Field(default="report-research-user", min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def normalize_strings(self) -> "SupplementReportResearchRequest":
+        self.page_reference = self.page_reference.strip() if self.page_reference else None
+        self.created_by = self.created_by.strip()
+        if not self.content.strip():
+            raise ValueError("content must not be blank")
+        if not self.created_by:
+            raise ValueError("created_by must not be blank")
+        return self
+
+
 class ReportResearchDocumentDTO(V1Model):
     id: uuid.UUID
     kind: Literal["research_report"] = "research_report"

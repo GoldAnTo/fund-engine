@@ -183,6 +183,13 @@ export interface CreateReportResearchPdfInput {
   file: File;
 }
 
+export interface SupplementReportResearchInput {
+  caseId: string;
+  documentId: string;
+  content: string;
+  pageReference?: string;
+}
+
 export interface CreatedReportResearch {
   caseId: string;
   documentId: string;
@@ -316,6 +323,7 @@ export interface EventResearchClient {
   getEventImpactTrace?(caseId: string): Promise<EventImpactTrace>;
   createReportResearch?(input: CreateReportResearchInput): Promise<CreatedReportResearch>;
   createReportResearchPdf?(input: CreateReportResearchPdfInput): Promise<CreatedReportResearch>;
+  supplementReportResearch?(input: SupplementReportResearchInput): Promise<CreatedReportResearch>;
   listReportResearchScopes?(caseId: string): Promise<{ items: ReportResearchScope[]; currentScopeVersion: number | null }>;
   appendReportResearchScope?(input: AppendReportResearchScopeInput): Promise<ReportResearchScope>;
   getReportWikiGraph?(caseId: string, options?: { relationId?: string; scopeVersion?: number }): Promise<ReportWikiGraph>;

@@ -2966,6 +2966,18 @@ export class HttpResearchAdapter implements ResearchClient {
     return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true, initialScopeVersion: dto.initial_scope_version ?? null };
   }
 
+  async supplementReportResearch(input: import("../domain/eventResearch").SupplementReportResearchInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
+    const dto = await this.post<{
+      case: { id: string }; document: { id: string };
+      state: "ready_to_extract" | "needs_text_or_pages"; needs_text_or_pages?: boolean;
+      initial_scope_version?: number | null;
+    }>(`/report-research/${encodeURIComponent(input.caseId)}/documents/${encodeURIComponent(input.documentId)}/supplement`, {
+      content: input.content,
+      page_reference: input.pageReference || null,
+    });
+    return { caseId: dto.case.id, documentId: dto.document.id, state: dto.state, needsTextOrPages: dto.needs_text_or_pages === true, initialScopeVersion: dto.initial_scope_version ?? null };
+  }
+
   async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
     type WireScope = { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection: string[]; evidence_plan: string[]; selected_claim_ids: string[]; selected_relation_ids: string[]; changed_by: string; change_summary: string; created_at: string };
     const dto = await this.get<{ items: WireScope[]; current_scope_version: number | null }>(`/report-research/${encodeURIComponent(caseId)}/scopes`);

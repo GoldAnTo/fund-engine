@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
 from app.models.ledger import (
+    CaseDocumentVersion,
     Company,
     DocumentBlob,
     DocumentVersion,
@@ -293,7 +294,9 @@ class ReportClaimExtractor:
         self._extractor_version = extractor_version or _REPORT_EXTRACTOR_VERSION
         self._research = ResearchService(ResearchRepository(session))
 
-    def extract(self, research_case_id: uuid.UUID) -> list[ReportClaim]:
+    def extract(
+        self, research_case_id: uuid.UUID, *, input_fingerprint: str | None = None
+    ) -> list[ReportClaim]:
         """Append one complete extraction or no output at all.
 
         The durable extraction claim is part of the same outer savepoint as
@@ -307,7 +310,9 @@ class ReportClaimExtractor:
             spans_by_document.setdefault(document, []).append(span)
         with self._session.begin_nested():
             for document, spans in spans_by_document.items():
-                if not self._claim_document_extraction(research_case_id, document):
+                if not self._claim_document_extraction(
+                    research_case_id, document, input_fingerprint=input_fingerprint
+                ):
                     continue
                 for span in spans:
                     for draft in self._extractor.extract(span=span):
@@ -365,15 +370,20 @@ class ReportClaimExtractor:
         )
 
     def _claim_document_extraction(
-        self, research_case_id: uuid.UUID, document: DocumentVersion
+        self,
+        research_case_id: uuid.UUID,
+        document: DocumentVersion,
+        *,
+        input_fingerprint: str | None = None,
     ) -> bool:
         """Claim one case/document/version/fingerprint key without poisoning retry."""
+        fingerprint = input_fingerprint or document.content_sha256
         existing = self._session.scalar(
             select(ReportExtractionClaim.id).where(
                 ReportExtractionClaim.research_case_id == research_case_id,
                 ReportExtractionClaim.document_version_id == document.id,
                 ReportExtractionClaim.extractor_version == self._extractor_version,
-                ReportExtractionClaim.input_fingerprint == document.content_sha256,
+                ReportExtractionClaim.input_fingerprint == fingerprint,
             )
         )
         if existing is not None:
@@ -385,7 +395,7 @@ class ReportClaimExtractor:
                         research_case_id=research_case_id,
                         document_version_id=document.id,
                         extractor_version=self._extractor_version,
-                        input_fingerprint=document.content_sha256,
+                        input_fingerprint=fingerprint,
                     )
                 )
                 self._session.flush()
@@ -619,6 +629,85 @@ class ReportResearchService:
             source_statement_ids=statement_ids,
         )
 
+    def supplement_text(
+        self,
+        *,
+        research_case_id: uuid.UUID,
+        document_version_id: uuid.UUID,
+        content: str,
+        page_reference: str | None,
+        created_by: str,
+    ) -> CreatedReportResearch:
+        """Continue an unresolved intake without replacing its frozen source.
+
+        The original document bytes/text remain immutable.  A researcher-supplied
+        readable fragment is an additional source span attached to that exact
+        case/document pair, so its locator preserves both the recovery actor
+        and any page reference.
+        """
+        case = lock_event_scope_case(self._session, research_case_id)
+        if case is None:
+            raise ValueError("report research case not found")
+        document = self._session.get(DocumentVersion, document_version_id)
+        attached = self._session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == research_case_id,
+                CaseDocumentVersion.document_version_id == document_version_id,
+            )
+        )
+        if document is None or attached is None:
+            raise ValueError("report document must belong to its research case")
+        if self._session.scalar(
+            select(ReportResearchScopeVersion.id).where(
+                ReportResearchScopeVersion.research_case_id == research_case_id
+            )
+        ) is not None:
+            raise ValueError("report research already has an initial scope")
+
+        source_kind, publisher = self._original_document_metadata(
+            research_case_id, document_version_id
+        )
+        statement_ids = self._append_text_statement(
+            research_case_id=research_case_id,
+            document=document,
+            content=content,
+            input_kind="recovery_text",
+            publisher=publisher,
+            locator_extra={
+                "recovery_case_id": str(research_case_id),
+                "recovery_document_id": str(document_version_id),
+                "recovery_created_by": created_by,
+                **({"page_reference": page_reference} if page_reference else {}),
+            },
+        )
+        fingerprint = hashlib.sha256(
+            f"report-recovery-v1\0{document.content_sha256}\0{content}\0{page_reference or ''}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        statement_ids.extend(
+            self._extract_claim_statement_ids(
+                research_case_id, input_fingerprint=fingerprint
+            )
+        )
+        initial_scope = self._create_initial_scope(
+            research_case_id,
+            document_version_id,
+            created_by,
+            case.core_question,
+            change_summary="补充正文后创建初始研报研究范围",
+        )
+        self._schedule_market_impact(research_case_id)
+        return CreatedReportResearch(
+            case=case,
+            document=document,
+            input_kind=source_kind,
+            publisher=publisher,
+            state="ready_to_extract",
+            initial_scope_version=initial_scope.version if initial_scope else None,
+            source_statement_ids=statement_ids,
+        )
+
     def _create_failed_pdf(
         self,
         *,
@@ -687,16 +776,20 @@ class ReportResearchService:
         content: str,
         input_kind: str,
         publisher: str | None,
+        locator_extra: dict[str, object] | None = None,
     ) -> list:
+        locator: dict[str, object] = {
+            "input_kind": input_kind,
+            "publisher": publisher,
+            "published_at": self._iso_published_at(document.published_at),
+            "paragraph": 1,
+            "parser": "user-pasted-report-v1",
+        }
+        if locator_extra:
+            locator.update(locator_extra)
         span = self._documents.add_span(
             document_version_id=document.id,
-            locator={
-                "input_kind": input_kind,
-                "publisher": publisher,
-                "published_at": self._iso_published_at(document.published_at),
-                "paragraph": 1,
-                "parser": "user-pasted-report-v1",
-            },
+            locator=locator,
             verbatim_text=content,
         )
         self._select_span_for_case(research_case_id, document.id, span.id)
@@ -704,6 +797,28 @@ class ReportResearchService:
             span.id, content, kind="research_opinion"
         )
         return [statement.id]
+
+    def _original_document_metadata(
+        self, research_case_id: uuid.UUID, document_version_id: uuid.UUID
+    ) -> tuple[str, str | None]:
+        """Recover display metadata from the first frozen source span only."""
+        span = self._session.scalar(
+            select(SourceSpan)
+            .join(
+                ReportCaseSourceSpan,
+                ReportCaseSourceSpan.source_span_id == SourceSpan.id,
+            )
+            .where(ReportCaseSourceSpan.research_case_id == research_case_id)
+            .where(ReportCaseSourceSpan.document_version_id == document_version_id)
+            .order_by(ReportCaseSourceSpan.created_at, SourceSpan.id)
+            .limit(1)
+        )
+        locator = span.locator if span is not None else {}
+        input_kind = locator.get("input_kind")
+        if input_kind not in {"pdf_upload", "pasted_text", "web_content"}:
+            raise ValueError("report document has no frozen intake source")
+        publisher = locator.get("publisher")
+        return input_kind, publisher if isinstance(publisher, str) else None
 
     def _select_span_for_case(
         self,
@@ -726,6 +841,8 @@ class ReportResearchService:
         document_version_id: uuid.UUID,
         changed_by: str,
         research_question: str | None,
+        *,
+        change_summary: str = "初始研报研究范围",
     ) -> ReportResearchScopeVersion | None:
         """Append the first explicit report-research scope for a new case."""
         selected_claim_ids, selected_relation_ids = self._paths_for_document(
@@ -749,7 +866,7 @@ class ReportResearchService:
             document_version_id=document_version_id,
             version=1,
             changed_by=changed_by,
-            change_summary="初始研报研究范围",
+            change_summary=change_summary,
             research_question=(research_question or "验证研报观点与市场影响。").strip(),
             factor_selection=[],
             evidence_plan=[],
@@ -995,14 +1112,18 @@ class ReportResearchService:
             )
         return claim_ids, relation_ids
 
-    def _extract_claim_statement_ids(self, research_case_id: uuid.UUID) -> list:
+    def _extract_claim_statement_ids(
+        self, research_case_id: uuid.UUID, *, input_fingerprint: str | None = None
+    ) -> list:
         """Run the default report parser immediately after source intake.
 
         The input and every original span are already frozen at this point.
         Extraction appends its own narrow SourceStatements and cannot mutate
         either original text or page/paragraph locators.
         """
-        claims = ReportClaimExtractor(self._session).extract(research_case_id)
+        claims = ReportClaimExtractor(self._session).extract(
+            research_case_id, input_fingerprint=input_fingerprint
+        )
         return [claim.source_statement_id for claim in claims]
 
     def _schedule_market_impact(self, research_case_id: uuid.UUID) -> None:

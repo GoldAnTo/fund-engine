@@ -3816,6 +3816,12 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ caseId: "report-pdf-mock", documentId: "document-pdf-mock", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1 });
   }
 
+  async supplementReportResearch(input: import("../domain/eventResearch").SupplementReportResearchInput): Promise<import("../domain/eventResearch").CreatedReportResearch> {
+    this.throwIfOffline();
+    this.reportScopes.set(input.caseId, [this.defaultReportScope(input.documentId)]);
+    return simulateLatency({ caseId: input.caseId, documentId: input.documentId, state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1 });
+  }
+
   async listReportResearchScopes(caseId: string): Promise<{ items: import("../domain/eventResearch").ReportResearchScope[]; currentScopeVersion: number | null }> {
     const scopes = this.reportScopes.get(caseId) ?? [this.defaultReportScope("report-document-mock")];
     return simulateLatency({ items: scopes, currentScopeVersion: scopes[scopes.length - 1]?.version ?? null });

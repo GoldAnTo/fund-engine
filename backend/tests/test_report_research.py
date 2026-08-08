@@ -471,6 +471,90 @@ def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
         )
 
 
+def test_supplementing_failed_pdf_keeps_its_case_and_document_audit_chain(
+    cmd_client, cmd_session, monkeypatch, tmp_path
+) -> None:
+    def _parse_failure(self, raw: bytes, *, document_sha256: str):
+        raise PdfParseError("fixture parser failure")
+
+    monkeypatch.setattr(
+        "app.services.report_research.PypdfAdapter.extract_spans", _parse_failure
+    )
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
+    created = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params={"title": "需补正文 PDF", "filename": "scan.pdf"},
+        content=b"%PDF-no-text",
+        headers={"content-type": "application/pdf"},
+    )
+    assert created.status_code == 201
+    original = created.json()
+
+    resumed = cmd_client.post(
+        f"/api/v1/report-research/{original['case']['id']}/documents/{original['document']['id']}/supplement",
+        json={
+            "content": "研报观点：未上市供应商甲是星海科技的供应商。",
+            "page_reference": "第 3 页",
+            "created_by": "analyst-a",
+        },
+    )
+
+    assert resumed.status_code == 201
+    body = resumed.json()
+    assert body["case"]["id"] == original["case"]["id"]
+    assert body["document"]["id"] == original["document"]["id"]
+    assert body["initial_scope_version"] == 1
+    assert body["needs_text_or_pages"] is False
+    document_id = uuid.UUID(original["document"]["id"])
+    spans = list(
+        cmd_session.scalars(
+            select(SourceSpan)
+            .where(SourceSpan.document_version_id == document_id)
+            .order_by(SourceSpan.id)
+        )
+    )
+    supplement = next(span for span in spans if span.locator.get("input_kind") == "recovery_text")
+    assert supplement.locator["page_reference"] == "第 3 页"
+    assert supplement.locator["recovery_case_id"] == original["case"]["id"]
+    claims = list(
+        cmd_session.scalars(
+            select(ReportClaim).where(
+                ReportClaim.research_case_id == uuid.UUID(original["case"]["id"])
+            )
+        )
+    )
+    assert len(claims) == 1
+    scope = cmd_client.get(
+        f"/api/v1/report-research/{original['case']['id']}/scopes/current"
+    )
+    assert scope.status_code == 200
+    assert scope.json()["document_id"] == original["document"]["id"]
+
+
+def test_supplementing_zero_claim_text_reuses_its_frozen_document(cmd_client) -> None:
+    created = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "先无主张的研报",
+            "content": "资料描述：订单出现变化。",
+        },
+    )
+    assert created.status_code == 201
+    original = created.json()
+    assert original["initial_scope_version"] is None
+
+    resumed = cmd_client.post(
+        f"/api/v1/report-research/{original['case']['id']}/documents/{original['document']['id']}/supplement",
+        json={"content": "研报观点：未上市供应商甲是星海科技的供应商。"},
+    )
+
+    assert resumed.status_code == 201
+    assert resumed.json()["case"]["id"] == original["case"]["id"]
+    assert resumed.json()["document"]["id"] == original["document"]["id"]
+    assert resumed.json()["initial_scope_version"] == 1
+
+
 def test_report_research_rejects_blank_title_or_content(cmd_client) -> None:
     blank_title = cmd_client.post(
         "/api/v1/report-research",

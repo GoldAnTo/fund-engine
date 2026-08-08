@@ -96,6 +96,9 @@ describe("ReportResearchCreateScreen", () => {
     const createPdf = vi.spyOn(adapter, "createReportResearchPdf").mockResolvedValue({
       caseId: "report-pdf-needs-text", documentId: "document-pdf-needs-text", state: "needs_text_or_pages", needsTextOrPages: true, initialScopeVersion: null,
     });
+    const supplement = vi.spyOn(adapter, "supplementReportResearch").mockResolvedValue({
+      caseId: "report-pdf-needs-text", documentId: "document-pdf-needs-text", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
+    });
     const graph = vi.spyOn(adapter, "getReportWikiGraph");
     renderCreate();
 
@@ -107,15 +110,29 @@ describe("ReportResearchCreateScreen", () => {
     expect(createPdf).toHaveBeenCalledOnce();
     expect(await screen.findByRole("status")).toHaveTextContent("原件已冻结，等待补充");
     expect(screen.getByRole("button", { name: "补充正文或页码" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "重新提交当前 PDF" })).toBeVisible();
     expect(screen.queryByText("已进入研报工作台：report-pdf-needs-text")).not.toBeInTheDocument();
     expect(graph).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "补充正文或页码" }));
+    await user.type(screen.getByLabelText("研报正文"), "研报观点：供应商甲是目标公司的供应商。");
+    await user.type(screen.getByLabelText("对应原始 PDF 页码（可选）"), "第 3 页");
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    expect(supplement).toHaveBeenCalledWith({
+      caseId: "report-pdf-needs-text", documentId: "document-pdf-needs-text",
+      content: "研报观点：供应商甲是目标公司的供应商。", pageReference: "第 3 页",
+    });
+    expect(createPdf).toHaveBeenCalledOnce();
+    expect(await screen.findByText("已进入研报工作台：report-pdf-needs-text")).toBeVisible();
   });
 
   it("keeps text research in intake when no claims produced an initial scope", async () => {
     const user = userEvent.setup();
-    vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
+    const create = vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
       caseId: "report-no-claims", documentId: "document-no-claims", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: null,
+    });
+    const supplement = vi.spyOn(adapter, "supplementReportResearch").mockResolvedValue({
+      caseId: "report-no-claims", documentId: "document-no-claims", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
     });
     const graph = vi.spyOn(adapter, "getReportWikiGraph");
     renderCreate();
@@ -129,5 +146,18 @@ describe("ReportResearchCreateScreen", () => {
     expect(screen.getByRole("button", { name: "重新提交当前内容" })).toBeVisible();
     expect(screen.queryByText("已进入研报工作台：report-no-claims")).not.toBeInTheDocument();
     expect(graph).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "修改内容后继续解析" }));
+    const content = screen.getByLabelText("研报正文");
+    await user.clear(content);
+    await user.type(content, "研报观点：供应商甲是目标公司的供应商。");
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    expect(supplement).toHaveBeenCalledWith({
+      caseId: "report-no-claims", documentId: "document-no-claims",
+      content: "研报观点：供应商甲是目标公司的供应商。", pageReference: undefined,
+    });
+    expect(create).toHaveBeenCalledOnce();
+    expect(await screen.findByText("已进入研报工作台：report-no-claims")).toBeVisible();
   });
 });

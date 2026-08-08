@@ -15,6 +15,7 @@ from app.models.ledger import DocumentBlob
 from app.schemas.v1.report_research import (
     AppendReportResearchScopeRequest,
     CreateReportResearchRequest,
+    SupplementReportResearchRequest,
     ReportResearchCreatedResponse,
     ReportResearchCaseDTO,
     ReportResearchDocumentDTO,
@@ -102,6 +103,36 @@ def upload_pdf_report(
         filename=filename,
         created_by=created_by,
     )
+    return _response(created)
+
+
+@router.post(
+    "/{case_id}/documents/{document_id}/supplement",
+    response_model=ReportResearchCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def supplement_report_research(
+    case_id: uuid.UUID,
+    document_id: uuid.UUID,
+    payload: SupplementReportResearchRequest,
+    db: Session = Depends(get_db),
+) -> ReportResearchCreatedResponse:
+    try:
+        created = ReportResearchService(db).supplement_text(
+            research_case_id=case_id,
+            document_version_id=document_id,
+            content=payload.content,
+            page_reference=payload.page_reference,
+            created_by=payload.created_by,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        if str(exc) == "report research case not found":
+            raise NotFoundError(str(exc)) from None
+        from app.errors import ValidationFailedError
+
+        raise ValidationFailedError(str(exc)) from None
     return _response(created)
 
 
