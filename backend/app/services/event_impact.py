@@ -17,6 +17,7 @@ from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_impact import (
     CompanyImpactObservation,
     CompanyImpactRelation,
+    CompanyImpactRelationReview,
     CompanyIdentityAlias,
     EventImpactRefreshClaim,
     EventImpactHypothesis,
@@ -747,6 +748,44 @@ class EventImpactResearchService:
             .values(status="cancelled")
         )
         return result.rowcount or 0
+
+    def review_relation(
+        self, relation_id: uuid.UUID, *, outcome: str, reason: str, reviewer: str
+    ) -> CompanyImpactRelationReview:
+        """Append a human relation review without mutating the ledger relation."""
+        relation = self._session.get(CompanyImpactRelation, relation_id)
+        if relation is None:
+            raise NotFoundError(f"impact relation {relation_id} not found")
+        hypothesis = self._session.get(EventImpactHypothesis, relation.hypothesis_id)
+        if hypothesis is None:
+            raise ValidationFailedError("impact relation hypothesis not found")
+        lock_event_research_lifecycle(self._session, hypothesis.research_case_id)
+        current_scope = self._session.scalar(
+            select(EventResearchScopeVersion.id)
+            .where(EventResearchScopeVersion.research_case_id == hypothesis.research_case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if current_scope != relation.scope_version_id or relation.status not in {"candidate", "unresolved"}:
+            raise ValidationFailedError("impact relation is not reviewable in the current scope")
+        if self.schedule_company_impact_reviews(
+            hypothesis.research_case_id, scope_version_id=relation.scope_version_id
+        ) == 0 and self._session.scalar(
+            select(TaskItem.id)
+            .where(TaskItem.task_type == "review_company_impact")
+            .where(TaskItem.ref_type == "company_impact_relation")
+            .where(TaskItem.ref_id == relation.id)
+            .where(TaskItem.scope_version_id == relation.scope_version_id)
+        ) is None:
+            raise ValidationFailedError("impact relation is not a high-impact source gap")
+        review = CompanyImpactRelationReview(
+            relation_id=relation.id, outcome=outcome, reason=reason.strip(), reviewer=reviewer.strip(), created_at=_utcnow()
+        )
+        self._session.add(review)
+        self._session.flush()
+        self.classify(hypothesis.research_case_id, scope_version_id=relation.scope_version_id,
+                      hypothesis_ids=[hypothesis.id], update_lifecycle=False)
+        return review
 
     def classify(
         self,

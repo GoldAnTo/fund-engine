@@ -76,6 +76,32 @@ export interface EventResearchScope {
   unmappedEvidenceCount: number;
 }
 
+export interface EventImpactTrace {
+  scopeVersion: number;
+  asOf: string | null;
+  factors: EventImpactFactor[];
+  alternatives: EventImpactFactor[];
+  progress: Record<string, number>;
+}
+
+export interface EventImpactFactor {
+  hypothesisId: string;
+  statement: string;
+  rank: number;
+  classification: string;
+  scoreComponents: Record<string, number>;
+  explanation: string;
+  relations: EventImpactRelation[];
+  funds: EventImpactFund[];
+}
+export interface EventImpactRelation {
+  relationId: string; companyId: string; companyName: string; companyType: string;
+  relationKind: string; direction: string; mechanism: string; status: string; effectiveStatus: string;
+  sourceStatementId: string | null; stocks: Array<{ stockId: string; code: string; name: string; market: string }>;
+  observations: Array<Record<string, unknown>>; fundExposure: EventImpactFund[];
+}
+export interface EventImpactFund { fundId?: string; fundCode?: string; fundName?: string; reportPeriod?: string; publishedAt?: string; source?: string; coverageRatio?: string | number; coverageStatus: string; computable: boolean; exposure: string | number | null; }
+
 export interface EventResearchScopeFactor {
   statement: string;
   description?: string | null;
@@ -160,6 +186,8 @@ export interface EventResearchClient {
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
+  getEventImpactTrace?(caseId: string): Promise<EventImpactTrace>;
+  reviewEventImpactRelation?(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;

@@ -27,6 +27,13 @@ from app.services.event_research import EventResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
+from app.queries.event_impact import EventImpactQueries
+from app.schemas.v1.event_impact import (
+    EventImpactTraceDTO,
+    ReviewImpactRelationRequest,
+    ReviewImpactRelationResponse,
+)
+from app.services.event_impact import EventImpactResearchService
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -103,6 +110,28 @@ def event_research_workbench(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> EventWorkbenchDTO:
     return EventResearchQueries(db).workbench(case_id)
+
+
+@router.get("/{case_id}/impact-trace", response_model=EventImpactTraceDTO)
+def event_impact_trace(case_id: uuid.UUID, db: Session = Depends(get_db)) -> EventImpactTraceDTO:
+    return EventImpactQueries(db).trace(case_id)
+
+
+@router.post(
+    "/impact-relations/{relation_id}/review",
+    response_model=ReviewImpactRelationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def review_impact_relation(
+    relation_id: uuid.UUID,
+    payload: ReviewImpactRelationRequest,
+    db: Session = Depends(get_db),
+) -> ReviewImpactRelationResponse:
+    review = EventImpactResearchService(db).review_relation(
+        relation_id, outcome=payload.outcome, reason=payload.reason, reviewer=payload.reviewer
+    )
+    db.commit()
+    return ReviewImpactRelationResponse(review_id=str(review.id), relation_id=str(relation_id), outcome=review.outcome)
 
 
 @router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)

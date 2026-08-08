@@ -37,6 +37,7 @@ import type {
   EventReviewQueueItem,
   EventSourceStatus,
   EventWorkbench,
+  EventImpactTrace,
 } from "../domain/eventResearch";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
@@ -2853,6 +2854,19 @@ export class HttpResearchAdapter implements ResearchClient {
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
     };
+  }
+
+  async getEventImpactTrace(caseId: string): Promise<EventImpactTrace> {
+    const dto = await this.get<any>(`/event-research/${encodeURIComponent(caseId)}/impact-trace`);
+    const mapFund = (fund: any) => ({ fundId: fund.fund_id, fundCode: fund.fund_code, fundName: fund.fund_name, reportPeriod: fund.report_period, publishedAt: fund.published_at, source: fund.source, coverageRatio: fund.coverage_ratio, coverageStatus: fund.coverage_status, computable: fund.computable, exposure: fund.exposure ?? null });
+    const mapRelation = (relation: any) => ({ relationId: relation.relation_id, companyId: relation.company_id, companyName: relation.company_name, companyType: relation.company_type, relationKind: relation.relation_kind, direction: relation.direction, mechanism: relation.mechanism, status: relation.status, effectiveStatus: relation.effective_status, sourceStatementId: relation.source_statement_id ?? null, stocks: (relation.stocks ?? []).map((stock: any) => ({ stockId: stock.stock_id, code: stock.code, name: stock.name, market: stock.market })), observations: relation.observations ?? [], fundExposure: (relation.fund_exposure ?? []).map(mapFund) });
+    const mapFactor = (factor: any) => ({ hypothesisId: factor.hypothesis_id, statement: factor.statement, rank: factor.rank, classification: factor.classification, scoreComponents: factor.score_components ?? {}, explanation: factor.explanation, relations: (factor.relations ?? []).map(mapRelation), funds: (factor.funds ?? []).map(mapFund) });
+    return { scopeVersion: dto.scope_version, asOf: dto.as_of ?? null, factors: (dto.factors ?? []).map(mapFactor), alternatives: (dto.alternatives ?? []).map(mapFactor), progress: dto.progress ?? {} };
+  }
+
+  async reviewEventImpactRelation(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }> {
+    const dto = await this.requestJson<any>(`/event-research/impact-relations/${encodeURIComponent(input.relationId)}/review`, { method: "POST", body: JSON.stringify({ outcome: input.outcome, reason: input.reason, reviewer: input.reviewer }) });
+    return { reviewId: dto.review_id, relationId: dto.relation_id, outcome: dto.outcome };
   }
 
   async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
