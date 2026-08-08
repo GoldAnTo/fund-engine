@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from threading import Barrier, Thread
 
 import pytest
 from sqlalchemy import event, select
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Company, DocumentVersion, SourceSpan, SourceStatement, Stock
 from app.models.report_research import (
@@ -1192,3 +1194,74 @@ def test_scope_hides_unselected_relation_market_and_fund_edges_but_keeps_claim_g
         for edge in body["edges"]
     )
     assert "观点级市场数据不足" in graph.text
+
+
+@pytest.mark.pg_only
+def test_postgres_append_scope_serializes_same_case_versions(
+    engine, cmd_client, cmd_session, monkeypatch
+) -> None:
+    case_id = _create_report(
+        cmd_client,
+        title="范围版本并发",
+        content="研报观点：并发供应商是并发发行人的供应商。",
+    )
+    scope = cmd_session.scalar(
+        select(ReportResearchScopeVersion)
+        .where(ReportResearchScopeVersion.research_case_id == case_id)
+        .order_by(ReportResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == case_id)
+    )
+    assert scope is not None and claim is not None
+    relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == claim.id)
+    )
+    assert relation is not None
+
+    before_lock = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.report_research._before_report_scope_append_lock",
+        lambda: before_lock.wait(timeout=5),
+    )
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    errors: list[BaseException] = []
+
+    def append() -> None:
+        db = SessionLocal()
+        try:
+            ReportResearchService(db).append_scope(
+                case_id,
+                scope.document_version_id,
+                changed_by="concurrent-tester",
+                change_summary="并发追加研究范围",
+                selected_claim_ids=[claim.id],
+                selected_relation_ids=[relation.id],
+            )
+            db.commit()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=append), Thread(target=append)
+    first.start()
+    second.start()
+    first.join(timeout=10)
+    second.join(timeout=10)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    verify = SessionLocal()
+    try:
+        assert list(
+            verify.scalars(
+                select(ReportResearchScopeVersion.version)
+                .where(ReportResearchScopeVersion.research_case_id == case_id)
+                .order_by(ReportResearchScopeVersion.version)
+            )
+        ) == [1, 2, 3]
+    finally:
+        verify.close()

@@ -36,6 +36,7 @@ from app.schemas.v1.report_research import CreateReportResearchRequest
 from app.services.ingest import DocumentService
 from app.services.document_blobs import LocalImmutableBlobStore
 from app.services.research import ResearchService
+from app.services.event_research_scope_evidence import lock_event_scope_case
 
 
 _REPORT_CLAIM_KINDS = frozenset(
@@ -451,6 +452,10 @@ def _before_document_blob_insert() -> None:
     """Test seam for the concurrent immutable-blob reference race."""
 
 
+def _before_report_scope_append_lock() -> None:
+    """Test seam before report scope writers contend on the case root lock."""
+
+
 class ReportResearchService:
     """Freeze report bytes/text before any later AI extraction can inspect them.
 
@@ -759,6 +764,12 @@ class ReportResearchService:
         """
         if not changed_by.strip() or not change_summary.strip():
             raise ValueError("report scope changed_by and change_summary must not be blank")
+        # Scope versions use the same stable root lock as event scope changes.
+        # It must be acquired before reading the latest version, otherwise two
+        # PostgreSQL sessions can both append the same successor number.
+        _before_report_scope_append_lock()
+        if lock_event_scope_case(self._session, research_case_id) is None:
+            raise ValueError("report research case not found")
         latest = self._session.scalar(
             select(ReportResearchScopeVersion)
             .where(ReportResearchScopeVersion.research_case_id == research_case_id)
