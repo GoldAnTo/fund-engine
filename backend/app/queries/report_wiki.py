@@ -40,6 +40,7 @@ from app.models.report_research import (
 )
 from app.schemas.v1.report_research import (
     ReportFactorDTO,
+    ReportResearchScopeDTO,
     ReportWikiEdgeDTO,
     ReportWikiGraphDTO,
     ReportWikiNodeDTO,
@@ -85,6 +86,7 @@ class ReportWikiQueries:
         case_id: uuid.UUID,
         *,
         scope_version: int | None = None,
+        relation_id: uuid.UUID | None = None,
     ) -> ReportWikiGraphDTO:
         self._require_case(case_id)
         scope = self._scope(case_id, scope_version)
@@ -97,6 +99,16 @@ class ReportWikiQueries:
         )
         claim_ids = {claim.id for claim in claims}
         relations = self._relations(claim_ids)
+        if relation_id is not None and relation_id not in {row.id for row in relations}:
+            raise NotFoundError("report relation is not in the selected scope")
+        selected_claim_id = next(
+            (
+                row.claim_id
+                for row in relations
+                if relation_id is not None and row.id == relation_id
+            ),
+            None,
+        )
         relations_by_claim: dict[uuid.UUID, list[ReportRelation]] = defaultdict(list)
         for relation in relations:
             relations_by_claim[relation.claim_id].append(relation)
@@ -209,6 +221,7 @@ class ReportWikiQueries:
                         locator,
                         current_scope_version,
                         suffix=str(relation.id),
+                        relation_id=relation.id,
                     )
                 )
                 verified, operating_rows = self._independent_relation_evidence(
@@ -235,16 +248,34 @@ class ReportWikiQueries:
                         scope_version=current_scope_version,
                     )
                 )
-                add_edge(
-                    self._edge(
-                        claim_node_id,
-                        independent_node_id,
-                        "independent_evidence",
-                        "verified",
-                        independent_locator,
-                        current_scope_version,
-                    )
+            for relation in claim_relations:
+                _verified, operating_rows = path_evidence[relation.id]
+                relation_rows = [
+                    row
+                    for row in operating_rows
+                    if row.statement.id in operating_evidence
+                ]
+                relation_proof, _ = self._independent_relation_evidence(
+                    relation=relation,
+                    companies=companies,
+                    evidence=independent_evidence,
                 )
+                if relation_proof is not None:
+                    relation_rows.append(relation_proof)
+                for row in {item.statement.id: item for item in relation_rows}.values():
+                    independent_node_id = f"evidence:{row.statement.id}"
+                    add_edge(
+                        self._edge(
+                            claim_node_id,
+                            independent_node_id,
+                            "independent_evidence",
+                            "verified",
+                            self._locator(row.span),
+                            current_scope_version,
+                            suffix=f"{relation.id}:{row.statement.id}",
+                            relation_id=relation.id,
+                        )
+                    )
 
             observations = observations_by_claim.get(claim.id, ())
             for observation in observations:
@@ -268,6 +299,7 @@ class ReportWikiQueries:
                         "market_observation",
                         market_locator,
                         current_scope_version,
+                        relation_id=observation.report_relation_id,
                     )
                 )
 
@@ -292,16 +324,27 @@ class ReportWikiQueries:
                         scope_version=current_scope_version,
                     )
                 )
-                add_edge(
-                    self._edge(
-                        claim_node_id,
-                        confounder_node_id,
-                        f"confounder:{confounder.kind}",
-                        "candidate",
-                        confounder_locator,
-                        current_scope_version,
+                for relation in claim_relations:
+                    outcome = confounder_assessments.get((relation.id, confounder.id))
+                    confounder_status = (
+                        "verified"
+                        if outcome is not None and outcome.outcome == "not_material"
+                        else "rejected"
+                        if outcome is not None and outcome.outcome == "material"
+                        else "candidate"
                     )
-                )
+                    add_edge(
+                        self._edge(
+                            claim_node_id,
+                            confounder_node_id,
+                            f"confounder:{confounder.kind}",
+                            confounder_status,
+                            confounder_locator,
+                            current_scope_version,
+                            suffix=f"{relation.id}:{confounder.id}",
+                            relation_id=relation.id,
+                        )
+                    )
 
             for exposure in exposures_by_claim.get(claim.id, ()):
                 fund = funds.get(exposure.fund_id) if exposure.fund_id else None
@@ -337,6 +380,7 @@ class ReportWikiQueries:
                         fund_locator,
                         current_scope_version,
                         suffix=str(exposure.id),
+                        relation_id=exposure.report_relation_id,
                     )
                 )
 
@@ -345,16 +389,16 @@ class ReportWikiQueries:
             # unioned into a fabricated "key" explanation.
             factor_paths: list[ReportRelation | None] = claim_relations or [None]
             for relation in factor_paths:
-                relation_id = relation.id if relation is not None else None
+                path_relation_id = relation.id if relation is not None else None
                 relation_verified, operating_rows = (
-                    path_evidence.get(relation_id, (False, ()))
-                    if relation_id is not None
+                    path_evidence.get(path_relation_id, (False, ()))
+                    if path_relation_id is not None
                     else (False, ())
                 )
                 path_observations = [
                     row
                     for row in observations
-                    if row.report_relation_id == relation_id
+                    if row.report_relation_id == path_relation_id
                 ]
                 path_market = any(
                     row.status == "verified" and row.kind == "target_market"
@@ -365,10 +409,10 @@ class ReportWikiQueries:
                     and row.kind in {"peer_control", "industry_control"}
                     for row in path_observations
                 )
-                path_confounders = confounders if relation_id is not None else ()
+                path_confounders = confounders if path_relation_id is not None else ()
                 latest_outcomes = {
                     confounder.id: confounder_assessments.get(
-                        (relation_id, confounder.id)
+                        (path_relation_id, confounder.id)
                     )
                     for confounder in path_confounders
                 }
@@ -392,7 +436,7 @@ class ReportWikiQueries:
                 factors.append(
                     ReportFactorDTO(
                         claim_id=claim.id,
-                        relation_id=relation_id,
+                        relation_id=path_relation_id,
                         statement=claim.statement,
                         classification=assessment.classification,
                         components=assessment.components,
@@ -400,13 +444,44 @@ class ReportWikiQueries:
                     )
                 )
 
+        selected_edges = list(edges.values())
+        selected_factors = factors
+        if relation_id is not None:
+            selected_edges = [
+                edge
+                for edge in selected_edges
+                if edge.relation_id in {None, relation_id}
+                and (
+                    edge.relation_id == relation_id
+                    or (
+                        edge.kind == "reported_by"
+                        and edge.source_id == f"report_claim:{selected_claim_id}"
+                    )
+                )
+            ]
+            visible_ids = {
+                node_id
+                for edge in selected_edges
+                for node_id in (edge.source_id, edge.target_id)
+            }
+            nodes = {node_id: node for node_id, node in nodes.items() if node_id in visible_ids}
+            selected_factors = [
+                factor for factor in factors if factor.relation_id == relation_id
+            ]
         return ReportWikiGraphDTO(
             research_case_id=case_id,
             scope_version=current_scope_version,
+            scope=ReportResearchScopeDTO(
+                version=scope.version,
+                document_id=scope.document_version_id,
+                research_question=scope.research_question,
+                factor_selection=list(scope.factor_selection),
+                evidence_plan=list(scope.evidence_plan),
+            ),
             document_id=document.id,
             nodes=list(nodes.values()),
-            edges=list(edges.values()),
-            factors=factors,
+            edges=selected_edges,
+            factors=selected_factors,
         )
 
     def _require_case(self, case_id: uuid.UUID) -> None:
@@ -695,14 +770,18 @@ class ReportWikiQueries:
         scope_version: int,
         *,
         suffix: str = "",
+        relation_id: uuid.UUID | None = None,
     ) -> ReportWikiEdgeDTO:
-        material = "|".join((source_id, target_id, kind, status, source_locator or "", suffix))
+        material = "|".join(
+            (source_id, target_id, kind, status, source_locator or "", suffix, str(relation_id or ""))
+        )
         return ReportWikiEdgeDTO(
             id="edge:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24],
             source_id=source_id,
             target_id=target_id,
             kind=kind,
             status=status,
+            relation_id=relation_id,
             source_locator=source_locator,
             scope_version=scope_version,
         )

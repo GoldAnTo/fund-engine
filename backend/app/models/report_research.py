@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    JSON,
     Numeric,
     String,
     Text,
@@ -123,9 +124,6 @@ class ReportResearchScopeVersion(Base):
         UniqueConstraint(
             "research_case_id", "version", name="uq_report_scope_case_version"
         ),
-        UniqueConstraint(
-            "research_case_id", "document_version_id", name="uq_report_scope_case_document"
-        ),
         Index("ix_report_scope_case_version", "research_case_id", "version"),
     )
 
@@ -139,6 +137,9 @@ class ReportResearchScopeVersion(Base):
     version: Mapped[int] = mapped_column(nullable=False)
     changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
     change_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    research_question: Mapped[str] = mapped_column(Text, nullable=False)
+    factor_selection: Mapped[list] = mapped_column(JSON, nullable=False)
+    evidence_plan: Mapped[list] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

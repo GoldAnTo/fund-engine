@@ -97,6 +97,7 @@ class ReportWikiEdgeDTO(V1Model):
     target_id: str
     kind: str
     status: ReportWikiNodeStatus
+    relation_id: uuid.UUID | None = None
     source_locator: str | None = None
     scope_version: int
 
@@ -110,11 +111,20 @@ class ReportFactorDTO(V1Model):
     explanation: str
 
 
+class ReportResearchScopeDTO(V1Model):
+    version: int
+    document_id: uuid.UUID
+    research_question: str
+    factor_selection: list[str]
+    evidence_plan: list[str]
+
+
 class ReportWikiGraphDTO(V1Model):
     """The selected report-document scope, never a mixed history view."""
 
     research_case_id: uuid.UUID
     scope_version: int
+    scope: ReportResearchScopeDTO
     document_id: uuid.UUID
     nodes: list[ReportWikiNodeDTO]
     edges: list[ReportWikiEdgeDTO]

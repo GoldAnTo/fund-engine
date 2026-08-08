@@ -224,6 +224,44 @@ def test_wiki_defaults_to_latest_report_document_but_can_read_one_history_scope(
     assert "新版订单判断" not in history.text
 
 
+def test_same_report_document_can_have_multiple_question_scopes(cmd_client, cmd_session) -> None:
+    created = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": "pasted_text",
+            "title": "同一研报多问题",
+            "content": "研报观点：订单增长。",
+        },
+    )
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case"]["id"])
+    document_id = uuid.UUID(created.json()["document"]["id"])
+
+    scope = ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document_id,
+        changed_by="tester",
+        change_summary="改为验证订单增长能否传导至基金持仓",
+        research_question="订单增长是否会传导至中国基金？",
+        factor_selection=["订单", "基金暴露"],
+        evidence_plan=["公司公告", "基金持仓", "发布后市场窗口"],
+    )
+    cmd_session.commit()
+
+    current = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+    history = cmd_client.get(
+        f"/api/v1/report-research/{case_id}/wiki", params={"scope_version": 1}
+    )
+
+    assert scope.version == 2
+    assert current.status_code == history.status_code == 200
+    assert current.json()["scope_version"] == 2
+    assert current.json()["scope"]["research_question"] == "订单增长是否会传导至中国基金？"
+    assert current.json()["scope"]["factor_selection"] == ["订单", "基金暴露"]
+    assert history.json()["scope_version"] == 1
+    assert history.json()["scope"]["research_question"] != current.json()["scope"]["research_question"]
+
+
 def test_factor_becomes_key_only_with_independent_relation_operating_market_peer_and_confounder_evidence(
     cmd_client, cmd_session
 ) -> None:
@@ -576,3 +614,20 @@ def test_factor_gate_never_unions_market_and_peer_evidence_across_relations(
     assert factors[str(second_relation.id)]["classification"] == "evidence_gap"
     assert factors[str(second_relation.id)]["components"]["market"] is False
     assert factors[str(second_relation.id)]["components"]["peer"] is True
+
+    focused = cmd_client.get(
+        f"/api/v1/report-research/{case_id}/wiki",
+        params={"relation_id": str(first_relation.id)},
+    )
+    assert focused.status_code == 200
+    focused_body = focused.json()
+    assert [row["relation_id"] for row in focused_body["factors"]] == [
+        str(first_relation.id)
+    ]
+    assert all(
+        edge["kind"] == "reported_by"
+        or edge["relation_id"] == str(first_relation.id)
+        for edge in focused_body["edges"]
+    )
+    assert any(edge["kind"] == "target_market" for edge in focused_body["edges"])
+    assert not any(edge["kind"] == "peer_control" for edge in focused_body["edges"])

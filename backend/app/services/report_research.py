@@ -494,7 +494,9 @@ class ReportResearchService:
             input_kind=request.input_kind,
             publisher=request.publisher,
         )
-        self._create_initial_scope(case.id, document.id, request.created_by)
+        self._create_initial_scope(
+            case.id, document.id, request.created_by, case.core_question
+        )
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._schedule_market_impact(case.id)
         self._session.commit()
@@ -579,7 +581,7 @@ class ReportResearchService:
                 span.id, parsed.verbatim_text, kind="research_opinion"
             )
             statement_ids.append(statement.id)
-        self._create_initial_scope(case.id, document.id, created_by)
+        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
         statement_ids.extend(self._extract_claim_statement_ids(case.id))
         self._schedule_market_impact(case.id)
         self._session.commit()
@@ -636,7 +638,7 @@ class ReportResearchService:
             verbatim_text="PDF uploaded but no extractable text is available.",
         )
         self._select_span_for_case(case.id, document.id, span.id)
-        self._create_initial_scope(case.id, document.id, created_by)
+        self._create_initial_scope(case.id, document.id, created_by, case.core_question)
         statement = self._research.add_statement(
             span.id,
             "PDF uploaded but no extractable text is available.",
@@ -698,6 +700,7 @@ class ReportResearchService:
         research_case_id: uuid.UUID,
         document_version_id: uuid.UUID,
         changed_by: str,
+        research_question: str | None,
     ) -> ReportResearchScopeVersion:
         """Append the first explicit report-research scope for a new case."""
         scope = ReportResearchScopeVersion(
@@ -706,6 +709,9 @@ class ReportResearchService:
             version=1,
             changed_by=changed_by,
             change_summary="初始研报研究范围",
+            research_question=(research_question or "验证研报观点与市场影响。").strip(),
+            factor_selection=[],
+            evidence_plan=[],
         )
         self._session.add(scope)
         self._session.flush()
@@ -718,6 +724,9 @@ class ReportResearchService:
         *,
         changed_by: str,
         change_summary: str,
+        research_question: str | None = None,
+        factor_selection: Sequence[str] | None = None,
+        evidence_plan: Sequence[str] | None = None,
     ) -> ReportResearchScopeVersion:
         """Select an attached report revision as a new immutable scope.
 
@@ -735,12 +744,20 @@ class ReportResearchService:
         )
         if latest is None:
             raise ValueError("report research case has no initial scope")
+        selected_question = (research_question or latest.research_question).strip()
+        if not selected_question:
+            raise ValueError("report scope research_question must not be blank")
         scope = ReportResearchScopeVersion(
             research_case_id=research_case_id,
             document_version_id=document_version_id,
             version=latest.version + 1,
             changed_by=changed_by.strip(),
             change_summary=change_summary.strip(),
+            research_question=selected_question,
+            factor_selection=list(
+                latest.factor_selection if factor_selection is None else factor_selection
+            ),
+            evidence_plan=list(latest.evidence_plan if evidence_plan is None else evidence_plan),
         )
         self._session.add(scope)
         self._session.flush()

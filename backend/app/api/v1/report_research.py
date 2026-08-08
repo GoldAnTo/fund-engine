@@ -87,6 +87,7 @@ def upload_pdf_report(
 def report_wiki_graph(
     case_id: uuid.UUID,
     scope_version: int | None = Query(default=None, ge=1),
+    relation_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReportWikiGraphDTO:
     """Return one document version of a report Wiki graph.
@@ -97,7 +98,9 @@ def report_wiki_graph(
     Case-level authorization is supplied by the hosting application boundary,
     just as it is for the existing case read endpoints.
     """
-    return ReportWikiQueries(db).graph(case_id, scope_version=scope_version)
+    return ReportWikiQueries(db).graph(
+        case_id, scope_version=scope_version, relation_id=relation_id
+    )
 
 
 @router.get("/documents/{document_id}/original")
