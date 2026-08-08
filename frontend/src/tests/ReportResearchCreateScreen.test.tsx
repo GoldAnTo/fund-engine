@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
@@ -11,11 +11,16 @@ function CreatedWorkbench() {
   return <p>已进入研报工作台：{caseId}</p>;
 }
 
-function renderCreate() {
+function CreateRoute() {
+  const location = useLocation();
+  return <><ReportResearchCreateScreen /><div data-testid="location">{`${location.pathname}${location.search}`}</div></>;
+}
+
+function renderCreate(initialEntry = "/reports/new") {
   return render(
-    <MemoryRouter initialEntries={["/reports/new"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
-        <Route path="/reports/new" element={<ReportResearchCreateScreen />} />
+        <Route path="/reports/new" element={<CreateRoute />} />
         <Route path="/reports/:caseId" element={<CreatedWorkbench />} />
       </Routes>
     </MemoryRouter>,
@@ -126,6 +131,41 @@ describe("ReportResearchCreateScreen", () => {
     expect(await screen.findByText("已进入研报工作台：report-pdf-needs-text")).toBeVisible();
   });
 
+  it("restores a PDF recovery target from its URL and supplements the same frozen case after reload", async () => {
+    const user = userEvent.setup();
+    const createPdf = vi.spyOn(adapter, "createReportResearchPdf").mockResolvedValue({
+      caseId: "report-reload-pdf", documentId: "document-reload-pdf", state: "needs_text_or_pages", needsTextOrPages: true, initialScopeVersion: null,
+    });
+    const supplement = vi.spyOn(adapter, "supplementReportResearch").mockResolvedValue({
+      caseId: "report-reload-pdf", documentId: "document-reload-pdf", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
+    });
+    const first = renderCreate();
+
+    await user.selectOptions(screen.getByLabelText("研报输入方式"), "pdf_upload");
+    await user.type(screen.getByLabelText("研报标题"), "可恢复 PDF");
+    await user.upload(screen.getByLabelText("PDF 文件"), new File(["%PDF-1.4"], "reload.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    const recoveryUrl = screen.getByTestId("location").textContent!;
+    expect(recoveryUrl).toContain("resume_case_id=report-reload-pdf");
+    expect(recoveryUrl).toContain("resume_document_id=document-reload-pdf");
+    first.unmount();
+    renderCreate(recoveryUrl);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("原件已冻结，等待补充");
+    await user.click(screen.getByRole("button", { name: "补充正文或页码" }));
+    await user.type(screen.getByLabelText("研报正文"), "研报观点：供应商甲是目标公司的供应商。");
+    await user.type(screen.getByLabelText("对应原始 PDF 页码（可选）"), "第 5 页");
+    await user.click(screen.getByRole("button", { name: "创建并开始自动研究" }));
+
+    expect(supplement).toHaveBeenCalledWith({
+      caseId: "report-reload-pdf", documentId: "document-reload-pdf",
+      content: "研报观点：供应商甲是目标公司的供应商。", pageReference: "第 5 页",
+    });
+    expect(createPdf).toHaveBeenCalledOnce();
+    expect(await screen.findByText("已进入研报工作台：report-reload-pdf")).toBeVisible();
+  });
+
   it("keeps text research in intake when no claims produced an initial scope", async () => {
     const user = userEvent.setup();
     const create = vi.spyOn(adapter, "createReportResearch").mockResolvedValue({
@@ -135,7 +175,7 @@ describe("ReportResearchCreateScreen", () => {
       caseId: "report-no-claims", documentId: "document-no-claims", state: "ready_to_extract", needsTextOrPages: false, initialScopeVersion: 1,
     });
     const graph = vi.spyOn(adapter, "getReportWikiGraph");
-    renderCreate();
+    const first = renderCreate();
 
     await user.type(screen.getByLabelText("研报标题"), "只有资料描述的研报");
     await user.type(screen.getByLabelText("研报正文"), "资料描述：行业近期存在订单变化。");
@@ -146,6 +186,12 @@ describe("ReportResearchCreateScreen", () => {
     expect(screen.getByRole("button", { name: "重新提交当前内容" })).toBeVisible();
     expect(screen.queryByText("已进入研报工作台：report-no-claims")).not.toBeInTheDocument();
     expect(graph).not.toHaveBeenCalled();
+
+    const recoveryUrl = screen.getByTestId("location").textContent!;
+    expect(recoveryUrl).toContain("resume_case_id=report-no-claims");
+    first.unmount();
+    renderCreate(recoveryUrl);
+    expect(await screen.findByRole("status")).toHaveTextContent("原件已冻结，尚未解析主张");
 
     await user.click(screen.getByRole("button", { name: "修改内容后继续解析" }));
     const content = screen.getByLabelText("研报正文");

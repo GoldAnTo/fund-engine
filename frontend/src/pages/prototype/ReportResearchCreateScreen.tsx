@@ -1,10 +1,11 @@
 import { FormEvent, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { researchClient } from "../../data/researchClient";
 
 type InputKind = "pasted_text" | "web_content" | "pdf_upload";
 type IntakeRecovery = "needs_text_or_pages" | "no_initial_scope";
 type RecoveryTarget = { caseId: string; documentId: string; inputKind: InputKind };
+type PersistedRecovery = { recovery: IntakeRecovery; target: RecoveryTarget };
 
 function optional(value: string): string | undefined {
   const trimmed = value.trim();
@@ -18,9 +19,24 @@ function localDateTimeToUtc(value: string): string | undefined {
   return Number.isNaN(date.valueOf()) ? undefined : date.toISOString();
 }
 
+function recoveryFromSearch(searchParams: URLSearchParams): PersistedRecovery | null {
+  const caseId = searchParams.get("resume_case_id");
+  const documentId = searchParams.get("resume_document_id");
+  if (!caseId || !documentId) return null;
+  const inputKind = searchParams.get("resume_input_kind");
+  const recovery = searchParams.get("resume_reason");
+  if (!(["pdf_upload", "pasted_text", "web_content"] as string[]).includes(inputKind ?? "")) return null;
+  return {
+    recovery: recovery === "needs_text_or_pages" ? "needs_text_or_pages" : "no_initial_scope",
+    target: { caseId, documentId, inputKind: inputKind as InputKind },
+  };
+}
+
 export function ReportResearchCreateScreen() {
   const navigate = useNavigate();
-  const [inputKind, setInputKind] = useState<InputKind>("pasted_text");
+  const [searchParams] = useSearchParams();
+  const persistedRecovery = recoveryFromSearch(searchParams);
+  const [inputKind, setInputKind] = useState<InputKind>(() => persistedRecovery?.target.inputKind ?? "pasted_text");
   const [title, setTitle] = useState("");
   const [publisher, setPublisher] = useState("");
   const [publishedAt, setPublishedAt] = useState("");
@@ -29,19 +45,31 @@ export function ReportResearchCreateScreen() {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [recovery, setRecovery] = useState<IntakeRecovery | null>(null);
-  const [recoveryTarget, setRecoveryTarget] = useState<RecoveryTarget | null>(null);
+  const [recovery, setRecovery] = useState<IntakeRecovery | null>(() => persistedRecovery?.recovery ?? null);
+  const [recoveryTarget, setRecoveryTarget] = useState<RecoveryTarget | null>(() => persistedRecovery?.target ?? null);
   const [pageReference, setPageReference] = useState("");
   const contentRef = useRef<HTMLTextAreaElement>(null);
 
   const clearRecovery = () => setRecovery(null);
   const focusContent = () => window.setTimeout(() => contentRef.current?.focus(), 0);
+  const persistRecovery = (created: { caseId: string; documentId: string }, nextRecovery: IntakeRecovery, sourceInputKind: InputKind) => {
+    const target = { caseId: created.caseId, documentId: created.documentId, inputKind: sourceInputKind };
+    setRecovery(nextRecovery);
+    setRecoveryTarget(target);
+    const query = new URLSearchParams({
+      resume_case_id: target.caseId,
+      resume_document_id: target.documentId,
+      resume_input_kind: target.inputKind,
+      resume_reason: nextRecovery,
+    });
+    navigate(`/reports/new?${query.toString()}`, { replace: true });
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
-    if (!title.trim()) { setError("请先填写研报标题。"); return; }
-    if (inputKind === "pdf_upload" && !file) { setError("请选择需要解析的 PDF 文件。"); return; }
+    if (!recoveryTarget && !title.trim()) { setError("请先填写研报标题。"); return; }
+    if (!recoveryTarget && inputKind === "pdf_upload" && !file) { setError("请选择需要解析的 PDF 文件。"); return; }
     if (inputKind !== "pdf_upload" && !content.trim()) { setError("请粘贴需要研究的研报正文。"); return; }
     setSubmitting(true);
     try {
@@ -56,13 +84,11 @@ export function ReportResearchCreateScreen() {
           ? await researchClient.createReportResearchPdf!({ ...common, file: file! })
           : await researchClient.createReportResearch!({ ...common, inputKind, sourceUrl: inputKind === "web_content" ? optional(sourceUrl) : undefined, content });
       if (created.needsTextOrPages || created.state === "needs_text_or_pages") {
-        setRecovery("needs_text_or_pages");
-        setRecoveryTarget({ caseId: created.caseId, documentId: created.documentId, inputKind });
+        persistRecovery(created, "needs_text_or_pages", recoveryTarget?.inputKind ?? inputKind);
         return;
       }
       if (!created.initialScopeVersion || created.initialScopeVersion < 1) {
-        setRecovery("no_initial_scope");
-        setRecoveryTarget({ caseId: created.caseId, documentId: created.documentId, inputKind });
+        persistRecovery(created, "no_initial_scope", recoveryTarget?.inputKind ?? inputKind);
         return;
       }
       navigate(`/reports/${created.caseId}`, { replace: true });
@@ -77,7 +103,7 @@ export function ReportResearchCreateScreen() {
     <header className="report-page-header"><div><p className="section-kicker">研报研究 · 第一步</p><h1>创建研报研究</h1><p>冻结原始报告，系统将提取主张与关系，并自动开始收集可核验的数据与证据。</p></div></header>
     <form className="report-create-form" onSubmit={(event) => void submit(event)}>
       <label>研报输入方式<select value={inputKind} onChange={(event) => { clearRecovery(); setInputKind(event.target.value as InputKind); }}><option value="pasted_text">粘贴研报正文</option><option value="web_content">网页正文</option><option value="pdf_upload">上传 PDF</option></select></label>
-      <label>研报标题<input value={title} onChange={(event) => { clearRecovery(); setTitle(event.target.value); }} required /></label>
+      <label>研报标题<input value={title} onChange={(event) => { clearRecovery(); setTitle(event.target.value); }} required={!recoveryTarget} /></label>
       <div className="report-create-form__meta"><label>发布机构（可选）<input value={publisher} onChange={(event) => { clearRecovery(); setPublisher(event.target.value); }} /></label><label>发布时间（可选，按本地时区）<input aria-label="发布时间（可选）" type="datetime-local" value={publishedAt} onChange={(event) => { clearRecovery(); setPublishedAt(event.target.value); }} /></label></div>
       {inputKind === "web_content" ? <label>来源网址<input type="url" value={sourceUrl} onChange={(event) => { clearRecovery(); setSourceUrl(event.target.value); }} placeholder="https://" /></label> : null}
       {recoveryTarget && inputKind !== "pdf_upload" ? <label>对应原始 {recoveryTarget.inputKind === "pdf_upload" ? "PDF 页码" : "内容位置"}（可选）<input value={pageReference} onChange={(event) => setPageReference(event.target.value)} placeholder={recoveryTarget.inputKind === "pdf_upload" ? "例如：第 3 页" : "例如：第 2 段"} /></label> : null}
