@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fund Engine · Case 持续研究原型</title>
+  <style>
+    :root {
+      --paper: oklch(0.972 0.008 85);
+      --paper-deep: oklch(0.944 0.013 82);
+      --ink: oklch(0.255 0.018 65);
+      --ink-soft: oklch(0.48 0.018 65);
+      --muted: oklch(0.62 0.014 72);
+      --rule: oklch(0.855 0.013 78);
+      --rule-strong: oklch(0.76 0.018 75);
+      --moss: oklch(0.43 0.066 145);
+      --moss-soft: oklch(0.93 0.028 145);
+      --oxide: oklch(0.49 0.083 32);
+      --oxide-soft: oklch(0.94 0.026 32);
+      --amber: oklch(0.59 0.084 82);
+      --amber-soft: oklch(0.95 0.033 87);
+      --blue: oklch(0.48 0.08 245);
+      --shadow: 0 10px 28px oklch(0.25 0.02 65 / 0.07);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 13px/1.48 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    button { font: inherit; cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 240px minmax(620px, 1fr) 330px; }
+    .sidebar { background: var(--paper-deep); border-right: 1px solid var(--rule); padding: 25px 16px; position: sticky; top: 0; height: 100vh; }
+    .brand { display: flex; gap: 9px; align-items: center; margin: 0 8px 31px; font-weight: 700; letter-spacing: -.02em; }
+    .mark { width: 20px; height: 20px; border: 1.5px solid var(--moss); border-radius: 6px 6px 6px 1px; display: grid; place-items: center; color: var(--moss); font-size: 12px; }
+    .case-switcher { padding: 11px 12px; border: 1px solid var(--rule-strong); background: var(--paper); border-radius: 9px; margin-bottom: 25px; }
+    .case-switcher span, .eyebrow, .rail-label, .small-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+    .case-switcher strong { display:block; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nav-group { margin: 0 0 24px; }
+    .nav-group > span { display: block; margin: 0 9px 7px; font-size: 10px; letter-spacing: .08em; color: var(--muted); }
+    .nav { display: grid; gap: 2px; }
+    .nav a { color: var(--ink-soft); text-decoration: none; padding: 9px 10px; border-radius: 7px; display:flex; justify-content:space-between; align-items:center; }
+    .nav a.active { background: var(--paper); color: var(--ink); box-shadow: 0 1px 0 oklch(0.25 0.018 65 / .04); font-weight: 650; }
+    .count { font-size: 11px; color: var(--oxide); background: var(--oxide-soft); min-width: 18px; text-align:center; border-radius: 10px; padding: 1px 5px; }
+    .user { position:absolute; bottom:23px; left:24px; right:24px; border-top:1px solid var(--rule); padding-top:15px; color:var(--ink-soft); }
+    .user strong { color: var(--ink); display:block; }
+    main { padding: 26px 42px 70px; max-width: 1110px; width: 100%; }
+    .crumbs { display:flex; gap:7px; color:var(--muted); font-size:12px; margin-bottom:20px; }
+    .crumbs b { color:var(--ink-soft); font-weight:600; }
+    .case-head { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; border-bottom:1px solid var(--rule); padding-bottom:24px; }
+    h1 { font-size:28px; line-height:1.18; letter-spacing:-.04em; margin:4px 0 8px; font-weight:700; }
+    h2 { font-size:17px; letter-spacing:-.02em; margin:0; }
+    h3 { font-size:13px; margin:0; }
+    .case-meta { color: var(--ink-soft); max-width: 660px; margin:0; }
+    .status { border:1px solid var(--rule-strong); border-radius:999px; padding:6px 10px; white-space:nowrap; color:var(--moss); background:var(--moss-soft); font-weight:650; font-size:12px; }
+    .status i { display:inline-block; width:6px; height:6px; border-radius:50%; background:currentColor; margin:0 5px 1px 0; }
+    .statement { padding:28px 0 24px; border-bottom:1px solid var(--rule); }
+    .statement-grid { display:grid; grid-template-columns: minmax(0,1fr) 190px; gap:25px; }
+    .judgment { font-size:19px; line-height:1.5; letter-spacing:-.02em; margin:8px 0 12px; max-width:720px; }
+    .judgment strong { font-weight:720; }
+    .citation { color:var(--blue); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+    .basis { border-left:1px solid var(--rule); padding-left:17px; color:var(--ink-soft); }
+    .basis b { color:var(--ink); display:block; margin-top:4px; font-size:14px; }
+    .chip-row { display:flex; flex-wrap:wrap; gap:7px; margin-top:15px; }
+    .chip { border:1px solid var(--rule); color:var(--ink-soft); padding:4px 8px; border-radius:999px; background:var(--paper); font-size:11px; }
+    .chip.negative { color:var(--oxide); border-color:oklch(0.72 .05 32); background:var(--oxide-soft); }
+    .chip.pending { color:var(--amber); border-color:oklch(0.76 .05 82); background:var(--amber-soft); }
+    .section { padding:27px 0; border-bottom:1px solid var(--rule); }
+    .section-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:15px; }
+    .muted-link { color:var(--blue); text-decoration:none; font-size:12px; font-weight:600; }
+    .thesis { display:grid; grid-template-columns:27px minmax(0,1fr) auto; column-gap:11px; padding:15px 0; border-top:1px solid var(--rule); }
+    .thesis:first-of-type { border-top:0; }
+    .ordinal { color:var(--muted); font-variant-numeric:tabular-nums; padding-top:1px; }
+    .thesis p { margin:4px 0 0; color:var(--ink-soft); }
+    .signal { align-self:start; color:var(--moss); background:var(--moss-soft); border-radius:4px; padding:3px 6px; font-size:11px; white-space:nowrap; }
+    .signal.risk { color:var(--oxide); background:var(--oxide-soft); }
+    .signal.gap { color:var(--amber); background:var(--amber-soft); }
+    aside { background: oklch(0.954 0.012 83); border-left:1px solid var(--rule); padding:26px 23px 50px; min-height:100vh; }
+    .rail-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:13px; }
+    .live-dot { width:7px; height:7px; background:var(--moss); border-radius:50%; box-shadow:0 0 0 3px var(--moss-soft); }
+    .next-action { border:1px solid var(--rule-strong); background:var(--paper); box-shadow:var(--shadow); padding:16px; border-radius:10px; margin-bottom:18px; }
+    .next-action h2 { margin:5px 0 7px; }
+    .next-action p { margin:0 0 14px; color:var(--ink-soft); }
+    .primary { width:100%; border:0; padding:10px 12px; border-radius:7px; color:oklch(0.985 .008 85); background:var(--moss); font-weight:700; transition: background .18s ease, transform .18s ease; }
+    .primary:hover { background:oklch(.38 .07 145); transform:translateY(-1px); }
+    .secondary { margin-top:8px; width:100%; border:1px solid var(--rule-strong); padding:9px 11px; border-radius:7px; color:var(--ink); background:transparent; font-weight:600; }
+    .monitor { border-top:1px solid var(--rule); padding-top:19px; }
+    .monitor h3 { margin:5px 0 13px; font-size:16px; }
+    .monitor-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px 15px; margin-bottom:15px; }
+    .monitor-grid span { display:block; color:var(--muted); font-size:11px; margin-bottom:2px; }
+    .monitor-grid b { font-size:12px; font-weight:620; }
+    .run-card { margin-top:18px; border-top:1px solid var(--rule); padding-top:18px; }
+    .run-card-head { display:flex; justify-content:space-between; align-items:center; }
+    .run-state { font-size:11px; color:var(--moss); font-weight:700; }
+    .run-state.running { color:var(--amber); }
+    .timeline { margin:16px 0 12px; position:relative; }
+    .timeline:before { content:""; position:absolute; left:4px; top:9px; bottom:9px; width:1px; background:var(--rule-strong); }
+    .timeline-row { position:relative; padding:0 0 15px 19px; color:var(--ink-soft); font-size:12px; }
+    .timeline-row:last-child { padding-bottom:0; }
+    .timeline-row:before { content:""; position:absolute; z-index:1; left:0; top:4px; width:8px; height:8px; border-radius:50%; background:var(--paper); border:1.5px solid var(--rule-strong); }
+    .timeline-row.done:before { border-color:var(--moss); background:var(--moss); }
+    .timeline-row.alert:before { border-color:var(--oxide); background:var(--oxide); }
+    .timeline-row strong { color:var(--ink); display:block; font-size:12px; }
+    .run-details { border-top:1px solid var(--rule); padding-top:13px; }
+    .run-details button { border:0; padding:0; background:transparent; color:var(--blue); font-weight:650; font-size:12px; }
+    .detail-panel { display:none; margin-top:12px; background:var(--paper); border:1px solid var(--rule); padding:10px; border-radius:7px; color:var(--ink-soft); font-size:11px; }
+    .detail-panel.show { display:block; }
+    .detail-panel div { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--rule); gap:12px; }
+    .detail-panel div:last-child { border-bottom:0; }
+    .footer-note { margin-top:22px; color:var(--muted); font-size:11px; }
+    .toast { position:fixed; left:50%; bottom:26px; transform:translate(-50%, 18px); opacity:0; transition:.22s ease; background:var(--ink); color:var(--paper); padding:10px 13px; border-radius:7px; box-shadow:var(--shadow); font-size:12px; pointer-events:none; }
+    .toast.show { opacity:1; transform:translate(-50%, 0); }
+    @media (max-width: 1120px) { .app { grid-template-columns: 208px minmax(0,1fr); }.sidebar{padding-inline:12px;} aside { grid-column:2; border-left:0; border-top:1px solid var(--rule); min-height:auto; display:grid; grid-template-columns:1fr 1fr; gap:20px; }.rail-head{grid-column:1/-1; margin-bottom:-10px;}.next-action{margin-bottom:0}.monitor{border-top:0;padding-top:0}.run-card{margin-top:0} }
+    @media (max-width: 760px) { .app{display:block}.sidebar{position:relative;height:auto;padding:15px;display:flex;align-items:center;gap:13px}.brand{margin:0}.case-switcher,.nav-group,.user{display:none}main{padding:20px}.case-head,.statement-grid{display:block}.status{display:inline-block;margin-top:12px}.basis{border-left:0;border-top:1px solid var(--rule);padding:13px 0 0;margin-top:18px}aside{display:block;padding:20px}.monitor{border-top:1px solid var(--rule);padding-top:18px;margin-top:18px}.next-action{margin-bottom:18px} }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="sidebar" aria-label="研究 Case 导航">
+      <div class="brand"><span class="mark">F</span><span>Fund Engine</span></div>
+      <div class="case-switcher"><span>当前 Case</span><strong>AI 算力资本开支传导</strong></div>
+      <div class="nav-group"><span>研究档案</span><div class="nav">
+        <a class="active" href="#conclusion">结论</a><a href="#theses">命题与证据</a><a href="#sources">原文资料</a><a href="#review">审核 <b class="count">1</b></a>
+      </div></div>
+      <div class="nav-group"><span>后续工作</span><div class="nav"><a href="#monitor">持续研究</a><a href="#impact">影响穿透</a><a href="#versions">监控与版本</a></div></div>
+      <div class="user"><strong>林晨</strong><span>半导体研究组</span></div>
+    </nav>
+
+    <main>
+      <div class="crumbs"><span>行业研究</span><span>›</span><b>AI 算力资本开支传导</b></div>
+      <header class="case-head">
+        <div><div class="eyebrow">研究截止时点 · 2026.08.08 09:30</div><h1>海外云厂商 CapEx 会否穿透至中国算力链</h1><p class="case-meta">当前研究范围：北美四家云厂商的资本开支、订单与交付披露，及对中国服务器、光模块、PCB 公司的可复核影响。</p></div>
+        <div class="status"><i></i>持续研究已开启</div>
+      </header>
+
+      <section class="statement" id="conclusion">
+        <div class="statement-grid"><div>
+          <div class="eyebrow">当前人工判断 · 版本 3</div>
+          <p class="judgment"><strong>支持有限：</strong>资本开支仍在增长，但对中国供应链的收入兑现取决于交付节奏与产品结构，现有资料不足以确认跨公司、跨季度的稳定传导。</p>
+          <p class="case-meta">主要依据来自 <span class="citation">4 条已审核披露</span>；最新一轮发现 1 条可能反证，尚未进入正式结论。</p>
+          <div class="chip-row"><span class="chip">已审核证据 12</span><span class="chip negative">关键反证 1</span><span class="chip pending">待审提议 1</span></div>
+        </div><div class="basis"><span class="small-label">最大缺口</span><b>订单口径与中国公司收入的同周期对齐</b><span>下一验证：云厂商 Q3 资本开支指引</span></div></div>
+      </section>
+
+      <section class="section" id="theses">
+        <div class="section-head"><div><div class="eyebrow">竞争性命题</div><h2>目前不是“更多材料”，而是“哪种解释更能成立”</h2></div><a class="muted-link" href="#sources">查看全部证据</a></div>
+        <article class="thesis"><span class="ordinal">01</span><div><h3>云厂商资本开支上行，带动供应链订单与收入兑现</h3><p>支持：CapEx 指引未下修。缺口：订单归属与交付期尚未对齐。</p></div><span class="signal">支持有限</span></article>
+        <article class="thesis"><span class="ordinal">02</span><div><h3>增长主要由海外供应链或存量采购吸收</h3><p>反证候选：新增资料显示单一公司收入增长与交付窗口不一致。</p></div><span class="signal risk">需审核</span></article>
+        <article class="thesis"><span class="ordinal">03</span><div><h3>CapEx 增长不等于短期收入确认</h3><p>需观察：设备到货、验收与收入确认是否跨季度延后。</p></div><span class="signal gap">证据不足</span></article>
+      </section>
+
+      <section class="section" id="sources">
+        <div class="section-head"><div><div class="eyebrow">最近一次持续研究</div><h2 id="result-heading">08:30 已完成一次补证</h2></div><a class="muted-link" href="#monitor">查看运行记录</a></div>
+        <article class="thesis"><span class="ordinal">08:32</span><div><h3>已冻结 3 份新增资料，其中 1 份与命题 02 发生冲突</h3><p>来源：公司公告 1、授权研报 1、公开新闻 1。所有材料均保留获取时间与精确定位。</p></div><span class="signal risk">需审核</span></article>
+        <article class="thesis"><span class="ordinal">08:35</span><div><h3>未发现足以直接修改已发布判断的材料</h3><p>系统没有改写结论，仅创建了 1 条关键证据审核提议。</p></div><span class="signal">边界正常</span></article>
+      </section>
+    </main>
+
+    <aside id="monitor">
+      <div class="rail-head"><span class="rail-label">证据与行动</span><span class="live-dot" title="监控已启用"></span></div>
+      <section class="next-action" aria-live="polite"><div class="eyebrow">现在需要你</div><h2 id="action-title">审核 1 条关键证据</h2><p id="action-copy">它可能说明“增长来自存量采购”，会影响对命题 02 的判断。审核后将解锁结论是否需重审。</p><button class="primary" id="review-button">开始审核关键证据</button><button class="secondary" id="run-button">立即补证一次</button></section>
+
+      <section class="monitor"><div class="eyebrow">持续研究</div><h3>每天检查，直到 Q3 指引发布</h3><div class="monitor-grid"><div><span>资料范围</span><b>已授权 + 公开披露</b></div><div><span>下次检查</span><b>明日 08:30</b></div><div><span>监控对象</span><b>3 个命题 · 7 家公司</b></div><div><span>本月预算</span><b>18 / 40 次</b></div></div><a class="muted-link" href="#monitor">编辑监控条件</a></section>
+
+      <section class="run-card"><div class="run-card-head"><div><div class="eyebrow">本次运行 · RUN-0841</div><h3 id="run-title">已完成 · 4 分 12 秒</h3></div><span class="run-state" id="run-state">已记录</span></div>
+        <div class="timeline" id="timeline"><div class="timeline-row done"><strong>校验研究范围</strong>3 个命题、7 家公司、4 类来源</div><div class="timeline-row done"><strong>检索并冻结材料</strong>检查 18 条，冻结 3 份可用资料</div><div class="timeline-row alert"><strong>提出待审证据</strong>1 条关键反证候选，未自动采纳</div><div class="timeline-row done"><strong>更新下一步</strong>等待人工审核，不改写已有结论</div></div>
+        <div class="run-details"><button id="detail-button" aria-expanded="false">查看过程明细与失败记录</button><div class="detail-panel" id="detail-panel"><div><span>聚源授权研报</span><b>2 条命中，1 条冻结</b></div><div><span>公司公告</span><b>6 条命中，1 条冻结</b></div><div><span>公开新闻</span><b>10 条命中，1 条冻结</b></div><div><span>失败</span><b>1 条正文不可用，已记录</b></div><div><span>运行口径</span><b>CaseMonitor v2</b></div></div></div>
+      </section>
+      <p class="footer-note">AI 仅提出候选材料与关系。正式结论必须由研究员审核并保留证据定位。</p>
+    </aside>
+  </div>
+  <div class="toast" role="status" id="toast"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const toast = (message) => { const node = $('toast'); node.textContent = message; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 2800); };
+    $('detail-button').addEventListener('click', () => { const panel = $('detail-panel'); const open = panel.classList.toggle('show'); $('detail-button').setAttribute('aria-expanded', String(open)); $('detail-button').textContent = open ? '收起过程明细与失败记录' : '查看过程明细与失败记录'; });
+    $('review-button').addEventListener('click', () => toast('原型：将进入“关键证据审核”分栏视图。'));
+    $('run-button').addEventListener('click', () => {
+      const button = $('run-button'); if (button.dataset.running) return;
+      button.dataset.running = 'true'; button.textContent = '正在补证…'; button.disabled = true;
+      $('run-title').textContent = '运行中 · 正在检查来源'; $('run-state').textContent = '执行中'; $('run-state').classList.add('running');
+      $('timeline').innerHTML = '<div class="timeline-row done"><strong>校验研究范围</strong>3 个命题、7 家公司、4 类来源</div><div class="timeline-row"><strong>检索允许资料源</strong>正在读取授权范围和已有证据</div><div class="timeline-row"><strong>冻结候选材料</strong>等待来源响应</div><div class="timeline-row"><strong>生成待审提议</strong>仅在范围内产生候选</div>';
+      toast('已启动本次补证，过程会保留在 Case 运行记录中。');
+      setTimeout(() => { $('run-title').textContent = '已完成 · 3 分 48 秒'; $('run-state').textContent = '已记录'; $('run-state').classList.remove('running'); button.textContent = '立即补证一次'; button.disabled = false; delete button.dataset.running; $('timeline').innerHTML = '<div class="timeline-row done"><strong>校验研究范围</strong>3 个命题、7 家公司、4 类来源</div><div class="timeline-row done"><strong>检索并冻结材料</strong>检查 11 条，冻结 2 份可用资料</div><div class="timeline-row alert"><strong>提出待审证据</strong>发现 1 条可能改变命题 02 的反证</div><div class="timeline-row done"><strong>更新下一步</strong>等待人工审核，不改写已有结论</div>'; $('action-title').textContent = '审核 1 条关键证据'; $('action-copy').textContent = '新材料可能影响命题 02。审核后将决定是否创建新的结论复核版本。'; $('result-heading').textContent = '刚刚完成一次补证'; toast('本次完成：冻结 2 份材料，产生 1 条关键待审反证。'); }, 1650);
+    });
+  </script>
+</body>
+</html>
