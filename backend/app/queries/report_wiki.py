@@ -45,6 +45,10 @@ from app.models.report_research import (
 from app.schemas.v1.report_research import (
     ReportFactorDTO,
     ReportResearchScopeDTO,
+    ReportEmbedFactorDTO,
+    ReportEmbedWikiEdgeDTO,
+    ReportEmbedWikiGraphDTO,
+    ReportEmbedWikiNodeDTO,
     ReportWikiEdgeDTO,
     ReportWikiGraphDTO,
     ReportWikiNodeDTO,
@@ -544,6 +548,53 @@ class ReportWikiQueries:
             factors=selected_factors,
         )
 
+    def embed_graph(self, case_id: uuid.UUID) -> ReportEmbedWikiGraphDTO:
+        """Return a deliberately small, source-safe projection for embeds.
+
+        The normal Wiki graph is an authorized-researcher read model.  An
+        external embed has a narrower contract: it must never receive report
+        prose, an original upload locator, reviewer identity, or an internal
+        record locator that could be used to pivot into the main workspace.
+        """
+        graph = self.graph(case_id)
+        node_ids = {
+            node.id: f"n{position}"
+            for position, node in enumerate(graph.nodes, start=1)
+        }
+        embed_nodes = [
+            ReportEmbedWikiNodeDTO(
+                id=node_ids[node.id],
+                kind=node.kind,
+                label=self._embed_node_label(node),
+                status=node.status,
+            )
+            for node in graph.nodes
+        ]
+        embed_edges = [
+            ReportEmbedWikiEdgeDTO(
+                id=f"e{position}",
+                source_id=node_ids[edge.source_id],
+                target_id=node_ids[edge.target_id],
+                kind=edge.kind,
+                status=edge.status,
+            )
+            for position, edge in enumerate(graph.edges, start=1)
+            if edge.source_id in node_ids and edge.target_id in node_ids
+        ]
+        embed_factors = [
+            ReportEmbedFactorDTO(
+                classification=factor.classification,
+                components=factor.components,
+                explanation=self._embed_factor_explanation(factor.classification),
+            )
+            for factor in graph.factors
+        ]
+        return ReportEmbedWikiGraphDTO(
+            nodes=embed_nodes,
+            edges=embed_edges,
+            factors=embed_factors,
+        )
+
     def _require_case(self, case_id: uuid.UUID) -> None:
         if self._session.get(ResearchCase, case_id) is None:
             raise NotFoundError("report research case not found")
@@ -903,6 +954,29 @@ class ReportWikiQueries:
     @staticmethod
     def _locator(span: SourceSpan) -> str:
         return json.dumps(span.locator, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _embed_node_label(node: ReportWikiNodeDTO) -> str:
+        if node.kind == "report_claim":
+            return "研报主张"
+        if node.kind == "evidence":
+            return "已核验的外部证据" if node.status == "verified" else "研报来源证据"
+        if node.kind == "market_window":
+            return "市场观察"
+        if node.kind == "fund":
+            # A fund position can be sensitive even when its exact weight is
+            # absent.  The external graph exposes a mapping without naming a
+            # product or revealing its disclosure record.
+            return "关联基金"
+        return node.label
+
+    @staticmethod
+    def _embed_factor_explanation(classification: str) -> str:
+        if classification == "key":
+            return "证据链已满足关键因素的审阅门槛。"
+        if classification == "alternative":
+            return "存在需要并列评估的替代解释。"
+        return "当前证据链仍有待补充的验证缺口。"
 
     @staticmethod
     def _market_locator(observation: ReportMarketObservation) -> str:

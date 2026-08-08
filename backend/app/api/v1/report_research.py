@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import uuid
 
-from fastapi import APIRouter, Body, Depends, Query, Response, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,11 +17,13 @@ from app.schemas.v1.report_research import (
     ReportResearchCreatedResponse,
     ReportResearchCaseDTO,
     ReportResearchDocumentDTO,
+    ReportEmbedWikiGraphDTO,
     ReportWikiGraphDTO,
 )
 from app.queries.report_wiki import ReportWikiQueries
 from app.services.report_research import CreatedReportResearch, ReportResearchService
 from app.services.document_blobs import LocalImmutableBlobStore
+from app.services.embed_access import EmbedAccessDenied, EmbedAccessService
 
 router = APIRouter(prefix="/report-research", tags=["report-research-v1"])
 
@@ -101,6 +103,40 @@ def report_wiki_graph(
     return ReportWikiQueries(db).graph(
         case_id, scope_version=scope_version, relation_id=relation_id
     )
+
+
+@router.api_route(
+    "/{case_id}/embed/wiki",
+    methods=["GET", "HEAD"],
+    response_model=ReportEmbedWikiGraphDTO,
+)
+def embedded_report_wiki_graph(
+    case_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    x_embed_token: str | None = Header(default=None, alias="X-Embed-Token"),
+    db: Session = Depends(get_db),
+) -> ReportEmbedWikiGraphDTO:
+    """Render one case's redacted Wiki graph under a scoped bearer grant.
+
+    Tokens are accepted only in a request header.  They are intentionally not
+    read from query parameters so an embedding host cannot leak a credential
+    through browser history, server logs, or a referrer header.
+    """
+    origin = request.headers.get("origin")
+    try:
+        grant = EmbedAccessService(db).require_read_only(x_embed_token, case_id, origin)
+    except EmbedAccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail="embed access denied") from None
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if origin is not None:
+        # ``require_read_only`` has already checked this exact normalized
+        # origin.  Never send a wildcard for bearer-token protected content.
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return ReportWikiQueries(db).embed_graph(grant.research_case_id)
 
 
 @router.get("/documents/{document_id}/original")

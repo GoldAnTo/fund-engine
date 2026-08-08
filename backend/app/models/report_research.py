@@ -206,6 +206,53 @@ class ReportResearchScopeRelation(Base):
     )
 
 
+class EmbedGrant(Base):
+    """One scoped, time-bounded permission for a redacted embedded view.
+
+    Only the SHA-256 digest of the bearer token is retained.  The raw token is
+    deliberately returned once by the controlled service seam and never has a
+    database column or an HTTP management route.
+    """
+
+    __tablename__ = "embed_grants"
+    __table_args__ = (
+        UniqueConstraint("token_sha256", name="uq_embed_grants_token_sha256"),
+        Index("ix_embed_grants_case_expiry", "research_case_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    allowed_origins: Mapped[list] = mapped_column(JSON, nullable=False)
+    issued_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class EmbedGrantRevocation(Base):
+    """Append-only audit record that makes one :class:`EmbedGrant` unusable."""
+
+    __tablename__ = "embed_grant_revocations"
+    __table_args__ = (
+        UniqueConstraint("embed_grant_id", name="uq_embed_grant_revocation_grant"),
+        Index("ix_embed_grant_revocations_grant", "embed_grant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    embed_grant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("embed_grants.id"), nullable=False
+    )
+    revoked_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
 class ReportClaim(Base):
     """One source-backed opinion, forecast, assumption, or risk in a report."""
 

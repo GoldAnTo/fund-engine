@@ -132,3 +132,38 @@ class ReportWikiGraphDTO(V1Model):
     nodes: list[ReportWikiNodeDTO]
     edges: list[ReportWikiEdgeDTO]
     factors: list[ReportFactorDTO]
+
+
+class ReportEmbedWikiNodeDTO(V1Model):
+    """One opaque external graph node; never a ledger or source identifier."""
+
+    id: str
+    kind: ReportWikiNodeKind
+    label: str
+    status: ReportWikiNodeStatus
+
+
+class ReportEmbedWikiEdgeDTO(V1Model):
+    """One opaque external graph edge; relation provenance stays internal."""
+
+    id: str
+    source_id: str
+    target_id: str
+    kind: str
+    status: ReportWikiNodeStatus
+
+
+class ReportEmbedFactorDTO(V1Model):
+    """Safe factor classification without claim or relation identifiers."""
+
+    classification: ReportFactorClassification
+    components: dict[str, bool]
+    explanation: str
+
+
+class ReportEmbedWikiGraphDTO(V1Model):
+    """External, read-only report Wiki projection with no dossier identifiers."""
+
+    nodes: list[ReportEmbedWikiNodeDTO]
+    edges: list[ReportEmbedWikiEdgeDTO]
+    factors: list[ReportEmbedFactorDTO]

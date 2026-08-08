@@ -1,5 +1,7 @@
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -7,10 +9,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from sqlalchemy.orm import Session
 
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
+from app.db import SessionLocal, get_db
 from app.env import load_local_env
 from app.errors import (
     ConflictError,
@@ -19,6 +23,7 @@ from app.errors import (
     ValidationFailedError,
 )
 from app.schemas.v1.common import ErrorEnvelope
+from app.services.embed_access import EmbedAccessService
 
 load_local_env()  # backend/.env (gitignored) -> os.environ, env vars win
 
@@ -38,6 +43,99 @@ app.add_middleware(
 )
 app.include_router(cases_router)
 app.include_router(v1_router)
+
+
+_EMBED_PREFLIGHT_PREFIX = "/api/v1/report-research/"
+_EMBED_PREFLIGHT_SUFFIX = "/embed/wiki"
+_EMBED_PREFLIGHT_ALLOWED_HEADERS = frozenset({"x-embed-token"})
+
+
+def _embed_case_id_for_preflight(request: Request) -> uuid.UUID | None:
+    """Return the case only for the exact external embed preflight route."""
+    if request.method != "OPTIONS":
+        return None
+    path = request.url.path
+    if not path.startswith(_EMBED_PREFLIGHT_PREFIX) or not path.endswith(
+        _EMBED_PREFLIGHT_SUFFIX
+    ):
+        return None
+    raw_case_id = path[
+        len(_EMBED_PREFLIGHT_PREFIX) : -len(_EMBED_PREFLIGHT_SUFFIX)
+    ]
+    if not raw_case_id or "/" in raw_case_id:
+        return None
+    try:
+        return uuid.UUID(raw_case_id)
+    except ValueError:
+        return None
+
+
+def _embed_preflight_headers_are_safe(request: Request) -> bool:
+    requested_method = request.headers.get("access-control-request-method", "").upper()
+    if requested_method not in {"GET", "HEAD"}:
+        return False
+    requested_headers = request.headers.get("access-control-request-headers", "")
+    headers = {
+        value.strip().lower()
+        for value in requested_headers.split(",")
+        if value.strip()
+    }
+    return headers == _EMBED_PREFLIGHT_ALLOWED_HEADERS
+
+
+@contextmanager
+def _embed_preflight_session() -> Iterator[Session]:
+    """Open one short read session, honoring test dependency overrides."""
+    override = app.dependency_overrides.get(get_db)
+    if override is None:
+        session = SessionLocal()
+        try:
+            yield session
+        finally:
+            session.close()
+        return
+    dependency = override()
+    session = next(dependency)
+    try:
+        yield session
+    finally:
+        try:
+            next(dependency)
+        except StopIteration:
+            pass
+
+
+@app.middleware("http")
+async def embed_preflight_middleware(request: Request, call_next):
+    """Handle grant-aware external embed preflight before global CORS.
+
+    This declaration is intentionally after the request-id middleware and is
+    therefore the outermost application middleware.  Returning directly
+    prevents the broad development ``CORSMiddleware`` from answering embed
+    preflights with its unrelated local-origin policy.
+    """
+    case_id = _embed_case_id_for_preflight(request)
+    if case_id is None:
+        return await call_next(request)
+    origin = request.headers.get("origin")
+    allowed = False
+    if origin is not None and _embed_preflight_headers_are_safe(request):
+        with _embed_preflight_session() as session:
+            allowed = EmbedAccessService(session).allows_preflight(case_id, origin)
+    if not allowed:
+        return Response(status_code=403)
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, HEAD",
+            "Access-Control-Allow-Headers": "X-Embed-Token",
+            "Vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _v1_error_response(
@@ -80,6 +178,18 @@ async def request_id_middleware(request: Request, call_next):
             request_id,
             status_code=500,
         )
+    # The application-wide development CORS allow-list is intentionally not
+    # an embed permission system.  A rejected bearer grant must not inherit a
+    # permissive CORS header merely because its Origin happens to be one of
+    # the local frontend origins.  Successful embed reads set their own exact
+    # grant-origin header in the route.
+    if (
+        request.url.path.endswith("/embed/wiki")
+        and response.status_code in {401, 403}
+    ):
+        for header in tuple(response.headers):
+            if header.lower().startswith("access-control-"):
+                del response.headers[header]
     response.headers["x-request-id"] = request_id
     return response
 

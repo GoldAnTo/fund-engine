@@ -50,6 +50,14 @@ _Avoid_: Automatic SUPPORTS edge, semantic similarity
 The frozen set of DocumentVersions, SourceStatements, and EvidenceLinks visible to one AIAssessment at its cutoff time.
 _Avoid_: Current database state
 
+**EmbedGrant**:
+A scoped, time-bounded, read-only permission that lets an external system render a redacted research projection for one ResearchCase. It is not a user session or a permission to alter the research ledger.
+_Avoid_: API key, shared login, edit token
+
+**EmbedView**:
+The redacted, read-only projection delivered under an EmbedGrant. It intentionally omits original files, reviewer identities, internal work identifiers, and restricted fund-disclosure detail.
+_Avoid_: Full dossier, external workspace
+
 **CausalEdge**:
 A proposed transmission relationship between two domain factors with its own evidence requirements. A positive company result or a source attribution does not by itself establish a CausalEdge.
 _Avoid_: Correlation, supply-chain adjacency
