@@ -4,7 +4,19 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Uuid
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    Uuid,
+    event,
+    select,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
@@ -128,3 +140,20 @@ class CompanyImpactObservation(Base):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     as_of_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+@event.listens_for(CompanyImpactRelation, "before_insert")
+def _derive_relation_scope_from_hypothesis(_mapper, connection, target) -> None:
+    """Prevent a relation from crossing the owning hypothesis's scope boundary."""
+
+    hypothesis_scope_id = connection.scalar(
+        select(EventImpactHypothesis.scope_version_id).where(
+            EventImpactHypothesis.id == target.hypothesis_id
+        )
+    )
+    if hypothesis_scope_id is None:
+        raise ValueError("hypothesis_id must reference an existing impact hypothesis")
+    if target.scope_version_id is None:
+        target.scope_version_id = hypothesis_scope_id
+    elif target.scope_version_id != hypothesis_scope_id:
+        raise ValueError("scope_version_id must match the owning hypothesis scope")

@@ -30,10 +30,10 @@ MIGRATION_PATH = (
 )
 
 
-def _scope(session, research_case) -> EventResearchScopeVersion:
+def _scope(session, research_case, *, version: int = 1) -> EventResearchScopeVersion:
     scope = EventResearchScopeVersion(
         research_case_id=research_case.id,
-        version=1,
+        version=version,
         changed_by="tester",
         change_summary="fixture scope",
         created_at=NOW,
@@ -97,6 +97,44 @@ def test_impact_relation_is_scope_bound_and_append_only(session, research_case) 
             .where(CompanyImpactRelation.id == relation.id)
             .values(status="verified")
         )
+
+
+def test_relation_derives_hypothesis_scope_and_rejects_mismatch(session, research_case) -> None:
+    scope = _scope(session, research_case)
+    conflicting_scope = _scope(session, research_case, version=2)
+    company = _company(session, code="SCOPE-COMPANY", company_type="unlisted_supplier")
+    hypothesis = _hypothesis(session, research_case.id, scope.id)
+
+    derived_relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        status="candidate",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+    session.add(derived_relation)
+    session.commit()
+
+    assert derived_relation.scope_version_id == scope.id
+
+    mismatched_relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        scope_version_id=conflicting_scope.id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        status="candidate",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+    session.add(mismatched_relation)
+    with pytest.raises(ValueError, match="scope_version_id must match"):
+        session.commit()
+    session.rollback()
 
 
 def test_unlisted_company_can_be_relation_target_without_stock(session, research_case) -> None:
