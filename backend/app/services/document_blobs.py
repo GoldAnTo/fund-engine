@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from app.models.ledger import DocumentBlob
@@ -32,27 +33,32 @@ class LocalImmutableBlobStore:
         key = f"sha256/{digest[:2]}/{digest}"
         target = self._path_for_key(key)
         target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{digest}.", suffix=".tmp", dir=target.parent
+        )
+        temporary = Path(temporary_name)
         try:
-            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-        except FileExistsError:
-            self._verify_bytes(key, raw, digest)
-            return key, digest
-        try:
-            view = memoryview(raw)
-            while view:
-                written = os.write(fd, view)
-                view = view[written:]
-            os.fsync(fd)
-            os.fchmod(fd, 0o444)
-        except Exception:
-            os.close(fd)
-            # Only remove the exact object this invocation created. Leaving a
-            # partial content-addressed object would make every later retry
-            # fail its integrity check forever.
-            target.unlink(missing_ok=True)
-            raise
-        else:
-            os.close(fd)
+            try:
+                view = memoryview(raw)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+                os.fsync(fd)
+                os.fchmod(fd, 0o444)
+            finally:
+                os.close(fd)
+            try:
+                # link() publishes only if the final key does not exist.
+                # Readers never see the temporary file, so a racing upload
+                # can only read a fully fsynced immutable object.
+                os.link(temporary, target)
+                self._fsync_directory(target.parent)
+            except FileExistsError:
+                # A peer completed the same digest first. Its object is safe
+                # only after a full byte-for-byte verification.
+                self._verify_bytes(key, raw, digest)
+        finally:
+            temporary.unlink(missing_ok=True)
         self._verify_bytes(key, raw, digest)
         return key, digest
 
@@ -86,3 +92,11 @@ class LocalImmutableBlobStore:
         except ValueError as exc:
             raise BlobIntegrityError("immutable blob key escapes configured storage") from exc
         return path
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)

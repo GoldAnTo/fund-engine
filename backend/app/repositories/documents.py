@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
@@ -76,6 +78,66 @@ class DocumentRepository:
         self._session.add(version)
         self._session.flush()
         return version
+
+    def insert_version_or_existing(
+        self,
+        *,
+        content_sha256: str,
+        source_url: str,
+        published_at: datetime | None,
+        available_at: datetime,
+        acquired_at: datetime,
+        parser_version: str,
+        supersedes_id: uuid.UUID | None,
+        natural_key: str | None = None,
+        title: str | None = None,
+        byte_size: int | None = None,
+        language: str | None = None,
+        parse_state: str = "success",
+    ) -> tuple[DocumentVersion, bool]:
+        """Insert inside a savepoint, rereading normal idempotency races.
+
+        A duplicate content/natural key must not roll back the caller's outer
+        transaction. PostgreSQL aborts a transaction after a unique conflict,
+        hence the deliberately narrow savepoint.
+        """
+        try:
+            with self._session.begin_nested():
+                version = self.insert_version(
+                    content_sha256=content_sha256,
+                    source_url=source_url,
+                    published_at=published_at,
+                    available_at=available_at,
+                    acquired_at=acquired_at,
+                    parser_version=parser_version,
+                    supersedes_id=supersedes_id,
+                    natural_key=natural_key,
+                    title=title,
+                    byte_size=byte_size,
+                    language=language,
+                    parse_state=parse_state,
+                )
+            return version, True
+        except IntegrityError:
+            # The competing commit is now visible under READ COMMITTED. Hash
+            # is authoritative; natural key is the intentional semantic
+            # fallback for non-report callers.
+            existing = self.by_hash(content_sha256)
+            if existing is None and natural_key:
+                existing = self.by_natural_key(natural_key)
+            if existing is None:
+                raise
+            return existing, False
+
+    def lock_source_for_append(self, source_url: str) -> None:
+        """Serialize successor selection for one source on PostgreSQL only."""
+        if self._session.bind is None or self._session.bind.dialect.name != "postgresql":
+            return
+        digest = hashlib.sha256(source_url.encode("utf-8")).digest()[:8]
+        lock_key = int.from_bytes(digest, byteorder="big", signed=True)
+        self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key}
+        )
 
     def insert_span(
         self,

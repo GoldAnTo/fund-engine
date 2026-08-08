@@ -136,6 +136,7 @@ class ReportResearchService:
                 {
                     "input_kind": "pdf_upload",
                     "publisher": normalized_publisher,
+                    "filename": filename,
                     "published_at": self._iso_published_at(document.published_at),
                 }
             )

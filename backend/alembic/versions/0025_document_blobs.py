@@ -47,6 +47,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    count = op.get_bind().execute(
+        sa.text("SELECT count(*) FROM document_blobs")
+    ).scalar_one()
+    if count:
+        raise RuntimeError(
+            f"refusing to downgrade: document_blobs contains {count} immutable references; export or purge them first"
+        )
     if op.get_bind().dialect.name == "postgresql":
         op.execute("DROP TRIGGER IF EXISTS no_delete_document_blobs ON document_blobs;")
         op.execute("DROP TRIGGER IF EXISTS no_update_document_blobs ON document_blobs;")

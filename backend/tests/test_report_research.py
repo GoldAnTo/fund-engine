@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import datetime, timezone
+from threading import Barrier, Event, Thread
 
 import pytest
 from sqlalchemy import select, update
 
 from app.datasources.docling import PdfParseError
+from app.documents.locators import coerce_locator_v1, compute_text_sha256
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentBlob,
@@ -185,9 +187,16 @@ def test_report_research_rejects_blank_title_or_content(cmd_client) -> None:
             "content": " \n ",
         },
     )
+    blank_pdf_title = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params={"title": "  "},
+        content=b"%PDF-not-parsed-because-title-is-invalid",
+        headers={"content-type": "application/pdf"},
+    )
 
     assert blank_title.status_code == 422
     assert blank_content.status_code == 422
+    assert blank_pdf_title.status_code == 422
 
 
 def test_same_report_title_and_date_with_changed_pasted_content_appends_version(
@@ -277,3 +286,130 @@ def test_same_report_title_and_date_with_changed_pdf_bytes_appends_blob_version(
     assert cmd_client.get(
         f"/api/v1/report-research/documents/{second_document_id}/original"
     ).content == second_raw
+
+
+@pytest.mark.parametrize(
+    ("input_kind", "source_url"),
+    [
+        ("pasted_text", None),
+        ("web_content", "https://research.example.com/original-whitespace"),
+    ],
+)
+def test_text_report_preserves_original_whitespace_bytes(
+    cmd_client, cmd_session, input_kind, source_url
+) -> None:
+    raw_content = "  原始研报正文\n保留前后空白。  \n"
+    response = cmd_client.post(
+        "/api/v1/report-research",
+        json={
+            "input_kind": input_kind,
+            "title": "原文保真测试",
+            "content": raw_content,
+            "source_url": source_url,
+        },
+    )
+
+    assert response.status_code == 201
+    document = cmd_session.get(
+        DocumentVersion, uuid.UUID(response.json()["document"]["id"])
+    )
+    assert document is not None
+    assert document.content_sha256 == hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+    span = cmd_session.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == document.id)
+    )
+    assert span is not None
+    assert span.verbatim_text == raw_content
+    statement = cmd_session.scalar(
+        select(SourceStatement).where(SourceStatement.source_span_id == span.id)
+    )
+    assert statement is not None
+    assert statement.normalized_text == raw_content
+
+
+def test_successful_pdf_keeps_original_filename_in_source_locator(
+    cmd_client, cmd_session, monkeypatch, tmp_path
+) -> None:
+    from app.datasources.docling import ParsedSpan
+
+    def _parse_one_span(self, raw: bytes, *, document_sha256: str):
+        locator = coerce_locator_v1(
+            {"page": 1, "paragraph": 1, "parser": "pypdf-v1"},
+            document_sha256=document_sha256,
+            parser_version="pypdf-v1",
+        )
+        return [
+            ParsedSpan(
+                locator=locator,
+                verbatim_text="成功解析的原文",
+                text_sha256=compute_text_sha256("成功解析的原文"),
+                context_hash="fixture",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.services.report_research.PypdfAdapter.extract_spans", _parse_one_span
+    )
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
+    response = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params={"title": "成功解析研报", "filename": "original-name.pdf"},
+        content=b"%PDF-success",
+        headers={"content-type": "application/pdf"},
+    )
+
+    assert response.status_code == 201
+    document_id = uuid.UUID(response.json()["document"]["id"])
+    span = cmd_session.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == document_id)
+    )
+    assert span is not None
+    assert span.locator["filename"] == "original-name.pdf"
+
+
+def test_blob_store_concurrent_writers_never_expose_partial_object(
+    monkeypatch, tmp_path
+) -> None:
+    from app.services.document_blobs import LocalImmutableBlobStore
+    import app.services.document_blobs as blob_module
+
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
+    original_write = blob_module.os.write
+    first_write_started = Event()
+    allow_first_write = Event()
+    first_fd: dict[str, int | None] = {"value": None}
+
+    def _delayed_first_write(fd: int, data) -> int:
+        if first_fd["value"] is None:
+            first_fd["value"] = fd
+            first_write_started.set()
+            assert allow_first_write.wait(timeout=5)
+        return original_write(fd, data)
+
+    monkeypatch.setattr(blob_module.os, "write", _delayed_first_write)
+    raw = b"complete PDF bytes" * 1024
+    start = Barrier(2)
+    results: list[tuple[str, str]] = []
+    errors: list[BaseException] = []
+
+    def _persist() -> None:
+        try:
+            start.wait()
+            results.append(LocalImmutableBlobStore().persist(raw))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = Thread(target=_persist)
+    second = Thread(target=_persist)
+    first.start()
+    second.start()
+    assert first_write_started.wait(timeout=5)
+    allow_first_write.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    assert results[0] == results[1]
+    key, _ = results[0]
+    assert (tmp_path / "report-blobs" / key).read_bytes() == raw

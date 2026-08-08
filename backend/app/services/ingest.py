@@ -21,6 +21,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _before_document_source_lock() -> None:
+    """Test seam for concurrent source-version ordering."""
+
+
+def _before_document_version_insert() -> None:
+    """Test seam for the content/natural-key conflict recovery path."""
+
+
 def _source_prefix(source_url: str) -> str:
     # 仅取来源类型（gildata://research_report 等）以让跨入口/跨站点同源
     # 文档归并到同一组；正文 URL 的差异不应绕过去重。
@@ -120,6 +128,10 @@ class DocumentService:
         language: str | None = None,
         parse_state: str = "success",
     ) -> tuple[DocumentVersion, bool]:
+        _before_document_source_lock()
+        # Choosing ``supersedes_id`` is source-order-sensitive. A transaction
+        # advisory lock makes concurrent revisions form one linear chain.
+        self._repo.lock_source_for_append(source_url)
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
         if existing is not None:
@@ -142,7 +154,8 @@ class DocumentService:
             else None
         )
         now = _utcnow()
-        version = self._repo.insert_version(
+        _before_document_version_insert()
+        version, created = self._repo.insert_version_or_existing(
             content_sha256=digest,
             source_url=source_url,
             natural_key=key,
@@ -156,7 +169,7 @@ class DocumentService:
             language=language,
             parse_state=parse_state,
         )
-        return version, True
+        return version, created
 
     def attach_to_case(
         self, *, research_case_id: uuid.UUID, document_version_id: uuid.UUID
