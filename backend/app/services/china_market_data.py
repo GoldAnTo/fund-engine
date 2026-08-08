@@ -47,6 +47,10 @@ class ChinaMarketData(Protocol):
         self, stock_ids: Sequence[uuid.UUID], *, as_of: date
     ) -> Sequence[HoldingDisclosure]: ...
 
+    def fund_holding_history(
+        self, stock_ids: Sequence[uuid.UUID], *, as_of: date
+    ) -> Sequence[HoldingDisclosure]: ...
+
 
 def is_china_a_share(stock: Stock) -> bool:
     return stock.market.upper() in CHINA_A_SHARE_MARKETS
@@ -93,20 +97,7 @@ class LedgerChinaMarketData:
         self, stock_ids: Sequence[uuid.UUID], *, as_of: date
     ) -> list[HoldingDisclosure]:
         """Visible latest report per ``(fund, stock)`` at the requested date."""
-        if not stock_ids:
-            return []
-        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
-        rows = self._session.scalars(
-            select(HoldingDisclosure)
-            .join(Stock, Stock.id == HoldingDisclosure.stock_id)
-            .where(HoldingDisclosure.stock_id.in_(stock_ids))
-            .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
-            .where(HoldingDisclosure.published_at <= cutoff)
-            .order_by(
-                HoldingDisclosure.report_period.desc(),
-                HoldingDisclosure.published_at.desc(),
-            )
-        )
+        rows = self.fund_holding_history(stock_ids, as_of=as_of)
         latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
         for row in rows:
             latest.setdefault((row.fund_id, row.stock_id), row)
@@ -121,6 +112,30 @@ class LedgerChinaMarketData:
             if is_china_public_fund(code)
         }
         return [row for row in latest.values() if row.fund_id in chinese_fund_ids]
+
+    def fund_holding_history(
+        self, stock_ids: Sequence[uuid.UUID], *, as_of: date
+    ) -> list[HoldingDisclosure]:
+        """Return all China A-share disclosures visible by ``as_of``.
+
+        Consumers that must evaluate several cutoffs can derive each
+        latest-per-fund/stock view in memory from this one bounded ledger read.
+        """
+        if not stock_ids:
+            return []
+        cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
+        rows = self._session.scalars(
+            select(HoldingDisclosure)
+            .join(Stock, Stock.id == HoldingDisclosure.stock_id)
+            .where(HoldingDisclosure.stock_id.in_(stock_ids))
+            .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
+            .where(HoldingDisclosure.published_at <= cutoff)
+            .order_by(
+                HoldingDisclosure.report_period.desc(),
+                HoldingDisclosure.published_at.desc(),
+            )
+        )
+        return list(rows)
 
     def _metric_snapshots(
         self,

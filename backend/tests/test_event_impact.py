@@ -169,7 +169,13 @@ def _verified_relation(session, hypothesis, scope, company) -> CompanyImpactRela
     return relation
 
 
-def _verified_impact_observation(session, relation, kind: str) -> None:
+def _verified_impact_observation(
+    session,
+    relation,
+    kind: str,
+    *,
+    as_of: date = date(2026, 8, 8),
+) -> None:
     session.add(
         CompanyImpactObservation(
             relation_id=relation.id,
@@ -178,7 +184,7 @@ def _verified_impact_observation(session, relation, kind: str) -> None:
             source_statement_id=None,
             valuation_snapshot_id=None,
             summary=f"verified {kind} evidence",
-            as_of_date=date(2026, 8, 8),
+            as_of_date=as_of,
             created_at=NOW,
         )
     )
@@ -397,7 +403,9 @@ def test_candidate_relation_observation_cannot_make_a_key_factor(
     assert assessment.classification == "alternative"
 
 
-def _classification_select_count(session, research_case, relation_count: int) -> int:
+def _classification_select_count(
+    session, research_case, relation_count: int, *, distinct_as_of: bool = False
+) -> int:
     factor = f"bulk classification {relation_count}"
     scope = _event_scope(session, research_case, factors=[factor])
     company = _company(
@@ -420,8 +428,9 @@ def _classification_select_count(session, research_case, relation_count: int) ->
             rank=rank,
         )
         relation = _verified_relation(session, hypothesis, scope, company)
+        as_of = date(2026, 8, 8 - rank) if distinct_as_of else date(2026, 8, 8)
         for kind in ("event", "operating", "market", "peer_control"):
-            _verified_impact_observation(session, relation, kind)
+            _verified_impact_observation(session, relation, kind, as_of=as_of)
     session.commit()
 
     selects = 0
@@ -458,6 +467,26 @@ def test_classify_fund_coverage_queries_do_not_scale_per_relation(
     )
 
     assert many_relation_selects <= one_relation_selects + 2
+
+
+def test_classify_fund_coverage_queries_do_not_scale_per_as_of_cutoff(
+    session, research_service
+) -> None:
+    one_cutoff_case = research_service.add_case(
+        title="one cutoff", industry_topic="impact", created_by="tester"
+    )
+    many_cutoff_case = research_service.add_case(
+        title="many cutoffs", industry_topic="impact", created_by="tester"
+    )
+
+    one_cutoff_selects = _classification_select_count(
+        session, one_cutoff_case, relation_count=1, distinct_as_of=True
+    )
+    many_cutoff_selects = _classification_select_count(
+        session, many_cutoff_case, relation_count=4, distinct_as_of=True
+    )
+
+    assert many_cutoff_selects <= one_cutoff_selects + 2
 
 
 def test_classify_keeps_fund_coverage_with_its_own_hypothesis(
@@ -514,6 +543,78 @@ def test_classify_keeps_fund_coverage_with_its_own_hypothesis(
     components = {assessment.hypothesis_id: assessment.score_components for assessment in assessments}
     assert components[covered_hypothesis.id]["fund_coverage"] == 1
     assert components[uncovered_hypothesis.id]["fund_coverage"] == 0
+
+
+def test_classify_fund_coverage_uses_each_relation_point_in_time_cutoff(
+    session, research_case
+) -> None:
+    scope = _event_scope(session, research_case, factors=["earlier", "later"])
+    company = _company(session, code="PIT-COVERAGE", company_type="listed")
+    earlier_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="earlier", rank=1
+    )
+    later_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="later", rank=2
+    )
+    earlier_relation = _verified_relation(
+        session, earlier_hypothesis, scope, company
+    )
+    later_relation = _verified_relation(session, later_hypothesis, scope, company)
+    stock = Stock(
+        company_id=company.id,
+        code="600199.SH",
+        name="PIT stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000199",
+        name="PIT fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([stock, fund])
+    session.flush()
+    session.add_all(
+        [
+            HoldingDisclosure(
+                fund_id=fund.id,
+                stock_id=stock.id,
+                weight=Decimal("0.05"),
+                report_period=date(2026, 2, 1),
+                published_at=datetime(2026, 2, 2, tzinfo=UTC),
+                acquired_at=datetime(2026, 2, 2, tzinfo=UTC),
+                source="old fixture holding",
+                created_at=NOW,
+            ),
+            HoldingDisclosure(
+                fund_id=fund.id,
+                stock_id=stock.id,
+                weight=Decimal("0.10"),
+                report_period=date(2026, 7, 31),
+                published_at=datetime(2026, 8, 7, tzinfo=UTC),
+                acquired_at=datetime(2026, 8, 7, tzinfo=UTC),
+                source="new fixture holding",
+                created_at=NOW,
+            ),
+        ]
+    )
+    _verified_impact_observation(
+        session, earlier_relation, "event", as_of=date(2026, 8, 1)
+    )
+    _verified_impact_observation(
+        session, later_relation, "event", as_of=date(2026, 8, 8)
+    )
+    session.commit()
+
+    assessments = EventImpactResearchService(session).classify(research_case.id)
+
+    components = {assessment.hypothesis_id: assessment.score_components for assessment in assessments}
+    assert components[earlier_hypothesis.id]["fund_coverage"] == 0
+    assert components[later_hypothesis.id]["fund_coverage"] == 1
 
 
 def test_conclusion_uses_latest_assessment_not_a_superseded_key(

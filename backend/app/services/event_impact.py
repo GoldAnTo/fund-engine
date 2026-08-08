@@ -673,21 +673,18 @@ class EventImpactResearchService:
         ]
         if not eligible:
             return {}
-        holdings_by_as_of: dict[date, list[HoldingDisclosure]] = {}
-        for as_of in {relation_as_of[relation.id] for relation in eligible}:
-            stock_ids = {
-                stock.id
-                for relation in eligible
-                if relation_as_of[relation.id] == as_of
-                for stock in stocks_by_company[relation.affected_company_id]
-            }
-            holdings_by_as_of[as_of] = self._market_data.fund_holdings(
-                list(stock_ids), as_of=as_of
-            )
+        all_stock_ids = {
+            stock.id
+            for relation in eligible
+            for stock in stocks_by_company[relation.affected_company_id]
+        }
+        max_as_of = max(relation_as_of[relation.id] for relation in eligible)
+        holding_history = self._market_data.fund_holding_history(
+            list(all_stock_ids), as_of=max_as_of
+        )
         fund_ids = {
             holding.fund_id
-            for holdings in holdings_by_as_of.values()
-            for holding in holdings
+            for holding in holding_history
         }
         funds = {
             fund.id: fund
@@ -695,12 +692,28 @@ class EventImpactResearchService:
         } if fund_ids else {}
 
         coverage: dict[uuid.UUID, bool] = {}
+        latest_holdings_by_cutoff: dict[
+            date, dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure]
+        ] = {}
         for relation in eligible:
             as_of = relation_as_of[relation.id]
             stocks = stocks_by_company[relation.affected_company_id]
             stock_ids = {stock.id for stock in stocks}
             disclosures_by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = {}
-            for holding in holdings_by_as_of[as_of]:
+            visible_holdings = latest_holdings_by_cutoff.get(as_of)
+            if visible_holdings is None:
+                visible_holdings = {}
+                for holding in holding_history:
+                    if holding.published_at.date() <= as_of:
+                        key = (holding.fund_id, holding.stock_id)
+                        current = visible_holdings.get(key)
+                        if current is None or (
+                            holding.report_period,
+                            holding.published_at,
+                        ) > (current.report_period, current.published_at):
+                            visible_holdings[key] = holding
+                latest_holdings_by_cutoff[as_of] = visible_holdings
+            for holding in visible_holdings.values():
                 if holding.stock_id in stock_ids:
                     disclosures_by_fund.setdefault(holding.fund_id, []).append(holding)
             for fund_id, disclosures in disclosures_by_fund.items():
