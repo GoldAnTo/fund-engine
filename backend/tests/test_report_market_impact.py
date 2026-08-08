@@ -4,9 +4,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from threading import Barrier, Lock, Thread
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import (
     CaseDocumentVersion,
@@ -456,6 +458,66 @@ def test_cross_case_confounder_source_is_rejected_by_ledger_validation(session):
     ))
     with pytest.raises(ValueError, match="attached to its claim case"):
         session.flush()
+
+
+@pytest.mark.pg_only
+def test_postgres_concurrent_collection_reuses_unique_observations(engine, monkeypatch):
+    """A losing insert rolls back only its savepoint and reads the winner."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        _case, claim = _report_claim(bootstrap)
+        _calendar_days(bootstrap)
+        bootstrap.commit()
+        claim_id = claim.id
+    finally:
+        bootstrap.close()
+
+    barrier = Barrier(2)
+    gate_lock = Lock()
+    gate_count = 0
+
+    def _gate() -> None:
+        nonlocal gate_count
+        with gate_lock:
+            should_wait = gate_count < 2
+            gate_count += 1
+        if should_wait:
+            barrier.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "app.services.report_market_impact._before_report_market_unique_insert", _gate
+    )
+    errors: list[BaseException] = []
+
+    def _collect() -> None:
+        db = SessionLocal()
+        try:
+            ReportMarketImpactService(db).collect(claim_id)
+            db.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=_collect), Thread(target=_collect)
+    first.start(); second.start()
+    first.join(timeout=15); second.join(timeout=15)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    verify = SessionLocal()
+    try:
+        rows = list(
+            verify.scalars(
+                select(ReportMarketObservation).where(
+                    ReportMarketObservation.report_claim_id == claim_id
+                )
+            )
+        )
+        assert len(rows) == 2  # one target-mapping gap for each 1d/5d window
+    finally:
+        verify.close()
 
 
 def _calendar_days(session) -> None:

@@ -50,6 +50,10 @@ from app.services.china_market_data import (
 _WINDOWS: tuple[tuple[str, int], ...] = (("1d", 0), ("5d", 4))
 
 
+def _before_report_market_unique_insert() -> None:
+    """Test seam for the database unique-key collection race."""
+
+
 @dataclass(frozen=True)
 class MarketImpactResult:
     windows: dict[str, str]
@@ -707,6 +711,7 @@ class ReportMarketImpactService:
             return existing
         try:
             with self._session.begin_nested():
+                _before_report_market_unique_insert()
                 created = factory()
                 self._session.add(created)
                 self._session.flush()
