@@ -590,6 +590,97 @@ def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(
         verify.close()
 
 
+@pytest.mark.pg_only
+def test_postgres_concurrent_cases_reuse_one_canonical_company_without_leaks(
+    engine, monkeypatch
+) -> None:
+    """The unique canonical key + savepoint recovery handles two case writers."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    bootstrap = SessionLocal()
+    try:
+        case_ids: list[uuid.UUID] = []
+        scope_ids: list[uuid.UUID] = []
+        statement_ids: list[uuid.UUID] = []
+        for number in (1, 2):
+            case = ResearchCase(
+                title=f"company race {number}",
+                industry_topic="event",
+                created_by="tester",
+                created_at=NOW,
+            )
+            bootstrap.add(case)
+            bootstrap.commit()
+            scope = _event_scope(
+                bootstrap, case, factors=[f"company race factor {number}"]
+            )
+            statement = _case_statement(bootstrap, case)
+            case_ids.append(case.id)
+            scope_ids.append(scope.id)
+            statement_ids.append(statement.id)
+    finally:
+        bootstrap.close()
+
+    before_insert = Barrier(2)
+    monkeypatch.setattr(
+        "app.services.event_impact._before_company_insert",
+        lambda: before_insert.wait(timeout=5),
+    )
+    errors: list[BaseException] = []
+
+    def refresh(index: int) -> None:
+        db = SessionLocal()
+        try:
+            factor = f"company race factor {index + 1}"
+            resolver = _FakeImpactResolver(
+                {
+                    factor: [
+                        _candidate(
+                            company_name=(
+                                "Ａｃｍｅ　Supplier" if index == 0 else "acme supplier"
+                            ),
+                            source_statement_id=statement_ids[index],
+                        )
+                    ]
+                }
+            )
+            EventImpactResearchService(db, resolver).refresh(
+                case_ids[index], scope_version_id=scope_ids[index]
+            )
+            db.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            db.rollback()
+        finally:
+            db.close()
+
+    first, second = Thread(target=refresh, args=(0,)), Thread(target=refresh, args=(1,))
+    first.start(); second.start()
+    first.join(timeout=15); second.join(timeout=15)
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+
+    verify = SessionLocal()
+    try:
+        assert verify.scalar(select(sa.func.count()).select_from(Company)) == 1
+        for case_id, scope_id in zip(case_ids, scope_ids):
+            assert verify.scalar(
+                select(sa.func.count()).select_from(EventImpactHypothesis).where(
+                    EventImpactHypothesis.research_case_id == case_id,
+                    EventImpactHypothesis.scope_version_id == scope_id,
+                )
+            ) == 1
+            assert verify.scalar(
+                select(sa.func.count()).select_from(CompanyImpactRelation)
+                .join(EventImpactHypothesis)
+                .where(
+                    EventImpactHypothesis.research_case_id == case_id,
+                    CompanyImpactRelation.scope_version_id == scope_id,
+                )
+            ) == 1
+    finally:
+        verify.close()
+
+
 def test_refresh_retry_is_idempotent_for_scope_initial_key(session, research_case) -> None:
     factor = "supplier impact"
     scope = _event_scope(session, research_case, factors=[factor])
@@ -656,7 +747,7 @@ def test_refresh_reuses_canonical_company_identity(session, research_case) -> No
         ("Ａｃｍｅ　Supplier", "Ａｃｍｅ　Supplier"),
     ],
 )
-def test_refresh_reconciles_legacy_company_identity_with_alias(
+def test_refresh_uses_persisted_legacy_company_identity_alias(
     session, research_case, legacy_name, candidate_name
 ) -> None:
     factor = "supplier impact"
@@ -670,6 +761,15 @@ def test_refresh_reconciles_legacy_company_identity_with_alias(
             name=legacy_name,
             type="listed",
             canonical_identity=None,
+            created_at=NOW,
+        )
+    )
+    identity = "acme supplier"
+    session.add(
+        CompanyIdentityAlias(
+            company_id=legacy_id,
+            company_type="listed",
+            canonical_identity=identity,
             created_at=NOW,
         )
     )
@@ -694,7 +794,34 @@ def test_refresh_reconciles_legacy_company_identity_with_alias(
     alias = session.scalar(
         select(CompanyIdentityAlias).where(CompanyIdentityAlias.company_id == legacy_id)
     )
-    assert alias is not None and alias.canonical_identity == "acme supplier"
+    assert alias is not None and alias.canonical_identity == identity
+
+
+def test_refresh_company_lookup_never_scans_null_legacy_rows(session, research_case) -> None:
+    factor = "supplier impact"
+    _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    seen: list[str] = []
+
+    def record_sql(_conn, _cursor, sql, _parameters, _context, _executemany):
+        if "companies" in sql:
+            seen.append(sql)
+
+    sa.event.listen(session.bind, "before_cursor_execute", record_sql)
+    try:
+        EventImpactResearchService(
+            session,
+            _FakeImpactResolver(
+                {factor: [_candidate(source_statement_id=statement.id)]}
+            ),
+        ).refresh(research_case.id)
+        session.commit()
+    finally:
+        sa.event.remove(session.bind, "before_cursor_execute", record_sql)
+
+    company_sql = "\n".join(seen).lower()
+    assert "canonical_identity is null" not in company_sql
+    assert "lower(trim(companies.name))" not in company_sql
 
 
 def test_impact_refresh_task_executes_with_injected_resolver(session, research_case) -> None:
@@ -1297,3 +1424,42 @@ def test_0021_migration_alias_contract_on_postgres() -> None:
 
     migration.downgrade()
     assert operations.dropped_tables[-1] == ("company_identity_aliases",)
+
+
+def test_0021_sqlite_upgrade_backfills_nfkc_aliases_for_legacy_companies() -> None:
+    """Exercise the actual SQLite bind path used by developer/test upgrades."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "CREATE TABLE companies ("
+                "id VARCHAR(36) PRIMARY KEY, type VARCHAR(64) NOT NULL, "
+                "name VARCHAR(512) NOT NULL, canonical_identity VARCHAR(512))"
+            )
+        )
+        company_id = str(uuid.uuid4())
+        connection.execute(
+            sa.text(
+                "INSERT INTO companies (id, type, name, canonical_identity) "
+                "VALUES (:id, 'listed', :name, NULL)"
+            ),
+            {"id": company_id, "name": "Ａｃｍｅ　Supplier"},
+        )
+        migration = _load_migration(MIGRATION_0021_PATH)
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.upgrade()
+        alias = connection.execute(
+            sa.text(
+                "SELECT company_id, company_type, canonical_identity "
+                "FROM company_identity_aliases"
+            )
+        ).mappings().one()
+
+    assert alias == {
+        "company_id": company_id,
+        "company_type": "listed",
+        "canonical_identity": "acme supplier",
+    }

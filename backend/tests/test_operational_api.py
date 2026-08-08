@@ -2,14 +2,26 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select
 
 from app.errors import ConflictError
 from app.models.events import DomainEvent
-from app.models.operational import Job, JobEvent
+from app.models.event_impact import EventImpactHypothesis
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
+from app.models.ledger import ResearchCase
+from app.models.operational import Job, JobEvent, ResearchTask
+from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.operational import TaskRepository
+from app.services.auto_research import AutoResearchService
+from app.services.event_impact import ResolvedImpactCompany
 from app.services.jobs import JobService
 
 
@@ -62,6 +74,118 @@ def test_job_retry_endpoint_resets_to_queued(cmd_client, cmd_session):
     assert body["status"] == "queued"
     assert body["attempt"] == attempt_before + 1
     assert body["error"] is None
+
+
+def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
+    cmd_client, cmd_session
+) -> None:
+    """A failed impact task is requeued only through the durable job retry path."""
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Impact retry",
+        industry_topic="events",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchBrief(
+            research_case_id=case.id,
+            raw_input="retry fixture",
+            source_url=None,
+            event_title="retry fixture",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            research_question="does retry execute?",
+            extraction_state="human_confirmed",
+            created_at=now,
+        )
+    )
+    scope = EventResearchScopeVersion(
+        research_case_id=case.id,
+        version=1,
+        changed_by="tester",
+        change_summary="retry fixture",
+        created_at=now,
+    )
+    cmd_session.add(scope)
+    cmd_session.flush()
+    cmd_session.add(
+        EventResearchScopeFactor(
+            scope_version_id=scope.id,
+            statement="supplier retry factor",
+            description=None,
+            position=1,
+        )
+    )
+    cmd_session.commit()
+
+    @dataclass
+    class FlakyResolver:
+        calls: int = 0
+
+        def resolve(self, *, factor_statement, statements):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("resolver temporarily unavailable")
+            return [
+                ResolvedImpactCompany(
+                    company_name="Retry Supplier",
+                    type="unlisted_supplier",
+                    relation_kind="supplier",
+                    direction="benefits",
+                    mechanism="retry evidence pending",
+                    source_statement_id=None,
+                )
+            ]
+
+    resolver = FlakyResolver()
+    worker = AutoResearchService(cmd_session, impact_resolver=resolver)
+    run = worker.start(
+        case.id,
+        max_rounds=1,
+        budget=2,
+        thesis_ids=[],
+        scope_version_id=scope.id,
+    )
+    worker.execute(run)
+    job = AutoResearchRepository(cmd_session).job_for_run(run.id)
+    assert job is not None
+    AutoResearchRepository(cmd_session).record_job_completion(
+        job, status="failed", step="failed", error="resolver temporarily unavailable"
+    )
+    cmd_session.commit()
+
+    impact_task = cmd_session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "impact_refresh",
+        )
+    )
+    assert impact_task is not None and impact_task.status == "failed"
+    assert run.status == "failed"
+
+    response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
+    assert response.status_code == 200, response.text
+    cmd_session.refresh(run)
+    cmd_session.refresh(impact_task)
+    assert run.status == "queued"
+    assert impact_task.status == "queued"
+
+    worker.execute(run)
+    cmd_session.commit()
+    assert resolver.calls == 2
+    assert impact_task.status == "done"
+    output = cmd_session.scalar(
+        select(EventImpactHypothesis).where(
+            EventImpactHypothesis.scope_version_id == scope.id,
+            EventImpactHypothesis.classification == "unresolved",
+        )
+    )
+    assert output is not None
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):

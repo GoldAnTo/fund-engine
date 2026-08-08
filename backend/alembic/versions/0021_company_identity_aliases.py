@@ -55,11 +55,11 @@ def _backfill_legacy_aliases() -> None:
         bind.execute(
             statement,
             {
-                "id": __import__("uuid").uuid4(),
+                "id": str(__import__("uuid").uuid4()),
                 "company_id": row["id"],
                 "company_type": row["type"],
                 "canonical_identity": identity,
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 

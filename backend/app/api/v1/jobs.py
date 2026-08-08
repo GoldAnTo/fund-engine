@@ -12,12 +12,15 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.errors import NotFoundError
 from app.repositories.operational import JobRepository
 from app.repositories.outbox import emit_event
+from app.models.operational import ResearchRun, ResearchTask
+from app.models.event_research import EventResearchScopeVersion
 from app.schemas.v1.common import CursorPage
 from app.schemas.v1.operational import (
     ActivityItemDTO,
@@ -125,6 +128,37 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
         raise NotFoundError(f"job {job_id} not found")
     if job.status not in {"failed", "cancelled"}:
         raise NotFoundError(f"job {job_id} is not retryable (status={job.status})")
+    if job.kind == "research_run" and job.target_id is not None:
+        run = db.get(ResearchRun, job.target_id)
+        if run is not None and run.status != "cancelled":
+            latest_scope = db.scalar(
+                select(EventResearchScopeVersion.id)
+                .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+                .order_by(EventResearchScopeVersion.version.desc())
+                .limit(1)
+            )
+            recovered_impact = False
+            for task in db.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.task_type == "impact_refresh")
+                .where(ResearchTask.status == "failed")
+            ):
+                parts = task.query.split(":", 3)
+                if len(parts) == 4 and str(latest_scope) == parts[2]:
+                    task.status = "queued"
+                    task.stage = "planned"
+                    task.result = None
+                    recovered_impact = True
+            # ``execute`` advances a run's round before doing its queued
+            # tasks.  A retry of a failed first-round impact task therefore
+            # must reopen that round; otherwise the task remains queued but
+            # can never be selected by the worker.
+            if recovered_impact:
+                run.round = max(0, run.round - 1)
+            run.status = "queued"
+            run.stage = "planning"
+            run.stop_reason = None
     job.status = "queued"
     job.attempt += 1
     job.error = None

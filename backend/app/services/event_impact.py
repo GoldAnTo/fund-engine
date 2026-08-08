@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Protocol, Sequence
 from unicodedata import normalize
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,10 @@ def _before_refresh_claim_insert() -> None:
 
 def _before_refresh_claim_lock() -> None:
     """Test seam for synchronizing competing worker execution attempts."""
+
+
+def _before_company_insert() -> None:
+    """Test seam for proving cross-case canonical-company races without sleeps."""
 
 
 def _utcnow() -> datetime:
@@ -476,10 +480,11 @@ class EventImpactResearchService:
         if not keys:
             return {}
         identities = {key[1] for key in keys}
-        raw_names = {candidate.company_name.strip() for candidate in candidates}
         company_types = {candidate.type for candidate in candidates}
-        # Three bounded queries keep the indexed steady-state path free of a
-        # type-wide scan and keep legacy reconciliation isolated.
+        # The steady-state lookup is deliberately restricted to the two
+        # persisted identities.  Migration 0021 backfills aliases for legacy
+        # immutable rows, so refresh never falls back to a type-wide (or even
+        # repeated lower/trim) scan of companies with a NULL identity.
         existing = list(
             self._session.scalars(
                 select(Company)
@@ -498,19 +503,6 @@ class EventImpactResearchService:
                 .where(CompanyIdentityAlias.canonical_identity.in_(identities))
             )
         )
-        existing.extend(
-            self._session.scalars(
-                select(Company)
-                .where(Company.type.in_(company_types))
-                .where(Company.canonical_identity.is_(None))
-                .where(
-                    or_(
-                        func.lower(func.trim(Company.name)).in_(identities),
-                        Company.name.in_(raw_names),
-                    )
-                )
-            )
-        )
         companies: dict[tuple[str, str, str], Company] = {}
         for company in {company.id: company for company in existing}.values():
             companies.setdefault(self._company_key(company.name, company.type), company)
@@ -523,26 +515,7 @@ class EventImpactResearchService:
                 ),
                 company,
             )
-            if company.canonical_identity is None:
-                identity = self._company_key(company.name, company.type)[1]
-                if identity in identities:
-                    self._append_legacy_alias(company, identity)
         return companies
-
-    def _append_legacy_alias(self, company: Company, identity: str) -> None:
-        try:
-            with self._session.begin_nested():
-                self._session.add(
-                    CompanyIdentityAlias(
-                        company_id=company.id,
-                        company_type=company.type,
-                        canonical_identity=identity,
-                        created_at=_utcnow(),
-                    )
-                )
-                self._session.flush()
-        except IntegrityError:
-            pass
 
     def _resolve_or_create_company(
         self,
@@ -561,6 +534,7 @@ class EventImpactResearchService:
         )
         try:
             with self._session.begin_nested():
+                _before_company_insert()
                 self._session.add(company)
                 self._session.flush()
             companies[key] = company
