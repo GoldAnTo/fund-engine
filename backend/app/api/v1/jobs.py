@@ -138,6 +138,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                 .limit(1)
             )
             recovered_impact = False
+            recovered_round: int | None = None
             for task in db.scalars(
                 select(ResearchTask)
                 .where(ResearchTask.run_id == run.id)
@@ -150,6 +151,7 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                     task.stage = "planned"
                     task.result = None
                     recovered_impact = True
+                    recovered_round = task.round
             # ``execute`` advances a run's round before doing its queued
             # tasks.  A retry of a failed first-round impact task therefore
             # must reopen that round; otherwise the task remains queued but
@@ -157,7 +159,10 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
             # consumed one unit in ``execute``; refund that unit only for the
             # requeued impact task so a budget-bound retry can run it.
             if recovered_impact:
-                run.round = max(0, run.round - 1)
+                # A late retry may happen after later rounds have already
+                # advanced the run.  Reopen the failed task's own round,
+                # never the current run round.
+                run.round = max(0, (recovered_round or 1) - 1)
                 run.budget_used = max(0, (run.budget_used or 0) - 1)
             run.status = "queued"
             run.stage = "planning"

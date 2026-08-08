@@ -287,6 +287,32 @@ def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_s
     assert observation.as_of_date == date(2026, 8, 7)
 
 
+def test_refresh_calls_provider_without_a_database_transaction(
+    session, research_case
+) -> None:
+    factor = "provider transaction boundary"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    transaction_states: list[bool] = []
+
+    class TransactionCheckingResolver:
+        def resolve(self, *, factor_statement, statements):
+            transaction_states.append(session.in_transaction())
+            # Source values are detached snapshots, so accessing them cannot
+            # auto-begin a transaction in the provider callback.
+            assert statements[0].id == statement.id
+            assert statements[0].normalized_text
+            assert not session.in_transaction()
+            return []
+
+    EventImpactResearchService(session, TransactionCheckingResolver()).refresh(
+        research_case.id, scope_version_id=scope.id
+    )
+    session.commit()
+
+    assert transaction_states == [False]
+
+
 def test_refresh_keeps_unlisted_supplier_without_creating_stock(session, research_case) -> None:
     factor = "domestic supplier benefits"
     _event_scope(session, research_case, factors=[factor])
@@ -559,6 +585,7 @@ def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(
         verify.close()
 
     refresh_barrier = Barrier(2)
+    provider_barrier = Barrier(2)
     monkeypatch.setattr(
         "app.services.event_impact._before_refresh_claim_lock",
         lambda: refresh_barrier.wait(timeout=5),
@@ -568,7 +595,13 @@ def test_postgres_concurrent_refresh_schedule_creates_one_claim_and_task(
     def refresh() -> None:
         db = SessionLocal()
         try:
-            EventImpactResearchService(db).refresh(
+            class ConcurrentResolver:
+                def resolve(self, *, factor_statement, statements):
+                    assert not db.in_transaction()
+                    provider_barrier.wait(timeout=5)
+                    return []
+
+            EventImpactResearchService(db, ConcurrentResolver()).refresh(
                 case_id, scope_version_id=scope_id
             )
             db.commit()

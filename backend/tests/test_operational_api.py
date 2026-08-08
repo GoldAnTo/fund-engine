@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
+from app.ai.assessment_gen import AssessmentGenerator
 from app.errors import ConflictError
 from app.models.events import DomainEvent
 from app.models.event_impact import EventImpactHypothesis
@@ -154,7 +155,7 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     worker = AutoResearchService(cmd_session, impact_resolver=resolver)
     run = worker.start(
         case.id,
-        max_rounds=1,
+        max_rounds=3,
         budget=1,
         thesis_ids=[],
         scope_version_id=scope.id,
@@ -183,6 +184,11 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
             )
         )
     ) == []
+    # A run can have progressed through later non-impact work before the
+    # failed first-round task is retried.  The task's own round remains the
+    # only safe restart identity.
+    run.round = 3
+    cmd_session.commit()
 
     response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
     assert response.status_code == 200, response.text
@@ -190,6 +196,7 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
     cmd_session.refresh(impact_task)
     assert run.status == "queued"
     assert impact_task.status == "queued"
+    assert run.round == 0
     assert run.budget_used == 0
 
     worker.execute(run)
@@ -208,6 +215,127 @@ def test_job_retry_recovers_a_failed_current_scope_impact_refresh(
         "supplier retry factor two",
     ]
     assert len([row for row in outputs if row.classification == "unresolved"]) == 2
+
+
+def test_job_retry_reopens_the_failed_impact_tasks_round_after_later_rounds(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Impact retry rounds",
+        industry_topic="events",
+        created_by="tester",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    cmd_session.add_all(
+        [
+            EventResearchBrief(
+                research_case_id=case.id,
+                raw_input="retry rounds fixture",
+                source_url=None,
+                event_title="retry rounds fixture",
+                company_name=None,
+                ticker=None,
+                event_at=None,
+                market_reaction=None,
+                research_question="does task round win?",
+                extraction_state="human_confirmed",
+                created_at=now,
+            ),
+            EventResearchScopeVersion(
+                research_case_id=case.id,
+                version=1,
+                changed_by="tester",
+                change_summary="retry rounds fixture",
+                created_at=now,
+            ),
+        ]
+    )
+    cmd_session.flush()
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case.id
+        )
+    )
+    assert scope is not None
+    cmd_session.add(
+        EventResearchScopeFactor(
+            scope_version_id=scope.id,
+            statement="supplier retry factor",
+            description=None,
+            position=1,
+        )
+    )
+    cmd_session.commit()
+
+    @dataclass
+    class FailingThenEmptyResolver:
+        calls: int = 0
+
+        def resolve(self, *, factor_statement, statements):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("first round impact failure")
+            return []
+
+    class SuccessfulAssessment:
+        id = uuid.uuid4()
+        conclusion = "insufficient_evidence"
+        gaps: list[str] = []
+
+    def complete_later_round(*_args, before_persist=None, **_kwargs):
+        assert before_persist is None or before_persist()
+        return SuccessfulAssessment()
+
+    monkeypatch.setattr(AssessmentGenerator, "generate", complete_later_round)
+    resolver = FailingThenEmptyResolver()
+    worker = AutoResearchService(cmd_session, impact_resolver=resolver)
+    run = worker.start(
+        case.id,
+        max_rounds=3,
+        budget=10,
+        thesis_ids=[],
+        scope_version_id=scope.id,
+    )
+    for round_number in (2, 3):
+        worker.repo.create_task(
+            run_id=run.id,
+            research_case_id=case.id,
+            task_type="result",
+            query=f"later round {round_number}",
+            round=round_number,
+        )
+    worker.execute(run)
+    job = AutoResearchRepository(cmd_session).job_for_run(run.id)
+    assert job is not None
+    AutoResearchRepository(cmd_session).record_job_completion(
+        job, status="failed", step="failed", error="impact failed in round one"
+    )
+    cmd_session.commit()
+
+    impact_task = cmd_session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "impact_refresh",
+        )
+    )
+    assert impact_task is not None and impact_task.round == 1
+    assert impact_task.status == "failed"
+    assert run.round == 3
+
+    response = cmd_client.post(f"/api/v1/jobs/{job.id}/retries")
+    assert response.status_code == 200, response.text
+    cmd_session.refresh(run)
+    cmd_session.refresh(impact_task)
+    assert run.round == 0
+    assert impact_task.status == "queued"
+
+    worker.execute(run)
+    cmd_session.commit()
+    assert resolver.calls == 2
+    assert impact_task.status == "done"
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):

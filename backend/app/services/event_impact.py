@@ -105,8 +105,14 @@ class _ResolvedCandidate:
 
 
 @dataclass(frozen=True)
+class _RefreshFactor:
+    statement: str
+    position: int
+
+
+@dataclass(frozen=True)
 class _ResolvedFactor:
-    factor: EventResearchScopeFactor
+    factor: _RefreshFactor
     candidates: Sequence[ResolvedImpactCompany]
 
 
@@ -126,16 +132,6 @@ class EventImpactResearchService:
         scope = self._scope_for(case_id, scope_version_id)
         refresh_key = refresh_key or self._initial_refresh_key(scope.id)
         self._claim_refresh(case_id, scope.id, refresh_key)
-        # This row is the durable execution mutex.  The lock covers resolver
-        # output through the caller's commit, so competing workers observe the
-        # completed append-only trace instead of writing a second one.
-        _before_refresh_claim_lock()
-        self._session.scalar(
-            select(EventImpactRefreshClaim)
-            .where(EventImpactRefreshClaim.scope_version_id == scope.id)
-            .where(EventImpactRefreshClaim.refresh_key == refresh_key)
-            .with_for_update()
-        )
         existing_hypotheses = self._session.scalars(
             select(EventImpactHypothesis).where(
                 EventImpactHypothesis.research_case_id == case_id,
@@ -146,14 +142,16 @@ class EventImpactResearchService:
             hypothesis.score_components.get("refresh_key") == refresh_key
             for hypothesis in existing_hypotheses
         ):
+            self._session.commit()
             return ImpactRefreshResult(0, 0, 0, 0)
-        factors = list(
-            self._session.scalars(
+        factors = [
+            _RefreshFactor(statement=factor.statement, position=factor.position)
+            for factor in self._session.scalars(
                 select(EventResearchScopeFactor)
                 .where(EventResearchScopeFactor.scope_version_id == scope.id)
                 .order_by(EventResearchScopeFactor.position)
             )
-        )
+        ]
         admissible_records = self._admissible_statement_records(case_id)
         admissible_statements = [statement for statement, _ in admissible_records]
         admissible_by_id = {statement.id: statement for statement in admissible_statements}
@@ -166,6 +164,15 @@ class EventImpactResearchService:
             )
             for statement, document in admissible_records
         }
+
+        # Do not hold an open transaction (or the claim row lock) while a
+        # provider executes.  Statements are loaded scalar snapshots; detach
+        # them before the commit so a resolver cannot lazily start a database
+        # transaction by reading one of the admissible inputs.
+        for statement in admissible_statements:
+            self._session.expunge(statement)
+        scope_id = scope.id
+        self._session.commit()
 
         # Providers are deliberately run before any refresh output is added
         # to this Session.  If one factor fails, the task failure commit cannot
@@ -182,11 +189,36 @@ class EventImpactResearchService:
             resolved_factors.append(_ResolvedFactor(factor, candidates))
 
         if output_slot is not None and not output_slot():
+            self._session.rollback()
+            return ImpactRefreshResult(0, 0, 0, 0)
+
+        # This is the durable execution mutex, deliberately acquired only
+        # after the provider returns and after the caller owns its output slot.
+        # A competing worker may have published while this provider ran, so
+        # recheck the completed append-only trace under the claim lock.
+        _before_refresh_claim_lock()
+        self._session.scalar(
+            select(EventImpactRefreshClaim)
+            .where(EventImpactRefreshClaim.scope_version_id == scope_id)
+            .where(EventImpactRefreshClaim.refresh_key == refresh_key)
+            .with_for_update()
+        )
+        completed = self._session.scalars(
+            select(EventImpactHypothesis).where(
+                EventImpactHypothesis.research_case_id == case_id,
+                EventImpactHypothesis.scope_version_id == scope_id,
+            )
+        )
+        if any(
+            hypothesis.score_components.get("refresh_key") == refresh_key
+            for hypothesis in completed
+        ):
+            self._session.rollback()
             return ImpactRefreshResult(0, 0, 0, 0)
 
         return self._append_refresh_output(
             case_id=case_id,
-            scope=scope,
+            scope_id=scope_id,
             refresh_key=refresh_key,
             resolved_factors=resolved_factors,
             admissible_by_id=admissible_by_id,
@@ -197,7 +229,7 @@ class EventImpactResearchService:
         self,
         *,
         case_id: uuid.UUID,
-        scope: EventResearchScopeVersion,
+        scope_id: uuid.UUID,
         refresh_key: str,
         resolved_factors: Sequence[_ResolvedFactor],
         admissible_by_id: dict[uuid.UUID, SourceStatement],
@@ -211,7 +243,7 @@ class EventImpactResearchService:
                 candidates = resolved_factor.candidates
                 hypothesis = EventImpactHypothesis(
                     research_case_id=case_id,
-                    scope_version_id=scope.id,
+                    scope_version_id=scope_id,
                     statement=factor.statement,
                     classification="candidate",
                     rank=factor.position,
