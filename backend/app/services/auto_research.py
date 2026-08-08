@@ -95,6 +95,8 @@ class AutoResearchService:
         return run
 
     def execute(self, run):
+        if self._is_cancelled(run):
+            return
         self.repo.update_run(run, status="running", stage="extract")
         self.session.commit()
         used = run.budget_used or 0

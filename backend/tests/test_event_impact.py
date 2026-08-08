@@ -48,6 +48,7 @@ from app.errors import ValidationFailedError
 from app.models.events import DomainEvent
 from app.models.operational import ResearchRun, ResearchTask
 from app.services.auto_research import AutoResearchService
+from app.repositories.auto_research import AutoResearchRepository
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -663,6 +664,67 @@ def test_impact_refresh_task_executes_with_injected_resolver(session, research_c
     assert task.status == "done"
     assert task.result is not None and task.result["relations_created"] == 1
     assert session.scalar(select(EventImpactHypothesis)).scope_version_id == scope.id
+
+
+def test_cancelled_old_scope_impact_task_cannot_write_before_successor_runs(
+    session, research_case
+) -> None:
+    first_factor = "old supplier impact"
+    first_scope = _event_scope(session, research_case, factors=[first_factor])
+    statement = _case_statement(session, research_case)
+    resolver = _FakeImpactResolver(
+        {first_factor: [_candidate(source_statement_id=statement.id)]}
+    )
+    worker = AutoResearchService(session, impact_resolver=resolver)
+    old_run = worker.start(
+        research_case.id,
+        max_rounds=1,
+        budget=10,
+        thesis_ids=[],
+        scope_version_id=first_scope.id,
+    )
+    assert AutoResearchRepository(session).cancel_run(old_run)
+
+    worker.execute(old_run)
+    session.commit()
+
+    assert list(session.scalars(select(EventImpactHypothesis))) == []
+    assert all(
+        task.status == "cancelled"
+        for task in worker.repo.tasks_for_run(old_run.id)
+        if task.task_type == "impact_refresh"
+    )
+
+    successor_scope = EventResearchScopeVersion(
+        research_case_id=research_case.id,
+        version=2,
+        changed_by="tester",
+        change_summary="successor",
+        created_at=NOW,
+    )
+    session.add(successor_scope)
+    session.flush()
+    session.add(
+        EventResearchScopeFactor(
+            scope_version_id=successor_scope.id,
+            statement="successor factor",
+            description=None,
+            position=1,
+        )
+    )
+    session.commit()
+    successor = worker.start(
+        research_case.id,
+        max_rounds=1,
+        budget=10,
+        thesis_ids=[],
+        scope_version_id=successor_scope.id,
+    )
+    assert any(
+        str(successor_scope.id) in task.query
+        for task in worker.repo.tasks_for_run(successor.id)
+        if task.task_type == "impact_refresh"
+    )
 
 
 def test_refresh_appends_new_scope_rows_without_mutating_prior_scope_rows(
