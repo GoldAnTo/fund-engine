@@ -19,8 +19,11 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.event_impact import EventImpactRefreshClaim
-from app.models.event_impact import EventImpactHypothesis
+from app.models.event_impact import (
+    EventImpactHypothesis,
+    EventImpactHypothesisAssessment,
+    EventImpactRefreshClaim,
+)
 from app.models.events import DomainEvent
 from app.models.ledger import (
     AIAssessment,
@@ -159,6 +162,60 @@ def _cover_current_scope(session, case_id: uuid.UUID) -> list[EvidenceLink]:
         links.append(link)
     session.commit()
     return links
+
+
+def _append_complete_impact_key(session, case_id: uuid.UUID) -> None:
+    """Seed an immutable completed impact trace for conclusion-flow tests.
+
+    These tests exercise scope locking/publishing, not impact classification;
+    the explicit trace keeps the new conclusion gate in force.
+    """
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert scope is not None
+    factor = session.scalar(
+        select(EventResearchScopeFactor.statement)
+        .where(EventResearchScopeFactor.scope_version_id == scope.id)
+        .order_by(EventResearchScopeFactor.position)
+        .limit(1)
+    )
+    assert factor is not None
+    hypothesis = EventImpactHypothesis(
+        research_case_id=case_id,
+        scope_version_id=scope.id,
+        statement=factor,
+        classification="candidate",
+        rank=1,
+        score_components={"fixture": 1},
+        explanation="fixture candidate for conclusion-flow isolation",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(hypothesis)
+    session.flush()
+    session.add(
+        EventImpactHypothesisAssessment(
+            hypothesis_id=hypothesis.id,
+            research_case_id=case_id,
+            scope_version_id=scope.id,
+            classification="key",
+            rank=1,
+            score_components={
+                "event": 1,
+                "company": 1,
+                "operating": 1,
+                "market": 1,
+                "peer_control": 1,
+                "fund_coverage": 1,
+            },
+            explanation="fixture complete impact coverage",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
 
 
 def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_session) -> None:
@@ -1208,6 +1265,7 @@ def test_published_event_rejects_scope_update_without_starting_successor(
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     EventConclusionService(cmd_session).publish(
         case_id,
@@ -1633,6 +1691,7 @@ def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
     )
     assert response.status_code == 200
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
 
@@ -1667,6 +1726,8 @@ def test_final_key_review_requires_mapped_evidence_for_every_active_factor(
             factor_statement=factor,
             created_at=datetime.now(timezone.utc),
         )
+    if expects_draft:
+        _append_complete_impact_key(cmd_session, case_id)
     cmd_session.commit()
 
     AutoResearchService(cmd_session).continue_after_key_review(case_id)
@@ -1776,6 +1837,7 @@ def test_published_workbench_citations_use_conclusion_evidence_snapshot(
     assert lifecycle is not None
     lifecycle.status = "draft_ready"
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     EventConclusionService(cmd_session).publish(
         case_id,
@@ -1810,6 +1872,7 @@ def test_conclusion_publish_takes_the_case_lifecycle_lock(
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     calls: list[uuid.UUID] = []
@@ -1848,6 +1911,7 @@ def test_conclusion_draft_takes_the_case_lifecycle_lock(
     )
 
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     draft = EventConclusionService(cmd_session).create_draft(case_id)
 
     assert calls == [case_id]
@@ -1862,6 +1926,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = "draft_ready"
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     v1_draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     assert v1_draft.scope_version_id is not None
@@ -1896,6 +1961,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     ) is None
 
     _cover_current_scope(cmd_session, case_id)
+    _append_complete_impact_key(cmd_session, case_id)
     v2_draft = EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
     assert v2_draft.scope_version_id != v1_draft.scope_version_id

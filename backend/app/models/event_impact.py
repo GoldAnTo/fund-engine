@@ -59,6 +59,50 @@ class EventImpactHypothesis(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class EventImpactHypothesisAssessment(Base):
+    """Immutable, evidence-component assessment of one impact hypothesis.
+
+    A classification may be re-run when new ledger evidence arrives, so it is
+    intentionally a successor trace rather than a mutable field on the
+    original hypothesis.
+    """
+
+    __tablename__ = "event_impact_hypothesis_assessments"
+    __table_args__ = (
+        CheckConstraint(
+            "classification IN ('key', 'alternative', 'background', 'unresolved')",
+            name="ck_event_impact_hypothesis_assessments_classification",
+        ),
+        Index(
+            "ix_event_impact_assessments_case_scope_rank",
+            "research_case_id",
+            "scope_version_id",
+            "rank",
+        ),
+        Index(
+            "ix_event_impact_assessments_hypothesis_created",
+            "hypothesis_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    hypothesis_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("event_impact_hypotheses.id"), nullable=False
+    )
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    scope_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=False
+    )
+    classification: Mapped[str] = mapped_column(String(16), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    score_components: Mapped[dict] = mapped_column(JSON, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class CompanyImpactRelation(Base):
     """A company transmission relation belonging to one impact hypothesis."""
 
@@ -229,6 +273,17 @@ def _derive_relation_scopes_before_flush(session, _flush_context, _instances) ->
             raise ValueError("scope_version_id must reference an existing scope version")
         if scope_version.research_case_id != hypothesis.research_case_id:
             raise ValueError("scope_version_id must belong to the research_case_id")
+
+    for assessment in session.new:
+        if not isinstance(assessment, EventImpactHypothesisAssessment):
+            continue
+        hypothesis = session.get(EventImpactHypothesis, assessment.hypothesis_id)
+        if hypothesis is None:
+            raise ValueError("hypothesis_id must reference an existing impact hypothesis")
+        if assessment.research_case_id != hypothesis.research_case_id:
+            raise ValueError("assessment research_case_id must match its hypothesis")
+        if assessment.scope_version_id != hypothesis.scope_version_id:
+            raise ValueError("assessment scope_version_id must match its hypothesis")
 
     pending_hypotheses = {
         hypothesis.id: hypothesis

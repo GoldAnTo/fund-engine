@@ -6,13 +6,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.errors import ValidationFailedError
 from app.models.event_research import (
     EventResearchConclusion,
     EventResearchScopeVersion,
 )
+from app.models.event_impact import EventImpactHypothesisAssessment
 from app.models.ledger import EvidenceLink, Thesis
 from app.services.event_research_scope_evidence import (
     has_current_scope_evidence_coverage,
@@ -41,16 +42,22 @@ class EventConclusionService:
         # Scope, reviewed evidence, and the draft must come from one locked
         # event snapshot; scope updates take this same case -> lifecycle lock.
         lock_event_research_lifecycle(self._session, case_id)
-        if not has_current_scope_evidence_coverage(self._session, case_id):
-            raise ValidationFailedError(
-                "current scope lacks sufficient reviewed mapped evidence for a conclusion draft"
-            )
         scope = self._session.scalar(
             select(EventResearchScopeVersion)
             .where(EventResearchScopeVersion.research_case_id == case_id)
             .order_by(EventResearchScopeVersion.version.desc())
             .limit(1)
         )
+        if scope is None or not self._has_current_scope_key_assessment(
+            case_id, scope.id
+        ):
+            raise ValidationFailedError(
+                "impact coverage is insufficient: current scope has no key factor"
+            )
+        if not has_current_scope_evidence_coverage(self._session, case_id):
+            raise ValidationFailedError(
+                "current scope lacks sufficient reviewed mapped evidence for a conclusion draft"
+            )
         mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
         evidence = list(
             self._session.execute(
@@ -90,6 +97,29 @@ class EventConclusionService:
         self._session.add(draft)
         self._session.flush()
         return draft
+
+    def _has_current_scope_key_assessment(
+        self, case_id: uuid.UUID, scope_version_id: uuid.UUID
+    ) -> bool:
+        """Read only the latest immutable assessment for each hypothesis."""
+        assessment = EventImpactHypothesisAssessment
+        newer = aliased(EventImpactHypothesisAssessment)
+        latest_assessment_id = (
+            select(newer.id)
+            .where(newer.hypothesis_id == assessment.hypothesis_id)
+            .order_by(newer.created_at.desc(), newer.id.desc())
+            .limit(1)
+            .correlate(assessment)
+            .scalar_subquery()
+        )
+        return self._session.scalar(
+            select(assessment.id)
+            .where(assessment.research_case_id == case_id)
+            .where(assessment.scope_version_id == scope_version_id)
+            .where(assessment.id == latest_assessment_id)
+            .where(assessment.classification == "key")
+            .limit(1)
+        ) is not None
 
     def publish(
         self, case_id: uuid.UUID, *, text: str, reviewer: str

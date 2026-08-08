@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
@@ -23,9 +23,11 @@ from app.models.event_impact import (
     CompanyIdentityAlias,
     EventImpactRefreshClaim,
     EventImpactHypothesis,
+    EventImpactHypothesisAssessment,
 )
 from app.models.event_research import (
     EventResearchBrief,
+    EventResearchScopeEvidenceAssignment,
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
@@ -51,9 +53,10 @@ from app.services.event_impact import (
 )
 from app.errors import ValidationFailedError
 from app.models.events import DomainEvent
-from app.models.operational import ResearchRun, ResearchTask
+from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
 from app.services.auto_research import AutoResearchService
 from app.repositories.auto_research import AutoResearchRepository
+from app.services.event_conclusion import EventConclusionService
 
 
 NOW = datetime(2026, 8, 8, tzinfo=UTC)
@@ -81,6 +84,12 @@ MIGRATION_0022_PATH = (
     / "versions"
     / "0022_china_market_data_indexes.py"
 )
+MIGRATION_0023_PATH = (
+    Path(__file__).parents[1]
+    / "alembic"
+    / "versions"
+    / "0023_event_impact_assessments.py"
+)
 
 
 def _scope(session, research_case, *, version: int = 1) -> EventResearchScopeVersion:
@@ -103,13 +112,20 @@ def _company(session, *, code: str, company_type: str) -> Company:
     return company
 
 
-def _hypothesis(session, research_case_id, scope_version_id) -> EventImpactHypothesis:
+def _hypothesis(
+    session,
+    research_case_id,
+    scope_version_id,
+    *,
+    statement: str = "资本开支增加会提高中国供应商订单",
+    rank: int = 1,
+) -> EventImpactHypothesis:
     hypothesis = EventImpactHypothesis(
         research_case_id=research_case_id,
         scope_version_id=scope_version_id,
-        statement="资本开支增加会提高中国供应商订单",
+        statement=statement,
         classification="candidate",
-        rank=1,
+        rank=rank,
         score_components={"event_relevance": 0.5},
         explanation="等待验证",
         created_at=NOW,
@@ -134,6 +150,322 @@ def _relation(session, hypothesis, scope, company) -> CompanyImpactRelation:
     session.add(relation)
     session.commit()
     return relation
+
+
+def _verified_relation(session, hypothesis, scope, company) -> CompanyImpactRelation:
+    relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        scope_version_id=scope.id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="订单传导",
+        status="verified",
+        source_statement_id=None,
+        created_at=NOW,
+    )
+    session.add(relation)
+    session.flush()
+    return relation
+
+
+def _verified_impact_observation(session, relation, kind: str) -> None:
+    session.add(
+        CompanyImpactObservation(
+            relation_id=relation.id,
+            kind=kind,
+            status="verified",
+            source_statement_id=None,
+            valuation_snapshot_id=None,
+            summary=f"verified {kind} evidence",
+            as_of_date=date(2026, 8, 8),
+            created_at=NOW,
+        )
+    )
+
+
+def _formal_scope_coverage(session, research_case, scope, factor: str) -> None:
+    """Create the pre-existing reviewed formal coverage required by drafts."""
+    thesis = Thesis(
+        research_case_id=research_case.id,
+        statement=factor,
+        created_by="tester",
+        created_at=NOW,
+    )
+    session.add(thesis)
+    session.flush()
+    for ordinal in (1, 2):
+        document = DocumentVersion(
+            content_sha256=uuid.uuid5(
+                uuid.NAMESPACE_URL, f"formal-coverage/{factor}/{ordinal}"
+            ).hex,
+            source_url=f"https://example.test/formal/{ordinal}",
+            available_at=NOW,
+            acquired_at=NOW,
+            parser_version="html-v1",
+            parse_state="success",
+        )
+        session.add(document)
+        session.flush()
+        session.add(
+            CaseDocumentVersion(
+                research_case_id=research_case.id,
+                document_version_id=document.id,
+                linked_at=NOW,
+            )
+        )
+        span = SourceSpan(
+            document_version_id=document.id,
+            locator={"ordinal": ordinal},
+            verbatim_text=f"formal evidence {ordinal}",
+        )
+        session.add(span)
+        session.flush()
+        statement = SourceStatement(
+            source_span_id=span.id,
+            kind="fact",
+            normalized_text=f"formal evidence {ordinal}",
+            observed_period=date(2026, 8, 8),
+            created_at=NOW,
+        )
+        session.add(statement)
+        session.flush()
+        link = EvidenceLink(
+            thesis_id=thesis.id,
+            source_statement_id=statement.id,
+            role="supports",
+            reason="formal fixture evidence",
+            scope={},
+            available_at=NOW,
+            creator_type="human",
+            review_state="reviewed",
+            created_at=NOW,
+        )
+        session.add(link)
+        session.flush()
+        session.add(
+            EventResearchScopeEvidenceAssignment(
+                scope_version_id=scope.id,
+                evidence_link_id=link.id,
+                factor_statement=factor,
+                disposition="mapped",
+                created_at=NOW,
+            )
+        )
+    session.commit()
+
+
+def test_classify_competes_current_scope_hypotheses_without_mutating_history(
+    session, research_case
+) -> None:
+    scope = _event_scope(
+        session,
+        research_case,
+        factors=["完整传导", "市场替代解释"],
+    )
+    company = _company(session, code="COMPLETE-CO", company_type="listed")
+    complete = _hypothesis(
+        session,
+        research_case.id,
+        scope.id,
+        statement="完整传导",
+        rank=2,
+    )
+    market_only = _hypothesis(
+        session,
+        research_case.id,
+        scope.id,
+        statement="市场替代解释",
+        rank=1,
+    )
+    complete_relation = _verified_relation(session, complete, scope, company)
+    market_relation = _verified_relation(session, market_only, scope, company)
+    stock = Stock(
+        company_id=company.id,
+        code="600001.SH",
+        name="Complete Co",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000001",
+        name="China fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([stock, fund])
+    session.flush()
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=stock.id,
+            weight=Decimal("0.12"),
+            report_period=date(2026, 7, 31),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="fixture holding",
+            created_at=NOW,
+        )
+    )
+    for kind in ("event", "relation", "operating", "market", "peer_control"):
+        _verified_impact_observation(session, complete_relation, kind)
+    for kind in ("event", "relation", "market"):
+        _verified_impact_observation(session, market_relation, kind)
+    session.commit()
+
+    assessments = EventImpactResearchService(session).classify(research_case.id)
+    session.commit()
+
+    assert [(row.hypothesis_id, row.classification, row.rank) for row in assessments] == [
+        (complete.id, "key", 1),
+        (market_only.id, "alternative", 2),
+    ]
+    assert assessments[0].score_components == {
+        "event": 1,
+        "company": 1,
+        "operating": 1,
+        "market": 1,
+        "peer_control": 1,
+        "fund_coverage": 1,
+    }
+    # The original candidate remains an immutable trace rather than being
+    # overwritten by the new assessment row.
+    session.refresh(complete)
+    assert complete.classification == "candidate"
+    assert complete.rank == 2
+    assert complete.score_components == {"event_relevance": 0.5}
+
+    later_assessments = EventImpactResearchService(session).classify(research_case.id)
+    session.commit()
+    assert later_assessments[0].id != assessments[0].id
+    assert [
+        row.classification
+        for row in session.scalars(
+            select(EventImpactHypothesisAssessment)
+            .where(EventImpactHypothesisAssessment.hypothesis_id == complete.id)
+            .order_by(EventImpactHypothesisAssessment.created_at)
+        )
+    ] == ["key", "key"]
+
+    _formal_scope_coverage(session, research_case, scope, "完整传导")
+    _formal_scope_coverage(session, research_case, scope, "市场替代解释")
+    draft = EventConclusionService(session).create_draft(research_case.id)
+    assert draft.scope_version_id == scope.id
+
+
+def test_market_only_impact_assessment_blocks_draft_despite_formal_coverage(
+    session, research_case
+) -> None:
+    factor = "市场替代解释"
+    scope = _event_scope(session, research_case, factors=[factor])
+    company = _company(session, code="MARKET-ONLY", company_type="listed")
+    hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement=factor
+    )
+    relation = _verified_relation(session, hypothesis, scope, company)
+    for kind in ("event", "relation", "market"):
+        _verified_impact_observation(session, relation, kind)
+    session.commit()
+    _formal_scope_coverage(session, research_case, scope, factor)
+
+    assessment = EventImpactResearchService(session).classify(research_case.id)[0]
+    assert assessment.classification == "alternative"
+    with pytest.raises(ValidationFailedError, match="impact coverage is insufficient"):
+        EventConclusionService(session).create_draft(research_case.id)
+
+
+def test_conclusion_uses_latest_assessment_not_a_superseded_key(
+    session, research_case
+) -> None:
+    factor = "重新评估的传导"
+    scope = _event_scope(session, research_case, factors=[factor])
+    hypothesis = _hypothesis(session, research_case.id, scope.id, statement=factor)
+    session.add(
+        EventImpactHypothesisAssessment(
+            hypothesis_id=hypothesis.id,
+            research_case_id=research_case.id,
+            scope_version_id=scope.id,
+            classification="key",
+            rank=1,
+            score_components={"event": 1, "company": 1, "operating": 1, "market": 1, "peer_control": 1, "fund_coverage": 1},
+            explanation="earlier complete evidence",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+    session.add(
+        EventImpactHypothesisAssessment(
+            hypothesis_id=hypothesis.id,
+            research_case_id=research_case.id,
+            scope_version_id=scope.id,
+            classification="alternative",
+            rank=1,
+            score_components={"event": 1, "company": 1, "operating": 0, "market": 1, "peer_control": 0, "fund_coverage": 0},
+            explanation="new evidence no longer clears the key threshold",
+            created_at=NOW + timedelta(seconds=1),
+        )
+    )
+    session.commit()
+    _formal_scope_coverage(session, research_case, scope, factor)
+
+    with pytest.raises(ValidationFailedError, match="impact coverage is insufficient"):
+        EventConclusionService(session).create_draft(research_case.id)
+
+
+def test_no_current_scope_key_marks_lifecycle_exhausted_without_draft(
+    session, research_case
+) -> None:
+    _event_scope(session, research_case, factors=["没有候选"])
+    lifecycle = EventResearchLifecycle(
+        research_case_id=research_case.id,
+        status="researching",
+        active_run_id=None,
+        current_round=1,
+        status_summary="研究中",
+        current_gap=None,
+        next_human_action=None,
+        updated_at=NOW,
+    )
+    session.add(lifecycle)
+    session.commit()
+
+    assert EventImpactResearchService(session).classify(research_case.id) == []
+    session.commit()
+
+    session.refresh(lifecycle)
+    assert lifecycle.status == "exhausted"
+    assert lifecycle.current_gap is not None
+    assert lifecycle.current_gap.startswith("不能确定关键因素")
+    assert EventConclusionService(session).latest(research_case.id) is None
+
+
+def test_impact_assessments_are_append_only(session, research_case) -> None:
+    scope = _event_scope(session, research_case, factors=["immutable assessment"])
+    hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="immutable assessment"
+    )
+    assessment = EventImpactHypothesisAssessment(
+        hypothesis_id=hypothesis.id,
+        research_case_id=research_case.id,
+        scope_version_id=scope.id,
+        classification="background",
+        rank=1,
+        score_components={"event": 0},
+        explanation="fixture assessment",
+        created_at=NOW,
+    )
+    session.add(assessment)
+    session.commit()
+
+    with pytest.raises(ImmutableLedgerError):
+        session.execute(
+            update(EventImpactHypothesisAssessment)
+            .where(EventImpactHypothesisAssessment.id == assessment.id)
+            .values(rank=2)
+        )
 
 
 @dataclass
@@ -1663,6 +1995,7 @@ def test_models_package_import_registers_impact_tables() -> None:
     assert models.event_impact is not None
     assert {
         "event_impact_hypotheses",
+        "event_impact_hypothesis_assessments",
         "company_impact_relations",
         "company_impact_relation_reviews",
         "company_impact_observations",
@@ -1731,6 +2064,7 @@ def _checks(table_args: tuple) -> set[str]:
 def test_impact_model_indexes_match_the_migration_contract() -> None:
     impact_tables = (
         EventImpactHypothesis.__table__,
+        EventImpactHypothesisAssessment.__table__,
         CompanyImpactRelation.__table__,
         CompanyImpactRelationReview.__table__,
         CompanyImpactObservation.__table__,
@@ -1745,6 +2079,15 @@ def test_impact_model_indexes_match_the_migration_contract() -> None:
             "research_case_id",
             "scope_version_id",
             "rank",
+        ),
+        "ix_event_impact_assessments_case_scope_rank": (
+            "research_case_id",
+            "scope_version_id",
+            "rank",
+        ),
+        "ix_event_impact_assessments_hypothesis_created": (
+            "hypothesis_id",
+            "created_at",
         ),
         "ix_company_impact_relations_hypothesis_company": (
             "hypothesis_id",
@@ -2007,6 +2350,118 @@ def test_0022_sqlite_upgrade_and_downgrade_create_the_ledger_indexes() -> None:
             not sa.inspect(connection).get_indexes(table)
             for table in ("stocks", "valuation_snapshots", "holding_disclosures")
         )
+
+
+@pytest.mark.parametrize("dialect", ["sqlite", "postgresql"])
+def test_0023_migration_persists_immutable_impact_assessments(dialect: str) -> None:
+    migration = _load_migration(MIGRATION_0023_PATH)
+    operations = _OperationsRecorder(dialect)
+    migration.op = operations
+
+    migration.upgrade()
+
+    assert migration.revision == "0023"
+    assert migration.down_revision == "0022"
+    assessment = next(
+        args
+        for args in operations.tables
+        if args[0] == "event_impact_hypothesis_assessments"
+    )
+    assert _columns(assessment) == {
+        "id",
+        "hypothesis_id",
+        "research_case_id",
+        "scope_version_id",
+        "classification",
+        "rank",
+        "score_components",
+        "explanation",
+        "created_at",
+    }
+    assert _checks(assessment) == {
+        "classification IN ('key', 'alternative', 'background', 'unresolved')"
+    }
+    assert {
+        (name, table, tuple(columns))
+        for name, table, columns, _options in operations.indexes
+    } == {
+        (
+            "ix_event_impact_assessments_case_scope_rank",
+            "event_impact_hypothesis_assessments",
+            ("research_case_id", "scope_version_id", "rank"),
+        ),
+        (
+            "ix_event_impact_assessments_hypothesis_created",
+            "event_impact_hypothesis_assessments",
+            ("hypothesis_id", "created_at"),
+        ),
+    }
+    if dialect == "postgresql":
+        assert operations.executed == [
+            "CREATE TRIGGER no_update_event_impact_hypothesis_assessments BEFORE UPDATE "
+            "ON event_impact_hypothesis_assessments FOR EACH ROW EXECUTE FUNCTION "
+            "reject_mutable_ledger();",
+            "CREATE TRIGGER no_delete_event_impact_hypothesis_assessments BEFORE DELETE "
+            "ON event_impact_hypothesis_assessments FOR EACH ROW EXECUTE FUNCTION "
+            "reject_mutable_ledger();",
+        ]
+    else:
+        assert operations.executed == []
+
+    migration.downgrade()
+
+    assert operations.dropped_indexes == [
+        ("ix_event_impact_assessments_hypothesis_created",),
+        ("ix_event_impact_assessments_case_scope_rank",),
+    ]
+    assert operations.dropped_tables == [("event_impact_hypothesis_assessments",)]
+
+
+def test_0023_sqlite_upgrade_and_downgrade_create_assessment_indexes() -> None:
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text("CREATE TABLE research_cases (id VARCHAR(36) PRIMARY KEY)")
+        )
+        connection.execute(
+            sa.text(
+                "CREATE TABLE event_research_scope_versions (id VARCHAR(36) PRIMARY KEY)"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "CREATE TABLE event_impact_hypotheses (id VARCHAR(36) PRIMARY KEY)"
+            )
+        )
+        migration = _load_migration(MIGRATION_0023_PATH)
+        migration.op = Operations(MigrationContext.configure(connection))
+
+        migration.upgrade()
+
+        assert {
+            index["name"]: tuple(index["column_names"])
+            for index in sa.inspect(connection).get_indexes(
+                "event_impact_hypothesis_assessments"
+            )
+        } == {
+            "ix_event_impact_assessments_case_scope_rank": (
+                "research_case_id",
+                "scope_version_id",
+                "rank",
+            ),
+            "ix_event_impact_assessments_hypothesis_created": (
+                "hypothesis_id",
+                "created_at",
+            ),
+        }
+
+        migration.downgrade()
+        assert "event_impact_hypothesis_assessments" not in sa.inspect(
+            connection
+        ).get_table_names()
 
 
 def test_0021_sqlite_upgrade_backfills_nfkc_aliases_for_legacy_companies() -> None:

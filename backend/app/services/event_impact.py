@@ -20,6 +20,7 @@ from app.models.event_impact import (
     CompanyIdentityAlias,
     EventImpactRefreshClaim,
     EventImpactHypothesis,
+    EventImpactHypothesisAssessment,
 )
 from app.models.event_research import (
     EventResearchBrief,
@@ -49,6 +50,7 @@ from app.services.china_market_data import (
     LedgerChinaMarketData,
     is_china_public_fund,
 )
+from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 
 
 _INITIAL_REFRESH_KEY_SUFFIX = "initial"
@@ -508,6 +510,157 @@ class EventImpactResearchService:
                 )
             )
         return sorted(results, key=lambda result: (result.exposure is None, result.fund_code))
+
+    def classify(
+        self, case_id: uuid.UUID
+    ) -> list[EventImpactHypothesisAssessment]:
+        """Append transparent, scope-bound assessments for current hypotheses.
+
+        Classifications are never written back to ``EventImpactHypothesis``:
+        every run adds a new immutable assessment trace so later ledger data
+        can change the current interpretation without erasing the earlier one.
+        """
+        lifecycle = lock_event_research_lifecycle(self._session, case_id)
+        scope = self._scope_for(case_id, None)
+        hypotheses = list(
+            self._session.scalars(
+                select(EventImpactHypothesis)
+                .where(EventImpactHypothesis.research_case_id == case_id)
+                .where(EventImpactHypothesis.scope_version_id == scope.id)
+                .order_by(EventImpactHypothesis.rank, EventImpactHypothesis.created_at)
+            )
+        )
+        hypothesis_ids = [hypothesis.id for hypothesis in hypotheses]
+        relations = list(
+            self._session.scalars(
+                select(CompanyImpactRelation).where(
+                    CompanyImpactRelation.hypothesis_id.in_(hypothesis_ids)
+                )
+            )
+        ) if hypothesis_ids else []
+        relation_ids = [relation.id for relation in relations]
+        observations = list(
+            self._session.scalars(
+                select(CompanyImpactObservation).where(
+                    CompanyImpactObservation.relation_id.in_(relation_ids)
+                )
+            )
+        ) if relation_ids else []
+
+        relations_by_hypothesis: dict[uuid.UUID, list[CompanyImpactRelation]] = {}
+        for relation in relations:
+            relations_by_hypothesis.setdefault(relation.hypothesis_id, []).append(relation)
+        observations_by_relation: dict[uuid.UUID, list[CompanyImpactObservation]] = {}
+        for observation in observations:
+            observations_by_relation.setdefault(observation.relation_id, []).append(observation)
+
+        classifications: list[
+            tuple[EventImpactHypothesis, str, dict[str, int], str]
+        ] = []
+        for hypothesis in hypotheses:
+            hypothesis_relations = relations_by_hypothesis.get(hypothesis.id, [])
+            hypothesis_observations = [
+                observation
+                for relation in hypothesis_relations
+                for observation in observations_by_relation.get(relation.id, [])
+            ]
+            score = self._evidence_components(
+                hypothesis_relations, hypothesis_observations
+            )
+            classification, explanation = self._impact_classification(
+                hypothesis, score
+            )
+            classifications.append((hypothesis, classification, score, explanation))
+
+        priority = {"key": 0, "alternative": 1, "background": 2, "unresolved": 3}
+        classifications.sort(
+            key=lambda row: (
+                priority[row[1]],
+                -sum(row[2].values()),
+                row[0].rank,
+                str(row[0].id),
+            )
+        )
+        assessments = [
+            EventImpactHypothesisAssessment(
+                hypothesis_id=hypothesis.id,
+                research_case_id=case_id,
+                scope_version_id=scope.id,
+                classification=classification,
+                rank=rank,
+                score_components=score,
+                explanation=explanation,
+                created_at=_utcnow(),
+            )
+            for rank, (hypothesis, classification, score, explanation) in enumerate(
+                classifications, start=1
+            )
+        ]
+        self._session.add_all(assessments)
+        self._session.flush()
+
+        if not any(assessment.classification == "key" for assessment in assessments):
+            self._mark_no_key_factor(lifecycle)
+        return assessments
+
+    def _evidence_components(
+        self,
+        relations: Sequence[CompanyImpactRelation],
+        observations: Sequence[CompanyImpactObservation],
+    ) -> dict[str, int]:
+        verified_kinds = {
+            observation.kind
+            for observation in observations
+            if observation.status == "verified"
+        }
+        as_of_dates = [
+            observation.as_of_date
+            for observation in observations
+            if observation.as_of_date is not None
+        ]
+        as_of = max(as_of_dates) if as_of_dates else _utcnow().date()
+        fund_coverage = any(
+            exposure.computable
+            for relation in relations
+            if relation.status == "verified"
+            for exposure in self.fund_exposure(relation.id, as_of=as_of)
+        )
+        return {
+            "event": int("event" in verified_kinds),
+            "company": int(
+                any(relation.status == "verified" for relation in relations)
+                or "relation" in verified_kinds
+            ),
+            "operating": int("operating" in verified_kinds),
+            "market": int("market" in verified_kinds),
+            "peer_control": int("peer_control" in verified_kinds),
+            "fund_coverage": int(fund_coverage),
+        }
+
+    @staticmethod
+    def _impact_classification(
+        hypothesis: EventImpactHypothesis, score: dict[str, int]
+    ) -> tuple[str, str]:
+        if hypothesis.classification == "unresolved":
+            return (
+                "unresolved",
+                "候选公司关系缺少可采纳来源，尚不能形成可审计的影响传导。",
+            )
+        required = ("event", "company", "operating", "market", "peer_control")
+        if all(score[name] for name in required):
+            return "key", "事件、传导、经营、市场和对照证据完整。"
+        if score["event"] and (score["company"] or score["market"]):
+            return "alternative", "存在部分支持，但缺少区分替代解释的完整证据。"
+        return "background", "仅有环境线索，未形成可验证资产传导。"
+
+    def _mark_no_key_factor(self, lifecycle) -> None:
+        if lifecycle is None or lifecycle.status == "published":
+            return
+        lifecycle.status = "exhausted"
+        lifecycle.status_summary = "当前范围内没有满足证据门槛的关键因素"
+        lifecycle.current_gap = "不能确定关键因素；请补充传导、经营、市场或对照证据，或编辑研究因素。"
+        lifecycle.next_human_action = "补充来源或调整研究范围"
+        lifecycle.updated_at = _utcnow()
 
     def _append_insufficient_data_observation(
         self,
