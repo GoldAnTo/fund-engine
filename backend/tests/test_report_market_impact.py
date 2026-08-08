@@ -256,6 +256,21 @@ def test_missing_ledger_data_appends_insufficient_observations(session):
     assert any("缺少" in gap for gap in result.gaps)
 
 
+def test_missing_trading_calendar_appends_insufficient_not_an_empty_result(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="日历缺失公司", code="600004")
+    _mapped_relation(session, claim, target=target)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+    session.commit()
+
+    assert result.windows == {"1d": "insufficient", "5d": "insufficient"}
+    assert result.trading_days == {}
+    assert {row.status for row in result.observations} == {"insufficient"}
+    assert {row.window for row in result.observations} == {"1d", "5d"}
+
+
 def test_collects_only_same_case_confounder_visible_in_market_window(session):
     case, claim = _report_claim(session)
     unlisted = Company(

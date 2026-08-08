@@ -93,15 +93,16 @@ class ReportMarketImpactService:
                 after=document.published_at.date(), count=5
             )
         )
+        targets, peers = self._mapped_china_entities(claim)
         if len(trading_days) < 5:
+            observations = self._append_calendar_gap(claim, targets)
             return MarketImpactResult(
-                windows={},
+                windows={"1d": "insufficient", "5d": "insufficient"},
                 trading_days={},
                 gaps=("中国市场交易日账本不足，未计算 1 日/5 日市场反应",),
-                observations=(),
+                observations=tuple(observations),
             )
 
-        targets, peers = self._mapped_china_entities(claim)
         observations: list[ReportMarketObservation] = []
         confounders: list[ReportMarketConfounder] = []
         gaps: list[str] = []
@@ -136,6 +137,31 @@ class ReportMarketImpactService:
             observations=tuple(observations),
             confounders=tuple(confounders),
         )
+
+    def _append_calendar_gap(
+        self, claim: ReportClaim, targets: Sequence[_Target]
+    ) -> list[ReportMarketObservation]:
+        """Persist the missing-calendar boundary instead of returning silence."""
+        rows: list[ReportMarketObservation] = []
+        bindings: Sequence[_Target | None] = targets or (None,)
+        for window, _index in _WINDOWS:
+            for target in bindings:
+                rows.append(
+                    self._append_insufficient(
+                        claim=claim,
+                        relation=target.relation if target is not None else None,
+                        stock=None,
+                        window=window,
+                        kind="target_market",
+                        as_of=None,
+                        metric_name="trading_calendar",
+                        summary=(
+                            "中国市场交易日账本不足，无法对齐发布后 "
+                            f"{window} 窗口；未合成日期或市场数值。"
+                        ),
+                    )
+                )
+        return rows
 
     def _claim_and_document(
         self, claim_id: uuid.UUID
@@ -201,7 +227,7 @@ class ReportMarketImpactService:
         targets: Sequence[_Target],
         peers: Sequence[_Peer],
         window: str,
-        as_of: date,
+        as_of: date | None,
     ) -> tuple[str, list[ReportMarketObservation], list[str]]:
         observations: list[ReportMarketObservation] = []
         gaps: list[str] = []
