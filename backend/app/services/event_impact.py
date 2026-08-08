@@ -881,14 +881,7 @@ class EventImpactResearchService:
                 hypothesis_relations,
                 hypothesis_observations,
                 fund_coverage_by_relation,
-                {
-                    relation.id: (
-                        "verified" if latest_reviews.get(relation.id) and latest_reviews[relation.id].outcome == "accepted"
-                        else "rejected" if latest_reviews.get(relation.id) and latest_reviews[relation.id].outcome == "rejected"
-                        else relation.status
-                    )
-                    for relation in hypothesis_relations
-                },
+                {relation.id: relation.status for relation in hypothesis_relations},
             )
             classification, explanation = self._impact_classification(
                 hypothesis, score

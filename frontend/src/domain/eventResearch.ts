@@ -98,8 +98,11 @@ export interface EventImpactRelation {
   relationId: string; companyId: string; companyName: string; companyType: string;
   relationKind: string; direction: string; mechanism: string; status: string; effectiveStatus: string;
   sourceStatementId: string | null; stocks: Array<{ stockId: string; code: string; name: string; market: string }>;
-  observations: Array<Record<string, unknown>>; fundExposure: EventImpactFund[];
+  review: EventImpactRelationReview | null;
+  observations: EventImpactObservation[]; fundExposure: EventImpactFund[];
 }
+export interface EventImpactRelationReview { outcome: string; reason: string; reviewer: string; createdAt: string; }
+export interface EventImpactObservation { kind: string; status: string; sourceStatementId: string | null; valuationSnapshotId: string | null; summary: string; asOfDate: string | null; }
 export interface EventImpactFund { fundId?: string; fundCode?: string; fundName?: string; reportPeriod?: string; publishedAt?: string; source?: string; coverageRatio?: string | number; coverageStatus: string; computable: boolean; exposure: string | number | null; }
 
 export interface EventResearchScopeFactor {

@@ -125,7 +125,7 @@ class EventImpactQueries:
             cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc) if as_of else None
             by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = defaultdict(list)
             latest_visible: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
-            for stock in relation_stocks:
+            for stock in relation_stocks if cutoff is not None else []:
                 for holding in holdings_by_stock.get(stock.id, []):
                     published_at = holding.published_at
                     if published_at.tzinfo is None:
