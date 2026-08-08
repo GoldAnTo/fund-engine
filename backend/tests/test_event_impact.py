@@ -293,6 +293,8 @@ def test_refresh_calls_provider_without_a_database_transaction(
     factor = "provider transaction boundary"
     scope = _event_scope(session, research_case, factors=[factor])
     statement = _case_statement(session, research_case)
+    case_id, scope_id, statement_id = research_case.id, scope.id, statement.id
+    session.rollback()
     transaction_states: list[bool] = []
 
     class TransactionCheckingResolver:
@@ -300,17 +302,49 @@ def test_refresh_calls_provider_without_a_database_transaction(
             transaction_states.append(session.in_transaction())
             # Source values are detached snapshots, so accessing them cannot
             # auto-begin a transaction in the provider callback.
-            assert statements[0].id == statement.id
+            assert statements[0].id == statement_id
             assert statements[0].normalized_text
             assert not session.in_transaction()
             return []
 
     EventImpactResearchService(session, TransactionCheckingResolver()).refresh(
-        research_case.id, scope_version_id=scope.id
+        case_id, scope_version_id=scope_id
     )
     session.commit()
 
     assert transaction_states == [False]
+
+
+def test_refresh_provider_failure_never_commits_the_callers_outer_transaction(
+    session, research_case
+) -> None:
+    factor = "outer transaction boundary"
+    scope = _event_scope(session, research_case, factors=[factor])
+    case_id, scope_id = research_case.id, scope.id
+    session.rollback()
+    staged_title = "must remain uncommitted"
+    session.add(
+        ResearchCase(
+            title=staged_title,
+            industry_topic="staged",
+            created_by="tester",
+            created_at=NOW,
+        )
+    )
+
+    class FailingResolver:
+        def resolve(self, *, factor_statement, statements):
+            raise RuntimeError("provider failed")
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        EventImpactResearchService(session, FailingResolver()).refresh(
+            case_id, scope_version_id=scope_id
+        )
+    session.rollback()
+
+    assert session.scalar(
+        select(ResearchCase).where(ResearchCase.title == staged_title)
+    ) is None
 
 
 def test_refresh_keeps_unlisted_supplier_without_creating_stock(session, research_case) -> None:

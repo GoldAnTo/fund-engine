@@ -4,12 +4,13 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 from unicodedata import normalize
 
 from sqlalchemy import and_, select
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_impact import (
@@ -116,10 +117,38 @@ class _ResolvedFactor:
     candidates: Sequence[ResolvedImpactCompany]
 
 
+@dataclass(frozen=True)
+class _PreparedImpactRefresh:
+    case_id: uuid.UUID
+    scope_id: uuid.UUID
+    refresh_key: str
+    factors: Sequence[_RefreshFactor]
+    admissible_statements: Sequence[SourceStatement]
+    admissible_by_id: dict[uuid.UUID, SourceStatement]
+    statement_dates: dict[uuid.UUID, date]
+
+
 class EventImpactResearchService:
-    def __init__(self, session: Session, resolver: ImpactResolver | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        resolver: ImpactResolver | None = None,
+        *,
+        preflight_session_factory: Callable[[], Session] | None = None,
+    ) -> None:
         self._session = session
         self._resolver = resolver or _EmptyImpactResolver()
+        if preflight_session_factory is not None:
+            self._preflight_session_factory = preflight_session_factory
+        else:
+            bind = session.get_bind()
+            if isinstance(bind, Connection):
+                bind = bind.engine
+            self._preflight_session_factory = sessionmaker(
+                bind=bind,
+                future=True,
+                expire_on_commit=False,
+            )
 
     def refresh(
         self,
@@ -129,6 +158,80 @@ class EventImpactResearchService:
         refresh_key: str | None = None,
         output_slot=None,
     ) -> ImpactRefreshResult:
+        # Claim/input loading belongs to a short private transaction.  The
+        # injected Session may be an API command's outer unit of work, so this
+        # service must never commit or roll it back merely to call a provider.
+        with self._preflight_session_factory() as preflight_session:
+            preflight = EventImpactResearchService(
+                preflight_session,
+                resolver=self._resolver,
+                preflight_session_factory=self._preflight_session_factory,
+            )
+            prepared = preflight._prepare_provider_refresh(
+                case_id,
+                scope_version_id=scope_version_id,
+                refresh_key=refresh_key,
+            )
+        if prepared is None:
+            return ImpactRefreshResult(0, 0, 0, 0)
+
+        # Providers are deliberately run before any refresh output is added
+        # to this Session.  If one factor fails, the task failure commit cannot
+        # accidentally publish the hypotheses from factors that happened to
+        # resolve first.
+        resolved_factors: list[_ResolvedFactor] = []
+        for factor in prepared.factors:
+            candidates = list(
+                self._resolver.resolve(
+                    factor_statement=factor.statement,
+                    statements=prepared.admissible_statements,
+                )
+            )
+            resolved_factors.append(_ResolvedFactor(factor, candidates))
+
+        if output_slot is not None and not output_slot():
+            return ImpactRefreshResult(0, 0, 0, 0)
+
+        # This is the durable execution mutex, deliberately acquired only
+        # after the provider returns and after the caller owns its output slot.
+        # A competing worker may have published while this provider ran, so
+        # recheck the completed append-only trace under the claim lock.
+        _before_refresh_claim_lock()
+        self._session.scalar(
+            select(EventImpactRefreshClaim)
+            .where(EventImpactRefreshClaim.scope_version_id == prepared.scope_id)
+            .where(EventImpactRefreshClaim.refresh_key == prepared.refresh_key)
+            .with_for_update()
+        )
+        completed = self._session.scalars(
+            select(EventImpactHypothesis).where(
+                EventImpactHypothesis.research_case_id == case_id,
+                EventImpactHypothesis.scope_version_id == prepared.scope_id,
+            )
+        )
+        if any(
+            hypothesis.score_components.get("refresh_key") == prepared.refresh_key
+            for hypothesis in completed
+        ):
+            return ImpactRefreshResult(0, 0, 0, 0)
+
+        return self._append_refresh_output(
+            case_id=prepared.case_id,
+            scope_id=prepared.scope_id,
+            refresh_key=prepared.refresh_key,
+            resolved_factors=resolved_factors,
+            admissible_by_id=prepared.admissible_by_id,
+            statement_dates=prepared.statement_dates,
+        )
+
+    def _prepare_provider_refresh(
+        self,
+        case_id: uuid.UUID,
+        *,
+        scope_version_id: uuid.UUID | None,
+        refresh_key: str | None,
+    ) -> _PreparedImpactRefresh | None:
+        """Commit the private claim/input transaction before provider work."""
         scope = self._scope_for(case_id, scope_version_id)
         refresh_key = refresh_key or self._initial_refresh_key(scope.id)
         self._claim_refresh(case_id, scope.id, refresh_key)
@@ -143,7 +246,7 @@ class EventImpactResearchService:
             for hypothesis in existing_hypotheses
         ):
             self._session.commit()
-            return ImpactRefreshResult(0, 0, 0, 0)
+            return None
         factors = [
             _RefreshFactor(statement=factor.statement, position=factor.position)
             for factor in self._session.scalars(
@@ -154,76 +257,27 @@ class EventImpactResearchService:
         ]
         admissible_records = self._admissible_statement_records(case_id)
         admissible_statements = [statement for statement, _ in admissible_records]
-        admissible_by_id = {statement.id: statement for statement in admissible_statements}
-        statement_dates = {
-            statement.id: statement.observed_period
-            or (
-                document.published_at.date()
-                if document.published_at
-                else document.available_at.date()
-            )
-            for statement, document in admissible_records
-        }
-
-        # Do not hold an open transaction (or the claim row lock) while a
-        # provider executes.  Statements are loaded scalar snapshots; detach
-        # them before the commit so a resolver cannot lazily start a database
-        # transaction by reading one of the admissible inputs.
+        prepared = _PreparedImpactRefresh(
+            case_id=case_id,
+            scope_id=scope.id,
+            refresh_key=refresh_key,
+            factors=factors,
+            admissible_statements=admissible_statements,
+            admissible_by_id={statement.id: statement for statement in admissible_statements},
+            statement_dates={
+                statement.id: statement.observed_period
+                or (
+                    document.published_at.date()
+                    if document.published_at
+                    else document.available_at.date()
+                )
+                for statement, document in admissible_records
+            },
+        )
         for statement in admissible_statements:
             self._session.expunge(statement)
-        scope_id = scope.id
         self._session.commit()
-
-        # Providers are deliberately run before any refresh output is added
-        # to this Session.  If one factor fails, the task failure commit cannot
-        # accidentally publish the hypotheses from factors that happened to
-        # resolve first.
-        resolved_factors: list[_ResolvedFactor] = []
-        for factor in factors:
-            candidates = list(
-                self._resolver.resolve(
-                    factor_statement=factor.statement,
-                    statements=admissible_statements,
-                )
-            )
-            resolved_factors.append(_ResolvedFactor(factor, candidates))
-
-        if output_slot is not None and not output_slot():
-            self._session.rollback()
-            return ImpactRefreshResult(0, 0, 0, 0)
-
-        # This is the durable execution mutex, deliberately acquired only
-        # after the provider returns and after the caller owns its output slot.
-        # A competing worker may have published while this provider ran, so
-        # recheck the completed append-only trace under the claim lock.
-        _before_refresh_claim_lock()
-        self._session.scalar(
-            select(EventImpactRefreshClaim)
-            .where(EventImpactRefreshClaim.scope_version_id == scope_id)
-            .where(EventImpactRefreshClaim.refresh_key == refresh_key)
-            .with_for_update()
-        )
-        completed = self._session.scalars(
-            select(EventImpactHypothesis).where(
-                EventImpactHypothesis.research_case_id == case_id,
-                EventImpactHypothesis.scope_version_id == scope_id,
-            )
-        )
-        if any(
-            hypothesis.score_components.get("refresh_key") == refresh_key
-            for hypothesis in completed
-        ):
-            self._session.rollback()
-            return ImpactRefreshResult(0, 0, 0, 0)
-
-        return self._append_refresh_output(
-            case_id=case_id,
-            scope_id=scope_id,
-            refresh_key=refresh_key,
-            resolved_factors=resolved_factors,
-            admissible_by_id=admissible_by_id,
-            statement_dates=statement_dates,
-        )
+        return prepared
 
     def _append_refresh_output(
         self,
