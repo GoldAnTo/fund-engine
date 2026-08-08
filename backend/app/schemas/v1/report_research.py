@@ -114,6 +114,7 @@ class ReportFactorDTO(V1Model):
 class ReportResearchScopeDTO(V1Model):
     version: int
     document_id: uuid.UUID
+    visibility_cutoff_at: datetime
     research_question: str
     factor_selection: list[str]
     evidence_plan: list[str]

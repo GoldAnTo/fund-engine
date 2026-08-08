@@ -394,6 +394,67 @@ def test_same_document_scopes_freeze_distinct_claim_and_relation_paths(
     assert "供应商乙" not in history.text
 
 
+def test_wiki_builds_one_independent_evidence_index_for_all_selected_claim_paths(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    """Dense evidence is indexed once per graph, never once per claim."""
+    case_id = _create_report(
+        cmd_client,
+        title="图谱级证据索引",
+        content="研报观点：供应商甲是星海科技的供应商。",
+    )
+    document_id = cmd_session.scalar(
+        select(ReportCaseSourceSpan.document_version_id)
+        .where(ReportCaseSourceSpan.research_case_id == case_id)
+        .limit(1)
+    )
+    first_claim = cmd_session.scalar(
+        select(ReportClaim).where(ReportClaim.research_case_id == case_id)
+    )
+    assert document_id is not None and first_claim is not None
+    first_relation = cmd_session.scalar(
+        select(ReportRelation).where(ReportRelation.claim_id == first_claim.id)
+    )
+    assert first_relation is not None
+    second_claim, second_relation = _append_claim_to_report_document(
+        cmd_session,
+        case_id=case_id,
+        document_id=document_id,
+        statement="研报观点：供应商乙是星海科技的供应商。",
+        subject_name="供应商乙",
+        object_name="星海科技",
+    )
+    _append_independent_statement(
+        cmd_session,
+        case_id=case_id,
+        text="公告披露：供应商甲和供应商乙订单增长，星海科技需求稳定。",
+    )
+    ReportResearchService(cmd_session).append_scope(
+        case_id,
+        document_id,
+        changed_by="tester",
+        change_summary="同时核验两个观点路径",
+        selected_claim_ids=[first_claim.id, second_claim.id],
+        selected_relation_ids=[first_relation.id, second_relation.id],
+    )
+    cmd_session.commit()
+
+    calls: list[tuple[_IndependentEvidence, ...]] = []
+    original = ReportWikiQueries._independent_evidence_index
+
+    def counted_index(self, evidence, relations, companies):
+        calls.append(evidence)
+        return original(self, evidence, relations, companies)
+
+    monkeypatch.setattr(ReportWikiQueries, "_independent_evidence_index", counted_index)
+
+    response = cmd_client.get(f"/api/v1/report-research/{case_id}/wiki")
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert len(calls[0]) == 1
+
+
 def test_scope_selection_rejects_foreign_claim_before_appending_scope(
     cmd_client, cmd_session
 ) -> None:
@@ -1197,7 +1258,7 @@ def test_scope_hides_unselected_relation_market_and_fund_edges_but_keeps_claim_g
     assert "观点级市场数据不足" in graph.text
 
 
-def test_independent_evidence_index_scans_each_record_once_for_many_relations() -> None:
+def test_independent_evidence_index_scans_dense_records_once_for_many_claims() -> None:
     companies = {
         uuid.uuid4(): Company(id=uuid.uuid4(), code=f"IDX-{number}", name=f"实体{number}", type="listed", created_at=datetime.now(timezone.utc))
         for number in range(24)
@@ -1205,7 +1266,7 @@ def test_independent_evidence_index_scans_each_record_once_for_many_relations() 
     company_values = list(companies.values())
     relations = [
         ReportRelation(
-            id=uuid.uuid4(), claim_id=uuid.uuid4(), research_case_id=uuid.uuid4(),
+            id=uuid.uuid4(), claim_id=uuid.UUID(int=number % 3 + 1), research_case_id=uuid.uuid4(),
             source_span_id=uuid.uuid4(), source_statement_id=uuid.uuid4(),
             subject_company_id=company_values[number].id, object_company_id=company_values[number + 1].id,
             subject_name=None, object_name=None, relation_kind="supplier", mechanism="fixture", status="report_claim",
@@ -1214,7 +1275,7 @@ def test_independent_evidence_index_scans_each_record_once_for_many_relations() 
     ]
     evidence = tuple(
         _IndependentEvidence(
-            SourceStatement(id=uuid.uuid4(), source_span_id=uuid.uuid4(), kind="disclosed_fact", normalized_text=f"实体{number % 24} 订单增长", created_at=datetime.now(timezone.utc)),
+            SourceStatement(id=uuid.uuid4(), source_span_id=uuid.uuid4(), kind="disclosed_fact", normalized_text=f"实体{number % 24} 订单增长 实体{(number + 1) % 24} 供货", created_at=datetime.now(timezone.utc)),
             SourceSpan(id=uuid.uuid4(), document_version_id=uuid.uuid4(), locator={"fixture": number}, verbatim_text="fixture"),
         )
         for number in range(240)
@@ -1223,7 +1284,8 @@ def test_independent_evidence_index_scans_each_record_once_for_many_relations() 
         evidence, relations, {company.id: company for company in company_values}
     )
     assert index.scan_iterations == len(evidence)
-    assert sum(len(rows) for rows in index.by_entity.values()) <= len(evidence)
+    assert len(evidence) < index.match_iterations <= len(evidence) * 2
+    assert index.bucket_inserts == index.match_iterations
 
 
 @pytest.mark.pg_only

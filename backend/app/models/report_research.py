@@ -140,6 +140,11 @@ class ReportResearchScopeVersion(Base):
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
     factor_selection: Mapped[list] = mapped_column(JSON, nullable=False)
     evidence_plan: Mapped[list] = mapped_column(JSON, nullable=False)
+    # New scopes freeze this at creation.  Migration 0035 records its own
+    # execution timestamp for legacy scopes without rewriting source facts.
+    visibility_cutoff_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

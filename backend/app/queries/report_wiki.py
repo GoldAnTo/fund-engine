@@ -85,6 +85,8 @@ class _IndependentEvidenceIndex:
 
     by_entity: dict[str, tuple[_IndependentEvidence, ...]]
     scan_iterations: int
+    match_iterations: int
+    bucket_inserts: int
 
 
 class ReportWikiQueries:
@@ -148,7 +150,7 @@ class ReportWikiQueries:
         confounder_sources = self._confounder_sources(
             case_id,
             document.id,
-            scope.created_at,
+            scope.visibility_cutoff_at,
             {
                 row.source_statement_id
                 for rows in confounders_by_claim.values()
@@ -166,11 +168,17 @@ class ReportWikiQueries:
         confounder_assessments = self._confounder_assessments(claim_ids)
         exposures_by_claim = self._fund_exposures(claim_ids, selected_relation_ids)
         funds = self._funds(exposures_by_claim)
-        # ``created_at`` is the immutable visibility cutoff for this scope.
+        # ``visibility_cutoff_at`` is immutable for this scope.
         # Later disclosures may be examined in a successor scope, but cannot
         # retroactively promote this historical scope to a causal key factor.
         independent_evidence = self._independent_case_evidence(
-            case_id, document.id, scope.created_at
+            case_id, document.id, scope.visibility_cutoff_at
+        )
+        # Index every entity label in the selected graph once.  Rebuilding
+        # this per claim makes dense reports O(claims * evidence), even though
+        # the evidence set and entity vocabulary are scope-wide.
+        evidence_index = self._independent_evidence_index(
+            independent_evidence, relations, companies
         )
 
         nodes: dict[str, ReportWikiNodeDTO] = {}
@@ -223,9 +231,6 @@ class ReportWikiQueries:
             claim_relations = relations_by_claim[claim.id]
             relation_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
             operating_evidence: dict[uuid.UUID, _IndependentEvidence] = {}
-            evidence_index = self._independent_evidence_index(
-                independent_evidence, claim_relations, companies
-            )
             path_evidence: dict[
                 uuid.UUID, tuple[_IndependentEvidence | None, tuple[_IndependentEvidence, ...]]
             ] = {}
@@ -526,6 +531,7 @@ class ReportWikiQueries:
             scope=ReportResearchScopeDTO(
                 version=scope.version,
                 document_id=scope.document_version_id,
+                visibility_cutoff_at=scope.visibility_cutoff_at,
                 research_question=scope.research_question,
                 factor_selection=list(scope.factor_selection),
                 evidence_plan=list(scope.evidence_plan),
@@ -851,14 +857,21 @@ class ReportWikiQueries:
             if label
         }
         if not labels:
-            return _IndependentEvidenceIndex({}, len(evidence))
+            return _IndependentEvidenceIndex({}, len(evidence), 0, 0)
         matcher = re.compile("|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True)))
         buckets: dict[str, list[_IndependentEvidence]] = defaultdict(list)
+        match_iterations = 0
+        bucket_inserts = 0
         for row in evidence:
             for match in set(matcher.findall(row.statement.normalized_text)):
+                match_iterations += 1
                 buckets[match].append(row)
+                bucket_inserts += 1
         return _IndependentEvidenceIndex(
-            {label: tuple(rows) for label, rows in buckets.items()}, len(evidence)
+            {label: tuple(rows) for label, rows in buckets.items()},
+            len(evidence),
+            match_iterations,
+            bucket_inserts,
         )
 
     @staticmethod

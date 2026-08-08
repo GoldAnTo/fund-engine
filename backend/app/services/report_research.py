@@ -45,6 +45,10 @@ _REPORT_CLAIM_KINDS = frozenset(
 _REPORT_EXTRACTOR_VERSION = "report-rule-v2"
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 @dataclass(frozen=True)
 class ExtractedReportRelation:
     """A relation candidate from one report assertion.
@@ -724,6 +728,7 @@ class ReportResearchService:
             selected_claim_ids=selected_claim_ids,
             selected_relation_ids=selected_relation_ids,
         )
+        created_at = _utcnow()
         scope = ReportResearchScopeVersion(
             research_case_id=research_case_id,
             document_version_id=document_version_id,
@@ -733,6 +738,10 @@ class ReportResearchService:
             research_question=(research_question or "验证研报观点与市场影响。").strip(),
             factor_selection=[],
             evidence_plan=[],
+            # New scopes use their exact creation time as their historical
+            # evidence horizon; a later disclosure needs a successor scope.
+            visibility_cutoff_at=created_at,
+            created_at=created_at,
         )
         self._session.add(scope)
         self._session.flush()
@@ -788,6 +797,7 @@ class ReportResearchService:
             selected_claim_ids=selected_claim_ids,
             selected_relation_ids=selected_relation_ids,
         )
+        created_at = _utcnow()
         scope = ReportResearchScopeVersion(
             research_case_id=research_case_id,
             document_version_id=document_version_id,
@@ -805,6 +815,8 @@ class ReportResearchService:
                 if evidence_plan is None and latest is not None
                 else evidence_plan or []
             ),
+            visibility_cutoff_at=created_at,
+            created_at=created_at,
         )
         self._session.add(scope)
         self._session.flush()
