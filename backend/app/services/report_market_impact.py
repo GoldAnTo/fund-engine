@@ -94,6 +94,10 @@ class ReportMarketImpactService:
         self._existing_records: dict[type, dict[str, object]] = {}
 
     def collect(self, claim_id: uuid.UUID) -> MarketImpactResult:
+        # The ORM provenance validator caches immutable lookups while this
+        # collection appends many observations.  Start each independent run
+        # from a fresh view so a researcher-added mapping is immediately used.
+        self._session.info.pop("report_industry_control_provenance", None)
         claim, document = self._claim_and_document(claim_id)
         self._prime_existing_records(claim.id)
         if document.published_at is None:
@@ -648,6 +652,7 @@ class ReportMarketImpactService:
                 HoldingDisclosure.fund_id,
                 HoldingDisclosure.report_period.desc(),
                 HoldingDisclosure.published_at.desc(),
+                HoldingDisclosure.id.desc(),
             )
         )
         latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
@@ -682,6 +687,7 @@ class ReportMarketImpactService:
                 ValuationSnapshot.metric_name,
                 ValuationSnapshot.available_at.desc(),
                 ValuationSnapshot.created_at.desc(),
+                ValuationSnapshot.id.desc(),
             )
         )
         latest: dict[tuple[uuid.UUID, str], ValuationSnapshot] = {}
@@ -885,6 +891,7 @@ class ReportMarketImpactService:
                 ChinaIndustryIndexMembership.company_id,
                 ChinaIndustryIndexMembership.available_at.desc(),
                 ChinaIndustryIndexMembership.created_at.desc(),
+                ChinaIndustryIndexMembership.id.desc(),
             )
         )
         indexed: dict[uuid.UUID, ChinaIndustryIndex] = {}
@@ -912,6 +919,7 @@ class ReportMarketImpactService:
                 ChinaIndustryIndexSnapshot.industry_index_id,
                 ChinaIndustryIndexSnapshot.available_at.desc(),
                 ChinaIndustryIndexSnapshot.created_at.desc(),
+                ChinaIndustryIndexSnapshot.id.desc(),
             )
         )
         snapshots: dict[uuid.UUID, ChinaIndustryIndexSnapshot] = {}

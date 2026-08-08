@@ -444,6 +444,288 @@ def test_verified_industry_control_requires_an_industry_index_snapshot(session):
         session.flush()
 
 
+def test_verified_industry_control_rejects_snapshot_without_relation_company_mapping(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="映射缺失目标", code="600073")
+    relation = _mapped_relation(session, claim, target=target)
+    unrelated, _other_stock = _company_stock(session, name="无关映射公司", code="600074")
+    index = ChinaIndustryIndex(
+        id=uuid.uuid4(),
+        code="801082.SI",
+        name="申万无关控制",
+        provider="申万",
+        market="CN",
+        source="provider://sw/index",
+        definition="无关控制来源",
+        created_at=NOW,
+    )
+    session.add(index)
+    session.flush()
+    session.add(
+        ChinaIndustryIndexMembership(
+            id=uuid.uuid4(),
+            company_id=unrelated.id,
+            industry_index_id=index.id,
+            applicable_from=None,
+            applicable_to=None,
+            source="provider://sw/constituents",
+            definition="不属于当前关系公司的映射",
+            available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+    )
+    snapshot = ChinaIndustryIndexSnapshot(
+        id=uuid.uuid4(),
+        industry_index_id=index.id,
+        as_of_date=TRADING_DAYS[0],
+        metric_name="INDUSTRY_RETURN_1D",
+        metric_value=Decimal("0.01"),
+        source="provider://sw/quotes",
+        definition="无关控制来源",
+        available_at=datetime.combine(TRADING_DAYS[0], time.max, tzinfo=timezone.utc),
+        created_at=NOW,
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        ReportMarketObservation(
+            id=uuid.uuid4(),
+            research_case_id=claim.research_case_id,
+            report_claim_id=claim.id,
+            report_relation_id=relation.id,
+            stock_id=None,
+            valuation_snapshot_id=None,
+            industry_index_snapshot_id=snapshot.id,
+            window="1d",
+            kind="industry_control",
+            status="verified",
+            as_of_date=TRADING_DAYS[0],
+            metric_name="INDUSTRY_RETURN_1D",
+            summary="伪造的无关行业控制",
+            collection_key=uuid.uuid4().hex,
+            created_at=NOW,
+        )
+    )
+
+    with pytest.raises(ValueError, match="point-in-time industry mapping"):
+        session.flush()
+
+
+def test_unmapped_relation_company_records_industry_control_insufficient(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="未归类目标", code="600075")
+    relation = _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    index = ChinaIndustryIndex(
+        id=uuid.uuid4(),
+        code="801083.SI",
+        name="无映射指数",
+        provider="申万",
+        market="CN",
+        source="provider://sw/index",
+        definition="没有关系公司映射的真实指数",
+        created_at=NOW,
+    )
+    session.add(index)
+    for as_of, metric in (
+        (TRADING_DAYS[0], "INDUSTRY_RETURN_1D"),
+        (TRADING_DAYS[4], "INDUSTRY_RETURN_5D"),
+    ):
+        session.add(
+            ChinaIndustryIndexSnapshot(
+                id=uuid.uuid4(),
+                industry_index_id=index.id,
+                as_of_date=as_of,
+                metric_name=metric,
+                metric_value=Decimal("0.01"),
+                source="provider://sw/quotes",
+                definition="无映射窗口",
+                available_at=datetime.combine(as_of, time.max, tzinfo=timezone.utc),
+                created_at=NOW,
+            )
+        )
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    controls = [
+        row
+        for row in result.observations
+        if row.kind == "industry_control" and row.report_relation_id == relation.id
+    ]
+    assert [(row.window, row.status, row.industry_index_snapshot_id) for row in controls] == [
+        ("1d", "insufficient", None),
+        ("5d", "insufficient", None),
+    ]
+
+
+def test_equal_timestamp_industry_membership_uses_highest_id_deterministically(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="行业映射并列目标", code="600076")
+    relation = _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    low_index = ChinaIndustryIndex(
+        id=uuid.UUID(int=101), code="801084.SI", name="低序行业", provider="申万",
+        market="CN", source="provider://sw/index", definition="低序", created_at=NOW,
+    )
+    high_index = ChinaIndustryIndex(
+        id=uuid.UUID(int=102), code="801085.SI", name="高序行业", provider="申万",
+        market="CN", source="provider://sw/index", definition="高序", created_at=NOW,
+    )
+    session.add_all([low_index, high_index])
+    for membership_id, index in ((uuid.UUID(int=1), low_index), (uuid.UUID(int=2), high_index)):
+        session.add(
+            ChinaIndustryIndexMembership(
+                id=membership_id,
+                company_id=target.id,
+                industry_index_id=index.id,
+                applicable_from=None,
+                applicable_to=None,
+                source="provider://sw/constituents",
+                definition="并列时间戳映射",
+                available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+                created_at=NOW,
+            )
+        )
+    high_snapshot = ChinaIndustryIndexSnapshot(
+        id=uuid.UUID(int=200),
+        industry_index_id=high_index.id,
+        as_of_date=TRADING_DAYS[0],
+        metric_name="INDUSTRY_RETURN_1D",
+        metric_value=Decimal("0.02"),
+        source="provider://sw/quotes",
+        definition="高序窗口",
+        available_at=datetime.combine(TRADING_DAYS[0], time.max, tzinfo=timezone.utc),
+        created_at=NOW,
+    )
+    session.add(high_snapshot)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    control = next(
+        row for row in result.observations
+        if row.kind == "industry_control"
+        and row.report_relation_id == relation.id
+        and row.window == "1d"
+    )
+    assert (control.status, control.industry_index_snapshot_id) == ("verified", high_snapshot.id)
+
+
+def test_equal_timestamp_industry_snapshots_use_highest_id_deterministically(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="指数快照并列目标", code="600077")
+    relation = _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    index = ChinaIndustryIndex(
+        id=uuid.uuid4(), code="801086.SI", name="并列指数", provider="申万",
+        market="CN", source="provider://sw/index", definition="并列快照", created_at=NOW,
+    )
+    session.add(index)
+    session.add(
+        ChinaIndustryIndexMembership(
+            id=uuid.uuid4(), company_id=target.id, industry_index_id=index.id,
+            applicable_from=None, applicable_to=None, source="provider://sw/constituents",
+            definition="映射", available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+    )
+    snapshots = []
+    for snapshot_id, value in ((uuid.UUID(int=301), "0.01"), (uuid.UUID(int=302), "0.02")):
+        snapshot = ChinaIndustryIndexSnapshot(
+            id=snapshot_id, industry_index_id=index.id, as_of_date=TRADING_DAYS[0],
+            metric_name="INDUSTRY_RETURN_1D", metric_value=Decimal(value),
+            source="provider://sw/quotes", definition="并列快照",
+            available_at=datetime.combine(TRADING_DAYS[0], time.max, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+        snapshots.append(snapshot)
+        session.add(snapshot)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    control = next(
+        row for row in result.observations
+        if row.kind == "industry_control"
+        and row.report_relation_id == relation.id
+        and row.window == "1d"
+    )
+    assert (control.industry_index_snapshot_id, "0.02" in control.summary) == (
+        snapshots[1].id,
+        True,
+    )
+
+
+def test_equal_timestamp_fund_holdings_use_highest_id_deterministically(session):
+    _case, claim = _report_claim(session)
+    target, stock = _company_stock(session, name="基金披露并列目标", code="600078")
+    _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    fund = Fund(
+        id=uuid.uuid4(), code="000078", name="并列公募", fund_type="equity", created_at=NOW
+    )
+    session.add(fund)
+    disclosures = []
+    for disclosure_id, weight in ((uuid.UUID(int=401), "1.00"), (uuid.UUID(int=402), "2.00")):
+        disclosure = HoldingDisclosure(
+            id=disclosure_id, fund_id=fund.id, stock_id=stock.id, weight=Decimal(weight),
+            report_period=date(2026, 6, 30),
+            published_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            acquired_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            source="fixture-tie", created_at=NOW,
+        )
+        disclosures.append(disclosure)
+        session.add(disclosure)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    assert {
+        (row.window, row.holding_disclosure_id, row.weight)
+        for row in result.fund_exposures
+        if row.status == "verified"
+    } == {
+        ("1d", disclosures[1].id, Decimal("2.00")),
+        ("5d", disclosures[1].id, Decimal("2.00")),
+    }
+
+
+def test_equal_timestamp_market_snapshots_use_highest_id_deterministically(session):
+    _case, claim = _report_claim(session)
+    target, stock = _company_stock(session, name="行情快照并列目标", code="600079")
+    relation = _mapped_relation(session, claim, target=target)
+    _calendar_days(session)
+    snapshots = []
+    for snapshot_id, value in ((uuid.UUID(int=501), "0.01"), (uuid.UUID(int=502), "0.02")):
+        snapshot = ValuationSnapshot(
+            id=snapshot_id, stock_id=stock.id, as_of_date=TRADING_DAYS[0],
+            metric_name="EVENT_RETURN_1D", metric_value=Decimal(value),
+            source="fixture-tie", definition="并列行情快照",
+            available_at=datetime.combine(TRADING_DAYS[0], time.max, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+        snapshots.append(snapshot)
+        session.add(snapshot)
+    for metric in ("VOLUME", "TURNOVER_RATE", "VOLATILITY", "PE_TTM"):
+        _snapshot(session, stock, as_of=TRADING_DAYS[0], metric=metric)
+    session.commit()
+
+    result = ReportMarketImpactService(session).collect(claim.id)
+
+    event_return = next(
+        row for row in result.observations
+        if row.kind == "target_market"
+        and row.report_relation_id == relation.id
+        and row.window == "1d"
+        and row.metric_name == "EVENT_RETURN_1D"
+    )
+    assert (event_return.valuation_snapshot_id, "0.0200000000" in event_return.summary) == (
+        snapshots[1].id,
+        True,
+    )
+
+
 def test_missing_publish_time_skips_market_window(session):
     _case, claim = _report_claim(session, published_at=None)
     session.commit()

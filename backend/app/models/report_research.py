@@ -28,7 +28,9 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 from app.models.ledger import (
     Base,
     CaseDocumentVersion,
+    ChinaIndustryIndexMembership,
     ChinaIndustryIndexSnapshot,
+    DocumentVersion,
     SourceSpan,
     SourceStatement,
     _uuid,
@@ -353,6 +355,165 @@ class ReportFundExposure(Base):
     )
 
 
+def _verified_industry_control_context(
+    session: Session,
+    observations: list[ReportMarketObservation],
+    pending_claims: dict[uuid.UUID, ReportClaim],
+) -> dict[uuid.UUID, tuple[ChinaIndustryIndexSnapshot | None, bool]]:
+    """Batch-load provenance required by new verified industry controls.
+
+    ``before_flush`` must preserve the same proof as the collection service,
+    but it cannot issue one membership query for every report relation.  The
+    complete candidate set is checked in memory.  The session cache expands
+    by claim, relation company, and snapshot id, so the service's individual
+    immutable inserts do not turn this validation into an N+1 query pattern.
+    """
+    candidates = [
+        observation
+        for observation in observations
+        if observation.kind == "industry_control"
+        and observation.status == "verified"
+        and observation.industry_index_snapshot_id is not None
+    ]
+    if not candidates:
+        return {}
+    claim_ids = {observation.report_claim_id for observation in candidates}
+    relation_ids = {
+        observation.report_relation_id
+        for observation in candidates
+        if observation.report_relation_id is not None
+    }
+    snapshot_ids = {
+        observation.industry_index_snapshot_id
+        for observation in candidates
+        if observation.industry_index_snapshot_id is not None
+    }
+    cache = session.info.setdefault(
+        "report_industry_control_provenance",
+        {
+            "publications": {},
+            "relations": {},
+            "loaded_relation_claims": set(),
+            "snapshots": {},
+            "memberships": {},
+        },
+    )
+    publication_by_claim: dict[uuid.UUID, datetime | None] = cache["publications"]
+    missing_publications = claim_ids - set(publication_by_claim)
+    if missing_publications:
+        publication_by_claim.update(
+            {
+                claim_id: published_at
+                for claim_id, published_at in session.execute(
+                    select(ReportClaim.id, DocumentVersion.published_at)
+                    .join(SourceSpan, SourceSpan.id == ReportClaim.source_span_id)
+                    .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+                    .where(ReportClaim.id.in_(missing_publications))
+                )
+            }
+        )
+    relations: dict[uuid.UUID, ReportRelation] = cache["relations"]
+    loaded_relation_claims: set[uuid.UUID] = cache["loaded_relation_claims"]
+    missing_relation_claims = claim_ids - loaded_relation_claims
+    if missing_relation_claims:
+        relations.update(
+            {
+                relation.id: relation
+                for relation in session.scalars(
+                    select(ReportRelation).where(
+                        ReportRelation.claim_id.in_(missing_relation_claims)
+                    )
+                )
+            }
+        )
+        loaded_relation_claims.update(missing_relation_claims)
+    relations.update(
+        {
+            relation.id: relation
+            for relation in session.new
+            if isinstance(relation, ReportRelation) and relation.id in relation_ids
+        }
+    )
+    snapshots: dict[uuid.UUID, ChinaIndustryIndexSnapshot] = cache["snapshots"]
+    missing_snapshots = snapshot_ids - set(snapshots)
+    if missing_snapshots:
+        snapshots.update(
+            {
+                snapshot.id: snapshot
+                for snapshot in session.scalars(
+                    select(ChinaIndustryIndexSnapshot).where(
+                        ChinaIndustryIndexSnapshot.id.in_(missing_snapshots)
+                    )
+                )
+            }
+        )
+    snapshots.update(
+        {
+            snapshot.id: snapshot
+            for snapshot in session.new
+            if isinstance(snapshot, ChinaIndustryIndexSnapshot)
+            and snapshot.id in snapshot_ids
+        }
+    )
+    company_ids = {
+        company_id
+        for relation in relations.values()
+        for company_id in (relation.subject_company_id, relation.object_company_id)
+        if company_id is not None
+    }
+    memberships_by_company: dict[uuid.UUID, list[ChinaIndustryIndexMembership]] = cache[
+        "memberships"
+    ]
+    missing_companies = company_ids - set(memberships_by_company)
+    if missing_companies:
+        for membership in session.scalars(
+            select(ChinaIndustryIndexMembership).where(
+                ChinaIndustryIndexMembership.company_id.in_(missing_companies)
+            )
+        ):
+            memberships_by_company.setdefault(membership.company_id, []).append(membership)
+        for company_id in missing_companies:
+            memberships_by_company.setdefault(company_id, [])
+    for membership in session.new:
+        if (
+            isinstance(membership, ChinaIndustryIndexMembership)
+            and membership.company_id in company_ids
+            and membership not in memberships_by_company.setdefault(membership.company_id, [])
+        ):
+            memberships_by_company[membership.company_id].append(membership)
+    result: dict[uuid.UUID, tuple[ChinaIndustryIndexSnapshot | None, bool]] = {}
+    for observation in candidates:
+        snapshot = snapshots.get(observation.industry_index_snapshot_id)
+        relation = relations.get(observation.report_relation_id)
+        published_at = publication_by_claim.get(observation.report_claim_id)
+        if published_at is None and observation.report_claim_id in pending_claims:
+            # Pending report documents cannot establish a historical public
+            # time during the same flush; fail closed rather than guessing.
+            published_at = None
+        company_ids_for_relation = (
+            {company_id for company_id in (relation.subject_company_id, relation.object_company_id) if company_id is not None}
+            if relation is not None
+            else set()
+        )
+        mapped = bool(snapshot and published_at and any(
+            membership.company_id in company_ids_for_relation
+            and membership.industry_index_id == snapshot.industry_index_id
+            and membership.available_at <= published_at
+            and (
+                membership.applicable_from is None
+                or membership.applicable_from <= published_at.date()
+            )
+            and (
+                membership.applicable_to is None
+                or membership.applicable_to >= published_at.date()
+            )
+            for company_id in company_ids_for_relation
+            for membership in memberships_by_company.get(company_id, ())
+        ))
+        result[observation.id] = (snapshot, mapped)
+    return result
+
+
 @event.listens_for(Session, "before_flush")
 def _validate_report_ledger_provenance(session, _flush_context, _instances) -> None:
     """Keep denormalized graph keys bound to their immutable source ledger.
@@ -405,6 +566,15 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
         if selected is None:
             raise ValueError("report claim source span is not selected for its research case")
 
+    pending_observations = [
+        observation
+        for observation in session.new
+        if isinstance(observation, ReportMarketObservation)
+    ]
+    industry_context = _verified_industry_control_context(
+        session, pending_observations, pending_claims
+    )
+
     for extraction in session.new:
         if not isinstance(extraction, ReportExtractionClaim):
             continue
@@ -435,14 +605,13 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
         ):
             raise ValueError("report relation provenance must match its claim")
 
-    for observation in session.new:
-        if not isinstance(observation, ReportMarketObservation):
-            continue
+    for observation in pending_observations:
         claim = pending_claims.get(observation.report_claim_id) or session.get(
             ReportClaim, observation.report_claim_id
         )
         if claim is None or claim.research_case_id != observation.research_case_id:
             raise ValueError("report market observation must belong to its claim case")
+        relation: ReportRelation | None = None
         if observation.report_relation_id is not None:
             relation = session.get(ReportRelation, observation.report_relation_id)
             if relation is None or relation.claim_id != claim.id:
@@ -457,10 +626,8 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
                     raise ValueError(
                         "verified industry control must use only an industry index snapshot"
                     )
-                snapshot = session.get(
-                    ChinaIndustryIndexSnapshot,
-                    observation.industry_index_snapshot_id,
-                )
+                context = industry_context.get(observation.id)
+                snapshot = context[0] if context is not None else None
                 if (
                     snapshot is None
                     or snapshot.as_of_date != observation.as_of_date
@@ -468,6 +635,11 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
                 ):
                     raise ValueError(
                         "industry control must reference its exact industry index snapshot"
+                    )
+                if context is None or not context[1]:
+                    raise ValueError(
+                        "industry control has no point-in-time industry mapping "
+                        "for either relation company"
                     )
             elif observation.industry_index_snapshot_id is not None:
                 raise ValueError("insufficient industry control cannot cite an index snapshot")
