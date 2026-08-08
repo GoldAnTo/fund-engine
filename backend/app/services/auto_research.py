@@ -30,6 +30,16 @@ from app.services.event_research_scope_evidence import (
 )
 
 
+IMPACT_STAGE_TASK_TYPES = (
+    "impact_companies",
+    "impact_operating",
+    "impact_market",
+    "impact_peer",
+    "impact_fund",
+    "impact_alternative",
+)
+
+
 class AutoResearchService:
     def __init__(self, session: Session, *, impact_resolver=None) -> None:
         self.session = session
@@ -68,6 +78,18 @@ class AutoResearchService:
             EventImpactResearchService(self.session).schedule_refresh(
                 case_id, scope_version_id, run.id
             )
+            # Keep every scope/thesis handoff explicit and replayable.  These
+            # tasks run after the durable refresh task and retain the exact
+            # scope id so a successor scope cannot silently consume old work.
+            for thesis in theses:
+                for task_type in IMPACT_STAGE_TASK_TYPES:
+                    self.repo.create_task(
+                        run_id=run.id,
+                        research_case_id=case_id,
+                        thesis_id=thesis.id,
+                        task_type=task_type,
+                        query=f"impact_stage:{scope_version_id}:{task_type}",
+                    )
         for thesis in theses:
             for task_type, label in (
                 ("support", "寻找支持证据"),
@@ -153,6 +175,17 @@ class AutoResearchService:
                             refresh_key=refresh_key,
                             output_slot=lambda: self._claim_task_output_slot(run, task),
                         )
+                    elif task.task_type in IMPACT_STAGE_TASK_TYPES:
+                        _, scope_id, stage = task.query.split(":", 2)
+                        impact = EventImpactResearchService(
+                            self.session, resolver=self._impact_resolver
+                        ).run_stage(
+                            run.research_case_id,
+                            scope_version_id=uuid.UUID(scope_id),
+                            thesis_id=task.thesis_id,
+                            stage=stage,
+                            output_slot=lambda: self._claim_task_output_slot(run, task),
+                        )
                     elif task.task_type in {"support", "contradict", "alternative"}:
                         proposed_ids = self._propose_for_task(proposer, task, run)
                     else:
@@ -181,6 +214,8 @@ class AutoResearchService:
                             "hypotheses_created": impact.hypotheses_created,
                             "relations_created": impact.relations_created,
                         }
+                    elif task.task_type in IMPACT_STAGE_TASK_TYPES:
+                        task.result = {"task_type": task.task_type, **impact}
                     else:
                         task.result = {
                             "task_type": task.task_type,
@@ -516,6 +551,21 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
+        # Candidate impact relations are deliberately reviewed only when the
+        # ledger shows they are material (A-share + visible China-fund
+        # holding) and still lack an admissible relationship statement.
+        for research_task in research_tasks:
+            if research_task.task_type != "impact_refresh":
+                continue
+            try:
+                _, _claim_id, scope_id, _refresh_key = research_task.query.split(":", 3)
+                EventImpactResearchService(self.session).schedule_company_impact_reviews(
+                    run.research_case_id,
+                    scope_version_id=uuid.UUID(scope_id),
+                )
+            except (TypeError, ValueError):
+                continue
+            break
 
     def _propose_for_task(
         self, proposer: EvidenceProposer, task, run

@@ -53,7 +53,7 @@ from app.services.event_impact import (
 )
 from app.errors import ValidationFailedError
 from app.models.events import DomainEvent
-from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
+from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask, TaskItem
 from app.services.auto_research import AutoResearchService
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.event_conclusion import EventConclusionService
@@ -2076,6 +2076,244 @@ def test_impact_refresh_task_is_created_before_assessment_tasks(session, researc
     tasks = AutoResearchRepository(session).tasks_for_run(run.id)
     assert tasks[0].task_type == "impact_refresh"
     assert any(task.task_type == "result" for task in tasks[1:])
+
+
+def test_start_creates_auditable_impact_work_for_each_scope_thesis(
+    session, research_case
+) -> None:
+    factor = "supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    thesis = Thesis(
+        research_case_id=research_case.id,
+        statement=factor,
+        created_by="tester",
+        created_at=NOW,
+    )
+    session.add(thesis)
+    session.commit()
+
+    run = AutoResearchService(session).start(
+        research_case.id,
+        max_rounds=1,
+        budget=20,
+        thesis_ids=[thesis.id],
+        scope_version_id=scope.id,
+    )
+
+    tasks = AutoResearchRepository(session).tasks_for_run(run.id)
+    scoped_tasks = [
+        task
+        for task in tasks
+        if task.task_type.startswith("impact_") and task.task_type != "impact_refresh"
+    ]
+    assert tasks[0].task_type == "impact_refresh"
+    assert {(task.task_type, task.thesis_id) for task in scoped_tasks} == {
+        ("impact_companies", thesis.id),
+        ("impact_operating", thesis.id),
+        ("impact_market", thesis.id),
+        ("impact_peer", thesis.id),
+        ("impact_fund", thesis.id),
+        ("impact_alternative", thesis.id),
+    }
+    assert all(str(scope.id) in task.query for task in scoped_tasks)
+    first_normal_task = next(
+        index for index, task in enumerate(tasks) if task.task_type == "support"
+    )
+    assert max(tasks.index(task) for task in scoped_tasks) < first_normal_task
+
+
+def test_review_company_impact_requires_listed_china_fund_and_missing_source(
+    session, research_case
+) -> None:
+    scope = _event_scope(session, research_case, factors=["supplier impact"])
+    hypothesis = _hypothesis(session, research_case.id, scope.id)
+    listed = _company(session, code="LISTED-CO", company_type="listed")
+    relation = _relation(session, hypothesis, scope, listed)
+    stock = Stock(
+        company_id=listed.id,
+        code="600001.SH",
+        name="Listed Co",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000001",
+        name="China fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([stock, fund])
+    session.flush()
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=stock.id,
+            weight=Decimal("0.12"),
+            report_period=date(2026, 7, 31),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="fixture holding",
+            created_at=NOW,
+        )
+    )
+    session.commit()
+
+    created = EventImpactResearchService(session).schedule_company_impact_reviews(
+        research_case.id, scope_version_id=scope.id, as_of=NOW.date()
+    )
+    session.commit()
+
+    review_tasks = list(
+        session.scalars(
+            select(TaskItem).where(TaskItem.task_type == "review_company_impact")
+        )
+    )
+    assert created == 1
+    assert [task.ref_id for task in review_tasks] == [relation.id]
+    assert "缺少可采纳关系来源" in review_tasks[0].description
+
+    unlisted = _company(session, code="UNLISTED-CO", company_type="unlisted_supplier")
+    _relation(session, hypothesis, scope, unlisted)
+    low_impact = _company(session, code="LOW-IMPACT-CO", company_type="listed")
+    low_impact_stock = Stock(
+        company_id=low_impact.id,
+        code="600002.SH",
+        name="Low impact Co",
+        market="SSE",
+        created_at=NOW,
+    )
+    session.add(low_impact_stock)
+    session.commit()
+    _relation(session, hypothesis, scope, low_impact)
+    assert EventImpactResearchService(session).schedule_company_impact_reviews(
+        research_case.id, scope_version_id=scope.id, as_of=NOW.date()
+    ) == 0
+
+
+def test_impact_stage_obeys_output_slot_before_appending_ledger_data(
+    session, research_case
+) -> None:
+    factor = "supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    thesis = Thesis(
+        research_case_id=research_case.id,
+        statement=factor,
+        created_by="tester",
+        created_at=NOW,
+    )
+    session.add(thesis)
+    session.commit()
+    service = EventImpactResearchService(
+        session,
+        _FakeImpactResolver({factor: [_candidate(source_statement_id=statement.id)]}),
+    )
+    service.refresh(research_case.id, scope_version_id=scope.id)
+    session.commit()
+    relation = session.scalar(select(CompanyImpactRelation))
+    assert relation is not None
+    stock = Stock(
+        company_id=relation.affected_company_id,
+        code="600777.SH",
+        name="Impact stage company",
+        market="SSE",
+        created_at=NOW,
+    )
+    session.add(stock)
+    session.commit()
+    _snapshot(session, stock, metric_name="REVENUE_YOY")
+
+    cancelled = service.run_stage(
+        research_case.id,
+        scope_version_id=scope.id,
+        thesis_id=thesis.id,
+        stage="impact_operating",
+        output_slot=lambda: False,
+    )
+    assert cancelled == {"cancelled": True, "observations_created": 0}
+    assert not list(
+        session.scalars(
+            select(CompanyImpactObservation).where(
+                CompanyImpactObservation.kind == "operating"
+            )
+        )
+    )
+
+    completed = service.run_stage(
+        research_case.id,
+        scope_version_id=scope.id,
+        thesis_id=thesis.id,
+        stage="impact_operating",
+        output_slot=lambda: True,
+    )
+    session.commit()
+    assert completed == {"cancelled": False, "observations_created": 1}
+
+
+def test_worker_executes_scope_impact_stages_after_refresh(session, research_case) -> None:
+    factor = "supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    thesis = Thesis(
+        research_case_id=research_case.id,
+        statement=factor,
+        created_by="tester",
+        created_at=NOW,
+    )
+    company = Company(
+        code="ACME",
+        name="Acme Supplier",
+        type="listed",
+        created_at=NOW,
+    )
+    session.add_all([thesis, company])
+    session.flush()
+    stock = Stock(
+        company_id=company.id,
+        code="600888.SH",
+        name="Acme Supplier",
+        market="SSE",
+        created_at=NOW,
+    )
+    session.add(stock)
+    session.commit()
+    _snapshot(session, stock, metric_name="REVENUE_YOY")
+
+    worker = AutoResearchService(
+        session,
+        impact_resolver=_FakeImpactResolver(
+            {factor: [_candidate(source_statement_id=statement.id)]}
+        ),
+    )
+    run = worker.start(
+        research_case.id,
+        max_rounds=1,
+        budget=20,
+        thesis_ids=[thesis.id],
+        scope_version_id=scope.id,
+    )
+    for task in worker.repo.tasks_for_run(run.id):
+        if not task.task_type.startswith("impact_"):
+            task.status = "cancelled"
+    session.commit()
+
+    worker.execute(run)
+    session.commit()
+
+    stage_tasks = {
+        task.task_type: task
+        for task in worker.repo.tasks_for_run(run.id)
+        if task.task_type.startswith("impact_")
+    }
+    assert all(task.status == "done" for task in stage_tasks.values())
+    assert stage_tasks["impact_operating"].result == {
+        "task_type": "impact_operating",
+        "cancelled": False,
+        "observations_created": 1,
+    }
 
 
 def test_cancelled_old_scope_impact_task_cannot_write_before_successor_runs(

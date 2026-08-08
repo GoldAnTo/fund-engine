@@ -42,6 +42,7 @@ from app.models.ledger import (
     ValuationSnapshot,
 )
 from app.models.operational import ResearchRun, ResearchTask
+from app.repositories.operational import TaskRepository
 from app.services.source_admission import classify_source
 from app.repositories.outbox import emit_event
 from app.services.china_market_data import (
@@ -339,7 +340,11 @@ class EventImpactResearchService:
         return prepared
 
     def collect_data(
-        self, relation_id: uuid.UUID, *, as_of: date
+        self,
+        relation_id: uuid.UUID,
+        *,
+        as_of: date,
+        kinds: Sequence[str] | None = None,
     ) -> ImpactDataCollectionResult:
         """Append ledger-backed operating/market/peer evidence for one relation.
 
@@ -387,13 +392,27 @@ class EventImpactResearchService:
                 .where(CompanyImpactObservation.valuation_snapshot_id.is_not(None))
             )
         }
+        requested_kinds = tuple(kinds or ("operating", "market", "peer_control"))
+        allowed_kinds = {"operating", "market", "peer_control"}
+        if not set(requested_kinds) <= allowed_kinds:
+            raise ValidationFailedError("unsupported impact data collection kind")
         if company.type != "listed":
-            created = self._append_insufficient_data_observation(
-                relation, "operating", as_of, "Company is unlisted; no A-share operating ledger coverage."
-            ) if "operating" not in existing_insufficient_kinds else False
+            created_kinds = []
+            # Unlisted companies are explicit operating-data gaps only; they
+            # are never made tradable through market/peer observations.
+            for kind in ("operating",) if "operating" in requested_kinds else ():
+                if kind in existing_insufficient_kinds:
+                    continue
+                self._append_insufficient_data_observation(
+                    relation,
+                    kind,
+                    as_of,
+                    f"Company is unlisted; no A-share {kind} ledger coverage.",
+                )
+                created_kinds.append(kind)
             return ImpactDataCollectionResult(
-                observations_created=int(created),
-                insufficient_kinds=("operating",) if created else (),
+                observations_created=len(created_kinds),
+                insufficient_kinds=tuple(created_kinds),
             )
 
         stocks = list(
@@ -411,6 +430,8 @@ class EventImpactResearchService:
         created = 0
         insufficient: list[str] = []
         for kind, loader in sources:
+            if kind not in requested_kinds:
+                continue
             snapshots = {
                 snapshot.id: snapshot
                 for stock in stocks
@@ -518,8 +539,164 @@ class EventImpactResearchService:
             )
         return sorted(results, key=lambda result: (result.exposure is None, result.fund_code))
 
+    def run_stage(
+        self,
+        case_id: uuid.UUID,
+        *,
+        scope_version_id: uuid.UUID,
+        thesis_id: uuid.UUID | None,
+        stage: str,
+        output_slot: Callable[[], bool] | None = None,
+    ) -> dict[str, int | bool]:
+        """Perform one exact-scope impact task at the worker output boundary.
+
+        A stage is intentionally narrow: its ``ResearchTask`` records the
+        thesis and exact scope, while the durable run/task output-slot check
+        prevents a superseded scope from appending observations or assessments.
+        """
+        if stage not in {
+            "impact_companies",
+            "impact_operating",
+            "impact_market",
+            "impact_peer",
+            "impact_fund",
+            "impact_alternative",
+        }:
+            raise ValidationFailedError("unsupported impact research stage")
+        if thesis_id is None:
+            raise ValidationFailedError("impact stage requires a thesis")
+        scope = self._scope_for(case_id, scope_version_id)
+        thesis = self._session.get(Thesis, thesis_id)
+        if thesis is None or thesis.research_case_id != case_id:
+            raise ValidationFailedError("impact stage thesis does not belong to case")
+        hypotheses = list(
+            self._session.scalars(
+                select(EventImpactHypothesis)
+                .where(EventImpactHypothesis.research_case_id == case_id)
+                .where(EventImpactHypothesis.scope_version_id == scope.id)
+                .where(EventImpactHypothesis.statement == thesis.statement)
+            )
+        )
+        relation_ids = [
+            relation.id
+            for relation in self._session.scalars(
+                select(CompanyImpactRelation).where(
+                    CompanyImpactRelation.hypothesis_id.in_(
+                        [row.id for row in hypotheses]
+                    )
+                )
+            )
+        ] if hypotheses else []
+        if output_slot is not None and not output_slot():
+            return {"cancelled": True, "observations_created": 0}
+        if stage == "impact_companies":
+            return {
+                "cancelled": False,
+                "hypotheses": len(hypotheses),
+                "relations": len(relation_ids),
+            }
+        if stage in {"impact_operating", "impact_market", "impact_peer"}:
+            kind = {
+                "impact_operating": "operating",
+                "impact_market": "market",
+                "impact_peer": "peer_control",
+            }[stage]
+            created = sum(
+                self.collect_data(
+                    relation_id, as_of=_utcnow().date(), kinds=(kind,)
+                ).observations_created
+                for relation_id in relation_ids
+            )
+            return {"cancelled": False, "observations_created": created}
+        if stage == "impact_fund":
+            exposures = sum(
+                len(self.fund_exposure(relation_id, as_of=_utcnow().date()))
+                for relation_id in relation_ids
+            )
+            return {"cancelled": False, "fund_exposures": exposures}
+        assessments = self.classify(
+            case_id,
+            scope_version_id=scope.id,
+            hypothesis_ids=[row.id for row in hypotheses],
+            update_lifecycle=False,
+        )
+        return {"cancelled": False, "assessments_created": len(assessments)}
+
+    def schedule_company_impact_reviews(
+        self,
+        case_id: uuid.UUID,
+        *,
+        scope_version_id: uuid.UUID | None = None,
+        as_of: date | None = None,
+    ) -> int:
+        """Create human review work only for material, source-missing candidates.
+
+        Material means that the candidate already resolves to an A-share and a
+        Chinese public fund has a ledger-visible holding.  Unlisted candidates
+        and candidates without that fund signal remain explicit research gaps,
+        rather than generating noisy operational review tasks.
+        """
+        scope = self._scope_for(case_id, scope_version_id)
+        cutoff = datetime.combine(
+            as_of or _utcnow().date(), time.max, tzinfo=timezone.utc
+        )
+        admissible_ids = {
+            statement.id
+            for statement, _ in self._admissible_statement_records(case_id)
+        }
+        rows = self._session.execute(
+            select(CompanyImpactRelation, Fund.code)
+            .join(
+                EventImpactHypothesis,
+                EventImpactHypothesis.id == CompanyImpactRelation.hypothesis_id,
+            )
+            .join(Stock, Stock.company_id == CompanyImpactRelation.affected_company_id)
+            .join(HoldingDisclosure, HoldingDisclosure.stock_id == Stock.id)
+            .join(Fund, Fund.id == HoldingDisclosure.fund_id)
+            .where(EventImpactHypothesis.research_case_id == case_id)
+            .where(EventImpactHypothesis.scope_version_id == scope.id)
+            .where(CompanyImpactRelation.scope_version_id == scope.id)
+            .where(CompanyImpactRelation.status == "candidate")
+            .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
+            .where(HoldingDisclosure.published_at <= cutoff)
+        )
+        candidates: dict[uuid.UUID, CompanyImpactRelation] = {}
+        for relation, fund_code in rows:
+            if relation.source_statement_id in admissible_ids:
+                continue
+            if is_china_public_fund(fund_code):
+                candidates[relation.id] = relation
+        task_repo = TaskRepository(self._session)
+        created = 0
+        for relation in candidates.values():
+            if task_repo.find_by_ref(
+                task_type="review_company_impact",
+                ref_type="company_impact_relation",
+                ref_id=relation.id,
+            ) is not None:
+                continue
+            task_repo.add_task(
+                title="审核高影响公司传导",
+                description=(
+                    "已解析 A 股且中国基金存在可见持仓，但该候选关系"
+                    "缺少可采纳关系来源；请补充或审核来源后再确认传导。"
+                ),
+                task_type="review_company_impact",
+                ref_type="company_impact_relation",
+                ref_id=relation.id,
+                research_case_id=case_id,
+                priority="high",
+            )
+            created += 1
+        return created
+
     def classify(
-        self, case_id: uuid.UUID
+        self,
+        case_id: uuid.UUID,
+        *,
+        scope_version_id: uuid.UUID | None = None,
+        hypothesis_ids: Sequence[uuid.UUID] | None = None,
+        update_lifecycle: bool = True,
     ) -> list[EventImpactHypothesisAssessment]:
         """Append transparent, scope-bound assessments for current hypotheses.
 
@@ -528,15 +705,17 @@ class EventImpactResearchService:
         can change the current interpretation without erasing the earlier one.
         """
         lifecycle = lock_event_research_lifecycle(self._session, case_id)
-        scope = self._scope_for(case_id, None)
-        hypotheses = list(
-            self._session.scalars(
-                select(EventImpactHypothesis)
-                .where(EventImpactHypothesis.research_case_id == case_id)
-                .where(EventImpactHypothesis.scope_version_id == scope.id)
-                .order_by(EventImpactHypothesis.rank, EventImpactHypothesis.created_at)
-            )
+        requested_hypothesis_ids = hypothesis_ids
+        scope = self._scope_for(case_id, scope_version_id)
+        hypothesis_stmt = (
+            select(EventImpactHypothesis)
+            .where(EventImpactHypothesis.research_case_id == case_id)
+            .where(EventImpactHypothesis.scope_version_id == scope.id)
+            .order_by(EventImpactHypothesis.rank, EventImpactHypothesis.created_at)
         )
+        if hypothesis_ids is not None:
+            hypothesis_stmt = hypothesis_stmt.where(EventImpactHypothesis.id.in_(hypothesis_ids))
+        hypotheses = list(self._session.scalars(hypothesis_stmt))
         hypothesis_ids = [hypothesis.id for hypothesis in hypotheses]
         relations = list(
             self._session.scalars(
@@ -622,7 +801,11 @@ class EventImpactResearchService:
         self._session.add_all(assessments)
         self._session.flush()
 
-        if not any(assessment.classification == "key" for assessment in assessments):
+        if (
+            update_lifecycle
+            and requested_hypothesis_ids is None
+            and not any(assessment.classification == "key" for assessment in assessments)
+        ):
             self._mark_no_key_factor(lifecycle)
         return assessments
 
