@@ -31,6 +31,8 @@ import { EventEvidenceLibraryScreen } from "./pages/prototype/EventEvidenceLibra
 import { EventMonitoringScreen } from "./pages/prototype/EventMonitoringScreen";
 import { EventResearchBasisScreen } from "./pages/prototype/EventResearchBasisScreen";
 import { EventImpactTraceScreen } from "./pages/prototype/EventImpactTraceScreen";
+import { ReportEmbedScreen, ReportWikiGraphScreen } from "./pages/prototype/ReportWikiGraphScreen";
+import { ReportResearchScreen } from "./pages/prototype/ReportResearchScreen";
 import "./styles.css";
 import "./styles-prototype.css";
 
@@ -38,6 +40,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
+        <Route path="embed/reports/:caseId/wiki" element={<ReportEmbedScreen />} />
         <Route element={<PrototypeShell />}>
           <Route index element={<Navigate to="/events" replace />} />
           <Route path="events" element={<EventResearchListScreen />} />
@@ -47,6 +50,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="events/:caseId/conclusion" element={<EventConclusionReviewScreen />} />
           <Route path="events/:caseId/impact" element={<EventImpactTraceScreen />} />
           <Route path="events/:caseId/basis" element={<EventResearchBasisScreen />} />
+          <Route path="reports/:caseId" element={<ReportResearchScreen />} />
+          <Route path="reports/:caseId/wiki" element={<ReportWikiGraphScreen />} />
           <Route path="library" element={<EventEvidenceLibraryScreen />} />
           <Route path="versions" element={<EventMonitoringScreen />} />
           <Route path="themes/*" element={<LegacyEventRedirect />} />

@@ -39,6 +39,8 @@ import type {
   EventReviewQueue,
   EventWorkbench,
   EventImpactTrace,
+  ReportEmbedWikiGraph,
+  ReportWikiGraph,
 } from "../domain/eventResearch";
 import type {
   AssessmentReviewPayload,
@@ -3795,6 +3797,33 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getEventImpactTrace(_caseId: string): Promise<EventImpactTrace> {
     return simulateLatency({ scopeVersion: 1, asOf: "2026-08-08", progress: { hypotheses: 2, relations: 2 }, alternatives: [{ hypothesisId: "impact-alt", statement: "市场替代解释", rank: 2, classification: "alternative", scoreComponents: { market: 1 }, explanation: "市场证据尚不足", relations: [], funds: [] }], factors: [{ hypothesisId: "impact-1", statement: "资本开支传导", rank: 1, classification: "candidate", scoreComponents: { event: 1 }, explanation: "等待传导审核", relations: [{ relationId: "impact-listed", companyId: "company-listed", companyName: "示例 A 股公司", companyType: "listed", relationKind: "supplier", direction: "benefits", mechanism: "订单传导", status: "verified", effectiveStatus: "verified", isHighImpact: true, isReviewable: false, sourceStatementId: "statement-listed", review: { outcome: "accepted", reason: "公告披露", reviewer: "researcher", createdAt: "2026-08-08T00:00:00Z" }, stocks: [{ stockId: "stock-1", code: "600001.SH", name: "示例 A 股公司", market: "SSE" }], observations: [], fundExposure: [] }, { relationId: "impact-unlisted", companyId: "company-unlisted", companyName: "未上市供应商", companyType: "unlisted_supplier", relationKind: "supplier", direction: "benefits", mechanism: "产能传导", status: "candidate", effectiveStatus: "candidate", isHighImpact: false, isReviewable: false, sourceStatementId: null, review: null, stocks: [], observations: [], fundExposure: [] }], funds: [{ fundId: "fund-complete", fundCode: "000001", fundName: "示例中国基金", coverageRatio: 1, coverageStatus: "complete", computable: true, exposure: "0.12", reportPeriod: "2026-06-30", publishedAt: "2026-08-01T00:00:00Z", source: "https://example.invalid/fund-complete" }, { fundId: "fund-partial", fundCode: "000002", fundName: "示例部分覆盖基金", coverageRatio: 0.5, coverageStatus: "partial", computable: false, exposure: null, reportPeriod: "2026-06-30", publishedAt: "2026-08-01T00:00:00Z", source: "https://example.invalid/fund-disclosure" }] }] });
+  }
+
+  async getReportWikiGraph(_caseId: string, _options?: { relationId?: string }): Promise<ReportWikiGraph> {
+    this.throwIfOffline();
+    return simulateLatency({
+      researchCaseId: "report-mock", scopeVersion: 1, documentId: "report-document-mock",
+      scope: { version: 1, documentId: "report-document-mock", visibilityCutoffAt: "2026-08-08T00:00:00Z", researchQuestion: "资本开支上调是否会通过 AI 服务器供应链影响 A 股与中国基金？", factorSelection: ["自由现金流", "供应链订单"], evidencePlan: ["核对公司披露与发布后市场窗口"], selectedClaimIds: ["claim-mock"], selectedRelationIds: ["relation-mock"] },
+      nodes: [
+        { id: "claim-mock", kind: "report_claim", label: "报告认为资本开支上调会压低自由现金流预期", status: "report_claim", sourceLocator: "第 3 页 · 资本开支段", scopeVersion: 1 },
+        { id: "company-mock", kind: "company", label: "示例 A 股服务器供应商", status: "verified", sourceLocator: null, scopeVersion: 1 },
+        { id: "evidence-mock", kind: "evidence", label: "经营端独立证据仍不足", status: "candidate", sourceLocator: null, scopeVersion: 1 },
+        { id: "market-1d", kind: "market_window", label: "发布后 1 个交易日，证据不足", status: "market_observation", sourceLocator: null, scopeVersion: 1 },
+        { id: "market-5d", kind: "market_window", label: "发布后 5 个交易日，尚待验证", status: "market_observation", sourceLocator: null, scopeVersion: 1 },
+        { id: "fund-mock", kind: "fund", label: "示例中国基金，持仓披露过期", status: "candidate", sourceLocator: null, scopeVersion: 1 },
+      ],
+      edges: [
+        { id: "edge-mock-1", sourceId: "claim-mock", targetId: "company-mock", kind: "供应链影响", status: "verified", relationId: "relation-mock", sourceLocator: "第 3 页 · 资本开支段", scopeVersion: 1 },
+        { id: "edge-mock-2", sourceId: "company-mock", targetId: "evidence-mock", kind: "需要验证", status: "candidate", relationId: "relation-mock", sourceLocator: null, scopeVersion: 1 },
+      ],
+      factors: [{ claimId: "claim-mock", relationId: "relation-mock", statement: "资本开支上调压低自由现金流预期", classification: "evidence_gap", components: { report_claim: true, operating_evidence: false, market_evidence: false, confounder_assessed: false }, explanation: "尚缺独立经营数据和发布期混杂因素核对，不能归为关键因素。" }],
+    });
+  }
+
+  async getReportEmbedWiki(_caseId: string, token: string): Promise<ReportEmbedWikiGraph> {
+    this.throwIfOffline();
+    if (!token) throw new PageStateError("permission_denied", "嵌入访问未获授权或已失效");
+    return simulateLatency({ nodes: [{ id: "n1", kind: "report_claim", label: "报告主张", status: "report_claim" }, { id: "n2", kind: "company", label: "已映射公司", status: "verified" }], edges: [{ id: "e1", sourceId: "n1", targetId: "n2", kind: "影响", status: "verified" }], factors: [{ classification: "evidence_gap", components: { report_claim: true }, explanation: "证据仍待补充" }] });
   }
 
   async reviewEventImpactRelation(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }> {

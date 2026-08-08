@@ -16,6 +16,43 @@ describe("HttpResearchAdapter", () => {
     vi.unstubAllGlobals();
   });
 
+  it("maps report wiki snake-case DTOs and sends embed tokens in a header", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => jsonResponse({
+      research_case_id: "case-1",
+      scope_version: 3,
+      document_id: "doc-1",
+      scope: {
+        version: 3,
+        document_id: "doc-1",
+        visibility_cutoff_at: "2026-08-08T00:00:00Z",
+        research_question: "资本开支如何影响 A 股服务器供应链？",
+        factor_selection: ["资本开支"],
+        evidence_plan: ["核对现金流"],
+        selected_claim_ids: ["claim-1"],
+        selected_relation_ids: ["relation-1"],
+      },
+      nodes: [{ id: "claim:1", kind: "report_claim", label: "资本开支上调", status: "report_claim", source_locator: "https://source.test/report", scope_version: 3 }],
+      edges: [],
+      factors: [{ claim_id: "claim-1", relation_id: "relation-1", statement: "资本开支上调压低自由现金流", classification: "evidence_gap", components: { report_claim: true, confounder_assessed: false }, explanation: "缺少独立经营证据" }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    const graph = await adapter.getReportWikiGraph("case-1", { relationId: "relation-1" });
+    expect(graph.scopeVersion).toBe(3);
+    expect(graph.scope.researchQuestion).toContain("服务器供应链");
+    expect(graph.nodes[0]).toMatchObject({ sourceLocator: "https://source.test/report", scopeVersion: 3 });
+    expect(graph.factors[0]).toMatchObject({ claimId: "claim-1", relationId: "relation-1", classification: "evidence_gap" });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ nodes: [], edges: [], factors: [] }));
+    await adapter.getReportEmbedWiki("case-1", "token-from-hash");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "http://api.test/api/v1/report-research/case-1/embed/wiki",
+      expect.objectContaining({ headers: expect.objectContaining({ "X-Embed-Token": "token-from-hash" }) }),
+    );
+    expect(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])).not.toContain("token-from-hash");
+  });
+
   it("maps unlisted relations, complete partial-fund fields, observations and reviews", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ scope_version: 2, as_of: "2026-08-08", progress: {}, alternatives: [], factors: [{ hypothesis_id: "h1", statement: "factor", rank: 1, classification: "candidate", score_components: {}, explanation: "gap", funds: [{ fund_id: "fund-1", fund_code: "000001", fund_name: "China fund", report_period: "2026-06-30", published_at: "2026-08-01T00:00:00+00:00", source: "filing", coverage_ratio: 0.5, coverage_status: "partial", computable: false, exposure: null }], relations: [{ relation_id: "r1", company_id: "c1", company_name: "Private", company_type: "unlisted_supplier", relation_kind: "supplier", direction: "benefits", mechanism: "m", status: "candidate", effective_status: "verified", is_high_impact: false, is_reviewable: false, source_statement_id: null, stocks: [], fund_exposure: [], review: { outcome: "accepted", reason: "r", reviewer: "u", created_at: "2026-08-08T00:00:00Z" }, observations: [{ kind: "event", status: "verified", source_statement_id: "s1", valuation_snapshot_id: null, summary: "source", as_of_date: "2026-08-08" }] }] }] })));
     const trace = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }).getEventImpactTrace("case-1");

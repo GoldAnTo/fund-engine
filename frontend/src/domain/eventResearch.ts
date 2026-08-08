@@ -117,6 +117,66 @@ export interface EventImpactFund {
   exposure: string | number | null;
 }
 
+export type ReportWikiNodeKind = "report_claim" | "company" | "evidence" | "market_window" | "fund";
+export type ReportWikiNodeStatus = "report_claim" | "verified" | "candidate" | "rejected" | "market_observation";
+export type ReportFactorClassification = "key" | "alternative" | "evidence_gap";
+
+export interface ReportWikiNode {
+  id: string;
+  kind: ReportWikiNodeKind;
+  label: string;
+  status: ReportWikiNodeStatus;
+  sourceLocator: string | null;
+  scopeVersion: number;
+}
+
+export interface ReportWikiEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  kind: string;
+  status: ReportWikiNodeStatus;
+  relationId: string | null;
+  sourceLocator: string | null;
+  scopeVersion: number;
+}
+
+export interface ReportResearchScope {
+  version: number;
+  documentId: string;
+  visibilityCutoffAt: string;
+  researchQuestion: string;
+  factorSelection: string[];
+  evidencePlan: string[];
+  selectedClaimIds: string[];
+  selectedRelationIds: string[];
+}
+
+export interface ReportWikiFactor {
+  claimId: string;
+  relationId: string | null;
+  statement: string;
+  classification: ReportFactorClassification;
+  components: Record<string, boolean>;
+  explanation: string;
+}
+
+export interface ReportWikiGraph {
+  researchCaseId: string;
+  scopeVersion: number;
+  scope: ReportResearchScope;
+  documentId: string;
+  nodes: ReportWikiNode[];
+  edges: ReportWikiEdge[];
+  factors: ReportWikiFactor[];
+}
+
+export interface ReportEmbedWikiGraph {
+  nodes: Array<Omit<ReportWikiNode, "sourceLocator" | "scopeVersion">>;
+  edges: Array<Omit<ReportWikiEdge, "relationId" | "sourceLocator" | "scopeVersion">>;
+  factors: Array<Pick<ReportWikiFactor, "classification" | "components" | "explanation">>;
+}
+
 export interface EventResearchScopeFactor {
   statement: string;
   description?: string | null;
@@ -202,6 +262,8 @@ export interface EventResearchClient {
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
   getEventImpactTrace?(caseId: string): Promise<EventImpactTrace>;
+  getReportWikiGraph?(caseId: string, options?: { relationId?: string }): Promise<ReportWikiGraph>;
+  getReportEmbedWiki?(caseId: string, token: string): Promise<ReportEmbedWikiGraph>;
   reviewEventImpactRelation?(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;

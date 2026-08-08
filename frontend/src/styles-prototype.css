@@ -3668,6 +3668,63 @@ a.prototype-button { text-decoration: none; }
 .status-pill--frozen { color: var(--provider-accent); }
 .status-pill--draft { color: var(--ink-muted); }
 
+/* ── Report-first workspace / Wiki graph ─────────────────────────────── */
+.report-research-screen,.report-wiki-screen { display:grid; gap:18px; max-width:1380px; }
+.report-page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; padding:4px 0 2px; }
+.report-page-header > div { min-width:0; }
+.report-page-header h1 { margin:3px 0 7px; font-family:Georgia,"Source Han Serif SC","Songti SC",serif; font-size:28px; letter-spacing:-.025em; }
+.report-page-header p:not(.section-kicker) { max-width:66ch; margin:0; color:var(--ink-soft); font-size:14px; line-height:1.6; }
+.report-page-header .prototype-button { flex:0 0 auto; min-height:38px; }
+.report-judgment { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(250px,.65fr); gap:30px; padding:23px 26px 22px; border-top:1px solid var(--rule-strong); border-bottom:1px solid var(--rule-strong); background:var(--paper); }
+.report-judgment h2 { margin:2px 0 7px; font-family:Georgia,"Source Han Serif SC","Songti SC",serif; font-size:22px; letter-spacing:-.02em; }
+.report-judgment h3 { margin:0 0 7px; color:var(--next-action-text); font-size:13px; letter-spacing:.04em; }
+.report-judgment > div > p:not(.section-kicker) { max-width:62ch; margin:0; font-size:15px; line-height:1.72; }
+.report-judgment__next { align-self:end; padding:12px 0 0; border-top:1px solid var(--rule); color:var(--ink-soft); font-size:13px; line-height:1.55; }
+.report-judgment__next strong { display:block; margin-bottom:4px; color:var(--next-action-text); font-size:11px; letter-spacing:.05em; text-transform:uppercase; }
+.report-judgment__next p { margin:0; }
+.report-gap { display:flex; align-items:flex-start; gap:12px; padding:11px 14px; border:1px solid var(--assessment-border); border-radius:var(--radius-md); background:var(--assessment-surface); color:var(--assessment-text); font-size:13px; line-height:1.55; }
+.report-gap strong { flex:0 0 auto; }
+.report-workbench-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr); gap:20px; align-items:start; }
+.report-section { min-width:0; padding:18px 0 0; border-top:1px solid var(--rule-strong); }
+.report-section > header,.report-wiki-paths > header { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:11px; }
+.report-section > header h2,.report-wiki-paths h2,.report-wiki-canvas h2,.report-wiki-inspector h2 { margin:1px 0 0; font-size:17px; letter-spacing:-.012em; }
+.report-section > header > span,.report-wiki-paths > header > span { max-width:30ch; color:var(--ink-muted); font-size:12px; text-align:right; line-height:1.45; }
+.report-section--factor { padding:18px 18px 4px; border:1px solid var(--rule); border-radius:var(--radius-md); background:var(--paper-soft); }
+.report-section--factor h2 { margin:2px 0 11px; font-size:17px; }
+.report-node-list,.report-factor-list { list-style:none; margin:0; padding:0; }
+.report-node-list { display:grid; }
+.report-node-list li { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:13px 0; border-top:1px solid var(--rule); }
+.report-node-list li:first-child { border-top:0; padding-top:0; }
+.report-node-list li > div { display:grid; gap:3px; min-width:0; }
+.report-node-list strong { font-size:13px; line-height:1.52; overflow-wrap:anywhere; }
+.report-node-list small,.report-locator { color:var(--ink-muted); font-size:12px; line-height:1.45; }
+.report-node-list a { flex:0 0 auto; color:var(--reviewed); font-size:12px; font-weight:700; text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:3px; }
+.report-factor-list { display:grid; gap:11px; }
+.report-factor-list li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; padding-top:11px; border-top:1px solid var(--rule); }
+.report-factor-list li:first-child { padding-top:0; border-top:0; }
+.report-factor-list strong { font-size:13px; line-height:1.5; }
+.report-factor-list p { grid-column:1/-1; margin:0; color:var(--ink-soft); font-size:12px; line-height:1.5; }
+.report-factor-label { align-self:start; border:1px solid currentColor; border-radius:999px; padding:2px 6px; font-size:10px; font-weight:700; white-space:nowrap; }
+.report-factor-label--key { color:var(--support); }.report-factor-label--alternative { color:var(--warning); }.report-factor-label--evidence_gap { color:var(--gap-accent); }
+.report-empty { margin:0; padding:14px 0 4px; color:var(--ink-muted); font-size:13px; line-height:1.6; }
+.report-confounder { margin:13px 0 0; padding:10px 12px; border:1px dashed var(--rule-strong); border-radius:var(--radius-sm); background:var(--paper-soft); color:var(--ink-soft); font-size:12px; line-height:1.55; }
+.report-state { display:grid; gap:8px; max-width:620px; margin:62px auto; padding:24px; border:1px solid var(--rule-strong); border-radius:var(--radius-md); background:var(--paper); }
+.report-state h1 { font-family:Georgia,"Source Han Serif SC","Songti SC",serif; font-size:22px; }.report-state p { margin:0; color:var(--ink-soft); }.report-state--error { border-color:var(--contradict); }.report-state .prototype-button { justify-self:start; margin-top:6px; }
+.report-skeleton { display:grid; gap:10px; padding:30px 0; }.report-skeleton span { display:block; height:16px; border-radius:4px; background:var(--paper-soft); border:1px solid var(--rule); }.report-skeleton span:nth-child(2) { width:74%; }.report-skeleton span:nth-child(3) { width:56%; }
+.report-wiki-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 0; border-top:1px solid var(--rule-strong); border-bottom:1px solid var(--rule); }
+.report-wiki-toolbar > span { color:var(--ink-muted); font-size:12px; text-align:right; }.report-toggle { min-height:34px; padding:5px 10px; border:1px solid var(--rule-strong); border-radius:999px; background:var(--paper); color:var(--ink-soft); font:600 12px/1.3 inherit; cursor:pointer; }.report-toggle + .report-toggle { margin-left:6px; }.report-toggle[aria-pressed="true"] { border-color:var(--reviewed); background:var(--provider-surface); color:var(--reviewed); }
+.report-wiki-layout { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(250px,.55fr); gap:20px; align-items:stretch; }
+.report-wiki-canvas { min-width:0; padding:18px 0 0; border-top:1px solid var(--rule-strong); }.report-wiki-canvas > header p:not(.section-kicker) { margin:5px 0 0; color:var(--ink-muted); font-size:12px; }
+.report-wiki-svg { display:block; width:100%; min-height:300px; margin-top:13px; border:1px solid var(--rule); border-radius:var(--radius-md); background:var(--paper); }
+.report-wiki-svg__edge { stroke:var(--rule-strong); stroke-width:1.5; }.report-wiki-svg__edge--verified { stroke:var(--support); }.report-wiki-svg__edge--candidate { stroke:var(--warning); stroke-dasharray:4 4; }
+.report-wiki-svg__node { cursor:pointer; }.report-wiki-svg__node rect { fill:var(--paper-soft); stroke:var(--rule-strong); stroke-width:1.2; transition:fill .12s ease,stroke .12s ease; }.report-wiki-svg__node text { fill:var(--ink-soft); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; font-size:10px; pointer-events:none; }.report-wiki-svg__node text:first-of-type { fill:var(--ink-muted); font-size:9px; }.report-wiki-svg__node--verified rect { stroke:var(--support); }.report-wiki-svg__node--candidate rect { stroke:var(--warning); }.report-wiki-svg__node--rejected rect { stroke:var(--contradict); }.report-wiki-svg__node:focus { outline:none; }.report-wiki-svg__node:focus-visible rect,.report-wiki-svg__node:hover rect { fill:var(--selected-surface); stroke:var(--reviewed); stroke-width:2; }
+.report-wiki-inspector { padding:18px; border:1px solid var(--rule); border-radius:var(--radius-md); background:var(--paper-soft); }.report-wiki-inspector h2 { margin-bottom:9px; }.report-wiki-inspector p:not(.section-kicker) { margin:0; color:var(--ink-soft); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }.report-wiki-inspector a { color:var(--reviewed); font-weight:700; font-size:13px; text-decoration:underline; text-underline-offset:3px; }
+.report-wiki-paths { padding:18px 0 0; border-top:1px solid var(--rule-strong); }.report-path-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; }.report-path-list button { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); width:100%; gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--rule); border-radius:var(--radius-sm); background:var(--paper); color:var(--ink); text-align:left; font:inherit; cursor:pointer; }.report-path-list button:hover { border-color:var(--reviewed); background:var(--paper-soft); }.report-path-list strong { min-width:0; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }.report-path-list strong:last-child { text-align:right; }.report-path-list span { color:var(--ink-muted); font-size:11px; white-space:nowrap; }
+.report-embed-screen { min-height:100vh; max-width:760px; margin:0 auto; padding:26px; background:var(--warm-canvas); color:var(--ink); }.report-embed-screen header { padding-bottom:14px; border-bottom:1px solid var(--rule-strong); }.report-embed-screen header p { margin:0 0 3px; color:var(--ink-muted); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }.report-embed-screen h1 { font-family:Georgia,"Source Han Serif SC","Songti SC",serif; font-size:24px; }.report-embed-screen h2 { margin:20px 0 8px; font-size:15px; }.report-embed-screen section[role="alert"] { margin-top:18px; padding:14px; border:1px solid var(--contradict); border-radius:var(--radius-md); background:var(--contradict-surface); color:var(--ink); }.report-embed-screen section[role="alert"] p { margin:4px 0 0; color:var(--ink-soft); }.report-embed-summary { display:grid; gap:4px; margin-top:18px; padding:14px 0; border-bottom:1px solid var(--rule); }.report-embed-summary span { color:var(--ink-soft); font-size:13px; }.report-embed-paths { display:grid; gap:7px; margin:0; padding:0; list-style:none; }.report-embed-paths li { padding:10px 0; border-bottom:1px solid var(--rule); color:var(--ink-soft); font-size:13px; }
+.report-research-screen a:focus-visible,.report-research-screen button:focus-visible,.report-wiki-screen a:focus-visible,.report-wiki-screen button:focus-visible { outline:none; box-shadow:var(--focus-ring); }
+@media (max-width:900px) { .report-workbench-grid,.report-wiki-layout,.report-judgment { grid-template-columns:1fr; }.report-judgment { gap:16px; padding:19px 18px; }.report-page-header { flex-direction:column; gap:10px; }.report-wiki-inspector { order:-1; }.report-wiki-svg { display:none; }.report-wiki-canvas > header p:not(.section-kicker)::after { content:"移动端默认使用下方的结构化路径列表，可按需在较大屏幕查看图谱。"; display:block; margin-top:5px; }.report-wiki-canvas > header p:not(.section-kicker) { font-size:0; }.report-wiki-canvas > header p:not(.section-kicker)::after { font-size:12px; }.report-wiki-layout { display:block; }.report-wiki-inspector { margin-bottom:16px; }.report-wiki-canvas { padding-top:0; border-top:0; } }
+@media (max-width:520px) { .report-research-screen,.report-wiki-screen { gap:14px; }.report-page-header h1 { font-size:24px; }.report-section > header,.report-wiki-paths > header,.report-wiki-toolbar { align-items:flex-start; flex-direction:column; gap:7px; }.report-section > header > span,.report-wiki-paths > header > span,.report-wiki-toolbar > span { text-align:left; }.report-node-list li { flex-direction:column; gap:5px; }.report-path-list button { grid-template-columns:1fr; gap:3px; }.report-path-list strong:last-child { text-align:left; }.report-path-list span { order:-1; }.report-embed-screen { padding:18px; } }
+
 /* ── Topic research / 公司研究 三栏布局（设计图 9/10） ─────────────────── */
 .topic-list__banner,
 .company-list__banner {

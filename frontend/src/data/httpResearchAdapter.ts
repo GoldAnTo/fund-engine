@@ -38,6 +38,9 @@ import type {
   EventSourceStatus,
   EventWorkbench,
   EventImpactTrace,
+  ReportEmbedWikiGraph,
+  ReportWikiGraph,
+  ReportWikiNodeStatus,
 } from "../domain/eventResearch";
 import type { ResearchClient } from "../domain/prototypeTypes";
 import type {
@@ -2863,6 +2866,61 @@ export class HttpResearchAdapter implements ResearchClient {
     const mapRelation = (relation: any) => ({ relationId: relation.relation_id, companyId: relation.company_id, companyName: relation.company_name, companyType: relation.company_type, relationKind: relation.relation_kind, direction: relation.direction, mechanism: relation.mechanism, status: relation.status, effectiveStatus: relation.effective_status, isHighImpact: relation.is_high_impact === true, isReviewable: relation.is_reviewable === true, sourceStatementId: relation.source_statement_id ?? null, review: relation.review ? { outcome: relation.review.outcome, reason: relation.review.reason, reviewer: relation.review.reviewer, createdAt: relation.review.created_at } : null, stocks: (relation.stocks ?? []).map((stock: any) => ({ stockId: stock.stock_id, code: stock.code, name: stock.name, market: stock.market })), observations: (relation.observations ?? []).map(mapObservation), fundExposure: (relation.fund_exposure ?? []).map(mapFund) });
     const mapFactor = (factor: any) => ({ hypothesisId: factor.hypothesis_id, statement: factor.statement, rank: factor.rank, classification: factor.classification, scoreComponents: factor.score_components ?? {}, explanation: factor.explanation, relations: (factor.relations ?? []).map(mapRelation), funds: (factor.funds ?? []).map(mapFund) });
     return { scopeVersion: dto.scope_version, asOf: dto.as_of ?? null, factors: (dto.factors ?? []).map(mapFactor), alternatives: (dto.alternatives ?? []).map(mapFactor), progress: dto.progress ?? {} };
+  }
+
+  async getReportWikiGraph(caseId: string, options?: { relationId?: string }): Promise<ReportWikiGraph> {
+    type WireNode = { id: string; kind: ReportWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus; source_locator?: string | null; scope_version: number };
+    type WireEdge = { id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus; relation_id?: string | null; source_locator?: string | null; scope_version: number };
+    type Wire = {
+      research_case_id: string; scope_version: number; document_id: string;
+      scope: { version: number; document_id: string; visibility_cutoff_at: string; research_question: string; factor_selection?: string[]; evidence_plan?: string[]; selected_claim_ids?: string[]; selected_relation_ids?: string[] };
+      nodes: WireNode[]; edges: WireEdge[];
+      factors: Array<{ claim_id: string; relation_id?: string | null; statement: string; classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
+    };
+    const query = options?.relationId ? `?relation_id=${encodeURIComponent(options.relationId)}` : "";
+    const dto = await this.get<Wire>(`/report-research/${encodeURIComponent(caseId)}/wiki${query}`);
+    return {
+      researchCaseId: dto.research_case_id,
+      scopeVersion: dto.scope_version,
+      documentId: dto.document_id,
+      scope: {
+        version: dto.scope.version,
+        documentId: dto.scope.document_id,
+        visibilityCutoffAt: dto.scope.visibility_cutoff_at,
+        researchQuestion: dto.scope.research_question,
+        factorSelection: dto.scope.factor_selection ?? [],
+        evidencePlan: dto.scope.evidence_plan ?? [],
+        selectedClaimIds: dto.scope.selected_claim_ids ?? [],
+        selectedRelationIds: dto.scope.selected_relation_ids ?? [],
+      },
+      nodes: dto.nodes.map((node) => ({ id: node.id, kind: node.kind, label: node.label, status: node.status, sourceLocator: node.source_locator ?? null, scopeVersion: node.scope_version })),
+      edges: dto.edges.map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status, relationId: edge.relation_id ?? null, sourceLocator: edge.source_locator ?? null, scopeVersion: edge.scope_version })),
+      factors: dto.factors.map((factor) => ({ claimId: factor.claim_id, relationId: factor.relation_id ?? null, statement: factor.statement, classification: factor.classification, components: factor.components ?? {}, explanation: factor.explanation })),
+    };
+  }
+
+  async getReportEmbedWiki(caseId: string, token: string): Promise<ReportEmbedWikiGraph> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.options.baseUrl}/report-research/${encodeURIComponent(caseId)}/embed/wiki`, {
+        headers: { Accept: "application/json", "X-Embed-Token": token },
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      throw new PageStateError(response.status === 401 || response.status === 403 ? "permission_denied" : "backend_unavailable", "嵌入访问未获授权或已失效");
+    }
+    const dto = await response.json() as {
+      nodes?: Array<{ id: string; kind: ReportEmbedWikiGraph["nodes"][number]["kind"]; label: string; status: ReportWikiNodeStatus }>;
+      edges?: Array<{ id: string; source_id: string; target_id: string; kind: string; status: ReportWikiNodeStatus }>;
+      factors?: Array<{ classification: "key" | "alternative" | "evidence_gap"; components?: Record<string, boolean>; explanation: string }>;
+    };
+    return {
+      nodes: (dto.nodes ?? []).map((node) => ({ ...node })),
+      edges: (dto.edges ?? []).map((edge) => ({ id: edge.id, sourceId: edge.source_id, targetId: edge.target_id, kind: edge.kind, status: edge.status })),
+      factors: (dto.factors ?? []).map((factor) => ({ classification: factor.classification, components: factor.components ?? {}, explanation: factor.explanation })),
+    };
   }
 
   async reviewEventImpactRelation(input: { relationId: string; outcome: "accepted" | "rejected" | "needs_more"; reason: string; reviewer: string }): Promise<{ reviewId: string; relationId: string; outcome: string }> {
