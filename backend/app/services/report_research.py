@@ -8,20 +8,24 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, Sequence
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
 from app.models.ledger import (
-    CaseDocumentVersion,
     Company,
     DocumentBlob,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
 )
-from app.models.report_research import ReportClaim, ReportRelation
+from app.models.report_research import (
+    ReportCaseSourceSpan,
+    ReportClaim,
+    ReportExtractionClaim,
+    ReportRelation,
+)
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.report_research import CreateReportResearchRequest
@@ -33,6 +37,7 @@ from app.services.research import ResearchService
 _REPORT_CLAIM_KINDS = frozenset(
     {"report_opinion", "report_forecast", "report_assumption", "report_risk"}
 )
+_REPORT_EXTRACTOR_VERSION = "report-rule-v2"
 
 
 @dataclass(frozen=True)
@@ -80,9 +85,11 @@ class RuleBasedReportContentExtractor:
         rf"(?P<subject>{_company_name}?)与(?P<object>{_company_name}?)(?:存在)?竞争"
     )
     _narrator_prefix = re.compile(
-        r"^(?:(?:本)?报告|研报|公司|管理层)(?:认为|指出|表示|判断|提到|称|强调)"
+        r"^(?:(?:本)?报告|研报|公司|管理层|我们|分析师|本文)"
+        r"(?:认为|指出|表示|判断|提到|称|强调)?"
         r"(?:[:：，,、\s]*)"
     )
+    _hearsay_prefix = re.compile(r"^据悉(?:[:：，,、\s]*)")
 
     def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]:
         extracted: list[ExtractedReportClaim] = []
@@ -115,6 +122,7 @@ class RuleBasedReportContentExtractor:
         broader entity resolution belongs behind an injected parser boundary.
         """
         normalized_statement = self._narrator_prefix.sub("", statement).strip()
+        normalized_statement = self._hearsay_prefix.sub("", normalized_statement).strip()
         role_match = self._role_relation.search(normalized_statement)
         if role_match is not None:
             role = role_match.group("role")
@@ -160,59 +168,118 @@ class ReportClaimExtractor:
     """Append source statements, then append claims and report-only relations."""
 
     def __init__(
-        self, session: Session, extractor: ReportContentExtractor | None = None
+        self,
+        session: Session,
+        extractor: ReportContentExtractor | None = None,
+        *,
+        extractor_version: str | None = None,
     ) -> None:
         self._session = session
         self._extractor = extractor or RuleBasedReportContentExtractor()
+        self._extractor_version = extractor_version or _REPORT_EXTRACTOR_VERSION
         self._research = ResearchService(ResearchRepository(session))
 
     def extract(self, research_case_id: uuid.UUID) -> list[ReportClaim]:
+        """Append one complete extraction or no output at all.
+
+        The durable extraction claim is part of the same outer savepoint as
+        every SourceStatement, ReportClaim and ReportRelation.  If a later
+        span yields an invalid draft, all earlier output and its claim roll
+        back, leaving a clean retry path.
+        """
         claims: list[ReportClaim] = []
-        for span in self._case_spans(research_case_id):
-            for draft in self._extractor.extract(span=span):
-                self._validate_claim(draft)
-                # Statement first: claims and relations always lead back to the
-                # original span's stable page/paragraph locator.
-                source_statement = self._research.add_statement(
-                    span.id,
-                    draft.statement.strip(),
-                    kind=("forecast" if draft.kind == "report_forecast" else "research_opinion"),
-                )
-                claim = ReportClaim(
-                    research_case_id=research_case_id,
-                    source_span_id=span.id,
-                    source_statement_id=source_statement.id,
-                    kind=draft.kind,
-                    statement=draft.statement.strip(),
-                )
-                self._session.add(claim)
-                self._session.flush()
-                for relation_draft in draft.relations:
-                    self._session.add(
-                        self._relation_from_draft(
-                            claim=claim,
-                            research_case_id=research_case_id,
-                            span=span,
-                            draft=relation_draft,
+        spans_by_document: dict[DocumentVersion, list[SourceSpan]] = {}
+        for span, document in self._case_spans(research_case_id):
+            spans_by_document.setdefault(document, []).append(span)
+        with self._session.begin_nested():
+            for document, spans in spans_by_document.items():
+                if not self._claim_document_extraction(research_case_id, document):
+                    continue
+                for span in spans:
+                    for draft in self._extractor.extract(span=span):
+                        self._validate_claim(draft)
+                        # Statement first: claims and relations always lead
+                        # back to the original span's stable locator.
+                        source_statement = self._research.add_statement(
+                            span.id,
+                            draft.statement.strip(),
+                            kind=(
+                                "forecast"
+                                if draft.kind == "report_forecast"
+                                else "research_opinion"
+                            ),
                         )
-                    )
-                claims.append(claim)
-        self._session.flush()
+                        claim = ReportClaim(
+                            research_case_id=research_case_id,
+                            source_span_id=span.id,
+                            source_statement_id=source_statement.id,
+                            kind=draft.kind,
+                            statement=draft.statement.strip(),
+                        )
+                        self._session.add(claim)
+                        self._session.flush()
+                        for relation_draft in draft.relations:
+                            self._session.add(
+                                self._relation_from_draft(
+                                    claim=claim,
+                                    research_case_id=research_case_id,
+                                    span=span,
+                                    draft=relation_draft,
+                                )
+                            )
+                        claims.append(claim)
+            self._session.flush()
         return claims
 
-    def _case_spans(self, research_case_id: uuid.UUID) -> list[SourceSpan]:
+    def _case_spans(
+        self, research_case_id: uuid.UUID
+    ) -> list[tuple[SourceSpan, DocumentVersion]]:
         return list(
-            self._session.scalars(
-                select(SourceSpan)
+            self._session.execute(
+                select(SourceSpan, DocumentVersion)
                 .join(
-                    CaseDocumentVersion,
-                    CaseDocumentVersion.document_version_id
-                    == SourceSpan.document_version_id,
+                    ReportCaseSourceSpan,
+                    ReportCaseSourceSpan.source_span_id == SourceSpan.id,
                 )
-                .where(CaseDocumentVersion.research_case_id == research_case_id)
-                .order_by(SourceSpan.id)
+                .join(
+                    DocumentVersion,
+                    DocumentVersion.id == ReportCaseSourceSpan.document_version_id,
+                )
+                .where(ReportCaseSourceSpan.research_case_id == research_case_id)
+                .order_by(ReportCaseSourceSpan.document_version_id, SourceSpan.id)
             )
         )
+
+    def _claim_document_extraction(
+        self, research_case_id: uuid.UUID, document: DocumentVersion
+    ) -> bool:
+        """Claim one case/document/version/fingerprint key without poisoning retry."""
+        existing = self._session.scalar(
+            select(ReportExtractionClaim.id).where(
+                ReportExtractionClaim.research_case_id == research_case_id,
+                ReportExtractionClaim.document_version_id == document.id,
+                ReportExtractionClaim.extractor_version == self._extractor_version,
+                ReportExtractionClaim.input_fingerprint == document.content_sha256,
+            )
+        )
+        if existing is not None:
+            return False
+        try:
+            with self._session.begin_nested():
+                self._session.add(
+                    ReportExtractionClaim(
+                        research_case_id=research_case_id,
+                        document_version_id=document.id,
+                        extractor_version=self._extractor_version,
+                        input_fingerprint=document.content_sha256,
+                    )
+                )
+                self._session.flush()
+            return True
+        except IntegrityError:
+            # A concurrent worker won the unique claim.  Its output is the
+            # only valid result for this extractor/input identity.
+            return False
 
     @staticmethod
     def _validate_claim(draft: ExtractedReportClaim) -> None:
@@ -323,6 +390,7 @@ class ReportResearchService:
             research_case_id=case.id, document_version_id=document.id
         )
         statement_ids = self._append_text_statement(
+            research_case_id=case.id,
             document=document,
             content=request.content,
             input_kind=request.input_kind,
@@ -406,6 +474,7 @@ class ReportResearchService:
                 context_hash=parsed.context_hash,
                 locator_v1=parsed.locator.to_storage_dict(),
             )
+            self._select_span_for_case(case.id, document.id, span.id)
             statement = self._research.add_statement(
                 span.id, parsed.verbatim_text, kind="research_opinion"
             )
@@ -464,6 +533,7 @@ class ReportResearchService:
             },
             verbatim_text="PDF uploaded but no extractable text is available.",
         )
+        self._select_span_for_case(case.id, document.id, span.id)
         statement = self._research.add_statement(
             span.id,
             "PDF uploaded but no extractable text is available.",
@@ -482,6 +552,7 @@ class ReportResearchService:
     def _append_text_statement(
         self,
         *,
+        research_case_id: uuid.UUID,
         document: DocumentVersion,
         content: str,
         input_kind: str,
@@ -498,10 +569,26 @@ class ReportResearchService:
             },
             verbatim_text=content,
         )
+        self._select_span_for_case(research_case_id, document.id, span.id)
         statement = self._research.add_statement(
             span.id, content, kind="research_opinion"
         )
         return [statement.id]
+
+    def _select_span_for_case(
+        self,
+        research_case_id: uuid.UUID,
+        document_version_id: uuid.UUID,
+        source_span_id: uuid.UUID,
+    ) -> None:
+        self._session.add(
+            ReportCaseSourceSpan(
+                research_case_id=research_case_id,
+                document_version_id=document_version_id,
+                source_span_id=source_span_id,
+            )
+        )
+        self._session.flush()
 
     def _extract_claim_statement_ids(self, research_case_id: uuid.UUID) -> list:
         """Run the default report parser immediately after source intake.

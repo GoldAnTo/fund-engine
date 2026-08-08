@@ -9,7 +9,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, Uuid, event, select
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    event,
+    select,
+)
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.models.ledger import Base, CaseDocumentVersion, SourceSpan, SourceStatement, _uuid
@@ -17,6 +28,74 @@ from app.models.ledger import Base, CaseDocumentVersion, SourceSpan, SourceState
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class ReportCaseSourceSpan(Base):
+    """Immutable selection of the exact source spans owned by one report case.
+
+    A DocumentVersion can be replayed by multiple cases.  This companion
+    ledger prevents one case's extractor from scanning spans appended by a
+    later replay or by another case that happened to reuse the same bytes.
+    """
+
+    __tablename__ = "report_case_source_spans"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id", "source_span_id", name="uq_report_case_source_span"
+        ),
+        Index(
+            "ix_report_case_source_spans_case_document",
+            "research_case_id",
+            "document_version_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    source_span_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_spans.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class ReportExtractionClaim(Base):
+    """Durable, immutable exactly-once claim for one report extraction input."""
+
+    __tablename__ = "report_extraction_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id",
+            "document_version_id",
+            "extractor_version",
+            "input_fingerprint",
+            name="uq_report_extraction_claim",
+        ),
+        Index(
+            "ix_report_extraction_claims_case_document",
+            "research_case_id",
+            "document_version_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    extractor_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
 
 
 class ReportClaim(Base):
@@ -127,6 +206,28 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
     report relation from borrowing another case's page/paragraph evidence.
     """
 
+    pending_bindings = [
+        binding
+        for binding in session.new
+        if isinstance(binding, ReportCaseSourceSpan)
+    ]
+    for binding in pending_bindings:
+        span_document_id = session.scalar(
+            select(SourceSpan.document_version_id).where(
+                SourceSpan.id == binding.source_span_id
+            )
+        )
+        if span_document_id != binding.document_version_id:
+            raise ValueError("report case span must belong to its document version")
+        attached = session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == binding.research_case_id,
+                CaseDocumentVersion.document_version_id == binding.document_version_id,
+            )
+        )
+        if attached is None:
+            raise ValueError("report case span document is not attached to its research case")
+
     pending_claims = {
         claim.id: claim
         for claim in session.new
@@ -139,19 +240,27 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
             or source_statement.source_span_id != claim.source_span_id
         ):
             raise ValueError("report claim statement must belong to its source span")
-        attached = session.scalar(
-            select(CaseDocumentVersion.id).where(
-                CaseDocumentVersion.research_case_id == claim.research_case_id,
-                CaseDocumentVersion.document_version_id
-                == session.scalar(
-                    select(SourceSpan.document_version_id).where(
-                        SourceSpan.id == claim.source_span_id
-                    )
-                ),
+        selected = session.scalar(
+            select(ReportCaseSourceSpan.id).where(
+                ReportCaseSourceSpan.research_case_id == claim.research_case_id,
+                ReportCaseSourceSpan.source_span_id == claim.source_span_id,
             )
         )
-        if attached is None:
-            raise ValueError("report claim source span is not attached to its research case")
+        if selected is None:
+            raise ValueError("report claim source span is not selected for its research case")
+
+    for extraction in session.new:
+        if not isinstance(extraction, ReportExtractionClaim):
+            continue
+        selected = session.scalar(
+            select(ReportCaseSourceSpan.id).where(
+                ReportCaseSourceSpan.research_case_id == extraction.research_case_id,
+                ReportCaseSourceSpan.document_version_id
+                == extraction.document_version_id,
+            )
+        )
+        if selected is None:
+            raise ValueError("report extraction document has no selected source spans")
 
     for relation in session.new:
         if not isinstance(relation, ReportRelation):

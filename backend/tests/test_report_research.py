@@ -22,7 +22,12 @@ from app.models.ledger import (
 )
 # Register Task 2's report-ledger tables before the SQLite fixture builds
 # Base.metadata.  PostgreSQL receives the same tables through Alembic.
-from app.models.report_research import ReportClaim, ReportRelation
+from app.models.report_research import (
+    ReportCaseSourceSpan,
+    ReportClaim,
+    ReportExtractionClaim,
+    ReportRelation,
+)
 
 
 def test_pasted_report_is_frozen_and_creates_case(cmd_client, cmd_session) -> None:
@@ -242,6 +247,147 @@ def test_plain_relation_and_narrator_prefix_create_name_only_report_nodes(
             )
         )
     ).all() == []
+
+
+def test_adversarial_narrator_prefixes_do_not_become_relation_entities(
+    cmd_client, cmd_session
+) -> None:
+    prefixes = ("我们认为", "分析师认为", "本文认为", "据悉")
+    case_ids: list[uuid.UUID] = []
+    for index, prefix in enumerate(prefixes):
+        response = cmd_client.post(
+            "/api/v1/report-research",
+            json={
+                "input_kind": "pasted_text",
+                "title": f"前缀案例-{index}",
+                "content": f"{prefix}未上市供应商甲是星海科技的供应商。",
+            },
+        )
+        assert response.status_code == 201
+        case_ids.append(uuid.UUID(response.json()["case"]["id"]))
+
+    relations = list(
+        cmd_session.scalars(
+            select(ReportRelation)
+            .join(ReportClaim, ReportClaim.id == ReportRelation.claim_id)
+            .where(ReportClaim.research_case_id.in_(case_ids))
+        )
+    )
+    assert len(relations) == len(prefixes)
+    assert {
+        (relation.subject_name, relation.object_name)
+        for relation in relations
+    } == {("未上市供应商甲", "星海科技")}
+    assert all(
+        relation.subject_company_id is None and relation.object_company_id is None
+        for relation in relations
+    )
+
+
+def test_same_report_bytes_are_case_owned_and_retry_does_not_duplicate_claims(
+    cmd_client, cmd_session
+) -> None:
+    payload = {
+        "input_kind": "pasted_text",
+        "title": "共享研报",
+        "content": "未上市供应商甲是星海科技的供应商。",
+    }
+    first = cmd_client.post("/api/v1/report-research", json=payload)
+    second = cmd_client.post("/api/v1/report-research", json=payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_case = uuid.UUID(first.json()["case"]["id"])
+    second_case = uuid.UUID(second.json()["case"]["id"])
+    assert first.json()["document"]["id"] == second.json()["document"]["id"]
+    first_claims = list(
+        cmd_session.scalars(
+            select(ReportClaim).where(ReportClaim.research_case_id == first_case)
+        )
+    )
+    second_claims = list(
+        cmd_session.scalars(
+            select(ReportClaim).where(ReportClaim.research_case_id == second_case)
+        )
+    )
+    assert len(first_claims) == len(second_claims) == 1
+    assert first_claims[0].source_span_id != second_claims[0].source_span_id
+    for case_id, claim in ((first_case, first_claims[0]), (second_case, second_claims[0])):
+        bound_spans = list(
+            cmd_session.scalars(
+                select(ReportCaseSourceSpan.source_span_id).where(
+                    ReportCaseSourceSpan.research_case_id == case_id
+                )
+            )
+        )
+        assert bound_spans == [claim.source_span_id]
+
+    from app.services.report_research import ReportClaimExtractor
+
+    assert ReportClaimExtractor(cmd_session).extract(first_case) == []
+    assert cmd_session.scalar(
+        select(ReportExtractionClaim).where(
+            ReportExtractionClaim.research_case_id == first_case
+        )
+    ) is not None
+    assert cmd_session.scalars(
+        select(ReportClaim).where(ReportClaim.research_case_id == first_case)
+    ).all() == first_claims
+
+
+def test_invalid_later_draft_rolls_back_all_report_extraction_output_and_retries(
+    session, document_service, research_service
+) -> None:
+    from app.services.report_research import ExtractedReportClaim, ReportClaimExtractor
+
+    report_case = research_service.add_case(
+        title="原子抽取", industry_topic="研报研究", created_by="tester"
+    )
+    document = document_service.freeze(
+        raw=b"atomic", source_url="report://fixture/atomic", title="原子抽取"
+    )
+    document_service.attach_to_case(
+        research_case_id=report_case.id, document_version_id=document.id
+    )
+    first_span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1, "paragraph": 1},
+        verbatim_text="第一句",
+    )
+    second_span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1, "paragraph": 2},
+        verbatim_text="第二句",
+    )
+    for span in (first_span, second_span):
+        session.add(
+            ReportCaseSourceSpan(
+                research_case_id=report_case.id,
+                document_version_id=document.id,
+                source_span_id=span.id,
+            )
+        )
+    session.flush()
+    initial_statement_count = session.query(SourceStatement).count()
+
+    class LaterInvalidExtractor:
+        def extract(self, *, span):
+            kind = "report_opinion" if span.id == first_span.id else "unknown"
+            return [ExtractedReportClaim(kind=kind, statement=span.verbatim_text)]
+
+    with pytest.raises(ValueError, match="unsupported report claim kind"):
+        ReportClaimExtractor(session, LaterInvalidExtractor()).extract(report_case.id)
+    assert session.query(ReportClaim).count() == 0
+    assert session.query(ReportExtractionClaim).count() == 0
+    assert session.query(SourceStatement).count() == initial_statement_count
+
+    class ValidExtractor:
+        def extract(self, *, span):
+            return [ExtractedReportClaim(kind="report_opinion", statement=span.verbatim_text)]
+
+    claims = ReportClaimExtractor(session, ValidExtractor()).extract(report_case.id)
+    assert len(claims) == 2
+    assert session.query(ReportExtractionClaim).count() == 1
 
 
 def test_failed_pdf_upload_is_frozen_and_returns_recoverable_state(
@@ -653,6 +799,14 @@ def test_extracted_report_claim_keeps_span_statement_and_unresolved_relation_nod
         locator={"page": 3, "paragraph": 2, "parser": "fixture"},
         verbatim_text="研报预计星海科技订单增长，并由未上市供应商甲提供关键部件。",
     )
+    session.add(
+        ReportCaseSourceSpan(
+            research_case_id=report_case.id,
+            document_version_id=report.id,
+            source_span_id=report_span.id,
+        )
+    )
+    session.flush()
 
     class FakeExtractor:
         def extract(self, *, span):
@@ -716,11 +870,19 @@ def test_report_claim_extractor_appends_all_claim_kinds_and_rejects_mutation(
     document_service.attach_to_case(
         research_case_id=report_case.id, document_version_id=report.id
     )
-    document_service.add_span(
+    report_span = document_service.add_span(
         document_version_id=report.id,
         locator={"page": 6, "paragraph": 1},
         verbatim_text="观点、预测、假设与风险。",
     )
+    session.add(
+        ReportCaseSourceSpan(
+            research_case_id=report_case.id,
+            document_version_id=report.id,
+            source_span_id=report_span.id,
+        )
+    )
+    session.flush()
 
     class FourKindsExtractor:
         def extract(self, *, span):
@@ -821,6 +983,18 @@ def test_report_claim_and_relation_reject_cross_case_or_mismatched_provenance(
         locator={"page": 1, "paragraph": 1},
         verbatim_text="第二份观点",
     )
+    for case, document, span in (
+        (first_case, first_document, first_span),
+        (second_case, second_document, second_span),
+    ):
+        session.add(
+            ReportCaseSourceSpan(
+                research_case_id=case.id,
+                document_version_id=document.id,
+                source_span_id=span.id,
+            )
+        )
+    session.flush()
     first_statement = research_service.add_statement(
         first_span.id, "第一份观点", kind="research_opinion"
     )
@@ -837,7 +1011,7 @@ def test_report_claim_and_relation_reject_cross_case_or_mismatched_provenance(
         statement="不应跨案例引用。",
     )
     session.add(forged)
-    with pytest.raises(ValueError, match="report claim source span is not attached"):
+    with pytest.raises(ValueError, match="report claim source span is not selected"):
         session.flush()
     session.rollback()
 
