@@ -511,6 +511,48 @@ def test_verified_industry_control_rejects_snapshot_without_relation_company_map
         session.flush()
 
 
+def test_verified_industry_control_rejects_late_visible_snapshot(session):
+    _case, claim = _report_claim(session)
+    target, _stock = _company_stock(session, name="晚可见快照目标", code="600080")
+    relation = _mapped_relation(session, claim, target=target)
+    index = ChinaIndustryIndex(
+        id=uuid.uuid4(), code="801087.SI", name="晚可见指数", provider="申万",
+        market="CN", source="provider://sw/index", definition="晚可见", created_at=NOW,
+    )
+    session.add(index)
+    session.flush()
+    session.add(
+        ChinaIndustryIndexMembership(
+            id=uuid.uuid4(), company_id=target.id, industry_index_id=index.id,
+            applicable_from=None, applicable_to=None, source="provider://sw/constituents",
+            definition="可见映射", available_at=datetime(2026, 8, 3, 7, tzinfo=timezone.utc),
+            created_at=NOW,
+        )
+    )
+    snapshot = ChinaIndustryIndexSnapshot(
+        id=uuid.uuid4(), industry_index_id=index.id, as_of_date=TRADING_DAYS[0],
+        metric_name="INDUSTRY_RETURN_1D", metric_value=Decimal("0.01"),
+        source="provider://sw/quotes", definition="晚到快照",
+        available_at=datetime(2026, 8, 5, 9, tzinfo=timezone.utc),
+        created_at=NOW,
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        ReportMarketObservation(
+            id=uuid.uuid4(), research_case_id=claim.research_case_id,
+            report_claim_id=claim.id, report_relation_id=relation.id, stock_id=None,
+            valuation_snapshot_id=None, industry_index_snapshot_id=snapshot.id,
+            window="1d", kind="industry_control", status="verified",
+            as_of_date=TRADING_DAYS[0], metric_name="INDUSTRY_RETURN_1D",
+            summary="伪造晚可见控制", collection_key=uuid.uuid4().hex, created_at=NOW,
+        )
+    )
+
+    with pytest.raises(ValueError, match="not visible by the market window"):
+        session.flush()
+
+
 def test_unmapped_relation_company_records_industry_control_insufficient(session):
     _case, claim = _report_claim(session)
     target, _stock = _company_stock(session, name="未归类目标", code="600075")

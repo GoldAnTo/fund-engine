@@ -7,7 +7,7 @@ evidence collection is responsible for that distinction.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -635,6 +635,21 @@ def _validate_report_ledger_provenance(session, _flush_context, _instances) -> N
                 ):
                     raise ValueError(
                         "industry control must reference its exact industry index snapshot"
+                    )
+                window_end = datetime.combine(
+                    observation.as_of_date, time.max, tzinfo=timezone.utc
+                )
+                snapshot_available_at = snapshot.available_at
+                if snapshot_available_at.tzinfo is None:
+                    # SQLite returns DateTime(timezone=True) as a naive UTC
+                    # value; PostgreSQL retains the offset.  Ledger times
+                    # are UTC, so compare the two representations uniformly.
+                    snapshot_available_at = snapshot_available_at.replace(
+                        tzinfo=timezone.utc
+                    )
+                if snapshot_available_at > window_end:
+                    raise ValueError(
+                        "industry control snapshot was not visible by the market window"
                     )
                 if context is None or not context[1]:
                     raise ValueError(
