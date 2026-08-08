@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
@@ -615,6 +615,93 @@ def test_classify_fund_coverage_uses_each_relation_point_in_time_cutoff(
     components = {assessment.hypothesis_id: assessment.score_components for assessment in assessments}
     assert components[earlier_hypothesis.id]["fund_coverage"] == 0
     assert components[later_hypothesis.id]["fund_coverage"] == 1
+
+
+def test_classify_fund_coverage_compares_published_at_as_utc_instants(
+    session, research_case
+) -> None:
+    scope = _event_scope(session, research_case, factors=["negative", "positive"])
+    negative_company = _company(session, code="PIT-NEGATIVE", company_type="listed")
+    positive_company = _company(session, code="PIT-POSITIVE", company_type="listed")
+    negative_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="negative", rank=1
+    )
+    positive_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="positive", rank=2
+    )
+    negative_relation = _verified_relation(
+        session, negative_hypothesis, scope, negative_company
+    )
+    positive_relation = _verified_relation(
+        session, positive_hypothesis, scope, positive_company
+    )
+    negative_stock = Stock(
+        company_id=negative_company.id,
+        code="600211.SH",
+        name="Negative offset stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    positive_stock = Stock(
+        company_id=positive_company.id,
+        code="600212.SH",
+        name="Positive offset stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000211",
+        name="Offset fixture fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([negative_stock, positive_stock, fund])
+    session.flush()
+    _verified_impact_observation(session, negative_relation, "event")
+    _verified_impact_observation(session, positive_relation, "event")
+    session.commit()
+
+    history = [
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=negative_stock.id,
+            weight=Decimal("0.05"),
+            report_period=date(2026, 7, 31),
+            # Aug 8 local, but Aug 9 04:30 UTC: not visible by Aug 8 cutoff.
+            published_at=datetime(2026, 8, 8, 23, 30, tzinfo=timezone(timedelta(hours=-5))),
+            acquired_at=NOW,
+            source="negative-offset holding",
+            created_at=NOW,
+        ),
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=positive_stock.id,
+            weight=Decimal("0.05"),
+            report_period=date(2026, 7, 31),
+            # Aug 9 local, but Aug 8 23:30 UTC: visible by Aug 8 cutoff.
+            published_at=datetime(2026, 8, 9, 7, 30, tzinfo=timezone(timedelta(hours=8))),
+            acquired_at=NOW,
+            source="positive-offset holding",
+            created_at=NOW,
+        ),
+    ]
+
+    class OffsetHistoryMarketData:
+        def fund_holding_history(self, stock_ids, *, as_of):
+            assert set(stock_ids) == {negative_stock.id, positive_stock.id}
+            assert as_of == date(2026, 8, 8)
+            return history
+
+    assessments = EventImpactResearchService(
+        session, market_data=OffsetHistoryMarketData()
+    ).classify(research_case.id)
+
+    components = {assessment.hypothesis_id: assessment.score_components for assessment in assessments}
+    assert components[negative_hypothesis.id]["fund_coverage"] == 0
+    assert components[positive_hypothesis.id]["fund_coverage"] == 1
 
 
 def test_conclusion_uses_latest_assessment_not_a_superseded_key(

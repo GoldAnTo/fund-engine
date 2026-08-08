@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Callable, Protocol, Sequence
 from unicodedata import normalize
@@ -75,6 +75,13 @@ def _before_impact_data_relation_lock() -> None:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _to_aware_datetime(value: datetime) -> datetime:
+    """Interpret naive ledger timestamps as UTC, matching instrument writes."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -703,15 +710,21 @@ class EventImpactResearchService:
             visible_holdings = latest_holdings_by_cutoff.get(as_of)
             if visible_holdings is None:
                 visible_holdings = {}
+                cutoff = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
                 for holding in holding_history:
-                    if holding.published_at.date() <= as_of:
-                        key = (holding.fund_id, holding.stock_id)
-                        current = visible_holdings.get(key)
-                        if current is None or (
-                            holding.report_period,
-                            holding.published_at,
-                        ) > (current.report_period, current.published_at):
-                            visible_holdings[key] = holding
+                    published_at = _to_aware_datetime(holding.published_at)
+                    if published_at > cutoff:
+                        continue
+                    key = (holding.fund_id, holding.stock_id)
+                    current = visible_holdings.get(key)
+                    if current is None or (
+                        holding.report_period,
+                        published_at,
+                    ) > (
+                        current.report_period,
+                        _to_aware_datetime(current.published_at),
+                    ):
+                        visible_holdings[key] = holding
                 latest_holdings_by_cutoff[as_of] = visible_holdings
             for holding in visible_holdings.values():
                 if holding.stock_id in stock_ids:
