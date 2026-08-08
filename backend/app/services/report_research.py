@@ -46,7 +46,10 @@ class ReportResearchService:
     ) -> CreatedReportResearch:
         raw = request.content.encode("utf-8")
         source_url = request.source_url or self._generated_source_url(
-            request.input_kind, raw
+            request.input_kind,
+            title=request.title,
+            publisher=request.publisher,
+            published_at=request.published_at,
         )
         document = self._documents.freeze(
             raw=raw,
@@ -54,6 +57,7 @@ class ReportResearchService:
             published_at=request.published_at,
             parser_version="user-pasted-report-v1",
             title=request.title,
+            natural_key=self._content_natural_key(raw),
             language="zh",
             parse_state="partial",
         )
@@ -107,10 +111,16 @@ class ReportResearchService:
 
         document = self._documents.freeze(
             raw=raw,
-            source_url=self._generated_source_url("pdf_upload", raw),
+            source_url=self._generated_source_url(
+                "pdf_upload",
+                title=normalized_title,
+                publisher=normalized_publisher,
+                published_at=published_at,
+            ),
             published_at=published_at,
             parser_version=PARSER_VERSION_PYPDF,
             title=normalized_title,
+            natural_key=self._content_natural_key(raw),
             language="zh",
             parse_state="success",
         )
@@ -164,10 +174,16 @@ class ReportResearchService:
     ) -> CreatedReportResearch:
         document = self._documents.freeze(
             raw=raw,
-            source_url=self._generated_source_url("pdf_upload", raw),
+            source_url=self._generated_source_url(
+                "pdf_upload",
+                title=title,
+                publisher=publisher,
+                published_at=published_at,
+            ),
             published_at=published_at,
             parser_version=PARSER_VERSION_PYPDF,
             title=title,
+            natural_key=self._content_natural_key(raw),
             language=None,
             parse_state="failed",
         )
@@ -267,9 +283,29 @@ class ReportResearchService:
         return published_at.isoformat()
 
     @staticmethod
-    def _generated_source_url(input_kind: str, raw: bytes) -> str:
-        digest = hashlib.sha256(raw).hexdigest()
-        # File names are untrusted user input. The content-addressed source
-        # identity is enough for the ledger and cannot be interpreted as an
-        # external navigable URL.
-        return f"report://{input_kind}/{digest[:32]}?sha256={digest}"
+    def _content_natural_key(raw: bytes) -> str:
+        """Keep report versions distinct when title/date metadata is reused."""
+        return hashlib.sha256(b"report-content-v1\0" + raw).hexdigest()[:32]
+
+    @staticmethod
+    def _generated_source_url(
+        input_kind: str,
+        *,
+        title: str,
+        publisher: str | None,
+        published_at: datetime | None,
+    ) -> str:
+        # The generated source identity is stable across revisions of one
+        # pasted/uploaded report. Content itself lives in ``natural_key`` so a
+        # revised file becomes a successor rather than being collapsed by the
+        # generic (source, title, date) normalizer.
+        identity = "\0".join(
+            [
+                input_kind,
+                title.strip().casefold(),
+                (publisher or "").strip().casefold(),
+                published_at.isoformat() if published_at else "",
+            ]
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        return f"report://{input_kind}/{digest}"

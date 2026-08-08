@@ -188,3 +188,92 @@ def test_report_research_rejects_blank_title_or_content(cmd_client) -> None:
 
     assert blank_title.status_code == 422
     assert blank_content.status_code == 422
+
+
+def test_same_report_title_and_date_with_changed_pasted_content_appends_version(
+    cmd_client, cmd_session
+) -> None:
+    payload = {
+        "input_kind": "pasted_text",
+        "title": "服务器产业链更新",
+        "publisher": "某券商",
+        "published_at": "2026-08-01T08:00:00Z",
+    }
+    first = cmd_client.post(
+        "/api/v1/report-research", json={**payload, "content": "第一版订单增长。"}
+    )
+    second = cmd_client.post(
+        "/api/v1/report-research", json={**payload, "content": "修订版订单增长放缓。"}
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_document = cmd_session.get(
+        DocumentVersion, uuid.UUID(first.json()["document"]["id"])
+    )
+    second_document = cmd_session.get(
+        DocumentVersion, uuid.UUID(second.json()["document"]["id"])
+    )
+    assert first_document is not None
+    assert second_document is not None
+    assert first_document.id != second_document.id
+    assert first_document.content_sha256 != second_document.content_sha256
+    assert second_document.supersedes_id == first_document.id
+
+
+def test_same_report_title_and_date_with_changed_pdf_bytes_appends_blob_version(
+    cmd_client, cmd_session, monkeypatch, tmp_path
+) -> None:
+    def _parse_failure(self, raw: bytes, *, document_sha256: str):
+        raise PdfParseError("fixture parser failure")
+
+    monkeypatch.setattr(
+        "app.services.report_research.PypdfAdapter.extract_spans", _parse_failure
+    )
+    monkeypatch.setenv("DOCUMENT_BLOB_DIR", str(tmp_path / "report-blobs"))
+    params = {
+        "title": "公司深度报告",
+        "publisher": "某券商",
+        "published_at": "2026-08-01T08:00:00Z",
+        "filename": "company-report.pdf",
+    }
+    first_raw = b"%PDF-first-revision"
+    second_raw = b"%PDF-second-revision"
+    first = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params=params,
+        content=first_raw,
+        headers={"content-type": "application/pdf"},
+    )
+    second = cmd_client.post(
+        "/api/v1/report-research/pdf",
+        params=params,
+        content=second_raw,
+        headers={"content-type": "application/pdf"},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_document_id = uuid.UUID(first.json()["document"]["id"])
+    second_document_id = uuid.UUID(second.json()["document"]["id"])
+    first_document = cmd_session.get(DocumentVersion, first_document_id)
+    second_document = cmd_session.get(DocumentVersion, second_document_id)
+    assert first_document is not None
+    assert second_document is not None
+    assert first_document.id != second_document.id
+    assert second_document.supersedes_id == first_document.id
+    first_blob = cmd_session.scalar(
+        select(DocumentBlob).where(DocumentBlob.document_version_id == first_document_id)
+    )
+    second_blob = cmd_session.scalar(
+        select(DocumentBlob).where(DocumentBlob.document_version_id == second_document_id)
+    )
+    assert first_blob is not None
+    assert second_blob is not None
+    assert first_blob.storage_key != second_blob.storage_key
+    assert cmd_client.get(
+        f"/api/v1/report-research/documents/{first_document_id}/original"
+    ).content == first_raw
+    assert cmd_client.get(
+        f"/api/v1/report-research/documents/{second_document_id}/original"
+    ).content == second_raw
