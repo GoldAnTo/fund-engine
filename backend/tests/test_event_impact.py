@@ -377,6 +377,145 @@ def test_market_only_impact_assessment_blocks_draft_despite_formal_coverage(
         EventConclusionService(session).create_draft(research_case.id)
 
 
+def test_candidate_relation_observation_cannot_make_a_key_factor(
+    session, research_case
+) -> None:
+    factor = "待审核传导"
+    scope = _event_scope(session, research_case, factors=[factor])
+    company = _company(session, code="CANDIDATE-ONLY", company_type="listed")
+    hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement=factor
+    )
+    relation = _relation(session, hypothesis, scope, company)
+    for kind in ("event", "relation", "operating", "market", "peer_control"):
+        _verified_impact_observation(session, relation, kind)
+    session.commit()
+
+    assessment = EventImpactResearchService(session).classify(research_case.id)[0]
+
+    assert assessment.score_components["company"] == 0
+    assert assessment.classification == "alternative"
+
+
+def _classification_select_count(session, research_case, relation_count: int) -> int:
+    factor = f"bulk classification {relation_count}"
+    scope = _event_scope(session, research_case, factors=[factor])
+    company = _company(
+        session, code=f"BULK-CLASSIFY-{relation_count}", company_type="listed"
+    )
+    stock = Stock(
+        company_id=company.id,
+        code=f"6000{relation_count:02d}.SH",
+        name="Bulk classify stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    session.add(stock)
+    for rank in range(1, relation_count + 1):
+        hypothesis = _hypothesis(
+            session,
+            research_case.id,
+            scope.id,
+            statement=f"{factor}-{rank}",
+            rank=rank,
+        )
+        relation = _verified_relation(session, hypothesis, scope, company)
+        for kind in ("event", "operating", "market", "peer_control"):
+            _verified_impact_observation(session, relation, kind)
+    session.commit()
+
+    selects = 0
+
+    def count_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    engine = session.get_bind()
+    sa.event.listen(engine, "before_cursor_execute", count_selects)
+    try:
+        EventImpactResearchService(session).classify(research_case.id)
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", count_selects)
+    return selects
+
+
+def test_classify_fund_coverage_queries_do_not_scale_per_relation(
+    session, research_service
+) -> None:
+    one_relation_case = research_service.add_case(
+        title="one relation", industry_topic="impact", created_by="tester"
+    )
+    many_relations_case = research_service.add_case(
+        title="many relations", industry_topic="impact", created_by="tester"
+    )
+
+    one_relation_selects = _classification_select_count(
+        session, one_relation_case, relation_count=1
+    )
+    many_relation_selects = _classification_select_count(
+        session, many_relations_case, relation_count=4
+    )
+
+    assert many_relation_selects <= one_relation_selects + 2
+
+
+def test_classify_keeps_fund_coverage_with_its_own_hypothesis(
+    session, research_case
+) -> None:
+    scope = _event_scope(session, research_case, factors=["covered", "uncovered"])
+    covered_company = _company(session, code="FUND-COVERED", company_type="listed")
+    uncovered_company = _company(session, code="FUND-UNCOVERED", company_type="unlisted")
+    covered_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="covered", rank=1
+    )
+    uncovered_hypothesis = _hypothesis(
+        session, research_case.id, scope.id, statement="uncovered", rank=2
+    )
+    covered_relation = _verified_relation(
+        session, covered_hypothesis, scope, covered_company
+    )
+    _verified_relation(session, uncovered_hypothesis, scope, uncovered_company)
+    stock = Stock(
+        company_id=covered_company.id,
+        code="600188.SH",
+        name="Covered stock",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000188",
+        name="Covered fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([stock, fund])
+    session.flush()
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=stock.id,
+            weight=Decimal("0.08"),
+            report_period=date(2026, 7, 31),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="fixture holding",
+            created_at=NOW,
+        )
+    )
+    _verified_impact_observation(session, covered_relation, "event")
+    session.commit()
+
+    assessments = EventImpactResearchService(session).classify(research_case.id)
+
+    components = {assessment.hypothesis_id: assessment.score_components for assessment in assessments}
+    assert components[covered_hypothesis.id]["fund_coverage"] == 1
+    assert components[uncovered_hypothesis.id]["fund_coverage"] == 0
+
+
 def test_conclusion_uses_latest_assessment_not_a_superseded_key(
     session, research_case
 ) -> None:
@@ -938,7 +1077,11 @@ def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_s
 
     hypothesis = session.scalar(select(EventImpactHypothesis))
     relation = session.scalar(select(CompanyImpactRelation))
-    observation = session.scalar(select(CompanyImpactObservation))
+    observations = list(
+        session.scalars(
+            select(CompanyImpactObservation).order_by(CompanyImpactObservation.kind)
+        )
+    )
     assert result.hypotheses_created == 1
     assert result.relations_created == 1
     assert hypothesis is not None and hypothesis.scope_version_id == scope.id
@@ -950,11 +1093,88 @@ def test_refresh_appends_current_scope_candidate_relation_from_admissible_case_s
     }
     assert relation is not None and relation.source_statement_id == statement.id
     assert relation.scope_version_id == scope.id
-    assert observation is not None
-    assert observation.source_statement_id == statement.id
-    assert observation.kind == "relation"
-    assert observation.status == "verified"
-    assert observation.as_of_date == date(2026, 8, 7)
+    assert {
+        (observation.kind, observation.status, observation.source_statement_id, observation.as_of_date)
+        for observation in observations
+    } == {
+        ("event", "verified", statement.id, date(2026, 8, 7)),
+        ("relation", "verified", statement.id, date(2026, 8, 7)),
+    }
+
+
+def test_source_backed_refresh_can_become_key_after_verified_relation_and_ledger_data(
+    session, research_case
+) -> None:
+    factor = "source-backed supplier impact"
+    scope = _event_scope(session, research_case, factors=[factor])
+    statement = _case_statement(session, research_case)
+    service = EventImpactResearchService(
+        session,
+        _FakeImpactResolver({factor: [_candidate(source_statement_id=statement.id)]}),
+    )
+
+    service.refresh(research_case.id)
+    session.commit()
+    hypothesis = session.scalar(select(EventImpactHypothesis))
+    candidate_relation = session.scalar(select(CompanyImpactRelation))
+    assert hypothesis is not None and candidate_relation is not None
+    verified_relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        scope_version_id=scope.id,
+        affected_company_id=candidate_relation.affected_company_id,
+        relation_kind=candidate_relation.relation_kind,
+        direction=candidate_relation.direction,
+        mechanism=candidate_relation.mechanism,
+        status="verified",
+        source_statement_id=statement.id,
+        created_at=NOW,
+    )
+    stock = Stock(
+        company_id=candidate_relation.affected_company_id,
+        code="600099.SH",
+        name="Source-backed supplier",
+        market="SSE",
+        created_at=NOW,
+    )
+    fund = Fund(
+        code="000099",
+        name="China fixture fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=NOW,
+    )
+    session.add_all([verified_relation, stock, fund])
+    session.flush()
+    for metric_name in ("REVENUE_YOY", "EVENT_RETURN_1D", "PEER_RETURN_1D"):
+        _snapshot(session, stock, metric_name=metric_name)
+    session.add(
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=stock.id,
+            weight=Decimal("0.10"),
+            report_period=date(2026, 7, 31),
+            published_at=NOW,
+            acquired_at=NOW,
+            source="fixture holding",
+            created_at=NOW,
+        )
+    )
+    session.commit()
+
+    service.collect_data(verified_relation.id, as_of=date(2026, 8, 8))
+    assessment = service.classify(research_case.id)[0]
+
+    assert assessment.classification == "key"
+    assert assessment.score_components == {
+        "event": 1,
+        "company": 1,
+        "operating": 1,
+        "market": 1,
+        "peer_control": 1,
+        "fund_coverage": 1,
+    }
 
 
 def test_refresh_calls_provider_without_a_database_transaction(
@@ -1498,7 +1718,10 @@ def test_refresh_retry_is_idempotent_for_scope_initial_key(session, research_cas
     assert second.relations_created == 0
     assert len(list(session.scalars(select(EventImpactHypothesis)))) == 1
     assert len(list(session.scalars(select(CompanyImpactRelation)))) == 1
-    assert len(list(session.scalars(select(CompanyImpactObservation)))) == 1
+    assert {
+        observation.kind
+        for observation in session.scalars(select(CompanyImpactObservation))
+    } == {"event", "relation"}
 
 
 def test_refresh_reuses_canonical_company_identity(session, research_case) -> None:

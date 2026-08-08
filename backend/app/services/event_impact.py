@@ -553,6 +553,20 @@ class EventImpactResearchService:
         observations_by_relation: dict[uuid.UUID, list[CompanyImpactObservation]] = {}
         for observation in observations:
             observations_by_relation.setdefault(observation.relation_id, []).append(observation)
+        relation_as_of = {
+            relation.id: max(
+                (
+                    observation.as_of_date
+                    for observation in observations_by_relation.get(relation.id, [])
+                    if observation.as_of_date is not None
+                ),
+                default=_utcnow().date(),
+            )
+            for relation in relations
+        }
+        fund_coverage_by_relation = self._bulk_fund_coverage(
+            relations, relation_as_of
+        )
 
         classifications: list[
             tuple[EventImpactHypothesis, str, dict[str, int], str]
@@ -565,7 +579,9 @@ class EventImpactResearchService:
                 for observation in observations_by_relation.get(relation.id, [])
             ]
             score = self._evidence_components(
-                hypothesis_relations, hypothesis_observations
+                hypothesis_relations,
+                hypothesis_observations,
+                fund_coverage_by_relation,
             )
             classification, explanation = self._impact_classification(
                 hypothesis, score
@@ -607,35 +623,99 @@ class EventImpactResearchService:
         self,
         relations: Sequence[CompanyImpactRelation],
         observations: Sequence[CompanyImpactObservation],
+        fund_coverage_by_relation: dict[uuid.UUID, bool],
     ) -> dict[str, int]:
         verified_kinds = {
             observation.kind
             for observation in observations
             if observation.status == "verified"
         }
-        as_of_dates = [
-            observation.as_of_date
-            for observation in observations
-            if observation.as_of_date is not None
-        ]
-        as_of = max(as_of_dates) if as_of_dates else _utcnow().date()
-        fund_coverage = any(
-            exposure.computable
-            for relation in relations
-            if relation.status == "verified"
-            for exposure in self.fund_exposure(relation.id, as_of=as_of)
-        )
         return {
             "event": int("event" in verified_kinds),
-            "company": int(
-                any(relation.status == "verified" for relation in relations)
-                or "relation" in verified_kinds
-            ),
+            "company": int(any(relation.status == "verified" for relation in relations)),
             "operating": int("operating" in verified_kinds),
             "market": int("market" in verified_kinds),
             "peer_control": int("peer_control" in verified_kinds),
-            "fund_coverage": int(fund_coverage),
+            "fund_coverage": int(
+                any(
+                    fund_coverage_by_relation.get(relation.id, False)
+                    for relation in relations
+                )
+            ),
         }
+
+    def _bulk_fund_coverage(
+        self,
+        relations: Sequence[CompanyImpactRelation],
+        relation_as_of: dict[uuid.UUID, date],
+    ) -> dict[uuid.UUID, bool]:
+        """Evaluate verified relations' PIT fund coverage without relation N+1s."""
+        verified_relations = [
+            relation for relation in relations if relation.status == "verified"
+        ]
+        if not verified_relations:
+            return {}
+        company_ids = {relation.affected_company_id for relation in verified_relations}
+        stocks_by_company: dict[uuid.UUID, list[Stock]] = {}
+        for stock in self._session.scalars(
+            select(Stock)
+            .join(Company, Company.id == Stock.company_id)
+            .where(Company.id.in_(company_ids))
+            .where(Company.type == "listed")
+            .where(Stock.market.in_(CHINA_A_SHARE_MARKETS))
+        ):
+            stocks_by_company.setdefault(stock.company_id, []).append(stock)
+
+        eligible = [
+            relation
+            for relation in verified_relations
+            if stocks_by_company.get(relation.affected_company_id)
+        ]
+        if not eligible:
+            return {}
+        holdings_by_as_of: dict[date, list[HoldingDisclosure]] = {}
+        for as_of in {relation_as_of[relation.id] for relation in eligible}:
+            stock_ids = {
+                stock.id
+                for relation in eligible
+                if relation_as_of[relation.id] == as_of
+                for stock in stocks_by_company[relation.affected_company_id]
+            }
+            holdings_by_as_of[as_of] = self._market_data.fund_holdings(
+                list(stock_ids), as_of=as_of
+            )
+        fund_ids = {
+            holding.fund_id
+            for holdings in holdings_by_as_of.values()
+            for holding in holdings
+        }
+        funds = {
+            fund.id: fund
+            for fund in self._session.scalars(select(Fund).where(Fund.id.in_(fund_ids)))
+        } if fund_ids else {}
+
+        coverage: dict[uuid.UUID, bool] = {}
+        for relation in eligible:
+            as_of = relation_as_of[relation.id]
+            stocks = stocks_by_company[relation.affected_company_id]
+            stock_ids = {stock.id for stock in stocks}
+            disclosures_by_fund: dict[uuid.UUID, list[HoldingDisclosure]] = {}
+            for holding in holdings_by_as_of[as_of]:
+                if holding.stock_id in stock_ids:
+                    disclosures_by_fund.setdefault(holding.fund_id, []).append(holding)
+            for fund_id, disclosures in disclosures_by_fund.items():
+                fund = funds.get(fund_id)
+                if fund is None or not is_china_public_fund(fund.code):
+                    continue
+                covered_stock_ids = {disclosure.stock_id for disclosure in disclosures}
+                latest = max(
+                    disclosures, key=lambda item: (item.report_period, item.published_at)
+                )
+                stale = (as_of - latest.report_period).days > 180
+                if not stale and Decimal(len(covered_stock_ids)) / Decimal(len(stocks)) >= Decimal("0.80"):
+                    coverage[relation.id] = True
+                    break
+        return coverage
 
     @staticmethod
     def _impact_classification(
@@ -771,7 +851,7 @@ class EventImpactResearchService:
 
             relations_created = 0
             relation_sources: list[
-                tuple[CompanyImpactRelation, ResolvedImpactCompany, SourceStatement]
+                tuple[CompanyImpactRelation, _ResolvedCandidate, SourceStatement]
             ] = []
             for entry, statement, company in resolved_companies:
                 candidate = entry.candidate
@@ -787,10 +867,26 @@ class EventImpactResearchService:
                     created_at=_utcnow(),
                 )
                 self._session.add(relation)
-                relation_sources.append((relation, candidate, statement))
+                relation_sources.append((relation, entry, statement))
                 relations_created += 1
             self._session.flush()
-            for relation, candidate, statement in relation_sources:
+            for relation, entry, statement in relation_sources:
+                candidate = entry.candidate
+                self._session.add(
+                    CompanyImpactObservation(
+                        relation_id=relation.id,
+                        kind="event",
+                        status="verified",
+                        source_statement_id=statement.id,
+                        valuation_snapshot_id=None,
+                        summary=(
+                            f"Event factor: {entry.hypothesis.statement}. "
+                            f"Evidence: {statement.normalized_text}"
+                        ),
+                        as_of_date=statement_dates[statement.id],
+                        created_at=_utcnow(),
+                    )
+                )
                 self._session.add(
                     CompanyImpactObservation(
                         relation_id=relation.id,
