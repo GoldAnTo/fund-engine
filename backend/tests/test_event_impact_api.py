@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models.event_impact import CompanyImpactRelation, EventImpactHypothesis
+from app.models.event_impact import (
+    CompanyImpactObservation,
+    CompanyImpactRelation,
+    CompanyImpactRelationReview,
+    EventImpactHypothesis,
+    EventImpactHypothesisAssessment,
+)
 from app.models.event_research import EventResearchScopeVersion
-from app.models.ledger import Company
+from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
+from app.models.operational import TaskItem
 
 
 def test_impact_trace_reads_only_the_current_scope(cmd_client) -> None:
@@ -66,3 +74,171 @@ def test_trace_excludes_predecessor_and_keeps_unlisted_boundary(cmd_client, cmd_
         json={"outcome": "accepted", "reason": "stale", "reviewer": "tester"},
     )
     assert stale.status_code == 422
+
+
+def test_trace_review_is_idempotent_and_keeps_source_gap_nonkey_with_pit_funds(
+    cmd_client, cmd_session
+) -> None:
+    """The HTTP trace keeps a source-gap review auditable without overclaiming it."""
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json={
+            "raw_input": "fixture",
+            "event_title": "PIT trace",
+            "research_question": "what transmits?",
+            "candidate_factors": ["one", "two", "three"],
+            "created_by": "tester",
+        },
+    )
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    assert scope is not None
+    now = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
+    hypothesis = EventImpactHypothesis(
+        research_case_id=case_id,
+        scope_version_id=scope.id,
+        statement="source-gap candidate",
+        classification="candidate",
+        rank=1,
+        score_components={},
+        explanation="awaiting an admissible relation source",
+        created_at=now,
+    )
+    company = Company(
+        code="PIT-TRACE",
+        name="PIT trace issuer",
+        type="listed",
+        created_at=now,
+    )
+    fund = Fund(
+        code="000001",
+        name="China public fund",
+        fund_type="equity",
+        scale=None,
+        establish_date=None,
+        management_company_id=None,
+        created_at=now,
+    )
+    cmd_session.add_all([hypothesis, company, fund])
+    cmd_session.flush()
+    first_stock = Stock(
+        company_id=company.id,
+        code="600001",
+        name="PIT one",
+        market="SSE",
+        created_at=now,
+    )
+    second_stock = Stock(
+        company_id=company.id,
+        code="600002",
+        name="PIT two",
+        market="SSE",
+        created_at=now,
+    )
+    cmd_session.add_all([first_stock, second_stock])
+    cmd_session.flush()
+    relation = CompanyImpactRelation(
+        hypothesis_id=hypothesis.id,
+        scope_version_id=scope.id,
+        affected_company_id=company.id,
+        relation_kind="supplier",
+        direction="benefits",
+        mechanism="candidate has no admitted relation source",
+        status="candidate",
+        source_statement_id=None,
+        created_at=now,
+    )
+    cmd_session.add(relation)
+    cmd_session.flush()
+    cmd_session.add_all([
+        # This is an event datum, not an admitted relation source: accepting
+        # the review must therefore not make the relation evidence verified.
+        CompanyImpactObservation(
+            relation_id=relation.id,
+            kind="event",
+            status="verified",
+            source_statement_id=None,
+            valuation_snapshot_id=None,
+            summary="event happened",
+            as_of_date=date(2026, 8, 8),
+            created_at=now,
+        ),
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=first_stock.id,
+            weight=Decimal("0.10"),
+            report_period=date(2026, 6, 30),
+            published_at=datetime(2026, 8, 7, 8, tzinfo=timezone.utc),
+            acquired_at=datetime(2026, 8, 7, 8, tzinfo=timezone.utc),
+            source="visible filing",
+            created_at=now,
+        ),
+        # It is a valid ledger record but was published after this relation's
+        # event cutoff, so it must not turn partial coverage into a result.
+        HoldingDisclosure(
+            fund_id=fund.id,
+            stock_id=second_stock.id,
+            weight=Decimal("0.20"),
+            report_period=date(2026, 6, 30),
+            published_at=datetime(2026, 8, 9, 8, tzinfo=timezone.utc),
+            acquired_at=datetime(2026, 8, 9, 8, tzinfo=timezone.utc),
+            source="future filing",
+            created_at=now,
+        ),
+    ])
+    cmd_session.commit()
+
+    trace = cmd_client.get(f"/api/v1/event-research/{case_id}/impact-trace")
+    assert trace.status_code == 200
+    relation_payload = trace.json()["factors"][0]["relations"][0]
+    assert len(relation_payload["fund_exposure"]) == 1
+    fund_exposure = relation_payload["fund_exposure"][0]
+    assert fund_exposure["coverage_ratio"] == 0.5
+    assert fund_exposure["coverage_status"] == "partial"
+    assert fund_exposure["computable"] is False
+    assert fund_exposure["exposure"] is None
+    assert fund_exposure["source"] == "visible filing"
+
+    payload = {
+        "outcome": "accepted",
+        "reason": "reviewed but source remains absent",
+        "reviewer": "tester",
+    }
+    first = cmd_client.post(
+        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=payload
+    )
+    second = cmd_client.post(
+        f"/api/v1/event-research/impact-relations/{relation.id}/review", json=payload
+    )
+    assert first.status_code == second.status_code == 201
+    assert first.json()["review_id"] == second.json()["review_id"]
+    reviews = cmd_session.scalars(
+        select(CompanyImpactRelationReview).where(
+            CompanyImpactRelationReview.relation_id == relation.id
+        )
+    ).all()
+    assert len(reviews) == 1
+    review_task = cmd_session.scalar(
+        select(TaskItem).where(
+            TaskItem.task_type == "review_company_impact",
+            TaskItem.ref_id == relation.id,
+            TaskItem.scope_version_id == scope.id,
+        )
+    )
+    assert review_task is not None and review_task.status == "done"
+    assessment = cmd_session.scalar(
+        select(EventImpactHypothesisAssessment)
+        .where(EventImpactHypothesisAssessment.hypothesis_id == hypothesis.id)
+        .order_by(
+            EventImpactHypothesisAssessment.created_at.desc(),
+            EventImpactHypothesisAssessment.id.desc(),
+        )
+    )
+    assert assessment is not None
+    assert assessment.classification != "key"
+    assert assessment.score_components["company"] == 0
