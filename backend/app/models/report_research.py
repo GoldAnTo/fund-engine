@@ -150,6 +150,16 @@ class ReportResearchScopeVersion(Base):
     )
 
 
+@event.listens_for(ReportResearchScopeVersion, "before_insert")
+def _freeze_report_scope_visibility_cutoff(
+    _mapper, _connection, target: ReportResearchScopeVersion
+) -> None:
+    """Make every creation path use one exact causal visibility instant."""
+    if target.created_at is None:
+        target.created_at = _utcnow()
+    target.visibility_cutoff_at = target.created_at
+
+
 class ReportResearchScopeClaim(Base):
     """One report claim deliberately included in an immutable scope."""
 

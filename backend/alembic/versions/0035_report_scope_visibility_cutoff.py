@@ -31,6 +31,15 @@ def upgrade() -> None:
         "report_research_scope_versions",
         sa.Column("visibility_cutoff_at", sa.DateTime(timezone=True), nullable=True),
     )
+    is_postgresql = op.get_bind().dialect.name == "postgresql"
+    if is_postgresql:
+        # 0032 made this ledger append-only.  PostgreSQL executes the
+        # backfill as an UPDATE, so remove only that trigger inside Alembic's
+        # migration transaction; a failure rolls the trigger drop back too.
+        op.execute(
+            "DROP TRIGGER no_update_report_research_scope_versions "
+            "ON report_research_scope_versions"
+        )
     op.get_bind().execute(
         sa.text(
             "UPDATE report_research_scope_versions "
@@ -39,6 +48,12 @@ def upgrade() -> None:
         ),
         {"migration_cutoff_at": migration_cutoff_at},
     )
+    if is_postgresql:
+        op.execute(
+            "CREATE TRIGGER no_update_report_research_scope_versions "
+            "BEFORE UPDATE ON report_research_scope_versions "
+            "FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+        )
     with op.batch_alter_table("report_research_scope_versions") as batch:
         batch.alter_column("visibility_cutoff_at", nullable=False)
 

@@ -335,6 +335,37 @@ def test_same_report_document_can_have_multiple_question_scopes(cmd_client, cmd_
     assert history.json()["scope"]["research_question"] != current.json()["scope"]["research_question"]
 
 
+def test_direct_orm_scope_freezes_visibility_cutoff_at_its_creation_time(
+    cmd_client, cmd_session
+) -> None:
+    """Administrative/import writes cannot get two microsecond horizons."""
+    case_id = _create_report(
+        cmd_client,
+        title="ORM 创建范围截点",
+        content="研报观点：订单增长。",
+    )
+    document_id = cmd_session.scalar(
+        select(ReportCaseSourceSpan.document_version_id)
+        .where(ReportCaseSourceSpan.research_case_id == case_id)
+        .limit(1)
+    )
+    assert document_id is not None
+    scope = ReportResearchScopeVersion(
+        research_case_id=case_id,
+        document_version_id=document_id,
+        version=2,
+        changed_by="orm-import",
+        change_summary="直接写入测试",
+        research_question="直接写入也应冻结截点。",
+        factor_selection=[],
+        evidence_plan=[],
+    )
+    cmd_session.add(scope)
+    cmd_session.flush()
+
+    assert scope.visibility_cutoff_at == scope.created_at
+
+
 def test_same_document_scopes_freeze_distinct_claim_and_relation_paths(
     cmd_client, cmd_session
 ) -> None:
