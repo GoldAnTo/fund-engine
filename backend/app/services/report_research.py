@@ -2,20 +2,212 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Protocol, Sequence
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
-from app.models.ledger import DocumentBlob, DocumentVersion, ResearchCase
+from app.models.ledger import (
+    CaseDocumentVersion,
+    Company,
+    DocumentBlob,
+    DocumentVersion,
+    ResearchCase,
+    SourceSpan,
+)
+from app.models.report_research import ReportClaim, ReportRelation
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.report_research import CreateReportResearchRequest
 from app.services.ingest import DocumentService
 from app.services.document_blobs import LocalImmutableBlobStore
 from app.services.research import ResearchService
+
+
+_REPORT_CLAIM_KINDS = frozenset(
+    {"report_opinion", "report_forecast", "report_assumption", "report_risk"}
+)
+
+
+@dataclass(frozen=True)
+class ExtractedReportRelation:
+    """A relation candidate from one report assertion.
+
+    Company IDs are optional and must refer to an existing ledger company.  A
+    missing ID is intentionally represented by a name-only graph node.
+    """
+
+    subject_name: str | None
+    object_name: str | None
+    relation_kind: str
+    mechanism: str
+    subject_company_id: uuid.UUID | None = None
+    object_company_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class ExtractedReportClaim:
+    kind: str
+    statement: str
+    relations: tuple[ExtractedReportRelation, ...] = ()
+
+
+class ReportContentExtractor(Protocol):
+    def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]: ...
+
+
+class RuleBasedReportContentExtractor:
+    """A conservative local fallback until a model-backed parser is configured.
+
+    It creates only explicit report assertions.  Relationship extraction is
+    intentionally delegated to the parser seam: guessing a company identity
+    from prose would be worse than retaining an unresolved named node.
+    """
+
+    _sentences = re.compile(r"(?<=[。！？；;\n])")
+
+    def extract(self, *, span: SourceSpan) -> Sequence[ExtractedReportClaim]:
+        extracted: list[ExtractedReportClaim] = []
+        for fragment in self._sentences.split(span.verbatim_text):
+            statement = fragment.strip()
+            if not statement:
+                continue
+            kind = self._kind_for(statement)
+            if kind is not None:
+                extracted.append(ExtractedReportClaim(kind=kind, statement=statement))
+        return extracted
+
+    @staticmethod
+    def _kind_for(statement: str) -> str | None:
+        if any(marker in statement for marker in ("风险", "不及预期", "下行")):
+            return "report_risk"
+        if any(marker in statement for marker in ("假设", "前提", "基于")):
+            return "report_assumption"
+        if any(marker in statement for marker in ("预计", "预测", "目标价", "将")):
+            return "report_forecast"
+        if any(marker in statement for marker in ("观点", "看好", "判断", "认为", "核心结论")):
+            return "report_opinion"
+        return None
+
+
+class ReportClaimExtractor:
+    """Append source statements, then append claims and report-only relations."""
+
+    def __init__(
+        self, session: Session, extractor: ReportContentExtractor | None = None
+    ) -> None:
+        self._session = session
+        self._extractor = extractor or RuleBasedReportContentExtractor()
+        self._research = ResearchService(ResearchRepository(session))
+
+    def extract(self, research_case_id: uuid.UUID) -> list[ReportClaim]:
+        claims: list[ReportClaim] = []
+        for span in self._case_spans(research_case_id):
+            for draft in self._extractor.extract(span=span):
+                self._validate_claim(draft)
+                # Statement first: claims and relations always lead back to the
+                # original span's stable page/paragraph locator.
+                source_statement = self._research.add_statement(
+                    span.id,
+                    draft.statement.strip(),
+                    kind=("forecast" if draft.kind == "report_forecast" else "research_opinion"),
+                )
+                claim = ReportClaim(
+                    research_case_id=research_case_id,
+                    source_span_id=span.id,
+                    source_statement_id=source_statement.id,
+                    kind=draft.kind,
+                    statement=draft.statement.strip(),
+                )
+                self._session.add(claim)
+                self._session.flush()
+                for relation_draft in draft.relations:
+                    self._session.add(
+                        self._relation_from_draft(
+                            claim=claim,
+                            research_case_id=research_case_id,
+                            span=span,
+                            draft=relation_draft,
+                        )
+                    )
+                claims.append(claim)
+        self._session.flush()
+        return claims
+
+    def _case_spans(self, research_case_id: uuid.UUID) -> list[SourceSpan]:
+        return list(
+            self._session.scalars(
+                select(SourceSpan)
+                .join(
+                    CaseDocumentVersion,
+                    CaseDocumentVersion.document_version_id
+                    == SourceSpan.document_version_id,
+                )
+                .where(CaseDocumentVersion.research_case_id == research_case_id)
+                .order_by(SourceSpan.id)
+            )
+        )
+
+    @staticmethod
+    def _validate_claim(draft: ExtractedReportClaim) -> None:
+        if draft.kind not in _REPORT_CLAIM_KINDS:
+            raise ValueError(f"unsupported report claim kind: {draft.kind}")
+        if not draft.statement.strip():
+            raise ValueError("report claim statement must not be blank")
+
+    def _relation_from_draft(
+        self,
+        *,
+        claim: ReportClaim,
+        research_case_id: uuid.UUID,
+        span: SourceSpan,
+        draft: ExtractedReportRelation,
+    ) -> ReportRelation:
+        relation_kind = draft.relation_kind.strip()
+        mechanism = draft.mechanism.strip()
+        if not relation_kind or not mechanism:
+            raise ValueError("report relation kind and mechanism must not be blank")
+        subject_company_id = self._existing_company_id(draft.subject_company_id)
+        object_company_id = self._existing_company_id(draft.object_company_id)
+        subject_name = self._node_name(draft.subject_name)
+        object_name = self._node_name(draft.object_name)
+        if subject_company_id is None and subject_name is None:
+            raise ValueError("report relation subject must be a company or named node")
+        if object_company_id is None and object_name is None:
+            raise ValueError("report relation object must be a company or named node")
+        return ReportRelation(
+            claim_id=claim.id,
+            research_case_id=research_case_id,
+            source_span_id=span.id,
+            source_statement_id=claim.source_statement_id,
+            subject_company_id=subject_company_id,
+            object_company_id=object_company_id,
+            subject_name=subject_name,
+            object_name=object_name,
+            relation_kind=relation_kind,
+            mechanism=mechanism,
+            status="report_claim",
+        )
+
+    def _existing_company_id(self, company_id: uuid.UUID | None) -> uuid.UUID | None:
+        if company_id is None:
+            return None
+        if self._session.get(Company, company_id) is None:
+            raise ValueError(f"report relation references unknown company {company_id}")
+        return company_id
+
+    @staticmethod
+    def _node_name(name: str | None) -> str | None:
+        if name is None:
+            return None
+        normalized = " ".join(name.split())
+        return normalized or None
 
 
 @dataclass(frozen=True)
