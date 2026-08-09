@@ -277,6 +277,18 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("makes the latest recorded active-run step visible without opening a drawer", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).endsWith("/research-runs/active")
+        ? { items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电 Case", status: "running", stage: "parse", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false }
+        : { run_id: "run-1", items: [{ seq: 4, stage: "parse", status: "completed", message: "已冻结 2 份可核验材料", details: { frozen_documents: 2 }, created_at: "2026-08-09T00:00:00Z" }], next_cursor: null, has_more: false },
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(<MemoryRouter initialEntries={["/events"]}><Routes><Route element={<AppShell />}><Route path="/events" element={<p>工作台内容</p>} /></Route></Routes></MemoryRouter>);
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    await waitFor(() => expect(strip).toHaveTextContent("最近记录 · 解析原文 · 已冻结 2 份可核验材料"));
+  });
+
   it("searches the current Case registry and makes the matched Case directly navigable", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], next_cursor: null, has_more: false }), { status: 200, headers: { "content-type": "application/json" } })));
