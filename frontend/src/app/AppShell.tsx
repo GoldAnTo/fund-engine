@@ -31,6 +31,15 @@ const runStageLabels: Record<string, string> = {
   failed: "运行失败",
 };
 
+type RunStageEvent = {
+  seq: number;
+  stage: string | null;
+  status: string | null;
+  message: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
 export function AppShell() {
   const location = useLocation();
   const [events, setEvents] = useState<EventResearchListItem[]>([]);
@@ -40,15 +49,12 @@ export function AppShell() {
   );
   const [globalSearchError, setGlobalSearchError] = useState(false);
   const [activeRuns, setActiveRuns] = useState<ActiveResearchRun[]>([]);
-  const [activeRunEvents, setActiveRunEvents] = useState<Array<{
-    seq: number;
-    stage: string | null;
-    status: string | null;
-    message: string | null;
-    details: Record<string, unknown>;
-    created_at: string;
-  }> | null>(null);
-  const [activeRunEventError, setActiveRunEventError] = useState(false);
+  const [activeRunEvents, setActiveRunEvents] = useState<
+    Record<string, RunStageEvent[]>
+  >({});
+  const [activeRunEventErrors, setActiveRunEventErrors] = useState<
+    Record<string, boolean>
+  >({});
   const [runLoadError, setRunLoadError] = useState(false);
   const [drawerRun, setDrawerRun] = useState<ActiveResearchRun | null>(null);
   const [drawerEvents, setDrawerEvents] = useState<Array<{
@@ -135,21 +141,22 @@ export function AppShell() {
       live = false;
     };
   }, []);
-  const active = activeRuns[0];
+  const activeRunIds = activeRuns.map((run) => run.run_id).join(",");
   useEffect(() => {
     let live = true;
-    if (!active) {
-      setActiveRunEvents(null);
-      setActiveRunEventError(false);
+    if (!activeRunIds) {
+      setActiveRunEvents({});
+      setActiveRunEventErrors({});
       return;
     }
-    const load = () =>
-      researchOsApi
-        .runEvents(active.run_id)
-        .then((response) => {
-          if (live) {
-            setActiveRunEvents(
-              response.items.map((event) => ({
+    const load = async () => {
+      const results = await Promise.all(
+        activeRuns.map(async (run) => {
+          try {
+            const response = await researchOsApi.runEvents(run.run_id);
+            return {
+              runId: run.run_id,
+              events: response.items.map((event) => ({
                 seq: event.seq,
                 stage: event.stage ?? null,
                 status: event.status ?? null,
@@ -157,25 +164,29 @@ export function AppShell() {
                 details: event.details ?? {},
                 created_at: event.created_at,
               })),
-            );
-            setActiveRunEventError(false);
+              failed: false,
+            };
+          } catch {
+            return { runId: run.run_id, events: [], failed: true };
           }
-        })
-        .catch(() => {
-          if (live) {
-            setActiveRunEvents(null);
-            setActiveRunEventError(true);
-          }
-        });
+        }),
+      );
+      if (!live) return;
+      setActiveRunEvents(
+        Object.fromEntries(results.map((result) => [result.runId, result.events])),
+      );
+      setActiveRunEventErrors(
+        Object.fromEntries(results.map((result) => [result.runId, result.failed])),
+      );
+    };
     load();
     const refresh = window.setInterval(load, 15_000);
     return () => {
       live = false;
       window.clearInterval(refresh);
     };
-  }, [active?.run_id]);
+  }, [activeRunIds]);
   const needsReview = events.filter((event) => event.nextHumanAction).length;
-  const latestActiveEvent = activeRunEvents?.[activeRunEvents.length - 1];
   const searchMatches = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase("zh-CN");
     if (!query) return [];
@@ -347,7 +358,9 @@ export function AppShell() {
           </section>
         )}
         {activeRuns.map((run) => {
-          const isPrimaryRun = run.run_id === active?.run_id;
+          const runEvents = activeRunEvents[run.run_id];
+          const latestActiveEvent = runEvents?.[runEvents.length - 1];
+          const activeRunEventError = activeRunEventErrors[run.run_id];
           return (
             <section
               className="ros-run-strip"
@@ -367,13 +380,11 @@ export function AppShell() {
                     {(run.scope.allowed_source_types ?? []).join("、") ||
                       "未记录允许来源"}{" "}
                     · {run.case_title} · 已处理 {run.processed_count}
-                    {isPrimaryRun
-                      ? latestActiveEvent
-                        ? ` · 最近记录 · ${runStageLabels[latestActiveEvent.stage ?? ""] ?? latestActiveEvent.stage ?? "阶段"} · ${latestActiveEvent.message || "已记录阶段事件"}`
-                        : activeRunEventError
-                          ? " · 最近运行记录暂不可读取"
-                          : " · 正在读取最近阶段记录"
-                      : " · 可展开查看本次冻结范围与阶段记录"}
+                    {latestActiveEvent
+                      ? ` · 最近记录 · ${runStageLabels[latestActiveEvent.stage ?? ""] ?? latestActiveEvent.stage ?? "阶段"} · ${latestActiveEvent.message || "已记录阶段事件"}`
+                      : activeRunEventError
+                        ? " · 最近运行记录暂不可读取"
+                        : " · 正在读取最近阶段记录"}
                   </span>
                 </div>
               </div>

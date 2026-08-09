@@ -1024,7 +1024,39 @@ describe("Research OS event entry", () => {
               next_cursor: null,
               has_more: false,
             }
-          : { items: [], next_cursor: null, has_more: false };
+          : url.endsWith("/research-runs/run-a/events")
+            ? {
+                run_id: "run-a",
+                items: [
+                  {
+                    seq: 3,
+                    stage: "retrieve",
+                    status: "completed",
+                    message: "已按许可范围读取公司披露",
+                    details: {},
+                    created_at: "2026-08-09T00:00:00Z",
+                  },
+                ],
+                next_cursor: null,
+                has_more: false,
+              }
+            : url.endsWith("/research-runs/run-b/events")
+              ? {
+                  run_id: "run-b",
+                  items: [
+                    {
+                      seq: 7,
+                      stage: "verify",
+                      status: "running",
+                      message: "正在核验毛利率验证指标",
+                      details: {},
+                      created_at: "2026-08-09T00:00:00Z",
+                    },
+                  ],
+                  next_cursor: null,
+                  has_more: false,
+                }
+              : { items: [], next_cursor: null, has_more: false };
         return Promise.resolve(
           new Response(JSON.stringify(body), {
             status: 200,
@@ -1049,6 +1081,14 @@ describe("Research OS event entry", () => {
     expect(strips).toHaveLength(2);
     expect(strips[0]).toHaveTextContent("订单验证 Case");
     expect(strips[1]).toHaveTextContent("毛利率验证 Case");
+    await waitFor(() => {
+      expect(strips[0]).toHaveTextContent(
+        "最近记录 · 采集资料 · 已按许可范围读取公司披露",
+      );
+      expect(strips[1]).toHaveTextContent(
+        "最近记录 · 验证因素 · 正在核验毛利率验证指标",
+      );
+    });
     expect(screen.getAllByRole("button", { name: "展开运行详情" })).toHaveLength(2);
   });
 
