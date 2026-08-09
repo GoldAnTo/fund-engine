@@ -12,6 +12,21 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe("HttpResearchAdapter", () => {
+  it("does not retain retired prototype screen methods on the live adapter", () => {
+    const prototype = Object.getPrototypeOf(
+      new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }),
+    ) as Record<string, unknown>;
+
+    for (const retiredMethod of [
+      "getWorkspaceOverviewView",
+      "getWorkspaceOverviewScreen",
+      "getNewResearchView",
+      "getResearchPlanView",
+    ]) {
+      expect(prototype).not.toHaveProperty(retiredMethod);
+    }
+  });
+
   it("freezes an original upload through multipart without inventing a JSON text snapshot", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
