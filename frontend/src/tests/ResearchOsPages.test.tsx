@@ -1070,6 +1070,74 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("removes stale active-run strips when their live status can no longer be confirmed", async () => {
+    vi.useFakeTimers();
+    let activeRunRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/research-runs/active")) {
+          activeRunRequests += 1;
+          if (activeRunRequests > 1)
+            return Promise.resolve(new Response("unavailable", { status: 503 }));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                items: [
+                  {
+                    run_id: "run-stale",
+                    case_id: "event-tsm",
+                    case_title: "不应被当成当前运行的 Case",
+                    status: "running",
+                    stage: "retrieve",
+                    updated_at: "2026-08-09T00:00:00Z",
+                    processed_count: 3,
+                    next_action: "查看本次运行",
+                    scope: { allowed_source_types: ["company_disclosure"] },
+                  },
+                ],
+                next_cursor: null,
+                has_more: false,
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [], next_cursor: null, has_more: false }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await act(async () => {});
+    expect(screen.getByRole("region", { name: "系统正在运行" })).toHaveTextContent(
+      "不应被当成当前运行的 Case",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(screen.getByRole("region", { name: "运行状态不可用" })).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "系统正在运行" }),
+    ).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it("keeps every concurrent active run visible and individually expandable", async () => {
     vi.stubGlobal(
       "fetch",

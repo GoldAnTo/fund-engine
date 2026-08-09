@@ -118,7 +118,12 @@ export function AppShell() {
           }
         })
         .catch(() => {
-          if (live) setRunLoadError(true);
+          if (live) {
+            setActiveRuns([]);
+            setActiveRunEvents({});
+            setActiveRunEventErrors({});
+            setRunLoadError(true);
+          }
         });
     load();
     const refresh = window.setInterval(load, 15_000);
