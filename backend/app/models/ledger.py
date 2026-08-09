@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Integer, JSON, LargeBinary, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -42,6 +42,7 @@ IMMUTABLE_TABLES = frozenset(
     {
         "document_versions",
         "document_upload_artifacts",
+        "case_tenant_admissions",
         "case_document_versions",
         "event_research_briefs",
         "event_research_factor_drafts",
@@ -307,6 +308,34 @@ class ResearchCase(Base):
     period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
     period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     evidence_cutoff: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class CaseTenantAdmission(Base):
+    """Immutable ownership of an event Case's initial source admission.
+
+    Document versions are content-addressed and may be reused, so their hash
+    cannot establish who may inspect a Case.  This record binds the Case to
+    the tenant that opened it and to the exact initial frozen document.
+    """
+
+    __tablename__ = "case_tenant_admissions"
+    __table_args__ = (
+        UniqueConstraint("research_case_id", name="uq_case_tenant_admissions_case"),
+        Index("ix_case_tenant_admissions_tenant", "tenant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    tenant_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    initial_document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    admitted_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    admitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class Thesis(Base):

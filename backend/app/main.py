@@ -13,8 +13,10 @@ from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.env import load_local_env
 from app.errors import (
+    AuthenticationRequiredError,
     ConflictError,
     NotFoundError,
+    PermissionDeniedError,
     UpstreamUnavailableError,
     ValidationFailedError,
 )
@@ -96,6 +98,30 @@ async def not_found_error_handler(request: Request, exc: NotFoundError):
         str(exc) or "not found",
         request_id,
         status_code=404,
+    )
+
+
+@app.exception_handler(AuthenticationRequiredError)
+async def authentication_required_error_handler(
+    request: Request, exc: AuthenticationRequiredError
+):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "authentication_required",
+        str(exc) or "authentication required",
+        request_id,
+        status_code=401,
+    )
+
+
+@app.exception_handler(PermissionDeniedError)
+async def permission_denied_error_handler(request: Request, exc: PermissionDeniedError):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "permission_denied",
+        str(exc) or "permission denied",
+        request_id,
+        status_code=403,
     )
 
 

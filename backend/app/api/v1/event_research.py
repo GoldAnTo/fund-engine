@@ -44,12 +44,17 @@ from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.auto_research import AutoResearchService
 from app.services.case_relation_reviews import CaseRelationReviewService
+from app.api.v1.tenant_context import require_research_tenant
 from app.models.ledger import ValidationError
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.outbox import emit_event
 
 
-router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
+router = APIRouter(
+    prefix="/event-research",
+    tags=["event-research-v1"],
+    dependencies=[Depends(require_research_tenant)],
+)
 
 
 @router.get("", response_model=EventResearchListResponse)

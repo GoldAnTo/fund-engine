@@ -666,7 +666,7 @@ def cmd_session():
 
 
 @pytest.fixture
-def cmd_client(cmd_session):
+def cmd_client(cmd_session, monkeypatch):
     from app.db import get_db
     from app.main import app
 
@@ -674,8 +674,9 @@ def cmd_client(cmd_session):
         yield cmd_session
 
     app.dependency_overrides[get_db] = _override_get_db
+    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"test-tenant-token":"test-team"}')
     try:
-        yield TestClient(app)
+        yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
     finally:
         app.dependency_overrides.pop(get_db, None)
 
