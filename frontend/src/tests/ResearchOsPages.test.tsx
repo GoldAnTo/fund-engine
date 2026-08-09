@@ -96,6 +96,8 @@ describe("Research OS event entry", () => {
     render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
 
     expect(await screen.findByRole("heading", { name: "关联公司与股票" })).toBeVisible();
+    expect(screen.getByText(/直接受影响 · 审核 human:reviewer/)).toBeVisible();
+    expect(screen.queryByText(/directly_affected/)).not.toBeInTheDocument();
     expect(screen.getByText(/不会从事件标题或代码自动推断/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "登记基本面传导" }));
     expect(await screen.findByLabelText("传导标的" )).toBeVisible();

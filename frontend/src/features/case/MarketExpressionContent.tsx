@@ -36,6 +36,13 @@ const fundFreshnessLabels: Record<string, string> = {
   coverage_incomplete: "覆盖不足",
   source_unlinked: "来源受限",
 };
+const instrumentRoleLabels: Record<string, string> = {
+  directly_affected: "直接受影响",
+  supply_chain: "供应链传导",
+  competitor: "竞争对手",
+  beneficiary: "受益方",
+  risk_exposure: "风险暴露",
+};
 
 type ThesisOption = { id: string; statement: string };
 
@@ -650,7 +657,7 @@ function MarketInstrumentWorkspace({
                   : " · 未上市/未映射"}
               </strong>
               <small>
-                {binding.relationship_role} · 审核 {binding.reviewed_by}
+                {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role} · 审核 {binding.reviewed_by}
               </small>
               <small>
                 定位{" "}
@@ -887,7 +894,7 @@ function FundamentalImpactRegistration({
                 <option key={binding.id} value={binding.id}>
                   {binding.company_name}
                   {binding.stock_code ? ` · ${binding.stock_code}` : ""} ·{" "}
-                  {binding.relationship_role}
+                  {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role}
                 </option>
               ))}
             </select>
@@ -1078,7 +1085,7 @@ function MarketObservationRegistration({
               {stockBindings.map((binding) => (
                 <option key={binding.id} value={binding.id}>
                   {binding.company_name} · {binding.stock_code} ·{" "}
-                  {binding.relationship_role}
+                  {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role}
                 </option>
               ))}
             </select>
