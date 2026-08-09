@@ -568,7 +568,7 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("研究意见")).toBeVisible();
     expect(screen.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=doc-report-1");
     expect(screen.getByText(/定位 \{"page":12\} · 可得/)).toBeVisible();
-    expect(screen.getByText("许可 not_recorded")).toBeVisible();
+    expect(screen.getByText("许可：未记录")).toBeVisible();
     expect(screen.getByText("得到支持")).toBeVisible();
     expect(screen.getByText(/事件窗口观测/)).toBeVisible();
     expect(screen.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();

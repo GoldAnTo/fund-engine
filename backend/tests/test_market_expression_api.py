@@ -26,6 +26,7 @@ from app.models.research_expression import (
     MarketObservation,
     ReportClaim,
 )
+from app.services.source_governance import SourceGovernanceService
 
 
 def _event_payload() -> dict:
@@ -56,6 +57,12 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     )
     cmd_session.add(document)
     cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
     cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
     span = SourceSpan(document_version_id=document.id, locator={"page": 12, "paragraph": 3}, verbatim_text="券商预计客户资本开支提升将带动订单。")
     cmd_session.add(span)
@@ -166,6 +173,7 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     payload = response.json()
     assert payload["claims"][0]["claim_kind"] == "research_opinion"
     assert payload["claims"][0]["source"]["document_version_id"] == str(document.id)
+    assert payload["claims"][0]["source"]["permission_status"] == "admitted"
     assert payload["claims"][0]["source"]["locator"] == {"page": 12, "paragraph": 3}
     assert payload["factors"][0]["verification"]["outcome"] == "supported"
     assert payload["factors"][0]["allowed_source_types"] == ["company_disclosure", "licensed_provider"]

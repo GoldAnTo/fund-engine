@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.ledger import Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
+from app.models.source_governance import SourceContract
 from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.market_expression import (
@@ -52,7 +53,9 @@ class MarketExpressionQueries:
         statement = self._db.get(SourceStatement, statement_id)
         span = self._db.get(SourceSpan, statement.source_span_id) if statement else None
         document = self._db.get(DocumentVersion, span.document_version_id) if span else None
-        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status="not_recorded")
+        contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
+        permission_status = "not_recorded" if contract is None else "admitted" if contract.allow_ai_processing and contract.allow_display else "restricted"
+        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status=permission_status)
 
     def _case_has_source(self, case_id: uuid.UUID, statement_id: uuid.UUID | None) -> bool:
         if statement_id is None:
