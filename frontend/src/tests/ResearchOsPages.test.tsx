@@ -76,6 +76,32 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByTestId("research-dispatch-skeleton")).toHaveLength(4);
   });
 
+  it("lets a researcher retry the dispatch after its live Case list is unavailable", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockRejectedValueOnce(
+      new Error("Dispatch unavailable"),
+    );
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route path="/events" element={<EventDeskPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "暂时无法读取事件研究",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "重试读取事件研究" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "今天，先推进哪一个判断？" }),
+    ).toBeVisible();
+  });
+
   it("keeps the global run archive structure visible while monitoring loads", () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "runs").mockReturnValue(new Promise(() => {}));
@@ -106,6 +132,32 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("跨 Case 关联加载中")).toBeVisible();
     expect(screen.getAllByTestId("network-relation-skeleton")).toHaveLength(2);
+  });
+
+  it("lets a researcher retry the network after its live relation read is unavailable", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "network").mockRejectedValueOnce(
+      new Error("Network unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/network"]}>
+        <Routes>
+          <Route path="/network" element={<ResearchNetworkPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取跨 Case 关联",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "重试读取跨 Case 关联" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "跨 Case 研究网络" }),
+    ).toBeVisible();
   });
 
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
