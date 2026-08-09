@@ -381,6 +381,21 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText(/已创建后继运行/)).toHaveCount(0);
   });
 
+  test("published Case reads an uploaded text snapshot before the human change decision", async ({ page }) => {
+    await page.goto("/events/event-published/documents?client=mock");
+
+    await page.getByLabel("新增材料来源接入方式").selectOption("uploaded_file");
+    await page.getByLabel("上传新增材料正文文件").setInputFiles({
+      name: "published-note.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("公司补充披露订单交付节奏。"),
+    });
+
+    await expect(page.getByRole("textbox", { name: "新增材料正文", exact: true })).toHaveValue("公司补充披露订单交付节奏。");
+    await expect(page.getByText(/只读取并冻结文本正文快照/)).toBeVisible();
+    await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("公司补充披露订单交付节奏。");
+  });
+
   test("a Case keeps its own reviewed associations separate from AI candidates", async ({ page }) => {
     await page.route("**/api/v1/event-research/event-tsm/relations", async (route) => route.fulfill({ json: {
       reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],
