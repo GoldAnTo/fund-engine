@@ -402,6 +402,7 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("button", { name: "冻结材料并记录不改变判断" }).click();
     await expect(page.getByText(/记录“不改变当前判断”的人工决定/)).toBeVisible();
     await expect(page.getByText(/已创建后继运行/)).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "新增待比较材料" })).toBeVisible();
   });
 
   test("published Case reads an uploaded text snapshot before the human change decision", async ({ page }) => {
