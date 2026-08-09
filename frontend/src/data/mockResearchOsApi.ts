@@ -61,6 +61,7 @@ function atomicClaim(caseId: string): AtomicClaim {
  */
 export class MockResearchOsApi implements ResearchOsApi {
   private monitors = new Map<string, Monitor>();
+  private monitorHistory = new Map<string, Monitor[]>();
   private rules = new Map<string, Rule[]>();
   private claims = new Map<string, AtomicClaim[]>();
   private reviewedClaimIds = new Set<string>();
@@ -72,13 +73,16 @@ export class MockResearchOsApi implements ResearchOsApi {
   async monitor(caseId: string): ReturnType<ResearchOsApi["monitor"]> {
     const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
     this.monitors.set(caseId, monitor);
-    return { monitor, history: [monitor], latest_run: caseId === "event-tsm" ? { id: "run-demo-1", status: "awaiting_review", stage: "review", updated_at: now } : null, confirmed_factors: factors };
+    const history = this.monitorHistory.get(caseId) ?? [monitor];
+    this.monitorHistory.set(caseId, history);
+    return { monitor, history, latest_run: caseId === "event-tsm" ? { id: "run-demo-1", status: "awaiting_review", stage: "review", updated_at: now } : null, confirmed_factors: factors };
   }
 
   async saveMonitor(caseId: string, input: Parameters<ResearchOsApi["saveMonitor"]>[1]): ReturnType<ResearchOsApi["saveMonitor"]> {
     const previous = this.monitors.get(caseId) ?? monitorFor(caseId);
     const next: Monitor = { ...previous, id: `monitor-${caseId}-v${previous.version + 1}`, version: previous.version + 1, frequency: input.frequency, factor_ids: [...input.factor_ids], allowed_source_types: [...input.allowed_source_types], next_verification_event: input.next_verification_event, budget: input.budget, changed_by: input.actor, change_reason: input.change_reason, created_at: now };
     this.monitors.set(caseId, next);
+    this.monitorHistory.set(caseId, [next, ...(this.monitorHistory.get(caseId) ?? [previous])]);
     return next;
   }
 
@@ -86,6 +90,7 @@ export class MockResearchOsApi implements ResearchOsApi {
     const previous = this.monitors.get(caseId) ?? monitorFor(caseId);
     const next = { ...previous, id: `monitor-${caseId}-v${previous.version + 1}`, version: previous.version + 1, status, changed_by: "human:researcher", change_reason: changeReason, created_at: now };
     this.monitors.set(caseId, next);
+    this.monitorHistory.set(caseId, [next, ...(this.monitorHistory.get(caseId) ?? [previous])]);
     return next;
   }
 
