@@ -1245,6 +1245,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/uploaded-materials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Event Material */
+        post: operations["upload_event_material_api_v1_event_research__case_id__uploaded_materials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/published-material-decisions": {
         parameters: {
             query?: never;
@@ -1983,6 +2000,18 @@ export interface components {
              * @enum {string}
              */
             source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+        };
+        /** Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post */
+        Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
+            /** File */
+            file: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Source Metadata
+             * @default {}
+             */
+            source_metadata: string;
         };
         /**
          * CancelRunRequest
@@ -3009,6 +3038,7 @@ export interface components {
             /** Entity */
             entity?: string | null;
             source_contract?: components["schemas"]["SourceContractDTO"] | null;
+            original_file?: components["schemas"]["OriginalFileDTO"] | null;
         };
         /** DocumentVersionAddedDTO */
         DocumentVersionAddedDTO: {
@@ -4577,6 +4607,24 @@ export interface components {
             metric_name: string;
             /** Points */
             points: components["schemas"]["MetricPointDTO"][];
+        };
+        /**
+         * OriginalFileDTO
+         * @description Inspectable provenance for a retained upload; never includes bytes.
+         */
+        OriginalFileDTO: {
+            /** File Name */
+            file_name: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Object Version */
+            object_version: string;
+            /** Uploaded By */
+            uploaded_by: string;
+            /** Retention Policy */
+            retention_policy: string;
         };
         /** OutcomeBindingDTO */
         OutcomeBindingDTO: {
@@ -6291,6 +6339,21 @@ export interface components {
              * @enum {string}
              */
             proposed_by: "human" | "ai";
+        };
+        /** UploadEventMaterialResponse */
+        UploadEventMaterialResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /**
+             * Parse State
+             * @enum {string}
+             */
+            parse_state: "parsed" | "partial" | "failed";
+            /**
+             * Next Action
+             * @enum {string}
+             */
+            next_action: "review_original" | "supplement_original";
         };
         /** ValidationError */
         ValidationError: {
@@ -8997,6 +9060,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttachEventMaterialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadEventMaterialResponse"];
                 };
             };
             /** @description Validation Error */

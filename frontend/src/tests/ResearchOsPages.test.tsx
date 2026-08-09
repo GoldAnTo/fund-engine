@@ -665,7 +665,7 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/已发布 Case 必须走变化比较/)).toBeVisible();
   });
 
-  it("reads an uploaded text snapshot without claiming that the original file was stored", async () => {
+  it("selects an uploaded text original and explains that it will be frozen separately", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={["/events/new"]}>
@@ -682,14 +682,15 @@ describe("Research OS event entry", () => {
     const file = new File(["公司更新指引，盘后股价下跌。"], "event-note.txt", {
       type: "text/plain",
     });
-    await user.upload(screen.getByLabelText("上传正文文件"), file);
+    await user.upload(screen.getByLabelText("选择上传原件文件"), file);
 
     await waitFor(() =>
       expect(screen.getByLabelText("事件原始输入")).toHaveValue(
         "公司更新指引，盘后股价下跌。",
       ),
     );
-    expect(screen.getByText(/不保存或冒充原件 PDF/)).toBeVisible();
+    expect(screen.getByText(/原件与解析片段分别冻结/)).toBeVisible();
+    expect(screen.getByText(/原件待冻结 · event-note.txt/)).toBeVisible();
   });
 
   it("makes the frozen source authority explicit before event creation", async () => {

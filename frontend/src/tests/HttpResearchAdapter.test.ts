@@ -12,6 +12,37 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe("HttpResearchAdapter", () => {
+  it("freezes an original upload through multipart without inventing a JSON text snapshot", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return jsonResponse({
+        document_version_id: "document-upload-1",
+        parse_state: "partial",
+        next_action: "review_original",
+      }, true, 201);
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const result = await adapter.uploadEventMaterial({
+      caseId: "event-1",
+      file: new File(["公司披露订单增长。"], "disclosure.txt", { type: "text/plain" }),
+      sourceMetadata: { authority_level: "primary_disclosure" },
+      actor: "human:researcher",
+    });
+
+    expect(requestUrl).toBe("http://api.test/api/v1/event-research/event-1/uploaded-materials");
+    expect(requestInit?.headers).toEqual({ Accept: "application/json" });
+    expect(requestInit?.body).toBeInstanceOf(FormData);
+    const form = requestInit?.body as FormData;
+    expect(form.get("actor")).toBe("human:researcher");
+    expect(form.get("source_metadata")).toBe('{"authority_level":"primary_disclosure"}');
+    expect((form.get("file") as File).name).toBe("disclosure.txt");
+    expect(result).toEqual({ documentVersionId: "document-upload-1", parseState: "partial", nextAction: "review_original" });
+  });
+
   it("creates new event Cases with the strict research protocol by default", async () => {
     let requestBody: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

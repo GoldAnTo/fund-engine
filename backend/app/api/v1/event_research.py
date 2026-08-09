@@ -1,9 +1,10 @@
 """Event-research creation commands and extraction endpoint."""
 from __future__ import annotations
 
+import json
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -13,6 +14,7 @@ from app.schemas.v1.event_research import (
     CreateEventResearchResponse,
     AttachEventMaterialRequest,
     AttachEventMaterialResponse,
+    UploadEventMaterialResponse,
     CaseRelationReviewDTO,
     CaseRelationReviewRequest,
     EventResearchLifecycleDTO,
@@ -36,6 +38,7 @@ from app.schemas.v1.event_research import (
 from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
+from app.services.document_uploads import DocumentUploadService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
@@ -268,6 +271,67 @@ def attach_event_material(
         raise ValidationFailedError(str(exc)) from exc
     return AttachEventMaterialResponse(
         document_version_id=str(document.id), source_type=payload.source_type
+    )
+
+
+@router.post(
+    "/{case_id}/uploaded-materials",
+    response_model=UploadEventMaterialResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_event_material(
+    case_id: uuid.UUID,
+    file: UploadFile = File(...),
+    actor: str = Form(...),
+    source_metadata: str = Form("{}"),
+    db: Session = Depends(get_db),
+) -> UploadEventMaterialResponse:
+    try:
+        metadata = json.loads(source_metadata)
+        if not isinstance(metadata, dict):
+            raise ValidationFailedError("source_metadata must be a JSON object")
+        if not actor.strip():
+            raise ValidationFailedError("actor must not be empty")
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
+            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
+        frozen = DocumentUploadService(db).freeze_case_material(
+            case_id=case_id,
+            raw=raw,
+            file_name=file.filename or "",
+            mime_type=file.content_type or "application/octet-stream",
+            actor=actor.strip(),
+            source_metadata=metadata,
+        )
+        emit_event(
+            db,
+            type="event_material_attached",
+            aggregate_type="document_version",
+            aggregate_id=frozen.document.id,
+            ref_type="research_case",
+            ref_id=case_id,
+            origin="operational",
+            actor=actor.strip(),
+            payload={
+                "source_type": "uploaded_file",
+                "case_id": str(case_id),
+                "parse_state": frozen.document.parse_state,
+            },
+        )
+        db.commit()
+    except (ValueError, json.JSONDecodeError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return UploadEventMaterialResponse(
+        document_version_id=str(frozen.document.id),
+        parse_state=(
+            "failed"
+            if frozen.document.parse_state == "failed"
+            else "partial"
+            if frozen.document.parse_state == "partial"
+            else "parsed"
+        ),
+        next_action=frozen.next_action,
     )
 
 

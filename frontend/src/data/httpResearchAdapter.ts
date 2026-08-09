@@ -387,6 +387,29 @@ export class HttpResearchAdapter implements ResearchClient {
     return (await response.json()) as T;
   }
 
+  private async postForm<T>(path: string, body: FormData): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.options.baseUrl}${path}`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        body,
+      });
+    } catch {
+      throw new PageStateError("backend_unavailable");
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(
+        () => null,
+      )) as ErrorEnvelopeDTO | null;
+      throw new PageStateError(
+        asPageStateErrorKind(payload?.error?.code),
+        payload?.error?.message,
+      );
+    }
+    return (await response.json()) as T;
+  }
+
   private async requestJson<T>(
     path: string,
     init: RequestInit,
@@ -743,6 +766,14 @@ export class HttpResearchAdapter implements ResearchClient {
           request_scope: dto.source_contract.provider_record.request_scope,
           retrieval_reference: dto.source_contract.provider_record.retrieval_reference,
         } : null,
+      } : null,
+      original_file: dto.original_file ? {
+        file_name: dto.original_file.file_name,
+        mime_type: dto.original_file.mime_type,
+        byte_size: dto.original_file.byte_size,
+        object_version: dto.original_file.object_version,
+        uploaded_by: dto.original_file.uploaded_by,
+        retention_policy: dto.original_file.retention_policy,
       } : null,
       supplements_document_id: dto.supplements_document_version_id ?? null,
       claimed_page_reference: dto.claimed_page_reference ?? null,
@@ -2861,6 +2892,23 @@ export class HttpResearchAdapter implements ResearchClient {
       },
     );
     return { documentVersionId: dto.document_version_id };
+  }
+
+  async uploadEventMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string; parseState: "parsed" | "partial" | "failed"; nextAction: "review_original" | "supplement_original" }> {
+    const form = new FormData();
+    form.set("file", input.file);
+    form.set("actor", input.actor);
+    form.set("source_metadata", JSON.stringify(input.sourceMetadata));
+    const dto = await this.postForm<{
+      document_version_id: string;
+      parse_state: "parsed" | "partial" | "failed";
+      next_action: "review_original" | "supplement_original";
+    }>(`/event-research/${encodeURIComponent(input.caseId)}/uploaded-materials`, form);
+    return {
+      documentVersionId: dto.document_version_id,
+      parseState: dto.parse_state,
+      nextAction: dto.next_action,
+    };
   }
 
   async listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
