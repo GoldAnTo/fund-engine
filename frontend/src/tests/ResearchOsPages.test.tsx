@@ -46,6 +46,8 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("研究问题")).toBeVisible();
     expect(screen.getAllByLabelText(/关键因素/)).toHaveLength(3);
     expect(screen.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox", { name: /启用严格研究协议/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/新建 Case 默认采用严格研究协议/)).toBeVisible();
   });
 
   it("reads an uploaded text snapshot without claiming that the original file was stored", async () => {
