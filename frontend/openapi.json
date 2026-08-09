@@ -4213,6 +4213,180 @@
         }
       }
     },
+    "/api/v1/mechanism-templates": {
+      "get": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "List Mechanism Templates",
+        "operationId": "list_mechanism_templates_api_v1_mechanism_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MechanismTemplateDTO"
+                  },
+                  "type": "array",
+                  "title": "Response List Mechanism Templates Api V1 Mechanism Templates Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/mechanism-selection": {
+      "post": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Select Mechanism Template",
+        "operationId": "select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectMechanismTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MechanismSelectionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/mechanism-protocol": {
+      "get": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Case Mechanism Protocol",
+        "operationId": "case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseMechanismProtocolDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mechanism-edges/{edge_id}/verification-rules": {
+      "post": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Create Verification Rule",
+        "operationId": "create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post",
+        "parameters": [
+          {
+            "name": "edge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Edge Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRuleDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/review-proposals": {
       "get": {
         "tags": [
@@ -5057,6 +5231,45 @@
           "page"
         ],
         "title": "CaseListResponse"
+      },
+      "CaseMechanismProtocolDTO": {
+        "properties": {
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MechanismSelectionDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MechanismTemplateDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationRuleDTO"
+            },
+            "type": "array",
+            "title": "Rules"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "selection",
+          "template",
+          "rules"
+        ],
+        "title": "CaseMechanismProtocolDTO"
       },
       "CaseMonitorDTO": {
         "properties": {
@@ -10917,6 +11130,182 @@
         ],
         "title": "MarketObservationDTO"
       },
+      "MechanismEdgeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "edge_key": {
+            "type": "string",
+            "title": "Edge Key"
+          },
+          "source_node_id": {
+            "type": "string",
+            "title": "Source Node Id"
+          },
+          "target_node_id": {
+            "type": "string",
+            "title": "Target Node Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "edge_key",
+          "source_node_id",
+          "target_node_id"
+        ],
+        "title": "MechanismEdgeDTO"
+      },
+      "MechanismNodeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "node_key": {
+            "type": "string",
+            "title": "Node Key"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "node_key",
+          "display_name",
+          "role"
+        ],
+        "title": "MechanismNodeDTO"
+      },
+      "MechanismSelectionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "research_case_id": {
+            "type": "string",
+            "title": "Research Case Id"
+          },
+          "template_version_id": {
+            "type": "string",
+            "title": "Template Version Id"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "research_case_id",
+          "template_version_id",
+          "supersedes_id",
+          "reviewer",
+          "reason",
+          "created_at"
+        ],
+        "title": "MechanismSelectionDTO"
+      },
+      "MechanismTemplateDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "template_key": {
+            "type": "string",
+            "title": "Template Key"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "industry_scope": {
+            "type": "string",
+            "title": "Industry Scope"
+          },
+          "approved_by": {
+            "type": "string",
+            "title": "Approved By"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/MechanismNodeDTO"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/MechanismEdgeDTO"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "template_key",
+          "version",
+          "display_name",
+          "industry_scope",
+          "approved_by",
+          "reason",
+          "created_at",
+          "nodes",
+          "edges"
+        ],
+        "title": "MechanismTemplateDTO"
+      },
       "MetricCatalogEntryDTO": {
         "properties": {
           "stock_id": {
@@ -13009,6 +13398,33 @@
           "page"
         ],
         "title": "SearchResponse"
+      },
+      "SelectMechanismTemplateRequest": {
+        "properties": {
+          "template_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Version Id"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_version_id",
+          "reviewer",
+          "reason"
+        ],
+        "title": "SelectMechanismTemplateRequest"
       },
       "SetCaseMonitorStatusRequest": {
         "properties": {
@@ -15180,6 +15596,187 @@
           "definition"
         ],
         "title": "ValuationViewDTO"
+      },
+      "VerificationRuleDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "mechanism_edge_id": {
+            "type": "string",
+            "title": "Mechanism Edge Id"
+          },
+          "metric_definition_id": {
+            "type": "string",
+            "title": "Metric Definition Id"
+          },
+          "expected_direction": {
+            "type": "string",
+            "title": "Expected Direction"
+          },
+          "support_predicate": {
+            "type": "string",
+            "title": "Support Predicate"
+          },
+          "contradiction_predicate": {
+            "type": "string",
+            "title": "Contradiction Predicate"
+          },
+          "allowed_source_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Source Roles"
+          },
+          "observed_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period Start"
+          },
+          "observed_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period End"
+          },
+          "available_at_deadline": {
+            "type": "string",
+            "format": "date",
+            "title": "Available At Deadline"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "title": "Next Verification Event"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "mechanism_edge_id",
+          "metric_definition_id",
+          "expected_direction",
+          "support_predicate",
+          "contradiction_predicate",
+          "allowed_source_roles",
+          "observed_period_start",
+          "observed_period_end",
+          "available_at_deadline",
+          "next_verification_event",
+          "supersedes_id",
+          "reviewer",
+          "reason",
+          "created_at"
+        ],
+        "title": "VerificationRuleDTO"
+      },
+      "VerificationRuleRequest": {
+        "properties": {
+          "metric_definition_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Metric Definition Id"
+          },
+          "expected_direction": {
+            "type": "string",
+            "enum": [
+              "increase",
+              "decrease",
+              "stable",
+              "mixed"
+            ],
+            "title": "Expected Direction"
+          },
+          "support_predicate": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Support Predicate"
+          },
+          "contradiction_predicate": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Contradiction Predicate"
+          },
+          "allowed_source_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Allowed Source Roles"
+          },
+          "observed_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period Start"
+          },
+          "observed_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period End"
+          },
+          "available_at_deadline": {
+            "type": "string",
+            "format": "date",
+            "title": "Available At Deadline"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Next Verification Event"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_definition_id",
+          "expected_direction",
+          "support_predicate",
+          "contradiction_predicate",
+          "allowed_source_roles",
+          "observed_period_start",
+          "observed_period_end",
+          "available_at_deadline",
+          "next_verification_event",
+          "reviewer",
+          "reason"
+        ],
+        "title": "VerificationRuleRequest"
       },
       "app__schemas__v1__cases__CausalStepDTO": {
         "properties": {

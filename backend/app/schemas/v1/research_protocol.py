@@ -73,3 +73,84 @@ class ResearchabilityDTO(V1Model):
     reason_codes: list[str]
     effective_binding_id: str | None
     next_action: str
+
+
+class MechanismNodeDTO(V1Model):
+    id: str
+    node_key: str
+    display_name: str
+    role: str
+
+
+class MechanismEdgeDTO(V1Model):
+    id: str
+    edge_key: str
+    source_node_id: str
+    target_node_id: str
+
+
+class MechanismTemplateDTO(V1Model):
+    id: str
+    template_key: str
+    version: int
+    display_name: str
+    industry_scope: str
+    approved_by: str
+    reason: str
+    created_at: datetime
+    nodes: list[MechanismNodeDTO]
+    edges: list[MechanismEdgeDTO]
+
+
+class SelectMechanismTemplateRequest(V1Model):
+    template_version_id: uuid.UUID
+    reviewer: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class MechanismSelectionDTO(V1Model):
+    id: str
+    research_case_id: str
+    template_version_id: str
+    supersedes_id: str | None
+    reviewer: str
+    reason: str
+    created_at: datetime
+
+
+class VerificationRuleRequest(V1Model):
+    metric_definition_id: uuid.UUID
+    expected_direction: Literal["increase", "decrease", "stable", "mixed"]
+    support_predicate: str = Field(min_length=1)
+    contradiction_predicate: str = Field(min_length=1)
+    allowed_source_roles: list[str] = Field(min_length=1)
+    observed_period_start: date
+    observed_period_end: date
+    available_at_deadline: date
+    next_verification_event: str = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class VerificationRuleDTO(V1Model):
+    id: str
+    mechanism_edge_id: str
+    metric_definition_id: str
+    expected_direction: str
+    support_predicate: str
+    contradiction_predicate: str
+    allowed_source_roles: list[str]
+    observed_period_start: date
+    observed_period_end: date
+    available_at_deadline: date
+    next_verification_event: str
+    supersedes_id: str | None
+    reviewer: str
+    reason: str
+    created_at: datetime
+
+
+class CaseMechanismProtocolDTO(V1Model):
+    selection: MechanismSelectionDTO | None
+    template: MechanismTemplateDTO | None
+    rules: list[VerificationRuleDTO]

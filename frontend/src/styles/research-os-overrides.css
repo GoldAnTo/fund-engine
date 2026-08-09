@@ -118,6 +118,28 @@
 .ros-protocol-optin input { width: auto; margin-top: .18rem; }
 .ros-protocol-optin b, .ros-protocol-optin small { display: block; }
 .ros-protocol-optin small { margin-top: .24rem; color: var(--ros-soft, #59615d); font-size: .72rem; line-height: 1.45; }
+.ros-mechanism { max-width: 1180px; margin-top: 1rem; padding: 1rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .55rem; background: #fffdf8; }
+.ros-mechanism > header h2 { margin: .25rem 0 .45rem; font-size: 1.08rem; }
+.ros-mechanism > header p:not(.ros-eyebrow) { max-width: 52rem; margin: 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; }
+.ros-mechanism-choices { display: grid; gap: .75rem; margin-top: 1rem; }
+.ros-mechanism-choices article { padding: .9rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-deep, #f6f3ec); }
+.ros-mechanism-choices strong, .ros-mechanism-choices p { display: block; }
+.ros-mechanism-choices p { margin: .35rem 0 .65rem; color: var(--ros-soft, #59615d); font-size: .75rem; }
+.ros-mechanism-meta { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0; padding: .65rem .8rem; background: var(--ros-moss-soft, #edf5ee); border-radius: .4rem; color: var(--ros-soft, #59615d); font-size: .7rem; }
+.ros-mechanism-nodes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
+.ros-mechanism-nodes article { display: grid; gap: .28rem; min-height: 5.5rem; padding: .7rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .42rem; background: var(--ros-deep, #f6f3ec); }
+.ros-mechanism-nodes span { color: var(--ros-accent, #285b54); font-size: .66rem; font-weight: 700; }
+.ros-mechanism-nodes strong { font-size: .78rem; line-height: 1.35; }
+.ros-mechanism-nodes small { color: var(--ros-muted, #767b76); font-size: .65rem; }
+.ros-mechanism-edges { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--ros-rule, #ded9ce); }
+.ros-mechanism-edges h3 { margin: 0 0 .5rem; font-size: .9rem; }
+.ros-mechanism-edges article { display: grid; grid-template-columns: minmax(13rem, .8fr) minmax(0, 1.2fr); gap: .8rem; padding: .8rem 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
+.ros-mechanism-edges strong, .ros-mechanism-edges small { display: block; }
+.ros-mechanism-edges small { margin-top: .25rem; color: var(--ros-muted, #767b76); font-size: .65rem; }
+.ros-mechanism-edges p { margin: 0; color: #a44c3b; font-size: .72rem; line-height: 1.45; }
+.ros-mechanism-edges dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .8rem; margin: 0; }
+.ros-mechanism-edges dt { color: var(--ros-muted, #767b76); font-size: .65rem; }
+.ros-mechanism-edges dd { margin: .15rem 0 0; font-size: .72rem; line-height: 1.4; }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }
@@ -137,4 +159,5 @@
   .ros-wiki-edge > b { grid-column: 1 / -1; }
   .ros-protocol-grid { grid-template-columns: 1fr; }
   .ros-protocol-form__two { grid-template-columns: 1fr; }
+  .ros-mechanism-nodes, .ros-mechanism-edges article, .ros-mechanism-edges dl { grid-template-columns: 1fr; }
 }

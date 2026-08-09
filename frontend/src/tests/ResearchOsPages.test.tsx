@@ -151,11 +151,13 @@ describe("Research OS event entry", () => {
   });
 
   it("shows the researchability gate as an explicit Case workflow, never a hidden worker state", async () => {
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
-      String(input).includes("/researchability")
-        ? { status: "blocked", reason_codes: ["missing_outcome_binding"], effective_binding_id: null, next_action: "确认结果指标、范围、基线和时间窗" }
-        : [],
-    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => { const url = String(input); const body = url.includes("/researchability")
+      ? { status: "blocked", reason_codes: ["missing_outcome_binding"], effective_binding_id: null, next_action: "确认结果指标、范围、基线和时间窗" }
+      : url.endsWith("/mechanism-templates") ? [{ id: "template-1", template_key: "overseas_ai_capex_to_china_hardware", version: 1, display_name: "海外 AI CapEx 到中国硬件", industry_scope: "ai_hardware", approved_by: "human", reason: "已审核路径", created_at: "2026-08-09T00:00:00Z", nodes: [], edges: [] }]
+      : url.includes("/mechanism-protocol") ? { selection: null, template: null, rules: [] }
+      : [];
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+    }));
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/protocol"]}>
         <Routes><Route path="/events/:caseId/protocol" element={<CaseProtocolPage />} /></Routes>
@@ -165,6 +167,8 @@ describe("Research OS event entry", () => {
     expect(await screen.findByRole("heading", { name: "研究协议与可研究性门槛" })).toBeVisible();
     expect(screen.getByText("确认结果指标、范围、基线和时间窗")).toBeVisible();
     expect(screen.getByRole("button", { name: "设定结果指标与验证窗口" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "选择此模板" })).toBeVisible();
+    expect(screen.getByText(/系统不会把市场表现自动写成机制成立/)).toBeVisible();
   });
 
   it("opens a Case-scoped frozen source snapshot with its exact locator", async () => {

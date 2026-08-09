@@ -1208,6 +1208,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mechanism-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Mechanism Templates */
+        get: operations["list_mechanism_templates_api_v1_mechanism_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/mechanism-selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Mechanism Template */
+        post: operations["select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/mechanism-protocol": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case Mechanism Protocol */
+        get: operations["case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mechanism-edges/{edge_id}/verification-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Verification Rule */
+        post: operations["create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/review-proposals": {
         parameters: {
             query?: never;
@@ -1525,6 +1593,13 @@ export interface components {
             /** Items */
             items: components["schemas"]["CaseSummaryDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** CaseMechanismProtocolDTO */
+        CaseMechanismProtocolDTO: {
+            selection: components["schemas"]["MechanismSelectionDTO"] | null;
+            template: components["schemas"]["MechanismTemplateDTO"] | null;
+            /** Rules */
+            rules: components["schemas"]["VerificationRuleDTO"][];
         };
         /** CaseMonitorDTO */
         CaseMonitorDTO: {
@@ -3554,6 +3629,74 @@ export interface components {
              */
             reviewed_at: string;
         };
+        /** MechanismEdgeDTO */
+        MechanismEdgeDTO: {
+            /** Id */
+            id: string;
+            /** Edge Key */
+            edge_key: string;
+            /** Source Node Id */
+            source_node_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /** MechanismNodeDTO */
+        MechanismNodeDTO: {
+            /** Id */
+            id: string;
+            /** Node Key */
+            node_key: string;
+            /** Display Name */
+            display_name: string;
+            /** Role */
+            role: string;
+        };
+        /** MechanismSelectionDTO */
+        MechanismSelectionDTO: {
+            /** Id */
+            id: string;
+            /** Research Case Id */
+            research_case_id: string;
+            /** Template Version Id */
+            template_version_id: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MechanismTemplateDTO */
+        MechanismTemplateDTO: {
+            /** Id */
+            id: string;
+            /** Template Key */
+            template_key: string;
+            /** Version */
+            version: number;
+            /** Display Name */
+            display_name: string;
+            /** Industry Scope */
+            industry_scope: string;
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Nodes */
+            nodes: components["schemas"]["MechanismNodeDTO"][];
+            /** Edges */
+            edges: components["schemas"]["MechanismEdgeDTO"][];
+        };
         /**
          * MetricCatalogEntryDTO
          * @description One catalog row: an entity-metric pair with its latest frozen value.
@@ -4320,6 +4463,18 @@ export interface components {
             /** Groups */
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** SelectMechanismTemplateRequest */
+        SelectMechanismTemplateRequest: {
+            /**
+             * Template Version Id
+             * Format: uuid
+             */
+            template_version_id: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /** SetCaseMonitorStatusRequest */
         SetCaseMonitorStatusRequest: {
@@ -5105,6 +5260,91 @@ export interface components {
             source: string;
             /** Definition */
             definition: string;
+        };
+        /** VerificationRuleDTO */
+        VerificationRuleDTO: {
+            /** Id */
+            id: string;
+            /** Mechanism Edge Id */
+            mechanism_edge_id: string;
+            /** Metric Definition Id */
+            metric_definition_id: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Support Predicate */
+            support_predicate: string;
+            /** Contradiction Predicate */
+            contradiction_predicate: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At Deadline
+             * Format: date
+             */
+            available_at_deadline: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** VerificationRuleRequest */
+        VerificationRuleRequest: {
+            /**
+             * Metric Definition Id
+             * Format: uuid
+             */
+            metric_definition_id: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "increase" | "decrease" | "stable" | "mixed";
+            /** Support Predicate */
+            support_predicate: string;
+            /** Contradiction Predicate */
+            contradiction_predicate: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At Deadline
+             * Format: date
+             */
+            available_at_deadline: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /** CausalStepDTO */
         app__schemas__v1__cases__CausalStepDTO: {
@@ -7644,6 +7884,127 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchabilityDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mechanism_templates_api_v1_mechanism_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MechanismTemplateDTO"][];
+                };
+            };
+        };
+    };
+    select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectMechanismTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MechanismSelectionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMechanismProtocolDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                edge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationRuleDTO"];
                 };
             };
             /** @description Validation Error */

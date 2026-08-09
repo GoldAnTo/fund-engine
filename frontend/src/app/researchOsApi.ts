@@ -20,6 +20,8 @@ export type ResearchNetwork = Schemas["ResearchNetworkResponse"];
 export type MetricDefinition = Schemas["MetricDefinitionDTO"];
 export type OutcomeBinding = Schemas["OutcomeBindingDTO"];
 export type Researchability = Schemas["ResearchabilityDTO"];
+export type MechanismTemplate = Schemas["MechanismTemplateDTO"];
+export type CaseMechanismProtocol = Schemas["CaseMechanismProtocolDTO"];
 
 export const researchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
@@ -37,4 +39,8 @@ export const researchOsApi = {
   createOutcomeBinding: (thesisId: string, input: Schemas["OutcomeBindingRequest"]) => request<OutcomeBinding>(`/theses/${thesisId}/outcome-bindings`, { method: "POST", body: JSON.stringify(input) }),
   approveOutcomeBinding: (bindingId: string, input: Schemas["ApproveOutcomeBindingRequest"]) => request<OutcomeBinding>(`/outcome-bindings/${bindingId}/approve`, { method: "POST", body: JSON.stringify(input) }),
   researchability: (thesisId: string) => request<Researchability>(`/theses/${thesisId}/researchability`),
+  mechanismTemplates: () => request<MechanismTemplate[]>("/mechanism-templates"),
+  caseMechanismProtocol: (caseId: string) => request<CaseMechanismProtocol>(`/research-cases/${caseId}/mechanism-protocol`),
+  selectMechanismTemplate: (caseId: string, input: Schemas["SelectMechanismTemplateRequest"]) => request<Schemas["MechanismSelectionDTO"]>(`/research-cases/${caseId}/mechanism-selection`, { method: "POST", body: JSON.stringify(input) }),
+  createVerificationRule: (edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
 };
