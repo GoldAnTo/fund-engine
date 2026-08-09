@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 import pytest
 from sqlalchemy import update
 
-from app.models.ledger import ImmutableLedgerError, ValidationError
+from app.models.ledger import ImmutableLedgerError, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
 from app.services.research_protocol import MetricDefinitionInput, OutcomeBindingInput, ResearchProtocolService
 
@@ -125,3 +125,47 @@ def test_effective_metric_uses_the_latest_append_only_version(session) -> None:
 
     assert (first.version, second.version) == (1, 2)
     assert service.effective_metric("business_line_revenue").id == second.id
+
+
+def _protocol_thesis(session) -> Thesis:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="协议 Case", industry_topic="ai", created_by="human", created_at=now)
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="相关业务收入将增长", research_protocol_required=True, created_by="human", created_at=now)
+    session.add(thesis)
+    session.flush()
+    return thesis
+
+
+def test_researchability_is_not_applicable_to_legacy_thesis(session, thesis) -> None:
+    result = ResearchProtocolService(session).check_researchability(thesis.id)
+
+    assert result.status == "not_applicable"
+    assert result.reason_codes == []
+
+
+def test_protocol_thesis_without_outcome_binding_is_explicitly_blocked(session) -> None:
+    thesis = _protocol_thesis(session)
+    result = ResearchProtocolService(session).check_researchability(thesis.id)
+
+    assert result.status == "blocked"
+    assert result.reason_codes == ["missing_outcome_binding"]
+
+
+def test_approved_outcome_binding_exposes_remaining_protocol_blockers(session) -> None:
+    thesis = _protocol_thesis(session)
+    service = ResearchProtocolService(session)
+    metric = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="结果指标")
+    draft = service.create_outcome_binding(thesis.id, _binding_input(metric.id))
+    service.approve_outcome_binding(draft.id, reviewer="human:reviewer", reason="范围和基线已核对")
+
+    result = service.check_researchability(thesis.id)
+
+    assert result.status == "blocked"
+    assert result.reason_codes == [
+        "missing_mechanism_template",
+        "missing_verification_rule",
+        "insufficient_primary_metrics",
+        "missing_counter_hypothesis",
+    ]

@@ -47,6 +47,14 @@ class OutcomeBindingInput:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchabilityResult:
+    status: str
+    reason_codes: list[str]
+    effective_binding_id: uuid.UUID | None
+    next_action: str
+
+
 def validate_metric_definition(value: MetricDefinitionInput) -> None:
     for name in ("metric_id", "display_name", "canonical_definition", "unit", "frequency", "period_semantics"):
         if not getattr(value, name).strip():
@@ -118,3 +126,66 @@ class ResearchProtocolService:
 
     def effective_metric(self, metric_id: str) -> MetricDefinitionVersion | None:
         return self._repo.effective_metric(metric_id)
+
+    def approve_outcome_binding(
+        self, binding_id: uuid.UUID, *, reviewer: str, reason: str
+    ) -> OutcomeBindingVersion:
+        draft = self._session.get(OutcomeBindingVersion, binding_id)
+        if draft is None:
+            raise ValidationError("outcome binding not found")
+        if draft.state != "draft":
+            raise ValidationError("only a draft outcome binding can be approved")
+        if not reviewer.strip() or not reason.strip():
+            raise ValidationError("binding reviewer and reason must not be empty")
+        return self._repo.add_outcome_binding_version(
+            thesis_id=draft.thesis_id,
+            metric_definition_id=draft.metric_definition_id,
+            entity_scope=dict(draft.entity_scope),
+            direction=draft.direction,
+            baseline=dict(draft.baseline),
+            horizon_start=draft.horizon_start,
+            horizon_end=draft.horizon_end,
+            state="approved",
+            reviewer=reviewer.strip(),
+            reason=reason.strip(),
+            created_at=_utcnow(),
+            supersedes_id=draft.id,
+        )
+
+    def check_researchability(self, thesis_id: uuid.UUID) -> ResearchabilityResult:
+        thesis = self._session.get(Thesis, thesis_id)
+        if thesis is None:
+            raise ValidationError("thesis not found")
+        if not thesis.research_protocol_required:
+            return ResearchabilityResult(
+                status="not_applicable",
+                reason_codes=[],
+                effective_binding_id=None,
+                next_action="继续既有研究流程",
+            )
+        binding = self._repo.effective_binding(thesis_id)
+        if binding is None:
+            return ResearchabilityResult(
+                status="blocked",
+                reason_codes=["missing_outcome_binding"],
+                effective_binding_id=None,
+                next_action="确认结果指标、范围、基线和时间窗",
+            )
+        if binding.state != "approved":
+            return ResearchabilityResult(
+                status="blocked",
+                reason_codes=["binding_not_approved"],
+                effective_binding_id=binding.id,
+                next_action="审核结果绑定",
+            )
+        return ResearchabilityResult(
+            status="blocked",
+            reason_codes=[
+                "missing_mechanism_template",
+                "missing_verification_rule",
+                "insufficient_primary_metrics",
+                "missing_counter_hypothesis",
+            ],
+            effective_binding_id=binding.id,
+            next_action="选择机制模板并补齐可验证规则",
+        )
