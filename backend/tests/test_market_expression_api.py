@@ -338,3 +338,54 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     assert factor["report_claim_id"] == claim["id"]
     assert factor["allowed_source_types"] == ["company_disclosure", "licensed_provider"]
     assert factor["verification"] is None
+
+
+def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
+    cmd_client, cmd_session
+) -> None:
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"verification-source").hexdigest(),
+        source_url="https://licensed.example/disclosure/orders",
+        title="订单披露",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 4}, verbatim_text="订单同比增长 20%。")
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(source_span_id=span.id, kind="disclosed_fact", normalized_text="订单同比增长 20%", created_at=now)
+    factor = KeyFactor(
+        research_case_id=case_id, report_claim_id=None, thesis_id=None,
+        name="订单同比增速", expected_direction="positive", metric_name="订单同比增速",
+        allowed_source_types=["company_disclosure"], verification_window_start=None,
+        verification_window_end=None, support_condition="订单增长", refutation_condition="订单下降",
+        next_verification_event="下一次财报", review_state="reviewed",
+        reviewed_by="human:researcher", review_reason="口径已固定", reviewed_at=now, created_at=now,
+    )
+    cmd_session.add_all([statement, factor])
+    cmd_session.commit()
+
+    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/verifications", json={
+        "source_statement_id": str(statement.id),
+        "outcome": "supported",
+        "rationale": "冻结披露中的订单同比增长满足支持条件。",
+        "reviewed_by": "human:researcher",
+        "review_reason": "已核对期间、指标和原文定位。",
+    })
+
+    assert response.status_code == 201
+    assert response.json()["outcome"] == "supported"
+    assert response.json()["source"]["document_version_id"] == str(document.id)

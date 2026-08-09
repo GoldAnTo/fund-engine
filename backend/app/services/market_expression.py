@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import CaseDocumentVersion, SourceSpan, SourceStatement, Thesis, ValidationError
-from app.models.research_expression import KeyFactor, ReportClaim
+from app.models.research_expression import ClaimVerification, KeyFactor, ReportClaim
 from app.models.source_governance import SourceContract
 from app.repositories.research import ResearchRepository
 
@@ -42,6 +42,15 @@ class KeyFactorInput:
     support_condition: str
     refutation_condition: str
     next_verification_event: str
+    reviewed_by: str
+    review_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimVerificationInput:
+    source_statement_id: uuid.UUID
+    outcome: str
+    rationale: str
     reviewed_by: str
     review_reason: str
 
@@ -102,6 +111,31 @@ class MarketExpressionService:
             support_condition=value.support_condition.strip(),
             refutation_condition=value.refutation_condition.strip(),
             next_verification_event=value.next_verification_event.strip(),
+            review_state="reviewed",
+            reviewed_by=value.reviewed_by.strip(),
+            review_reason=value.review_reason.strip(),
+            reviewed_at=_utcnow(),
+            created_at=_utcnow(),
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record
+
+    def register_claim_verification(
+        self, case_id: uuid.UUID, factor_id: uuid.UUID, value: ClaimVerificationInput
+    ) -> ClaimVerification:
+        self._require_case(case_id)
+        factor = self._session.get(KeyFactor, factor_id)
+        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed":
+            raise ValidationError("key factor must be a reviewed record in this research case")
+        self._require_admitted_case_statement(case_id, value.source_statement_id)
+        for name in ("rationale", "reviewed_by", "review_reason"):
+            self._require_text(getattr(value, name), name)
+        record = ClaimVerification(
+            key_factor_id=factor.id,
+            source_statement_id=value.source_statement_id,
+            outcome=value.outcome,
+            rationale=value.rationale.strip(),
             review_state="reviewed",
             reviewed_by=value.reviewed_by.strip(),
             review_reason=value.review_reason.strip(),

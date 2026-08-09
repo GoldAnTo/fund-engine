@@ -63,6 +63,14 @@ describe("Research OS event entry", () => {
     expect(screen.getByRole("heading", { name: "固定关键因素的验证口径" })).toBeVisible();
   });
 
+  it("makes a reviewed factor's verification an explicit source-backed decision", async () => {
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByRole("button", { name: "登记审核验证" })).toBeVisible();
+    expect(screen.getByText(/不会把运行结果自动写成支持或反证/)).toBeVisible();
+  });
+
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-published"]}>

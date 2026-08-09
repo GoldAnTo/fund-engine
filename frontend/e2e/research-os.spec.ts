@@ -233,6 +233,17 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "固定关键因素的验证口径" })).toBeVisible();
   });
 
+  test("market expression records a source-backed human verification instead of inferring it from a run", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await page.getByRole("button", { name: "登记审核验证" }).click();
+    await expect(page.getByLabel("验证来源")).toBeVisible();
+    await page.getByLabel("核验说明").fill("冻结披露中的资本开支增长满足已登记支持条件。");
+    await page.getByLabel("验证审核理由").fill("已核对原文定位、指标口径和可得时间。");
+    await page.getByRole("button", { name: "保存审核验证" }).click();
+    await expect(page.getByText(/当前验证：得到支持。冻结披露中的资本开支增长/)).toBeVisible();
+  });
+
   test("published Case exposes immutable conclusion versions instead of implying an automatic rewrite", async ({ page }) => {
     await page.goto("/events/event-published/history?client=mock");
 

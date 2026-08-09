@@ -64,6 +64,14 @@ class RegisterKeyFactorRequest(V1Model):
     review_reason: str = Field(min_length=1)
 
 
+class RegisterClaimVerificationRequest(V1Model):
+    source_statement_id: uuid.UUID
+    outcome: Literal["supported", "contradicted", "insufficient_evidence", "not_due"]
+    rationale: str = Field(min_length=1)
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
+
+
 class ClaimVerificationDTO(V1Model):
     outcome: str
     rationale: str

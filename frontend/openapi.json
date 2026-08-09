@@ -4673,6 +4673,69 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/verifications": {
+      "post": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Register Claim Verification",
+        "operationId": "register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "factor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Factor Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterClaimVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimVerificationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/metric-definitions": {
       "get": {
         "tags": [
@@ -13627,6 +13690,50 @@
           "created_at"
         ],
         "title": "PublishedSourceStatementDTO"
+      },
+      "RegisterClaimVerificationRequest": {
+        "properties": {
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "contradicted",
+              "insufficient_evidence",
+              "not_due"
+            ],
+            "title": "Outcome"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Rationale"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Review Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_statement_id",
+          "outcome",
+          "rationale",
+          "reviewed_by",
+          "review_reason"
+        ],
+        "title": "RegisterClaimVerificationRequest"
       },
       "RegisterKeyFactorRequest": {
         "properties": {

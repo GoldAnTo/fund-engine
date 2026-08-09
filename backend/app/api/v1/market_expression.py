@@ -11,14 +11,16 @@ from app.api.v1.commands.common import commit_or_rollback, translate_validation
 from app.db import get_db
 from app.queries.market_expression import MarketExpressionQueries
 from app.schemas.v1.market_expression import (
+    ClaimVerificationDTO,
     KeyFactorDTO,
     MarketExpressionResponse,
     RegisterKeyFactorRequest,
+    RegisterClaimVerificationRequest,
     RegisterReportClaimRequest,
     ReportClaimDTO,
     SourceStatementOptionsResponse,
 )
-from app.services.market_expression import KeyFactorInput, MarketExpressionService, ReportClaimInput
+from app.services.market_expression import ClaimVerificationInput, KeyFactorInput, MarketExpressionService, ReportClaimInput
 
 
 router = APIRouter(tags=["market-expression-v1"])
@@ -68,3 +70,24 @@ def register_key_factor(case_id: uuid.UUID, payload: RegisterKeyFactorRequest, d
     )
     commit_or_rollback(db)
     return MarketExpressionQueries(db)._factor(record, datetime.now(timezone.utc))
+
+
+@router.post("/research-cases/{case_id}/key-factors/{factor_id}/verifications", response_model=ClaimVerificationDTO, status_code=status.HTTP_201_CREATED)
+def register_claim_verification(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterClaimVerificationRequest, db: Session = Depends(get_db)) -> ClaimVerificationDTO:
+    record = translate_validation(
+        MarketExpressionService(db).register_claim_verification,
+        case_id,
+        factor_id,
+        ClaimVerificationInput(
+            source_statement_id=payload.source_statement_id, outcome=payload.outcome,
+            rationale=payload.rationale, reviewed_by=payload.reviewed_by,
+            review_reason=payload.review_reason,
+        ),
+    )
+    commit_or_rollback(db)
+    return ClaimVerificationDTO(
+        outcome=record.outcome, rationale=record.rationale,
+        reviewed_by=record.reviewed_by or "未记录",
+        reviewed_at=record.reviewed_at or record.created_at,
+        source=MarketExpressionQueries(db)._source(record.source_statement_id),
+    )

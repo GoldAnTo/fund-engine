@@ -1368,6 +1368,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Claim Verification */
+        post: operations["register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metric-definitions": {
         parameters: {
             query?: never;
@@ -4534,6 +4551,25 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RegisterClaimVerificationRequest */
+        RegisterClaimVerificationRequest: {
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "supported" | "contradicted" | "insufficient_evidence" | "not_due";
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
         };
         /** RegisterKeyFactorRequest */
         RegisterKeyFactorRequest: {
@@ -8828,6 +8864,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KeyFactorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterClaimVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimVerificationDTO"];
                 };
             };
             /** @description Validation Error */
