@@ -19,9 +19,10 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "事件研究" })).toBeVisible();
-    expect(await screen.findByText("待你处理")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Alphabet 财报超预期后股价下跌/ })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
+    expect(await screen.findByText("最高影响")).toBeVisible();
+    expect(await screen.findByText("研究网络")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: /Alphabet 财报超预期后股价下跌/ }).length).toBeGreaterThan(0);
   });
 
   it("keeps the research question and three factors editable before a Case is created", async () => {
