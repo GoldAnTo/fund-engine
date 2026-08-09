@@ -85,6 +85,24 @@ class LegacyCaseAdmissionResponse(V1Model):
     admitted_at: datetime
 
 
+class LegacyCaseAdmissionDocumentDTO(V1Model):
+    document_version_id: str
+    title: str | None
+    source_url: str
+    available_at: datetime
+
+
+class LegacyCaseAdmissionCandidateDTO(V1Model):
+    case_id: str
+    event_title: str
+    created_at: datetime
+    documents: list[LegacyCaseAdmissionDocumentDTO]
+
+
+class LegacyCaseAdmissionQueueResponse(V1Model):
+    items: list[LegacyCaseAdmissionCandidateDTO]
+
+
 class AttachEventMaterialRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None

@@ -1041,6 +1041,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/legacy-admission-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Legacy Case Admission Queue
+         * @description List only explicit-admin migration candidates and their attached sources.
+         */
+        get: operations["legacy_case_admission_queue_api_v1_event_research_legacy_admission_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/network": {
         parameters: {
             query?: never;
@@ -1741,6 +1761,26 @@ export interface paths {
         put?: never;
         /** Decide Proposal */
         post: operations["decide_proposal_api_v1_review_proposals__proposal_id__decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Research Session
+         * @description Expose only the already-authenticated tenant and configured roles.
+         */
+        get: operations["research_session_api_v1_research_session_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4335,6 +4375,39 @@ export interface components {
              */
             updated_at: string;
         };
+        /** LegacyCaseAdmissionCandidateDTO */
+        LegacyCaseAdmissionCandidateDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Event Title */
+            event_title: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Documents */
+            documents: components["schemas"]["LegacyCaseAdmissionDocumentDTO"][];
+        };
+        /** LegacyCaseAdmissionDocumentDTO */
+        LegacyCaseAdmissionDocumentDTO: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Title */
+            title: string | null;
+            /** Source Url */
+            source_url: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+        };
+        /** LegacyCaseAdmissionQueueResponse */
+        LegacyCaseAdmissionQueueResponse: {
+            /** Items */
+            items: components["schemas"]["LegacyCaseAdmissionCandidateDTO"][];
+        };
         /** LegacyCaseAdmissionRequest */
         LegacyCaseAdmissionRequest: {
             /** Tenant Id */
@@ -5411,6 +5484,13 @@ export interface components {
             next_action: string;
             /** Tasks */
             tasks: components["schemas"]["ResearchTaskDTO"][];
+        };
+        /** ResearchSessionDTO */
+        ResearchSessionDTO: {
+            /** Tenant Id */
+            tenant_id: string;
+            /** Roles */
+            roles: string[];
         };
         /** ResearchTaskDTO */
         ResearchTaskDTO: {
@@ -8791,6 +8871,37 @@ export interface operations {
             };
         };
     };
+    legacy_case_admission_queue_api_v1_event_research_legacy_admission_queue_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyCaseAdmissionQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     event_research_network_api_v1_event_research_network_get: {
         parameters: {
             query?: never;
@@ -10267,6 +10378,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__schemas__v1__operational__ReviewDecisionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    research_session_api_v1_research_session_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchSessionDTO"];
                 };
             };
             /** @description Validation Error */

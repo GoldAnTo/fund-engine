@@ -3851,6 +3851,56 @@
         }
       }
     },
+    "/api/v1/event-research/legacy-admission-queue": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Legacy Case Admission Queue",
+        "description": "List only explicit-admin migration candidates and their attached sources.",
+        "operationId": "legacy_case_admission_queue_api_v1_event_research_legacy_admission_queue_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyCaseAdmissionQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/network": {
       "get": {
         "tags": [
@@ -6384,6 +6434,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/app__schemas__v1__operational__ReviewDecisionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-session": {
+      "get": {
+        "tags": [
+          "research-session-v1"
+        ],
+        "summary": "Research Session",
+        "description": "Expose only the already-authenticated tenant and configured roles.",
+        "operationId": "research_session_api_v1_research_session_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchSessionDTO"
                 }
               }
             }
@@ -13834,6 +13934,93 @@
         ],
         "title": "LatestResearchRunDTO"
       },
+      "LegacyCaseAdmissionCandidateDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "event_title": {
+            "type": "string",
+            "title": "Event Title"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/LegacyCaseAdmissionDocumentDTO"
+            },
+            "type": "array",
+            "title": "Documents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "event_title",
+          "created_at",
+          "documents"
+        ],
+        "title": "LegacyCaseAdmissionCandidateDTO"
+      },
+      "LegacyCaseAdmissionDocumentDTO": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "title",
+          "source_url",
+          "available_at"
+        ],
+        "title": "LegacyCaseAdmissionDocumentDTO"
+      },
+      "LegacyCaseAdmissionQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LegacyCaseAdmissionCandidateDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "LegacyCaseAdmissionQueueResponse"
+      },
       "LegacyCaseAdmissionRequest": {
         "properties": {
           "tenant_id": {
@@ -16673,6 +16860,28 @@
           "tasks"
         ],
         "title": "ResearchRunResponse"
+      },
+      "ResearchSessionDTO": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "roles"
+        ],
+        "title": "ResearchSessionDTO"
       },
       "ResearchTaskDTO": {
         "properties": {

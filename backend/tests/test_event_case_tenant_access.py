@@ -42,6 +42,18 @@ def test_event_routes_reject_missing_or_unknown_tenant_credentials(
     assert unknown.json()["error"]["code"] == "permission_denied"
 
 
+def test_research_session_exposes_only_the_authenticated_tenant_and_roles(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"admin-token":{"tenant_id":"team-a","roles":["case_administrator"]}}',
+    )
+    response = cmd_client.get("/api/v1/research-session", headers=_auth("admin-token"))
+    assert response.status_code == 200
+    assert response.json() == {"tenant_id": "team-a", "roles": ["case_administrator"]}
+
+
 def test_foreign_tenant_cannot_read_or_attach_to_an_event_case(
     cmd_client, monkeypatch
 ) -> None:
@@ -235,6 +247,20 @@ def test_legacy_case_requires_explicit_admin_admission_before_it_is_visible(
         "RESEARCH_TENANT_TOKENS",
         '{"test-tenant-token":{"tenant_id":"test-team","roles":["case_administrator"]}}',
     )
+    queue = cmd_client.get("/api/v1/event-research/legacy-admission-queue")
+    assert queue.status_code == 200, queue.text
+    assert len(queue.json()["items"]) == 1
+    queued = queue.json()["items"][0]
+    assert queued["case_id"] == str(legacy_case.id)
+    assert queued["event_title"] == legacy_case.title
+    assert queued["documents"] == [
+        {
+            "document_version_id": str(legacy_document.id),
+            "title": None,
+            "source_url": legacy_document.source_url,
+            "available_at": queued["documents"][0]["available_at"],
+        }
+    ]
     admitted = cmd_client.post(
         f"/api/v1/event-research/{legacy_case.id}/tenant-admission",
         json={

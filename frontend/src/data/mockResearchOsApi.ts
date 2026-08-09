@@ -209,6 +209,30 @@ export class MockResearchOsApi implements ResearchOsApi {
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
+  async session(): ReturnType<ResearchOsApi["session"]> {
+    // Demo mode deliberately remains a researcher session; it must not expose
+    // a privileged migration queue merely because it is running locally.
+    return { tenant_id: "demo-team", roles: [] };
+  }
+
+  async legacyAdmissionQueue(): ReturnType<ResearchOsApi["legacyAdmissionQueue"]> {
+    return { items: [] };
+  }
+
+  async admitLegacyCase(
+    caseId: string,
+    input: Parameters<ResearchOsApi["admitLegacyCase"]>[1],
+  ): ReturnType<ResearchOsApi["admitLegacyCase"]> {
+    return {
+      case_id: caseId,
+      tenant_id: input.tenant_id,
+      initial_document_version_id: input.initial_document_version_id,
+      admitted_by: input.admitted_by,
+      reason: input.reason,
+      admitted_at: now,
+    };
+  }
+
   async monitor(caseId: string): ReturnType<ResearchOsApi["monitor"]> {
     const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
     this.monitors.set(caseId, monitor);
