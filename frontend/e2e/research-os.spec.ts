@@ -80,4 +80,18 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("monitor-v2", { exact: true })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "运行详情" }).getByText("company_disclosure", { exact: true })).toBeVisible();
   });
+
+  test("global network keeps reviewed Case relations separate from AI candidates", async ({ page }) => {
+    await page.route("**/api/v1/event-research/network", async (route) => route.fulfill({ json: {
+      reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支预期差", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],
+      candidate_relations: [{ id: "relation-2", source_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, target_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, relation_type: "potential_conflict", reason: "候选解释可能冲突", created_by: "ai:relation-proposal", review_state: "machine_generated", created_at: "2026-08-09T00:00:00Z" }],
+    } }));
+    await page.goto("/network?client=mock");
+
+    await expect(page.getByRole("heading", { name: "跨 Case 研究网络" })).toBeVisible();
+    await expect(page.getByText("共同验证资本开支预期差")).toBeVisible();
+    await expect(page.getByText("AI 候选，未经人工复核").first()).toBeVisible();
+    await page.getByRole("link", { name: "台积电 Case" }).first().click();
+    await expect(page).toHaveURL(/\/events\/event-tsm/);
+  });
 });

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.event_research import (
+    CaseRelation,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -28,6 +29,8 @@ from app.models.proposals import Proposal
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
+    CaseRelationCaseDTO,
+    CaseRelationDTO,
     EventConclusionDraftDTO,
     EventKeyEvidenceDTO,
     EventNextActionDTO,
@@ -38,6 +41,7 @@ from app.schemas.v1.event_research import (
     EventResearchScopeDTO,
     EventWorkbenchProgressDTO,
     EventWorkbenchDTO,
+    ResearchNetworkResponse,
 )
 from app.services.event_review_queue import EventReviewQueueService
 
@@ -59,6 +63,41 @@ class EventResearchQueries:
             stmt = stmt.where(EventResearchLifecycle.status == status)
         return EventResearchListResponse(
             items=[self._list_item(brief, lifecycle) for brief, lifecycle in self._session.execute(stmt)]
+        )
+
+    def network(self) -> ResearchNetworkResponse:
+        cases = {
+            brief.research_case_id: CaseRelationCaseDTO(
+                case_id=str(brief.research_case_id),
+                title=brief.event_title,
+                lifecycle_status=lifecycle.status,
+            )
+            for brief, lifecycle in self._session.execute(
+                select(EventResearchBrief, EventResearchLifecycle).join(
+                    EventResearchLifecycle,
+                    EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
+                )
+            )
+        }
+        visible = [
+            CaseRelationDTO(
+                id=str(relation.id),
+                source_case=cases[relation.source_case_id],
+                target_case=cases[relation.target_case_id],
+                relation_type=relation.relation_type,
+                reason=relation.reason,
+                created_by=relation.created_by,
+                review_state=relation.review_state,
+                created_at=relation.created_at,
+            )
+            for relation in self._session.scalars(
+                select(CaseRelation).order_by(CaseRelation.created_at.desc(), CaseRelation.id.desc())
+            )
+            if relation.source_case_id in cases and relation.target_case_id in cases
+        ]
+        return ResearchNetworkResponse(
+            reviewed_relations=[item for item in visible if item.review_state == "reviewed"],
+            candidate_relations=[item for item in visible if item.review_state == "machine_generated"],
         )
 
     def workbench(self, case_id: uuid.UUID) -> EventWorkbenchDTO:

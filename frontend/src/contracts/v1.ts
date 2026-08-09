@@ -968,6 +968,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Research Network */
+        get: operations["event_research_network_api_v1_event_research_network_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/extract": {
         parameters: {
             query?: never;
@@ -1416,6 +1433,41 @@ export interface components {
             latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
+        };
+        /** CaseRelationCaseDTO */
+        CaseRelationCaseDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Title */
+            title: string;
+            /** Lifecycle Status */
+            lifecycle_status: string;
+        };
+        /** CaseRelationDTO */
+        CaseRelationDTO: {
+            /** Id */
+            id: string;
+            source_case: components["schemas"]["CaseRelationCaseDTO"];
+            target_case: components["schemas"]["CaseRelationCaseDTO"];
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
+            /** Reason */
+            reason: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "machine_generated" | "reviewed" | "rejected";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /**
          * CaseSnapshotDTO
@@ -3409,6 +3461,13 @@ export interface components {
             /** Mode */
             mode: string;
             assessment: components["schemas"]["RerunAssessmentDTO"];
+        };
+        /** ResearchNetworkResponse */
+        ResearchNetworkResponse: {
+            /** Reviewed Relations */
+            reviewed_relations: components["schemas"]["CaseRelationDTO"][];
+            /** Candidate Relations */
+            candidate_relations: components["schemas"]["CaseRelationDTO"][];
         };
         /**
          * ResearchOpsResponse
@@ -6518,6 +6577,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_research_network_api_v1_event_research_network_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchNetworkResponse"];
                 };
             };
         };

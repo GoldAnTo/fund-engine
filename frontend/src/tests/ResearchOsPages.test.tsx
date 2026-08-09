@@ -108,4 +108,22 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/资本开支指引/)).toBeVisible();
     expect(screen.getByText('{"page":12,"section":"资本开支"}')).toBeVisible();
   });
+
+  it("renders reviewed Case relations separately from AI candidates in the global network", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).endsWith("/event-research/network")
+        ? { reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支预期差", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }], candidate_relations: [{ id: "relation-2", source_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, target_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, relation_type: "potential_conflict", reason: "候选解释可能冲突", created_by: "ai:relation-proposal", review_state: "machine_generated", created_at: "2026-08-09T00:00:00Z" }] }
+        : { items: [], next_cursor: null, has_more: false },
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(
+      <MemoryRouter initialEntries={["/network"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "跨 Case 研究网络" })).toBeVisible();
+    expect(screen.getByText("共同验证资本开支预期差")).toBeVisible();
+    expect(screen.getAllByText("AI 候选，未经人工复核").length).toBeGreaterThan(0);
+    expect(screen.getByText(/不继承证据、结论或审核状态/)).toBeVisible();
+  });
 });

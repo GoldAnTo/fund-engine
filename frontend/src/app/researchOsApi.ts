@@ -15,12 +15,14 @@ export type RunEvent = Schemas["ResearchRunEventsItemDTO"];
 export type ActiveResearchRun = Schemas["ActiveResearchRunDTO"];
 export type Graph = Schemas["GraphResponse"];
 export type FundExposure = Schemas["FundExposureResponse"];
+export type ResearchNetwork = Schemas["ResearchNetworkResponse"];
 
 export const researchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
   saveMonitor: (caseId: string, input: Schemas["UpdateCaseMonitorRequest"]) => request<Monitor>(`/research-cases/${caseId}/monitor`, { method: "PUT", body: JSON.stringify(input) }),
   runEvents: (runId: string) => request<Schemas["ResearchRunEventsResponse"]>(`/research-runs/${runId}/events`),
   activeRuns: () => request<Schemas["ActiveResearchRunsResponse"]>("/research-runs/active"),
+  network: () => request<ResearchNetwork>("/event-research/network"),
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
 };

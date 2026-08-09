@@ -3470,6 +3470,27 @@
         }
       }
     },
+    "/api/v1/event-research/network": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Research Network",
+        "operationId": "event_research_network_api_v1_event_research_network_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchNetworkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/extract": {
       "post": {
         "tags": [
@@ -4736,6 +4757,89 @@
           "confirmed_factors"
         ],
         "title": "CaseMonitorDetailResponse"
+      },
+      "CaseRelationCaseDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "lifecycle_status": {
+            "type": "string",
+            "title": "Lifecycle Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "title",
+          "lifecycle_status"
+        ],
+        "title": "CaseRelationCaseDTO"
+      },
+      "CaseRelationDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_case": {
+            "$ref": "#/components/schemas/CaseRelationCaseDTO"
+          },
+          "target_case": {
+            "$ref": "#/components/schemas/CaseRelationCaseDTO"
+          },
+          "relation_type": {
+            "type": "string",
+            "enum": [
+              "shared_driver",
+              "follow_up_validation",
+              "potential_conflict",
+              "shared_material"
+            ],
+            "title": "Relation Type"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "review_state": {
+            "type": "string",
+            "enum": [
+              "machine_generated",
+              "reviewed",
+              "rejected"
+            ],
+            "title": "Review State"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "source_case",
+          "target_case",
+          "relation_type",
+          "reason",
+          "created_by",
+          "review_state",
+          "created_at"
+        ],
+        "title": "CaseRelationDTO"
       },
       "CaseSnapshotDTO": {
         "properties": {
@@ -10457,6 +10561,31 @@
         ],
         "title": "RerunResponse",
         "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
+      },
+      "ResearchNetworkResponse": {
+        "properties": {
+          "reviewed_relations": {
+            "items": {
+              "$ref": "#/components/schemas/CaseRelationDTO"
+            },
+            "type": "array",
+            "title": "Reviewed Relations"
+          },
+          "candidate_relations": {
+            "items": {
+              "$ref": "#/components/schemas/CaseRelationDTO"
+            },
+            "type": "array",
+            "title": "Candidate Relations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reviewed_relations",
+          "candidate_relations"
+        ],
+        "title": "ResearchNetworkResponse"
       },
       "ResearchOpsResponse": {
         "properties": {

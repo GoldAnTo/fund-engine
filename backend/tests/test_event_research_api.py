@@ -7,6 +7,7 @@ import hashlib
 from sqlalchemy import event as sqlalchemy_event, select
 
 from app.models.event_research import (
+    CaseRelation,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -180,6 +181,46 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
             .order_by(EventResearchScopeFactor.position)
         )
     ) == _confirmed_event()["candidate_factors"]
+
+
+def test_research_network_keeps_reviewed_relations_separate_from_ai_candidates(
+    cmd_client, cmd_session
+) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    other_payload = _confirmed_event()
+    other_payload["event_title"] = "Alphabet 后续验证事件"
+    other = cmd_client.post("/api/v1/event-research", json=other_payload).json()
+    now = datetime.now(timezone.utc)
+    cmd_session.add_all([
+        CaseRelation(
+            source_case_id=uuid.UUID(first["case_id"]),
+            target_case_id=uuid.UUID(other["case_id"]),
+            relation_type="shared_driver",
+            reason="两项研究都需要验证资本开支的预期差。",
+            created_by="human:researcher",
+            review_state="reviewed",
+            created_at=now,
+        ),
+        CaseRelation(
+            source_case_id=uuid.UUID(other["case_id"]),
+            target_case_id=uuid.UUID(first["case_id"]),
+            relation_type="potential_conflict",
+            reason="AI 发现了可能冲突的解释，等待人工复核。",
+            created_by="ai:relation-proposal",
+            review_state="machine_generated",
+            created_at=now,
+        ),
+    ])
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/event-research/network")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviewed_relations"][0]["relation_type"] == "shared_driver"
+    assert payload["reviewed_relations"][0]["reason"] == "两项研究都需要验证资本开支的预期差。"
+    assert payload["candidate_relations"][0]["review_state"] == "machine_generated"
+    assert payload["candidate_relations"][0]["target_case"]["title"] == "Alphabet 财报后股价下跌"
 
 
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:

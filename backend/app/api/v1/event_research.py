@@ -14,6 +14,7 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
     EventResearchListResponse,
+    ResearchNetworkResponse,
     EventReviewQueueResponse,
     EventWorkbenchDTO,
     PublishEventConclusionRequest,
@@ -37,6 +38,11 @@ def list_event_research(
     status: str | None = None, db: Session = Depends(get_db)
 ) -> EventResearchListResponse:
     return EventResearchQueries(db).list(status=status)
+
+
+@router.get("/network", response_model=ResearchNetworkResponse)
+def event_research_network(db: Session = Depends(get_db)) -> ResearchNetworkResponse:
+    return EventResearchQueries(db).network()
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)

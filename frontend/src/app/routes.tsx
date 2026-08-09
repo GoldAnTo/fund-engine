@@ -4,12 +4,13 @@ import { AppShell } from "./AppShell";
 import { CaseConclusionPage, CaseDocumentsPage, CaseEvidencePage, CaseMarketPage, CaseMonitorPage, CaseReviewPage, CaseWikiPage, MonitorConfigPage } from "../features/case/CasePages";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 
 export function ResearchOsRoutes() {
   return <Routes><Route element={<AppShell />}>
     <Route index element={<Navigate to="/events" replace />} />
     <Route path="events" element={<EventDeskPage />} />
-    <Route path="network" element={<EventDeskPage />} />
+    <Route path="network" element={<ResearchNetworkPage />} />
     <Route path="monitoring" element={<EventDeskPage />} />
     <Route path="events/new" element={<EventCreatePage />} />
     <Route path="events/:caseId" element={<CaseConclusionPage />} />

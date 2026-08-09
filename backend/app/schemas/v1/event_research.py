@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from pydantic import Field, model_validator
 
 from app.schemas.v1.common import V1Model
@@ -110,6 +111,28 @@ class EventResearchListItemDTO(V1Model):
 
 class EventResearchListResponse(V1Model):
     items: list[EventResearchListItemDTO]
+
+
+class CaseRelationCaseDTO(V1Model):
+    case_id: str
+    title: str
+    lifecycle_status: str
+
+
+class CaseRelationDTO(V1Model):
+    id: str
+    source_case: CaseRelationCaseDTO
+    target_case: CaseRelationCaseDTO
+    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
+    reason: str
+    created_by: str
+    review_state: Literal["machine_generated", "reviewed", "rejected"]
+    created_at: datetime
+
+
+class ResearchNetworkResponse(V1Model):
+    reviewed_relations: list[CaseRelationDTO]
+    candidate_relations: list[CaseRelationDTO]
 
 
 class EventReviewQueueItemDTO(V1Model):
