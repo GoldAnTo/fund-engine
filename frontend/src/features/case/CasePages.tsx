@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useParams } from "react-router-dom";
 
-import { researchOsApi, type CaseMechanismProtocol, type FundExposure, type Graph, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
+import { researchOsApi, type CaseMechanismProtocol, type Graph, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
 import type { EventResearchClient, EventWorkbench } from "../../domain/eventResearch";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
@@ -196,12 +196,6 @@ function MechanismRuleHistory({ caseId }: { caseId: string }) {
   if (!protocol?.template) return null;
   const edgeById = new Map(protocol.template.edges.map((edge) => [edge.id, edge]));
   return <section className="ros-rule-history"><header><p className="ros-eyebrow">验证规则版本记录</p><h2>每次调整都可回放</h2><p>以下记录只属于当前 Case；当前有效规则与历史版本均保留审核人、原因和时点。</p></header>{history.length === 0 ? <div className="ros-empty ros-empty--compact">尚无规则版本；系统不会把空白配置当作默认规则。</div> : <ol>{history.map((rule) => <li key={rule.id}><strong>{edgeById.get(rule.mechanism_edge_id)?.edge_key || rule.mechanism_edge_id}</strong><span>{rule.supersedes_id ? "替代上一版本" : "首个版本"}</span><p>{rule.support_predicate}；反证：{rule.contradiction_predicate}</p><small>{rule.reviewer} · {rule.created_at} · {rule.reason}</small></li>)}</ol>}</section>;
-}
-
-function MarketContent({ caseId, data }: { caseId: string; data: EventWorkbench }) {
-  const [exposure, setExposure] = useState<FundExposure | null>(null);
-  useEffect(() => { researchOsApi.exposure(caseId).then(setExposure).catch(() => setExposure(null)); }, [caseId]);
-  return <section className="ros-market"><header className="ros-section-heading"><div><p className="ros-eyebrow">市场与表达</p><h2>把研报判断落到可验证的市场表达</h2></div><span className="ros-pill ros-pill--system">仅展示已披露持仓</span></header><p className="ros-market-intro">先验证关键因素，再分别观察基本面、股票市场和基金披露暴露。它们相关，但不是同一种证据。</p><div className="ros-market-workbench"><section className="ros-market-factors"><p className="ros-eyebrow">关键因素验证</p>{data.factors.map((factor) => <article className="ros-market-factor" key={factor.position}><i className={factor.reviewedContradictionCount > 0 ? "is-risk" : factor.currentGap ? "is-gap" : ""} /><div><strong>{factor.statement}</strong><small>支持 {factor.reviewedSupportCount} · 反证 {factor.reviewedContradictionCount} · 待核对 {factor.pendingProposalCount}</small></div><span>{factor.reviewedContradictionCount > 0 ? "存在反证" : factor.currentGap ? "证据缺口" : "持续验证"}</span></article>)}</section><section className="ros-market-chain"><p className="ros-eyebrow">影响路径</p><div className="ros-chain-row"><article><span>研报主张</span><b>当前 Case 判断</b><small>只引用已审核证据</small></article><i>→</i><article><span>关键因素</span><b>可验证指标</b><small>支持 / 反证 / 缺口</small></article><i>→</i><article><span>公司 / 股票</span><b>基本面与市场观测</b><small>不自动归因</small></article><i>→</i><article><span>基金披露</span><b>报告期内暴露</b><small>非实时仓位</small></article></div><p className="ros-note">股票事件窗口是观测结果；只有时点、机制和反证都足够时，才可以形成有限且带条件的判断。</p></section><aside className="ros-market-rail"><p className="ros-eyebrow">基金披露暴露</p><h2>{exposure ? `截至 ${exposure.as_of}` : "暂无可用披露"}</h2>{!exposure ? <p>当前 Case 尚未绑定已审核公司关系，或没有可访问的基金披露数据。</p> : exposure.funds.map((fund) => <article className="ros-fund-row" key={fund.fund_id}><strong>{fund.fund_name} <small>{fund.fund_code}</small></strong><span>主题暴露 {(fund.theme_exposure * 100).toFixed(2)}%</span>{fund.positions.map((position) => <small key={position.stock_id}>{position.stock_name} · {(position.weight * 100).toFixed(2)}% · {position.report_period}</small>)}</article>)}<p className="ros-market-warning">披露暴露按报告期、披露日和采集日理解，不表示实时持仓，也不构成交易建议。</p></aside></div></section>;
 }
 
 type RunEvent = { seq: number; stage: string | null; status: string | null; message: string | null; details: Record<string, unknown>; createdAt?: string };
