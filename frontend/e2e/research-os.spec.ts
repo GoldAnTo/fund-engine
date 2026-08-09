@@ -195,6 +195,9 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=doc-event-tsm-q2");
     await expect(page.getByLabel("关联审核与时点")).toContainText("审核状态 reviewed");
     await expect(page.getByLabel("关联审核与时点")).toContainText("审核人 human:reviewer");
+    await page.getByRole("button", { name: /冻结公司披露.*quoted_by/ }).click();
+    await expect(page.getByRole("heading", { name: "关系：冻结公司披露 → 资本开支指引上调" })).toBeVisible();
+    await expect(page.getByText("已逐字核对冻结原文与定位。")).toBeVisible();
     await page.getByRole("link", { name: "定位到冻结原文" }).click();
     await expect(page.getByRole("heading", { name: "台积电 2026 年第二季度法说会摘要" })).toBeVisible();
     await page.goBack();
@@ -350,7 +353,10 @@ test.describe("Event-first Research OS", () => {
   test("published Case records a no-change decision for newly frozen material without a hidden run", async ({ page }) => {
     await page.goto("/events/event-published/documents?client=mock");
 
+    await expect(page.getByText("当前已发布结论")).toBeVisible();
+    await expect(page.getByText("待冻结的新材料")).toBeVisible();
     await page.getByLabel("新增材料正文").fill("新增研报重复既有订单判断，未给出新指标。");
+    await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("新增研报重复既有订单判断，未给出新指标。");
     await page.getByRole("radio", { name: /记录为不改变当前判断/ }).check();
     await page.getByLabel("新材料决定理由").fill("没有新增可核验指标或反证条件。");
     await page.getByRole("button", { name: "冻结材料并记录不改变判断" }).click();
