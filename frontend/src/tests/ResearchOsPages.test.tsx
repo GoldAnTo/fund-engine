@@ -10,6 +10,7 @@ import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
+import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
@@ -88,6 +89,22 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("全局运行档案加载中")).toBeVisible();
     expect(screen.getAllByTestId("global-run-skeleton")).toHaveLength(2);
+  });
+
+  it("keeps reviewed and candidate relation lanes visible while the network loads", () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "network").mockReturnValue(new Promise(() => {}));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/network"]}>
+        <Routes>
+          <Route path="/network" element={<ResearchNetworkPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("跨 Case 关联加载中")).toBeVisible();
+    expect(screen.getAllByTestId("network-relation-skeleton")).toHaveLength(2);
   });
 
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
