@@ -93,7 +93,7 @@ function WikiContent({ caseId }: { caseId: string }) {
 export function CaseMarketPage() { return <CaseFrame>{(_data, caseId) => <MarketExpressionContent caseId={caseId} />}</CaseFrame>; }
 const protocolReason: Record<string, string> = { missing_outcome_binding: "尚未固定结果指标、实体范围、可回溯基线和观察窗口", binding_not_approved: "结果绑定仍是草案，尚未经过人工审核", missing_mechanism_template: "尚未选择可检验的机制模板", missing_verification_rule: "尚未声明支持、反证与证据优先级规则", insufficient_primary_metrics: "主证据指标不足，无法完成最低验证", missing_counter_hypothesis: "尚未定义竞争解释或反向检验" };
 
-export function CaseProtocolPage() { return <CaseFrame>{(data, caseId) => <><ProtocolContent caseId={caseId} data={data} /><MechanismProtocolPanel caseId={caseId} /></>}</CaseFrame>; }
+export function CaseProtocolPage() { return <CaseFrame>{(data, caseId) => <><ProtocolContent caseId={caseId} data={data} /><MechanismProtocolPanel caseId={caseId} /><MechanismRuleConfig caseId={caseId} /></>}</CaseFrame>; }
 function ProtocolContent({ caseId: _caseId, data }: { caseId: string; data: EventWorkbench }) {
   const [selectedId, setSelectedId] = useState(data.factors[0]?.thesisId ?? "");
   const [states, setStates] = useState<Record<string, Researchability>>({});
@@ -143,6 +143,36 @@ function MechanismProtocolPanel({ caseId }: { caseId: string }) {
   const template = protocol?.template;
   const nodeById = new Map(template?.nodes.map((node) => [node.id, node]) ?? []);
   return <section className="ros-mechanism"><header><div><p className="ros-eyebrow">机制模板与验证规则</p><h2>{template ? `${template.display_name} · v${template.version}` : "先选择可检验的机制模板"}</h2><p>系统不会把市场表现自动写成机制成立。模板只定义要验证的路径、竞争解释和范围保护；每条边仍需独立规则与来源。</p></div></header>{message && <p className={message.startsWith("机制模板已") ? "ros-success" : "ros-error"}>{message}</p>}{!protocol ? <div className="ros-empty ros-empty--compact">正在读取当前 Case 的机制协议…</div> : !template ? <div className="ros-mechanism-choices">{templates.map((item) => <article key={item.id}><strong>{item.display_name} · v{item.version}</strong><p>{item.reason}</p><button className="ros-button ros-button--primary" type="button" disabled={busy} onClick={() => select(item.id)}>{busy ? "正在保存…" : "选择此模板"}</button></article>)}</div> : <><div className="ros-mechanism-meta"><span>审核人：{protocol.selection?.reviewer}</span><span>选择理由：{protocol.selection?.reason}</span><span>版本时间：{protocol.selection?.created_at}</span></div><div className="ros-mechanism-nodes">{template.nodes.map((node) => <article key={node.id}><span>{node.role}</span><strong>{node.display_name}</strong><small>{node.node_key}</small></article>)}</div><section className="ros-mechanism-edges"><h3>验证规则与反证</h3>{template.edges.map((edge) => { const rule = protocol.rules.find((item) => item.mechanism_edge_id === edge.id); return <article key={edge.id}><div><strong>{nodeById.get(edge.source_node_id)?.display_name} → {nodeById.get(edge.target_node_id)?.display_name}</strong><small>{edge.edge_key}</small></div>{rule ? <dl><div><dt>支持</dt><dd>{rule.support_predicate}</dd></div><div><dt>反证</dt><dd>{rule.contradiction_predicate}</dd></div><div><dt>允许来源</dt><dd>{rule.allowed_source_roles.join("、")}</dd></div><div><dt>下一验证</dt><dd>{rule.next_verification_event}</dd></div></dl> : <p>尚未定义可执行验证规则；该边不能被自动视为成立。</p>}</article>})}</section></>}</section>;
+}
+
+function MechanismRuleConfig({ caseId }: { caseId: string }) {
+  const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [metrics, setMetrics] = useState<MetricDefinition[]>([]);
+  const [edgeId, setEdgeId] = useState("");
+  const [metricId, setMetricId] = useState("");
+  const [support, setSupport] = useState("");
+  const [contradiction, setContradiction] = useState("");
+  const [nextEvent, setNextEvent] = useState("");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    const [current, metricItems] = await Promise.all([researchOsApi.caseMechanismProtocol(caseId), researchOsApi.metrics()]);
+    setProtocol(current); setMetrics(metricItems);
+    setEdgeId((value) => value || current.template?.edges[0]?.id || "");
+    setMetricId((value) => value || metricItems[0]?.id || "");
+  }
+  useEffect(() => { load().catch(() => setMessage("规则配置暂不可读；不会用空白规则放行研究。")); }, [caseId]);
+  async function save() {
+    if (!edgeId || !metricId || !support.trim() || !contradiction.trim() || !nextEvent.trim() || !reason.trim()) { setMessage("请填写支持与反证条件、下一验证事件和记录原因。"); return; }
+    setBusy(true); setMessage(null);
+    try {
+      await researchOsApi.createVerificationRule(edgeId, { metric_definition_id: metricId, expected_direction: "increase", support_predicate: support.trim(), contradiction_predicate: contradiction.trim(), allowed_source_roles: ["primary_disclosure"], observed_period_start: "2026-01-01", observed_period_end: "2026-12-31", available_at_deadline: "2026-12-31", next_verification_event: nextEvent.trim(), reviewer: "human:researcher", reason: reason.trim() });
+      await load(); setMessage("验证规则已保存为新版本；上一规则仍可回放。");
+    } catch { setMessage("验证规则未保存；当前协议保持原样。"); } finally { setBusy(false); }
+  }
+  if (!protocol?.template) return null;
+  return <section className="ros-rule-config"><header><p className="ros-eyebrow">配置验证规则</p><h2>为机制边写下可观察的支持与反证</h2><p>默认只允许一手披露。请按实际研究期调整规则；提交后会新增版本，不覆盖旧规则。</p></header><div className="ros-rule-config__fields"><label>机制边<select value={edgeId} onChange={(event) => setEdgeId(event.target.value)}>{protocol.template.edges.map((edge) => <option key={edge.id} value={edge.id}>{edge.edge_key}</option>)}</select></label><label>验证指标<select value={metricId} onChange={(event) => setMetricId(event.target.value)}>{metrics.map((metric) => <option key={metric.id} value={metric.id}>{metric.display_name} · v{metric.version}</option>)}</select></label><label>支持条件<textarea value={support} onChange={(event) => setSupport(event.target.value)} placeholder="例如：公司一手披露的实际 CapEx 同比增长" /></label><label>反证条件<textarea value={contradiction} onChange={(event) => setContradiction(event.target.value)} placeholder="例如：同口径 CapEx 下调或未投向目标架构" /></label><label>下一验证事件<input value={nextEvent} onChange={(event) => setNextEvent(event.target.value)} placeholder="例如：2026Q1 财报" /></label><label>登记原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何该条件能支持或反驳此机制边" /></label></div><button className="ros-button ros-button--primary" type="button" disabled={busy || !metrics.length} onClick={save}>{busy ? "正在保存…" : "保存为新的验证规则版本"}</button>{message && <p className={message.startsWith("验证规则已") ? "ros-success" : "ros-error"}>{message}</p>}</section>;
 }
 
 function MarketContent({ caseId, data }: { caseId: string; data: EventWorkbench }) {

@@ -140,6 +140,13 @@
 .ros-mechanism-edges dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem .8rem; margin: 0; }
 .ros-mechanism-edges dt { color: var(--ros-muted, #767b76); font-size: .65rem; }
 .ros-mechanism-edges dd { margin: .15rem 0 0; font-size: .72rem; line-height: 1.4; }
+.ros-rule-config { max-width: 1180px; margin-top: 1rem; padding: 1rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .55rem; background: var(--ros-deep, #f6f3ec); }
+.ros-rule-config h2 { margin: .25rem 0 .4rem; font-size: 1rem; }
+.ros-rule-config header > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft, #59615d); font-size: .75rem; line-height: 1.5; }
+.ros-rule-config__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
+.ros-rule-config label { display: grid; gap: .3rem; color: var(--ros-soft, #59615d); font-size: .72rem; }
+.ros-rule-config input, .ros-rule-config select, .ros-rule-config textarea { width: 100%; min-width: 0; padding: .5rem .6rem; color: var(--ros-ink, #30332f); background: #fffdf8; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .32rem; font: inherit; }
+.ros-rule-config textarea { min-height: 4.3rem; resize: vertical; }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }
@@ -159,5 +166,5 @@
   .ros-wiki-edge > b { grid-column: 1 / -1; }
   .ros-protocol-grid { grid-template-columns: 1fr; }
   .ros-protocol-form__two { grid-template-columns: 1fr; }
-  .ros-mechanism-nodes, .ros-mechanism-edges article, .ros-mechanism-edges dl { grid-template-columns: 1fr; }
+  .ros-mechanism-nodes, .ros-mechanism-edges article, .ros-mechanism-edges dl, .ros-rule-config__fields { grid-template-columns: 1fr; }
 }
