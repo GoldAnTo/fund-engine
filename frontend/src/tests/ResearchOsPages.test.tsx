@@ -990,6 +990,68 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("keeps every concurrent active run visible and individually expandable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/research-runs/active")
+          ? {
+              items: [
+                {
+                  run_id: "run-a",
+                  case_id: "event-a",
+                  case_title: "订单验证 Case",
+                  status: "running",
+                  stage: "retrieve",
+                  updated_at: "2026-08-09T00:00:00Z",
+                  processed_count: 3,
+                  next_action: "查看本次运行",
+                  scope: { allowed_source_types: ["company_disclosure"] },
+                },
+                {
+                  run_id: "run-b",
+                  case_id: "event-b",
+                  case_title: "毛利率验证 Case",
+                  status: "running",
+                  stage: "verify",
+                  updated_at: "2026-08-09T00:00:00Z",
+                  processed_count: 7,
+                  next_action: "审核候选证据",
+                  scope: { allowed_source_types: ["licensed_provider"] },
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            }
+          : { items: [], next_cursor: null, has_more: false };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strips = await screen.findAllByRole("region", {
+      name: "系统正在运行",
+    });
+    expect(strips).toHaveLength(2);
+    expect(strips[0]).toHaveTextContent("订单验证 Case");
+    expect(strips[1]).toHaveTextContent("毛利率验证 Case");
+    expect(screen.getAllByRole("button", { name: "展开运行详情" })).toHaveLength(2);
+  });
+
   it("makes the latest recorded active-run step visible without opening a drawer", async () => {
     vi.stubGlobal(
       "fetch",
