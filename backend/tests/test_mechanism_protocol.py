@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.models.ledger import EvidenceSnapshot, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
-from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion, MechanismTemplateVersion
+from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion, MechanismTemplateVersion, VerificationRuleVersion
 from app.services.mechanism_templates import seed_ai_capex_template
 from app.services.research_protocol import (
     MetricDefinitionInput,
@@ -90,6 +90,21 @@ def test_gate_requires_rules_and_independent_metrics_after_template_selection(se
     result = service.check_researchability(thesis.id)
 
     assert result.reason_codes == ["missing_verification_rule", "insufficient_primary_metrics", "missing_counter_hypothesis"]
+
+    selection = service._repo.effective_case_template(case.id)
+    assert selection is not None
+    for edge in session.scalars(select(MechanismEdgeVersion).where(MechanismEdgeVersion.template_version_id == selection.template_version_id)):
+        session.add(VerificationRuleVersion(
+            research_case_id=case.id, mechanism_edge_id=edge.id, metric_definition_id=metric.id,
+            expected_direction="increase", support_predicate="同口径增长", contradiction_predicate="同口径下滑",
+            allowed_source_roles=["primary_disclosure"], observed_period_start=date(2026, 4, 1),
+            observed_period_end=date(2026, 6, 30), available_at_deadline=date(2026, 8, 31),
+            next_verification_event="半年报", reviewer="human", reason="单指标监测", created_at=now,
+        ))
+    session.flush()
+    monitoring = service.check_researchability(thesis.id)
+    assert monitoring.status == "single_metric_monitoring"
+    assert monitoring.reason_codes == ["insufficient_primary_metrics"]
 
 
 def test_verification_rules_are_scoped_to_the_case_that_selected_the_template(session) -> None:
