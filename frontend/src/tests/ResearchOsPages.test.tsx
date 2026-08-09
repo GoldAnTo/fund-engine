@@ -29,6 +29,17 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByRole("link", { name: /Alphabet 财报超预期后股价下跌/ }).length).toBeGreaterThan(0);
   });
 
+  it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes><Route path="/events/:caseId" element={<CaseEvidencePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
+    expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+  });
+
   it("keeps the research question and three factors editable before a Case is created", async () => {
     const user = userEvent.setup();
     render(

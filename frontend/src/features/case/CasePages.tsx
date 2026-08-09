@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { researchOsApi, type AtomicClaimCandidate, type CaseMechanismProtocol, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
@@ -13,14 +13,17 @@ import { WikiInspectorContent } from "./WikiInspectorContent";
 const tabs = [["", "研究结论"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["wiki", "Case Wiki"], ["protocol", "研究协议"], ["market", "市场与表达"], ["monitor", "监测与运行"], ["relations", "关联研究"]] as const;
 
 function CaseFrame({ children }: { children: (workbench: EventWorkbench, caseId: string) => ReactNode }) {
-  const { caseId = "" } = useParams();
+  const { caseId = "" } = useParams(); const navigate = useNavigate(); const location = useLocation();
   const [data, setData] = useState<EventWorkbench | null>(null);
+  const [caseOptions, setCaseOptions] = useState<Array<{ id: string; eventTitle: string }>>([]);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => { if (!caseId) return; setData(null); setLoadError(false); researchClient.getEventWorkbench(caseId).then(setData).catch(() => setLoadError(true)); }, [caseId, reload]);
+  useEffect(() => { researchClient.listEventResearch().then((items) => setCaseOptions(items.map((item) => ({ id: item.id, eventTitle: item.eventTitle })))).catch(() => setCaseOptions([])); }, []);
+  function switchCase(nextCaseId: string) { const suffix = location.pathname.startsWith(`/events/${caseId}`) ? location.pathname.slice(`/events/${caseId}`.length) : ""; navigate(`/events/${nextCaseId}${suffix}${location.search}`); }
   if (!data) return <main className="ros-page"><div className="ros-empty">{loadError ? <><strong>无法读取这个 Case</strong><p>没有展示替代数据；请检查权限、网络或 Case 标识。</p><button className="ros-button ros-button--secondary" type="button" onClick={() => setReload((value) => value + 1)}>重试</button></> : "正在读取 Case；若无权限或 Case 不存在，系统不会展示替代数据。"}</div></main>;
   return <main className="ros-page ros-case-page">
-    <header className="ros-case-header"><p className="ros-eyebrow">ResearchCase v{data.scope.version} · {data.event.ticker || "未绑定股票"}</p><h1>{data.event.eventTitle}</h1><p>{data.lifecycle.summary}</p><div className="ros-case-header__facts"><span>已审核证据 {data.progress.verified}</span><span>待审核 {data.progress.pending}</span><span>无效来源 {data.progress.invalidSource}</span><span>{data.lifecycle.activeRunId ? "运行记录可查看" : "无后台运行"}</span></div></header>
+    <header className="ros-case-header"><div className="ros-case-header__controls"><Link to="/events" className="ros-button ros-button--secondary">返回研究调度</Link><label>切换 ResearchCase<select aria-label="切换 ResearchCase" value={caseId} onChange={(event) => switchCase(event.target.value)}>{caseOptions.some((item) => item.id === caseId) ? null : <option value={caseId}>{data.event.eventTitle}</option>}{caseOptions.map((item) => <option key={item.id} value={item.id}>{item.eventTitle}</option>)}</select></label></div><p className="ros-eyebrow">ResearchCase v{data.scope.version} · {data.event.ticker || "未绑定股票"}</p><h1>{data.event.eventTitle}</h1><p>{data.lifecycle.summary}</p><div className="ros-case-header__facts"><span>已审核证据 {data.progress.verified}</span><span>待审核 {data.progress.pending}</span><span>无效来源 {data.progress.invalidSource}</span><span>{data.lifecycle.activeRunId ? "运行记录可查看" : "无后台运行"}</span></div></header>
     <nav className="ros-case-tabs" aria-label="Case 页面">{tabs.map(([suffix, label]) => <NavLink key={suffix} end={suffix === ""} to={`/events/${caseId}${suffix ? `/${suffix}` : ""}`}>{label}</NavLink>)}</nav>
     {children(data, caseId)}
   </main>;
