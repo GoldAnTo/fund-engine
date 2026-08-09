@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.models.ledger import ResearchCase, Thesis
 from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent  # noqa: F401
+from app.models.research_expression import KeyFactor
 
 
 def _case_with_confirmed_factor(cmd_session) -> tuple[ResearchCase, Thesis]:
@@ -133,6 +134,43 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
         f"/api/v1/research-runs/{started.json()['id']}/events"
     ).json()["items"][0]["details"]
     assert replayed_first_scope == first_scope
+
+
+def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    saved = cmd_client.put(f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(factor.id))
+    now = datetime.now(timezone.utc)
+    key_factor = KeyFactor(
+        research_case_id=case.id,
+        thesis_id=factor.id,
+        report_claim_id=None,
+        name="订单指引",
+        expected_direction="positive",
+        metric_name="订单金额",
+        allowed_source_types=["licensed_provider"],
+        support_condition="订单增长",
+        refutation_condition="订单下降",
+        next_verification_event="下一次财报",
+        review_state="reviewed",
+        reviewed_by="human:lin",
+        review_reason="已审核并绑定当前 Case 的研究范围因素",
+        reviewed_at=now,
+        created_at=now,
+    )
+    cmd_session.add(key_factor)
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/monitor/factor-runs",
+        json={"key_factor_id": str(key_factor.id)},
+    )
+
+    assert response.status_code == 201, response.text
+    events = cmd_client.get(f"/api/v1/research-runs/{response.json()['id']}/events").json()["items"]
+    assert events[0]["details"]["factor_ids"] == [str(factor.id)]
+    assert events[0]["details"]["requested_key_factor_id"] == str(key_factor.id)
 
 
 def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) -> None:

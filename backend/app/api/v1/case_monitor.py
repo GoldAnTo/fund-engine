@@ -16,6 +16,7 @@ from app.schemas.v1.case_monitor import (
     LatestResearchRunDTO,
     UpdateCaseMonitorRequest,
     SetCaseMonitorStatusRequest,
+    StartFactorMonitorRunRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
@@ -103,6 +104,21 @@ def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
         run = service.start_from_monitor(case_id)
         return service.detail(run.id)
     except ValueError as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.post(
+    "/research-cases/{case_id}/monitor/factor-runs",
+    response_model=ResearchRunResponse,
+    status_code=201,
+)
+def start_factor_monitor_run(case_id: uuid.UUID, request: StartFactorMonitorRunRequest, db: Session = Depends(get_db)):
+    try:
+        service = AutoResearchService(db)
+        run = service.start_from_key_factor(case_id, key_factor_id=uuid.UUID(request.key_factor_id))
+        return service.detail(run.id)
+    except (ValueError, TypeError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
 

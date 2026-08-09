@@ -26,6 +26,7 @@ from app.models.ledger import (
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion
+from app.models.research_expression import KeyFactor
 from app.models.event_research import EventResearchConclusion
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
@@ -59,6 +60,7 @@ class AutoResearchService:
         thesis_ids: list[uuid.UUID] | None = None,
         monitor_version_id: uuid.UUID | None = None,
         trigger: str = "manual",
+        allowed_source_types: list[str] | None = None,
         scope_context: dict[str, object] | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
@@ -80,6 +82,9 @@ class AutoResearchService:
             if trigger == "schedule" and monitor.status != "active":
                 raise ValueError("scheduled research is paused for this case")
             thesis_ids = [uuid.UUID(value) for value in monitor.factor_ids]
+        if allowed_source_types is not None:
+            if monitor is None or not set(allowed_source_types).issubset(set(monitor.allowed_source_types)):
+                raise ValueError("run sources must be a subset of the saved case monitor")
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
@@ -111,7 +116,7 @@ class AutoResearchService:
             "monitor_version_id": str(monitor.id) if monitor is not None else None,
             "factor_ids": [str(thesis.id) for thesis in theses],
             "factor_statements": [thesis.statement for thesis in theses],
-            "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
+            "allowed_source_types": allowed_source_types if allowed_source_types is not None else (monitor.allowed_source_types if monitor is not None else []),
             "budget": run.budget,
         }
         for key, value in (scope_context or {}).items():
@@ -184,6 +189,27 @@ class AutoResearchService:
             trigger=trigger,
             commit=commit,
             scope_context=scope_context,
+        )
+
+    def start_from_key_factor(self, case_id: uuid.UUID, *, key_factor_id: uuid.UUID):
+        factor = self.session.get(KeyFactor, key_factor_id)
+        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed" or factor.thesis_id is None:
+            raise ValueError("reviewed key factor is not explicitly linked to this Case research scope")
+        monitor = self.session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
+        if monitor is None or str(factor.thesis_id) not in monitor.factor_ids:
+            raise ValueError("linked key factor is not in the current CaseMonitor scope")
+        source_types = [source for source in monitor.allowed_source_types if source in factor.allowed_source_types]
+        if not source_types:
+            raise ValueError("key factor has no allowed source shared with the current CaseMonitor")
+        return self.start(
+            case_id,
+            max_rounds=3,
+            budget=monitor.budget,
+            thesis_ids=[factor.thesis_id],
+            monitor_version_id=monitor.id,
+            trigger="factor_manual",
+            allowed_source_types=source_types,
+            scope_context={"requested_key_factor_id": str(factor.id)},
         )
 
     def continue_published_event(

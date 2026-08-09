@@ -41,6 +41,7 @@ class KeyFactor(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    thesis_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("theses.id"), nullable=True, index=True)
     report_claim_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("report_claims.id"), nullable=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     expected_direction: Mapped[str] = mapped_column(String(16), nullable=False)

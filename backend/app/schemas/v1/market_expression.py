@@ -37,6 +37,7 @@ class ReportClaimDTO(V1Model):
 
 class KeyFactorDTO(V1Model):
     id: str
+    thesis_id: str | None
     report_claim_id: str | None
     name: str
     expected_direction: str

@@ -1249,6 +1249,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/monitor/factor-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Factor Monitor Run */
+        post: operations["start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
         parameters: {
             query?: never;
@@ -3774,6 +3791,8 @@ export interface components {
         KeyFactorDTO: {
             /** Id */
             id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
             /** Report Claim Id */
             report_claim_id: string | null;
             /** Name */
@@ -4996,6 +5015,11 @@ export interface components {
          * @enum {string}
          */
         SourceStatus: "accessible" | "pasted_unverified" | "restricted" | "invalid";
+        /** StartFactorMonitorRunRequest */
+        StartFactorMonitorRunRequest: {
+            /** Key Factor Id */
+            key_factor_id: string;
+        };
         /** StartResearchRunRequest */
         StartResearchRunRequest: {
             /**
@@ -8349,6 +8373,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartFactorMonitorRunRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             201: {

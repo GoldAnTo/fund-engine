@@ -4279,6 +4279,59 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/monitor/factor-runs": {
+      "post": {
+        "tags": [
+          "case-monitor-v1"
+        ],
+        "summary": "Start Factor Monitor Run",
+        "operationId": "start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartFactorMonitorRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
       "post": {
         "tags": [
@@ -11573,6 +11626,17 @@
             "type": "string",
             "title": "Id"
           },
+          "thesis_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thesis Id"
+          },
           "report_claim_id": {
             "anyOf": [
               {
@@ -11667,6 +11731,7 @@
         "type": "object",
         "required": [
           "id",
+          "thesis_id",
           "report_claim_id",
           "name",
           "expected_direction",
@@ -14916,6 +14981,21 @@
         ],
         "title": "SourceStatus",
         "description": "The admissibility of a source link for event evidence."
+      },
+      "StartFactorMonitorRunRequest": {
+        "properties": {
+          "key_factor_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key Factor Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key_factor_id"
+        ],
+        "title": "StartFactorMonitorRunRequest"
       },
       "StartResearchRunRequest": {
         "properties": {
