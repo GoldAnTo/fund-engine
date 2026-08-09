@@ -583,13 +583,16 @@ export class MockResearchOsApi implements ResearchOsApi {
       },
       nodes: [
         {
-          id: `document-${caseId}`,
+          id: "doc-event-tsm-q2",
           kind: "document",
           label: "冻结公司披露",
           properties: {
             verbatim_text:
               "公司上调全年资本开支指引，同时市场关注自由现金流承压。",
             permission_status: "admitted",
+            source_visible_in_case: true,
+            document_id: "doc-event-tsm-q2",
+            locator: { page: 12, section: "资本开支" },
             available_at: "2026-08-08T20:00:00Z",
           },
         },
@@ -625,10 +628,15 @@ export class MockResearchOsApi implements ResearchOsApi {
         {
           id: "edge-document-claim",
           semantic_kind: "quoted_by",
-          source: `document-${caseId}`,
+          source: "doc-event-tsm-q2",
           target: "claim-capex",
           review_state: "reviewed",
           available_at: "2026-08-08T20:00:00Z",
+          properties: {
+            reviewer: "human:reviewer",
+            review_reason: "已逐字核对冻结原文与定位。",
+            reviewed_at: "2026-08-08T20:10:00Z",
+          },
         },
         {
           id: "edge-claim-factor",
@@ -655,7 +663,7 @@ export class MockResearchOsApi implements ResearchOsApi {
       ],
       paths: [
         {
-          node_ids: [`document-${caseId}`, "claim-capex", "factor-capex"],
+          node_ids: ["doc-event-tsm-q2", "claim-capex", "factor-capex"],
           edge_ids: ["edge-document-claim", "edge-claim-factor"],
           label: "冻结原文到已审核关键因素",
         },

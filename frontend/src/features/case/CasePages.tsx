@@ -86,8 +86,8 @@ function CaseFrame({
   }
   if (!data)
     return (
-      <main className="ros-page">
-        <div className="ros-empty">
+      <main className="ros-page ros-case-page">
+        {loadError ? <div className="ros-empty">
           {loadError ? (
             <>
               <strong>无法读取这个 Case</strong>
@@ -103,7 +103,7 @@ function CaseFrame({
           ) : (
             "正在读取 Case；若无权限或 Case 不存在，系统不会展示替代数据。"
           )}
-        </div>
+        </div> : <CaseWorkbenchSkeleton />}
       </main>
     );
   return (
@@ -160,6 +160,15 @@ function CaseFrame({
       {children(data, caseId)}
     </main>
   );
+}
+
+function CaseWorkbenchSkeleton() {
+  return <section className="ros-case-loading" aria-label="Case 工作台加载中" aria-busy="true">
+    <header className="ros-case-loading__header"><Link to="/events" className="ros-button ros-button--secondary">返回研究调度</Link><span /></header>
+    <div className="ros-case-loading__title"><i /><b /><em /></div>
+    <nav className="ros-case-tabs" aria-label="Case 页面加载中"><span /><span /><span /><span /><span /><span /></nav>
+    <div className="ros-case-loading__body">{[0, 1, 2].map((item) => <div data-testid="case-workbench-skeleton" key={item}><i /><b /><em /></div>)}</div>
+  </section>;
 }
 
 function FactorList({ data }: { data: EventWorkbench }) {

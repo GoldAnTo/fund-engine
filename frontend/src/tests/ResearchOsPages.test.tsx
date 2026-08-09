@@ -17,6 +17,7 @@ import {
   CaseReviewPage,
   CaseScopePage,
   CaseStockProfilePage,
+  CaseWikiPage,
 } from "../features/case/CasePages";
 import {
   CaseDocumentsPage,
@@ -56,6 +57,22 @@ describe("Research OS event entry", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("keeps the research dispatch structure visible while Cases are loading", () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockReturnValue(new Promise(() => {}));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route path="/events" element={<EventDeskPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("研究调度加载中")).toBeVisible();
+    expect(screen.getAllByTestId("research-dispatch-skeleton")).toHaveLength(4);
+  });
+
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
@@ -65,10 +82,25 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    expect(
-      await screen.findByRole("link", { name: "返回研究调度" }),
-    ).toHaveAttribute("href", "/events");
+    await screen.findByLabelText("切换 ResearchCase");
+    expect(screen.getByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
     expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+  });
+
+  it("keeps Case navigation visible while the selected Case is loading", () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventWorkbench").mockReturnValue(new Promise(() => {}));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("Case 工作台加载中")).toBeVisible();
+    expect(screen.getAllByTestId("case-workbench-skeleton")).toHaveLength(3);
   });
 
   it("keeps Case navigation focused on the six stable research workbenches", async () => {
@@ -92,6 +124,44 @@ describe("Research OS event entry", () => {
     expect(navigation.textContent).not.toContain("研究范围");
     expect(navigation.textContent).not.toContain("结论版本");
     expect(navigation.textContent).not.toContain("研究协议");
+  });
+
+  it("turns a Case Wiki source and AI candidate into traceable researcher actions", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/wiki"]}>
+        <Routes>
+          <Route path="/events/:caseId/wiki" element={<CaseWikiPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "document 冻结公司披露 已进入 Case 图谱",
+      }),
+    );
+    expect(
+      await screen.findByRole("link", { name: "定位到冻结原文" }),
+    ).toHaveAttribute(
+      "href",
+      "/events/event-tsm/documents?document=doc-event-tsm-q2",
+    );
+    expect(screen.getByText("许可")).toBeVisible();
+    expect(screen.getByText("已准入")).toBeVisible();
+    expect(screen.getByText("定位")).toBeVisible();
+    expect(screen.getByText("第 12 页 · 资本开支")).toBeVisible();
+    expect(screen.getByText(/审核人 human:reviewer/)).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "proposal 自由现金流承压持续 AI 候选，未经人工复核",
+      }),
+    );
+    expect(
+      await screen.findByRole("link", { name: "审核此候选关系" }),
+    ).toHaveAttribute("href", "/events/event-tsm/review");
   });
 
   it("lets a researcher begin registering a reviewed claim from an admitted frozen source", async () => {

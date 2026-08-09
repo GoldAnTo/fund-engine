@@ -175,6 +175,14 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("可追溯检查器")).toBeVisible();
     await expect(page.getByText("已审核对象")).toBeVisible();
     await expect(page.getByText("公司上调全年资本开支指引，同时市场关注自由现金流承压。")).toBeVisible();
+    await expect(page.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=doc-event-tsm-q2");
+    await expect(page.getByLabel("关联审核与时点")).toContainText("审核状态 reviewed");
+    await expect(page.getByLabel("关联审核与时点")).toContainText("审核人 human:reviewer");
+    await page.getByRole("link", { name: "定位到冻结原文" }).click();
+    await expect(page.getByRole("heading", { name: "台积电 2026 年第二季度法说会摘要" })).toBeVisible();
+    await page.goBack();
+    await page.getByRole("button", { name: "proposal 自由现金流承压持续 AI 候选，未经人工复核" }).click();
+    await expect(page.getByRole("link", { name: "审核此候选关系" })).toHaveAttribute("href", "/events/event-tsm/review");
   });
 
   test("immediate replenishment starts from a visible frozen monitor scope", async ({ page }) => {
