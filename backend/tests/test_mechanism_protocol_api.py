@@ -27,3 +27,16 @@ def test_case_protocol_api_lists_templates_and_appends_selection(cmd_client, cmd
     assert protocol.status_code == 200, protocol.text
     assert protocol.json()["selection"]["reason"] == "适用范围已核对"
     assert protocol.json()["template"]["edges"]
+
+    metric = cmd_client.post("/api/v1/metric-definitions", json={
+        "metric_id": "customer_capex", "display_name": "客户 CapEx", "canonical_definition": "客户季度资本开支",
+        "entity_scope": "company", "unit": "yuan", "frequency": "quarterly", "period_semantics": "period_end",
+        "allowed_source_roles": ["primary_disclosure"], "role_eligibility": ["driver"], "approved_by": "human", "reason": "规则指标",
+    })
+    assert metric.status_code == 201, metric.text
+    rule = cmd_client.post(
+        f"/api/v1/mechanism-edges/{protocol.json()['template']['edges'][0]['id']}/verification-rules",
+        json={"metric_definition_id": metric.json()["id"], "expected_direction": "increase", "support_predicate": "披露的 CapEx 同比增长", "contradiction_predicate": "CapEx 下调", "allowed_source_roles": ["primary_disclosure"], "observed_period_start": "2026-01-01", "observed_period_end": "2026-03-31", "available_at_deadline": "2026-05-31", "next_verification_event": "季度财报", "reviewer": "human:reviewer", "reason": "定义反证规则"},
+    )
+    assert rule.status_code == 201, rule.text
+    assert rule.json()["contradiction_predicate"] == "CapEx 下调"
