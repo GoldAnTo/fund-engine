@@ -65,6 +65,13 @@ class CancelRunResponse(RunSummaryDTO):
     pass
 
 
+class CancelRunRequest(V1Model):
+    """Human decision recorded when an in-progress run is stopped."""
+
+    actor: str = Field(min_length=1, max_length=200)
+    change_reason: str = Field(min_length=1, max_length=2_000)
+
+
 class ResearchRunEventsItemDTO(V1Model):
     seq: int
     status: str | None = None

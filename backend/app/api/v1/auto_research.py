@@ -11,6 +11,7 @@ from app.services.case_monitor import ResearchRunEventRepository
 from app.db import get_db
 from app.schemas.v1.auto_research import (
     CancelRunResponse,
+    CancelRunRequest,
     ResearchRunEventsItemDTO,
     ResearchRunEventsResponse,
     ActiveResearchRunDTO,
@@ -160,10 +161,14 @@ def list_runs(
 
 
 @router.post("/research-runs/{run_id}/cancel", response_model=CancelRunResponse)
-def cancel_run(run_id: uuid.UUID, db: Session = Depends(get_db)):
+def cancel_run(run_id: uuid.UUID, request: CancelRunRequest, db: Session = Depends(get_db)):
     service = AutoResearchService(db)
     try:
-        summary = service.cancel_run(run_id)
+        summary = service.cancel_run(
+            run_id,
+            actor=request.actor,
+            change_reason=request.change_reason,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:

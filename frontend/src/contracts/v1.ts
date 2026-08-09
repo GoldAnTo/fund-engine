@@ -1750,6 +1750,16 @@ export interface components {
             /** Idempotency Key */
             idempotency_key: string;
         };
+        /**
+         * CancelRunRequest
+         * @description Human decision recorded when an in-progress run is stopped.
+         */
+        CancelRunRequest: {
+            /** Actor */
+            actor: string;
+            /** Change Reason */
+            change_reason: string;
+        };
         /** CancelRunResponse */
         CancelRunResponse: {
             /** Id */
@@ -7794,7 +7804,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelRunRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

@@ -3485,6 +3485,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRunRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5698,6 +5708,30 @@
           "idempotency_key"
         ],
         "title": "AtomicClaimReviewRequest"
+      },
+      "CancelRunRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "change_reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Change Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor",
+          "change_reason"
+        ],
+        "title": "CancelRunRequest",
+        "description": "Human decision recorded when an in-progress run is stopped."
       },
       "CancelRunResponse": {
         "properties": {

@@ -120,6 +120,24 @@ export class MockResearchOsApi implements ResearchOsApi {
     };
   }
 
+  async cancelRun(runId: string, _changeReason: string): ReturnType<ResearchOsApi["cancelRun"]> {
+    const manualRun = this.manualRuns.get(runId);
+    return {
+      id: runId,
+      status: "cancelled",
+      stage: "stopped",
+      round: 0,
+      max_rounds: 3,
+      budget: manualRun?.monitor.budget ?? 20,
+      budget_used: 0,
+      stop_reason: "cancelled",
+      scope_thesis_ids: manualRun?.monitor.factor_ids ?? factors.map((factor) => factor.id),
+      created_at: now,
+      updated_at: now,
+      next_action: "查看取消前进度",
+    };
+  }
+
   async runEvents(runId: string): ReturnType<ResearchOsApi["runEvents"]> {
     const manualRun = this.manualRuns.get(runId);
     if (manualRun) {

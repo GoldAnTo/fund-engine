@@ -871,7 +871,7 @@ class AutoResearchService:
         )
         return [self._run_summary_dict(run) for run in runs]
 
-    def cancel_run(self, run_id: uuid.UUID) -> dict:
+    def cancel_run(self, run_id: uuid.UUID, *, actor: str, change_reason: str) -> dict:
         run = self.repo.get_run(run_id)
         if run is None:
             raise ValueError(f"research run {run_id} not found")
@@ -881,6 +881,17 @@ class AutoResearchService:
         if run.status not in {"running", "queued", "waiting_for_review"}:
             raise RuntimeError(f"research run {run_id} is terminal ({run.status})")
         self.repo.cancel_run(run)
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="stopped",
+            status="cancelled",
+            message="研究员停止本次运行；此前阶段和冻结范围保持可回放。",
+            payload_json={
+                "actor": actor.strip(),
+                "change_reason": change_reason.strip(),
+                "stop_reason": run.stop_reason,
+            },
+        )
         self.session.commit()
         return self._run_summary_dict(run)
 

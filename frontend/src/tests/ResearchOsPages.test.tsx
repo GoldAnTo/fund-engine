@@ -371,6 +371,31 @@ describe("Research OS event entry", () => {
     expect(screen.getByRole("complementary", { name: "运行详情" })).toHaveTextContent("7");
   });
 
+  it("requires a recorded reason before a researcher stops an in-progress run", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = url.includes("/researchability")
+        ? { status: "ready", reason_codes: [], effective_binding_id: "binding-1", next_action: "可开始补证" }
+        : url.endsWith("/research-runs/run-live/events")
+          ? { run_id: "run-live", has_more: false, items: [{ seq: 1, stage: "scope", status: "completed", message: "已冻结本次范围", details: { trigger: "manual", monitor_version_id: "monitor-v1", allowed_source_types: ["company_disclosure"], budget: 10 }, created_at: "2026-08-09T00:00:00Z" }, { seq: 2, stage: "retrieve", status: "running", message: "正在读取许可来源", details: {}, created_at: "2026-08-09T00:01:00Z" }] }
+          : { monitor: { id: "monitor-v1", version: 1, status: "active", frequency: "weekday_08_30", factor_ids: ["event-tsm-factor-1"], allowed_source_types: ["company_disclosure"], next_verification_event: "下一次财报", budget: 10, changed_by: "human", change_reason: "test", created_at: "2026-08-09T00:00:00Z" }, latest_run: { id: "run-live", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:01:00Z" }, confirmed_factors: [{ id: "event-tsm-factor-1", statement: "资本开支指引" }] };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/events/event-tsm/monitor"]}><Routes><Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} /></Routes></MemoryRouter>);
+
+    await user.click(await screen.findByRole("button", { name: "打开运行详情" }));
+    expect(await screen.findByRole("button", { name: "停止本次运行" })).toBeDisabled();
+    await user.type(screen.getByLabelText("停止原因"), "资料源授权异常，停止后重新配置");
+    await user.click(screen.getByRole("button", { name: "停止本次运行" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/research-runs/run-live/cancel",
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
   it("keeps the newly saved monitor version and scope visible in the configuration form", async () => {
     const user = userEvent.setup();
     const initial = {

@@ -317,11 +317,15 @@ def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     run.status = "running"
     cmd_session.commit()
 
-    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    payload = {"actor": "human:researcher", "change_reason": "授权来源异常，停止后重新配置"}
+    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+    events = cmd_client.get(f"/api/v1/research-runs/{run.id}/events").json()["items"]
+    assert events[-1]["stage"] == "stopped"
+    assert events[-1]["details"] == {"actor": payload["actor"], "change_reason": payload["change_reason"], "stop_reason": "cancelled"}
 
-    resp2 = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    resp2 = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp2.status_code == 200
     assert resp2.json()["status"] == "cancelled"
 
@@ -335,7 +339,7 @@ def test_cancel_run_terminal_conflict(cmd_client, cmd_session):
     run.status = "succeeded"
     cmd_session.commit()
 
-    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json={"actor": "human:researcher", "change_reason": "测试终态"})
     assert resp.status_code == 409
 
 
