@@ -21,6 +21,7 @@ export type ResearchNetwork = Schemas["ResearchNetworkResponse"];
 export const researchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
   saveMonitor: (caseId: string, input: Schemas["UpdateCaseMonitorRequest"]) => request<Monitor>(`/research-cases/${caseId}/monitor`, { method: "PUT", body: JSON.stringify(input) }),
+  setMonitorStatus: (caseId: string, status: "active" | "paused", changeReason: string) => request<Monitor>(`/research-cases/${caseId}/monitor/${status}`, { method: "POST", body: JSON.stringify({ actor: "human:researcher", change_reason: changeReason }) }),
   runEvents: (runId: string) => request<Schemas["ResearchRunEventsResponse"]>(`/research-runs/${runId}/events`),
   activeRuns: () => request<Schemas["ActiveResearchRunsResponse"]>("/research-runs/active"),
   network: () => request<ResearchNetwork>("/event-research/network"),

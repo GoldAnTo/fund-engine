@@ -1105,6 +1105,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Monitor Status */
+        post: operations["set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/market-expression": {
         parameters: {
             query?: never;
@@ -4074,6 +4091,13 @@ export interface components {
             /** Groups */
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** SetCaseMonitorStatusRequest */
+        SetCaseMonitorStatusRequest: {
+            /** Actor */
+            actor: string;
+            /** Change Reason */
+            change_reason: string;
         };
         /**
          * SourceCitationDTO
@@ -7127,6 +7151,42 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateCaseMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                target_status: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetCaseMonitorStatusRequest"];
             };
         };
         responses: {

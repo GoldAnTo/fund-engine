@@ -15,6 +15,7 @@ from app.schemas.v1.case_monitor import (
     ConfirmedFactorOptionDTO,
     LatestResearchRunDTO,
     UpdateCaseMonitorRequest,
+    SetCaseMonitorStatusRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 
@@ -78,6 +79,17 @@ def save_monitor(
                 change_reason=request.change_reason,
             ),
         )
+        db.commit()
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return _dto(monitor)
+
+
+@router.post("/research-cases/{case_id}/monitor/{target_status}", response_model=CaseMonitorDTO)
+def set_monitor_status(case_id: uuid.UUID, target_status: str, request: SetCaseMonitorStatusRequest, db: Session = Depends(get_db)):
+    try:
+        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()

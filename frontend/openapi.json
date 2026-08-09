@@ -3861,6 +3861,68 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
+      "post": {
+        "tags": [
+          "case-monitor-v1"
+        ],
+        "summary": "Set Monitor Status",
+        "operationId": "set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "target_status",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Status"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCaseMonitorStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseMonitorDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/market-expression": {
       "get": {
         "tags": [
@@ -12339,6 +12401,28 @@
           "page"
         ],
         "title": "SearchResponse"
+      },
+      "SetCaseMonitorStatusRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "change_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Change Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor",
+          "change_reason"
+        ],
+        "title": "SetCaseMonitorStatusRequest"
       },
       "SourceCitationDTO": {
         "properties": {

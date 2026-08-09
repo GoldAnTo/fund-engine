@@ -48,6 +48,7 @@ class AutoResearchService:
         commit: bool = True,
         thesis_ids: list[uuid.UUID] | None = None,
         monitor_version_id: uuid.UUID | None = None,
+        trigger: str = "manual",
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -65,6 +66,8 @@ class AutoResearchService:
                 .limit(1)
             )
         if monitor is not None and thesis_ids is None:
+            if trigger == "schedule" and monitor.status != "active":
+                raise ValueError("scheduled research is paused for this case")
             thesis_ids = [uuid.UUID(value) for value in monitor.factor_ids]
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
@@ -83,7 +86,7 @@ class AutoResearchService:
             status="completed",
             message="已冻结本次运行范围",
             payload_json={
-                "trigger": "manual",
+                "trigger": trigger,
                 "monitor_version_id": str(monitor.id) if monitor is not None else None,
                 "factor_ids": [str(thesis.id) for thesis in theses],
                 "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],

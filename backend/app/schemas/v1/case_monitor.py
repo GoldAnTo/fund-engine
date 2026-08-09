@@ -24,6 +24,11 @@ class UpdateCaseMonitorRequest(V1Model):
     change_reason: str = Field(min_length=1)
 
 
+class SetCaseMonitorStatusRequest(V1Model):
+    actor: str = Field(min_length=1, max_length=128)
+    change_reason: str = Field(min_length=1)
+
+
 class CaseMonitorDTO(V1Model):
     id: str
     version: int
