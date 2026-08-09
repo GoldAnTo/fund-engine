@@ -197,3 +197,17 @@ class ResearchProtocolRepository:
             .order_by(VerificationRuleVersion.created_at.desc(), VerificationRuleVersion.id.desc())
             .limit(1)
         )
+
+    def rule_history(
+        self, research_case_id: uuid.UUID, mechanism_edge_ids: list[uuid.UUID]
+    ) -> list[VerificationRuleVersion]:
+        if not mechanism_edge_ids:
+            return []
+        return list(self._session.scalars(
+            select(VerificationRuleVersion)
+            .where(
+                VerificationRuleVersion.research_case_id == research_case_id,
+                VerificationRuleVersion.mechanism_edge_id.in_(mechanism_edge_ids),
+            )
+            .order_by(VerificationRuleVersion.created_at.desc(), VerificationRuleVersion.id.desc())
+        ))

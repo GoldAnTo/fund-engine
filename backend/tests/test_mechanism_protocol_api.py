@@ -41,3 +41,8 @@ def test_case_protocol_api_lists_templates_and_appends_selection(cmd_client, cmd
     assert rule.status_code == 201, rule.text
     assert rule.json()["research_case_id"] == str(case.id)
     assert rule.json()["contradiction_predicate"] == "CapEx 下调"
+
+    replay = cmd_client.get(f"/api/v1/research-cases/{case.id}/mechanism-protocol")
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["rule_history"][0]["id"] == rule.json()["id"]
+    assert replay.json()["rule_history"][0]["reason"] == "定义反证规则"

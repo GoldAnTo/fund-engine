@@ -155,3 +155,4 @@ class CaseMechanismProtocolDTO(V1Model):
     selection: MechanismSelectionDTO | None
     template: MechanismTemplateDTO | None
     rules: list[VerificationRuleDTO]
+    rule_history: list[VerificationRuleDTO]

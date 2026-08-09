@@ -5270,6 +5270,13 @@
             },
             "type": "array",
             "title": "Rules"
+          },
+          "rule_history": {
+            "items": {
+              "$ref": "#/components/schemas/VerificationRuleDTO"
+            },
+            "type": "array",
+            "title": "Rule History"
           }
         },
         "additionalProperties": false,
@@ -5277,7 +5284,8 @@
         "required": [
           "selection",
           "template",
-          "rules"
+          "rules",
+          "rule_history"
         ],
         "title": "CaseMechanismProtocolDTO"
       },

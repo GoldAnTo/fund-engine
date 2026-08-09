@@ -147,6 +147,13 @@
 .ros-rule-config label { display: grid; gap: .3rem; color: var(--ros-soft, #59615d); font-size: .72rem; }
 .ros-rule-config input, .ros-rule-config select, .ros-rule-config textarea { width: 100%; min-width: 0; padding: .5rem .6rem; color: var(--ros-ink, #30332f); background: #fffdf8; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .32rem; font: inherit; }
 .ros-rule-config textarea { min-height: 4.3rem; resize: vertical; }
+.ros-rule-history { max-width: 1180px; margin-top: 1rem; padding: 1rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .55rem; background: #fffdf8; }
+.ros-rule-history h2 { margin: .25rem 0 .4rem; font-size: 1rem; }
+.ros-rule-history header > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft, #59615d); font-size: .75rem; line-height: 1.5; }
+.ros-rule-history ol { display: grid; gap: .6rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.ros-rule-history li { display: grid; grid-template-columns: minmax(11rem, .7fr) minmax(0, 1.3fr); gap: .3rem .8rem; padding-top: .7rem; border-top: 1px solid var(--ros-rule, #ded9ce); font-size: .75rem; }
+.ros-rule-history li > span, .ros-rule-history li > small { color: var(--ros-muted, #767b76); }
+.ros-rule-history li > p, .ros-rule-history li > small { grid-column: 1 / -1; margin: 0; line-height: 1.45; }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }

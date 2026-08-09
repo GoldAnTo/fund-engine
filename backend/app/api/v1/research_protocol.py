@@ -107,11 +107,12 @@ def case_mechanism_protocol(case_id: uuid.UUID, db: Session = Depends(get_db)):
     repo = ResearchProtocolRepository(db)
     selection = repo.effective_case_template(case_id)
     if selection is None:
-        return CaseMechanismProtocolDTO(selection=None, template=None, rules=[])
+        return CaseMechanismProtocolDTO(selection=None, template=None, rules=[], rule_history=[])
     template = repo.template(selection.template_version_id)
     edge_ids = [edge.id for edge in db.scalars(select(MechanismEdgeVersion).where(MechanismEdgeVersion.template_version_id == selection.template_version_id))]
     rules = [_rule_dto(rule) for edge_id in edge_ids if (rule := repo.effective_rule(case_id, edge_id)) is not None]
-    return CaseMechanismProtocolDTO(selection=_selection_dto(selection), template=_template_dto(db, template), rules=rules)
+    history = [_rule_dto(rule) for rule in repo.rule_history(case_id, edge_ids)]
+    return CaseMechanismProtocolDTO(selection=_selection_dto(selection), template=_template_dto(db, template), rules=rules, rule_history=history)
 
 
 @router.post("/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules", response_model=VerificationRuleDTO, status_code=status.HTTP_201_CREATED)

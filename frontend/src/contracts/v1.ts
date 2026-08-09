@@ -1600,6 +1600,8 @@ export interface components {
             template: components["schemas"]["MechanismTemplateDTO"] | null;
             /** Rules */
             rules: components["schemas"]["VerificationRuleDTO"][];
+            /** Rule History */
+            rule_history: components["schemas"]["VerificationRuleDTO"][];
         };
         /** CaseMonitorDTO */
         CaseMonitorDTO: {
