@@ -20,6 +20,16 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
   });
 
+  test("topbar search opens a matching Case from the current registry", async ({ page }) => {
+    await page.goto("/events?client=mock");
+
+    await page.getByLabel("搜索事件、公司、命题或证据").fill("台积");
+    const result = page.getByLabel("Case 搜索结果").getByRole("link", { name: /台积电上调 CoWoS 指引后下跌/ });
+    await expect(result).toHaveAttribute("href", "/events/event-tsm");
+    await result.click();
+    await expect(page).toHaveURL(/\/events\/event-tsm(?:\?client=mock)?$/);
+  });
+
   test("research dispatch keeps priority, human review and system activity visible", async ({ page }) => {
     await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
       items: [{ run_id: "run-alphabet", case_id: "event-alphabet", case_title: "Alphabet 财报超预期后股价下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["licensed_provider"], budget: 20 } }], next_cursor: null, has_more: false,
