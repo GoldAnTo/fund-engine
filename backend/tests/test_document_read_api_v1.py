@@ -17,6 +17,34 @@ def test_documents_list_frozen_versions(api_client, document, span):
     assert item["parse_state"] == "parsed"
 
 
+def test_documents_list_can_be_scoped_to_one_case_without_leaking_other_case_material(
+    api_client, document_service, research_service, document
+):
+    first_case = research_service.add_case(
+        title="first case", industry_topic="test", created_by="tester"
+    )
+    second_case = research_service.add_case(
+        title="second case", industry_topic="test", created_by="tester"
+    )
+    document_service.attach_to_case(
+        research_case_id=first_case.id, document_version_id=document.id
+    )
+    other_document = document_service.freeze(
+        raw=b"other case frozen material",
+        source_url="https://example.test/other-case-material",
+    )
+    document_service.attach_to_case(
+        research_case_id=second_case.id, document_version_id=other_document.id
+    )
+
+    response = api_client.get(
+        "/api/v1/documents", params={"case_id": str(first_case.id)}
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [str(document.id)]
+
+
 def test_document_detail_returns_spans_and_citations(api_client, document, span):
     response = api_client.get(f"/api/v1/documents/{document.id}")
     assert response.status_code == 200

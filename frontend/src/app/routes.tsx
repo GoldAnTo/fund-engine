@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./AppShell";
-import { CaseConclusionPage, CaseMarketPage, CaseMonitorPage, CaseReviewPage, CaseWikiPage, MonitorConfigPage } from "../features/case/CasePages";
+import { CaseConclusionPage, CaseDocumentsPage, CaseEvidencePage, CaseMarketPage, CaseMonitorPage, CaseReviewPage, CaseWikiPage, MonitorConfigPage } from "../features/case/CasePages";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 
@@ -13,6 +13,8 @@ export function ResearchOsRoutes() {
     <Route path="monitoring" element={<EventDeskPage />} />
     <Route path="events/new" element={<EventCreatePage />} />
     <Route path="events/:caseId" element={<CaseConclusionPage />} />
+    <Route path="events/:caseId/evidence" element={<CaseEvidencePage />} />
+    <Route path="events/:caseId/documents" element={<CaseDocumentsPage />} />
     <Route path="events/:caseId/review" element={<CaseReviewPage />} />
     <Route path="events/:caseId/wiki" element={<CaseWikiPage />} />
     <Route path="events/:caseId/market" element={<CaseMarketPage />} />

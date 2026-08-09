@@ -953,6 +953,7 @@ export class HttpResearchAdapter implements ResearchClient {
       `/documents${this.buildQuery({
         q: query?.query,
         cutoff: query?.cutoff,
+        case_id: query?.caseId,
       })}`,
     );
     return dto.items.map((d) => this.mapDocument(d));

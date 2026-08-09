@@ -8,7 +8,9 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
+import { CaseEvidencePage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
+import { ResearchOsRoutes } from "../app/routes";
 
 describe("Research OS event entry", () => {
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
@@ -77,5 +79,33 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("台积电上调 CoWoS 指引后下跌");
     expect(strip).toHaveTextContent("company_disclosure");
     expect(strip).toHaveTextContent("已处理 3");
+  });
+
+  it("keeps Case evidence separate from the current conclusion and exposes its frozen locator", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
+        <Routes><Route path="/events/:caseId/evidence" element={<CaseEvidencePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "每一条关系都保留原文、时点与审核边界" })).toBeVisible();
+    expect(screen.getAllByText("命题与证据").length).toBeGreaterThan(0);
+    expect(screen.getByText("精确定位")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "原文资料" }).some((link) => link.getAttribute("href") === "/events/event-tsm/documents")).toBe(true);
+  });
+
+  it("opens a Case-scoped frozen source snapshot with its exact locator", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "原文资料" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: /台积电 2026 年第二季度法说会摘要/ }));
+    expect(await screen.findByText("内容快照（当前 V1 未提供原件文件）")).toBeVisible();
+    expect(screen.getByText(/资本开支指引/)).toBeVisible();
+    expect(screen.getByText('{"page":12,"section":"资本开支"}')).toBeVisible();
   });
 });

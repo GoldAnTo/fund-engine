@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import AIRun, DocumentVersion, Stock
+from app.models.ledger import AIRun, CaseDocumentVersion, DocumentVersion, Stock
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
@@ -66,6 +66,7 @@ class DocumentReadQueries:
         self,
         *,
         query: str | None,
+        case_id: uuid.UUID | None,
         basis: HistoricalBasis,
         limit: int,
         cursor: str | None,
@@ -77,6 +78,7 @@ class DocumentReadQueries:
             cutoff=basis.cutoff,
             limit=limit,
             query=query,
+            case_id=case_id,
             cursor_at=cursor_at,
             cursor_id=cursor_id,
         )

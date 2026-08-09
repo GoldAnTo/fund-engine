@@ -432,6 +432,7 @@ export interface RelationshipQuery {
 export interface DocumentsQuery {
   query?: string;
   cutoff?: string;
+  caseId?: string;
 }
 
 export interface SearchHit {

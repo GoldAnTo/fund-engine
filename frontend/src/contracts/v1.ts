@@ -4910,6 +4910,7 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string | null;
+                case_id?: string | null;
                 cutoff?: string | null;
                 limit?: number;
                 cursor?: string | null;

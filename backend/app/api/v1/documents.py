@@ -17,6 +17,7 @@ router = APIRouter(prefix="/documents", tags=["documents-v1"])
 @router.get("", response_model=DocumentListResponse)
 def list_documents(
     q: str | None = None,
+    case_id: uuid.UUID | None = None,
     cutoff: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = None,
@@ -24,6 +25,7 @@ def list_documents(
 ):
     return DocumentReadQueries(db).list_documents(
         query=q,
+        case_id=case_id,
         basis=HistoricalBasis.from_cutoff(cutoff),
         limit=limit,
         cursor=cursor,

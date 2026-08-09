@@ -128,6 +128,7 @@ class DocumentRepository:
         cutoff: datetime,
         limit: int,
         query: str | None = None,
+        case_id: uuid.UUID | None = None,
         cursor_at: datetime | None = None,
         cursor_id: uuid.UUID | None = None,
     ) -> list[DocumentVersion]:
@@ -140,6 +141,11 @@ class DocumentRepository:
         )
         if query:
             stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
+        if case_id is not None:
+            stmt = stmt.join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.document_version_id == DocumentVersion.id,
+            ).where(CaseDocumentVersion.research_case_id == case_id)
         if cursor_at is not None and cursor_id is not None:
             # Order is (available_at DESC, id DESC); fetch rows strictly before
             # the cursor tuple.
