@@ -6,8 +6,10 @@ from decimal import Decimal
 from app.models.ledger import (
     CausalEdge,
     CausalStep,
+    CaseDocumentVersion,
     Company,
     DocumentVersion,
+    EvidenceReview,
     EvidenceLink,
     Fund,
     HoldingDisclosure,
@@ -19,6 +21,7 @@ from app.models.ledger import (
     Thesis,
     ValuationSnapshot,
 )
+from app.models.source_governance import SourceContract
 
 
 def edge_pairs(payload):
@@ -505,6 +508,76 @@ def test_graph_includes_document_and_span_nodes_with_contains_derived_edges(
     document_nodes = [n for n in payload["nodes"] if n["kind"] == "document"]
     assert len(span_nodes) == 1
     assert len(document_nodes) == 1
+
+
+def test_graph_marks_only_case_admitted_sources_as_locatable(
+    api_client, session, workbench_case
+):
+    span = session.get(SourceSpan, workbench_case.statement.source_span_id)
+    assert span is not None
+    document = session.get(DocumentVersion, span.document_version_id)
+    assert document is not None
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=workbench_case.case.id,
+            document_version_id=document.id,
+            linked_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    session.add(
+        SourceContract(
+            document_version_id=document.id,
+            source_type="uploaded_file",
+            provider_or_tenant="research-team",
+            allow_ai_processing=True,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=[],
+            contract_version="fixture-v1",
+            intake_metadata={},
+            declared_by="human:researcher",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    session.add(
+        EvidenceReview(
+            evidence_link_id=workbench_case.link.id,
+            outcome="confirmed",
+            relation="supports",
+            factor_role="核心验证",
+            scope_boundary="数据中心",
+            reason="已逐字核对冻结原文与定位。",
+            reviewer="human:researcher",
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+    )
+    session.commit()
+
+    response = api_client.get(
+        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
+        params={
+            "thesis_id": str(workbench_case.thesis.id),
+            "cutoff": "2026-12-31T00:00:00Z",
+            "research_mode": "true",
+        },
+    )
+    assert response.status_code == 200
+    document_node = next(
+        node for node in response.json()["nodes"] if node["kind"] == "document"
+    )
+    assert document_node["properties"]["source_visible_in_case"] is True
+    assert document_node["properties"]["permission_status"] == "admitted"
+    evidence_edge = next(
+        edge for edge in response.json()["edges"] if edge["semantic_kind"] == "evidence"
+    )
+    assert evidence_edge["properties"]["reviewer"] == "human:researcher"
+    assert evidence_edge["properties"]["review_reason"] == "已逐字核对冻结原文与定位。"
 
 
 def test_graph_excludes_post_cutoff_document_layer(api_client, session):

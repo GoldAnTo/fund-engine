@@ -39,29 +39,40 @@ def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
-def latest_review_outcomes(
+def latest_reviews(
     db: Session,
     link_ids: list[uuid.UUID],
     *,
     cutoff: datetime | None = None,
-) -> dict[uuid.UUID, str]:
-    """Latest review outcome per link id, optionally bounded by cutoff.
+) -> dict[uuid.UUID, EvidenceReview]:
+    """Latest review record per link id, optionally bounded by cutoff.
 
     Reviews created after the cutoff do not exist for historical replay, so
     they are excluded when ``cutoff`` is given.
     """
     if not link_ids:
         return {}
-    query = select(
-        EvidenceReview.evidence_link_id,
-        EvidenceReview.outcome,
-        EvidenceReview.created_at,
-    ).where(EvidenceReview.evidence_link_id.in_(link_ids))
-    latest: dict[uuid.UUID, tuple[str, datetime]] = {}
-    for link_id, outcome, created_at in db.execute(query):
-        if cutoff is not None and _naive(created_at) > _naive(cutoff):
+    query = (
+        select(EvidenceReview)
+        .where(EvidenceReview.evidence_link_id.in_(link_ids))
+        .order_by(EvidenceReview.created_at, EvidenceReview.id)
+    )
+    latest: dict[uuid.UUID, EvidenceReview] = {}
+    for review in db.scalars(query):
+        if cutoff is not None and _naive(review.created_at) > _naive(cutoff):
             continue
-        prev = latest.get(link_id)
-        if prev is None or _naive(created_at) > _naive(prev[1]):
-            latest[link_id] = (outcome, created_at)
-    return {link_id: outcome for link_id, (outcome, _) in latest.items()}
+        latest[review.evidence_link_id] = review
+    return latest
+
+
+def latest_review_outcomes(
+    db: Session,
+    link_ids: list[uuid.UUID],
+    *,
+    cutoff: datetime | None = None,
+) -> dict[uuid.UUID, str]:
+    """Latest review outcome per link id, optionally bounded by cutoff."""
+    return {
+        link_id: review.outcome
+        for link_id, review in latest_reviews(db, link_ids, cutoff=cutoff).items()
+    }
