@@ -13,6 +13,13 @@ test.describe("Event-first Research OS", () => {
     expect(liveRequests).toEqual([]);
   });
 
+  test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {
+    await page.goto("/workspace?client=mock");
+
+    await expect(page).toHaveURL(/\/events(?:\?client=mock)?$/);
+    await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
+  });
+
   test("research dispatch keeps priority, human review and system activity visible", async ({ page }) => {
     await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
       items: [{ run_id: "run-alphabet", case_id: "event-alphabet", case_title: "Alphabet 财报超预期后股价下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["licensed_provider"], budget: 20 } }], next_cursor: null, has_more: false,
