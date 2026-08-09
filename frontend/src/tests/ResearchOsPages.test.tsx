@@ -160,6 +160,26 @@ describe("Research OS event entry", () => {
     expect(navigation.textContent).not.toContain("研究协议");
   });
 
+  it("opens Case evidence through its frozen Case document instead of a live source URL", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
+        <Routes>
+          <Route path="/events/:caseId/evidence" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "定位到冻结原文" }),
+    ).toHaveAttribute(
+      "href",
+      "/events/event-tsm/documents?document=doc-event-tsm-q2",
+    );
+    expect(
+      screen.queryByRole("link", { name: "打开冻结来源" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("turns a Case Wiki source and AI candidate into traceable researcher actions", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));

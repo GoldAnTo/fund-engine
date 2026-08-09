@@ -220,6 +220,8 @@ class EventKeyEvidenceDTO(V1Model):
     review_state: str
     source_title: str | None
     source_url: str | None
+    document_version_id: str
+    source_visible_in_case: bool
     excerpt: str
     locator: dict
     available_at: datetime

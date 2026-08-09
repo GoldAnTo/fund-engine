@@ -28,6 +28,7 @@ from app.models.proposals import Proposal
 from app.repositories.operational import TaskRepository
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.source_governance import SourceGovernanceService
 
 
 def _confirmed_event() -> dict:
@@ -907,6 +908,49 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
         "factors": [{"statement": statement, "description": None} for statement in factors],
         "unmapped_evidence_count": 0,
     }
+
+
+def test_event_workbench_evidence_links_only_to_the_case_frozen_document(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Verified investor relations release",
+    )
+    document = cmd_session.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.source_url
+            == "https://investor.tsmc.com/english/quarterly-results"
+        )
+    )
+    assert document is not None
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="uploaded_file",
+        source_metadata={},
+        declared_by="tester",
+    )
+    accepted = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "verified primary source supports the factor",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+    assert accepted.status_code == 201
+
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+
+    assert workbench.status_code == 200
+    evidence = workbench.json()["evidence"]
+    assert evidence[0]["document_version_id"] == str(document.id)
+    assert evidence[0]["source_visible_in_case"] is True
 
 
 def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client, cmd_session) -> None:

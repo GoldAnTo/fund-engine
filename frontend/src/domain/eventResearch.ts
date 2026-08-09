@@ -96,6 +96,8 @@ export interface EventEvidenceCitation {
   reviewState: string;
   sourceTitle: string | null;
   sourceUrl: string | null;
+  documentVersionId: string | null;
+  sourceVisibleInCase: boolean;
   excerpt: string;
   locator: Record<string, unknown>;
   availableAt: string;
