@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy import update
 
-from app.models.ledger import ImmutableLedgerError
+from app.models.ledger import ImmutableLedgerError, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
+from app.services.research_protocol import MetricDefinitionInput, OutcomeBindingInput, ResearchProtocolService
 
 
 def test_metric_versions_and_outcome_bindings_are_append_only(session, thesis) -> None:
@@ -66,3 +68,60 @@ def test_metric_versions_and_outcome_bindings_are_append_only(session, thesis) -
 
 def test_legacy_thesis_does_not_require_research_protocol_by_default(thesis) -> None:
     assert thesis.research_protocol_required is False
+
+
+def _metric_input(*, roles: list[str] | None = None) -> MetricDefinitionInput:
+    return MetricDefinitionInput(
+        metric_id="business_line_revenue",
+        display_name="相关业务收入",
+        canonical_definition="目标公司指定业务线按季度确认的营业收入",
+        entity_scope="business_line",
+        unit="yuan",
+        frequency="quarterly",
+        period_semantics="period_end",
+        allowed_source_roles=["primary_disclosure"],
+        role_eligibility=roles or ["outcome"],
+    )
+
+
+def _binding_input(metric_id) -> OutcomeBindingInput:
+    return OutcomeBindingInput(
+        metric_definition_id=metric_id,
+        entity_scope={"company_id": "company-a", "business_line": "800G optics"},
+        direction="increase",
+        baseline={"source_ref": "doc:baseline-1", "value": "10", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
+        horizon_start=date(2026, 4, 1),
+        horizon_end=date(2026, 12, 31),
+        reviewer="human:researcher",
+        reason="结果变量确认",
+    )
+
+
+def test_outcome_binding_requires_an_outcome_eligible_metric(session, thesis) -> None:
+    service = ResearchProtocolService(session)
+    driver_only = service.add_metric_version(_metric_input(roles=["driver"]), approved_by="human:owner", reason="驱动指标")
+
+    with pytest.raises(ValidationError, match="outcome eligible"):
+        service.create_outcome_binding(thesis.id, _binding_input(driver_only.id))
+
+
+def test_outcome_binding_rejects_invalid_horizon_and_untraceable_baseline(session, thesis) -> None:
+    service = ResearchProtocolService(session)
+    metric = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="结果指标")
+    inverted = _binding_input(metric.id)
+    inverted = replace(inverted, horizon_start=date(2026, 6, 30), horizon_end=date(2026, 3, 31))
+    with pytest.raises(ValidationError, match="horizon_start"):
+        service.create_outcome_binding(thesis.id, inverted)
+    incomplete = _binding_input(metric.id)
+    incomplete = replace(incomplete, baseline={"value": "10"})
+    with pytest.raises(ValidationError, match="baseline.source_ref"):
+        service.create_outcome_binding(thesis.id, incomplete)
+
+
+def test_effective_metric_uses_the_latest_append_only_version(session) -> None:
+    service = ResearchProtocolService(session)
+    first = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="初版")
+    second = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="范围澄清", supersedes_id=first.id)
+
+    assert (first.version, second.version) == (1, 2)
+    assert service.effective_metric("business_line_revenue").id == second.id
