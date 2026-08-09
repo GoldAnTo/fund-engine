@@ -57,6 +57,8 @@ IMMUTABLE_TABLES = frozenset(
         "market_observations",
         "source_contracts",
         "provider_records",
+        "metric_definition_versions",
+        "outcome_binding_versions",
         "source_spans",
         "research_cases",
         "theses",
@@ -251,6 +253,9 @@ class Thesis(Base):
         Uuid, ForeignKey("research_cases.id"), nullable=False
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
+    research_protocol_required: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
