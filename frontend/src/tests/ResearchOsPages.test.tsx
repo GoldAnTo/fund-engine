@@ -8,7 +8,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
-import { CaseDocumentsPage, CaseEvidencePage, CaseProtocolPage } from "../features/case/CasePages";
+import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 
@@ -248,6 +248,22 @@ describe("Research OS event entry", () => {
     expect(screen.getByRole("button", { name: "设定结果指标与验证窗口" })).toBeVisible();
     expect(await screen.findByRole("button", { name: "选择此模板" })).toBeVisible();
     expect(screen.getByText(/系统不会把市场表现自动写成机制成立/)).toBeVisible();
+  });
+
+  it("blocks immediate replenishment in the UI with the exact missing protocol work", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/researchability")
+        ? { status: "blocked", reason_codes: ["missing_outcome_binding"], effective_binding_id: null, next_action: "确认结果指标、范围、基线和时间窗" }
+        : { monitor: { id: "monitor-1", version: 1, status: "active", frequency: "weekday_08_30", factor_ids: ["event-tsm-factor-1"], allowed_source_types: ["company_disclosure"], next_verification_event: "下一次财报", budget: 10, changed_by: "human", change_reason: "test", created_at: "2026-08-09T00:00:00Z" }, latest_run: null, confirmed_factors: [{ id: "event-tsm-factor-1", statement: "资本开支指引" }] };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+    }));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/monitor"]}><Routes><Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText("研究协议尚未通过，不能启动补证。")).toBeVisible();
+    expect(screen.getByText(/尚未固定结果指标/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "立即补证一次" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "补齐研究协议" })).toHaveAttribute("href", "/events/event-tsm/protocol");
   });
 
   it("edits a rule from the current Case version and never posts to a global template edge", async () => {
