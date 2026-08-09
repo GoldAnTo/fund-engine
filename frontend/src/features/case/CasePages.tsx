@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useParams } from "react-router-dom";
 
-import { researchOsApi, type CaseMechanismProtocol, type Graph, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
+import { researchOsApi, type CaseMechanismProtocol, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
 import type { EventResearchClient, EventWorkbench } from "../../domain/eventResearch";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
@@ -76,24 +76,6 @@ function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearc
 
 export function CaseWikiPage() { return <CaseFrame>{(_data, caseId) => <WikiInspectorContent caseId={caseId} />}</CaseFrame>; }
 export function CaseRelationsPage() { return <CaseFrame>{(_data, caseId) => <CaseRelationsContent caseId={caseId} />}</CaseFrame>; }
-function WikiContent({ caseId }: { caseId: string }) {
-  const [graph, setGraph] = useState<Graph | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showCandidates, setShowCandidates] = useState(true);
-  useEffect(() => { researchOsApi.graph(caseId).then((value) => { setGraph(value); setSelectedId(value.nodes[0]?.id ?? null); }).catch(() => setGraph(null)); }, [caseId]);
-  if (!graph) return <div className="ros-empty ros-page-gap">Case Wiki 暂无可读取图谱。系统不会以示例节点替代真实证据。</div>;
-  const candidateNode = (node: Graph["nodes"][number]) => node.kind === "proposal" || node.properties?.review_state === "machine_generated";
-  const candidateEdge = (edge: Graph["edges"][number]) => edge.review_state === "machine_generated";
-  const nodes = graph.nodes.filter((node) => showCandidates || !candidateNode(node));
-  const visibleNodeIds = new Set(nodes.map((node) => node.id));
-  const edges = graph.edges.filter((edge) => showCandidates || (!candidateEdge(edge) && visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)));
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
-  const selected = nodes.find((node) => node.id === selectedId) || nodes[0];
-  const selectedEdges = graph.edges.filter((edge) => edge.source === selected?.id || edge.target === selected?.id);
-  const reviewed = graph.edges.filter((edge) => edge.review_state !== "machine_generated").length;
-  const candidates = graph.edges.filter((edge) => edge.review_state === "machine_generated").length;
-  return <section className="ros-wiki"><header className="ros-section-heading"><div><p className="ros-eyebrow">Case Wiki · 证据关系</p><h2>从资料到基金表达的可追溯路径</h2></div><button className="ros-button ros-button--secondary" type="button" onClick={() => setShowCandidates((value) => !value)}>{showCandidates ? `隐藏 AI 候选 ${candidates}` : `显示 AI 候选 ${candidates}`}</button></header><div className="ros-wiki-grid"><div className="ros-wiki-wrap"><div className="ros-wiki-bar"><span>已审核关系 {reviewed}</span><span>实线：已审核 · 虚线：未经人工复核</span></div><div className="ros-wiki-canvas" aria-label="Case Wiki 节点列表">{nodes.map((node) => <button type="button" onClick={() => setSelectedId(node.id)} className={`ros-wiki-node ros-wiki-node--${node.kind}${node.id === selected?.id ? " is-selected" : ""}${candidateNode(node) ? " is-candidate" : ""}`} key={node.id}><span>{node.kind}</span><strong>{node.label}</strong><small>{candidateNode(node) ? "AI 候选，未进入结论" : "已进入 Case 图谱"}</small></button>)}</div><div className="ros-wiki-edges" aria-label="Case Wiki 关系">{edges.map((edge) => <button className={`ros-wiki-edge${candidateEdge(edge) ? " is-candidate" : ""}`} type="button" onClick={() => setSelectedId(edge.target)} key={`${edge.source}-${edge.target}-${edge.semantic_kind}`}><span>{nodeById.get(edge.source)?.label || edge.source}</span><i aria-hidden="true">→</i><span>{nodeById.get(edge.target)?.label || edge.target}</span><b>{edge.semantic_kind}</b><small>{candidateEdge(edge) ? "AI 候选，未经复核" : "已审核关系"}</small></button>)}{edges.length === 0 && <p className="ros-empty ros-empty--compact">当前筛选下暂无可展示关系。</p>}</div></div><aside className="ros-wiki-inspector">{selected ? <><span className={`ros-pill ${candidateNode(selected) ? "ros-pill--human" : "ros-pill--system"}`}>{candidateNode(selected) ? "未经人工复核" : "已审核对象"}</span><h3>{selected.label}</h3><p>{selected.kind} · {selectedEdges.length} 条关联关系</p><dl>{Object.entries(selected.properties || {}).slice(0, 4).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl><div className="ros-legend"><span>关系：{selectedEdges.map((edge) => edge.semantic_kind).join("、") || "暂无"}</span><span>AI 候选不继承结论、市场表达或基金暴露。</span></div></> : <p>选择一个节点以查看其证据与关系。</p>}</aside></div></section>;
-}
 
 export function CaseMarketPage() { return <CaseFrame>{(_data, caseId) => <MarketExpressionContent caseId={caseId} />}</CaseFrame>; }
 const protocolReason: Record<string, string> = { missing_outcome_binding: "尚未固定结果指标、实体范围、可回溯基线和观察窗口", binding_not_approved: "结果绑定仍是草案，尚未经过人工审核", missing_mechanism_template: "尚未选择可检验的机制模板", missing_verification_rule: "尚未声明支持、反证与证据优先级规则", insufficient_primary_metrics: "仅一个独立主指标：只能受限监测，正式判断仅可为证据不足或未到验证时点", missing_counter_hypothesis: "尚未定义竞争解释或反向检验" };
