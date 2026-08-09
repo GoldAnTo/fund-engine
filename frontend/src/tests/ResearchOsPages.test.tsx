@@ -82,7 +82,9 @@ describe("Research OS event entry", () => {
     expect(await screen.findByRole("button", { name: "从冻结资料提取候选" })).toBeVisible();
     expect(screen.getByText(/只会创建待人工审核的原子陈述/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "从冻结资料提取候选" }));
-    expect(await screen.findByText("离线原型未运行 LLM 抽取")).toBeVisible();
+    expect(await screen.findByText(/离线原型未运行 LLM 抽取/)).toBeVisible();
+    expect(screen.getByText(/未产生可研究陈述/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续补充原 Case" })).toBeVisible();
   });
 
   it("opens the requested frozen document and marks the span used for review", async () => {
