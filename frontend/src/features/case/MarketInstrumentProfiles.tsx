@@ -13,6 +13,7 @@ const freshnessLabels: Record<string, string> = {
 function useMarketExpression(caseId: string) {
   const [expression, setExpression] = useState<MarketExpression | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -31,9 +32,13 @@ function useMarketExpression(caseId: string) {
     return () => {
       active = false;
     };
-  }, [caseId]);
+  }, [caseId, reload]);
 
-  return { expression, error };
+  return {
+    expression,
+    error,
+    retry: () => setReload((value) => value + 1),
+  };
 }
 
 export function MarketStockProfile({
@@ -43,8 +48,8 @@ export function MarketStockProfile({
   caseId: string;
   stockId: string;
 }) {
-  const { expression, error } = useMarketExpression(caseId);
-  if (error) return <p className="ros-error">{error}</p>;
+  const { expression, error, retry } = useMarketExpression(caseId);
+  if (error) return <MarketExpressionUnavailable error={error} onRetry={retry} />;
   if (!expression)
     return <div className="ros-empty">正在读取当前 Case 的股票研究档案…</div>;
 
@@ -193,8 +198,8 @@ export function MarketFundProfile({
   caseId: string;
   fundId: string;
 }) {
-  const { expression, error } = useMarketExpression(caseId);
-  if (error) return <p className="ros-error">{error}</p>;
+  const { expression, error, retry } = useMarketExpression(caseId);
+  if (error) return <MarketExpressionUnavailable error={error} onRetry={retry} />;
   if (!expression)
     return <div className="ros-empty">正在读取当前 Case 的基金披露档案…</div>;
 
@@ -283,6 +288,28 @@ function SourceLink({
     <p className="ros-note">
       冻结来源未关联当前 Case 或无展示许可，不能提供原文跳转。
     </p>
+  );
+}
+
+function MarketExpressionUnavailable({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="ros-empty ros-page-gap" role="alert">
+      <strong>市场表达暂不可读取</strong>
+      <p>{error}</p>
+      <button
+        className="ros-button ros-button--secondary"
+        type="button"
+        onClick={onRetry}
+      >
+        重试读取市场表达
+      </button>
+    </section>
   );
 }
 

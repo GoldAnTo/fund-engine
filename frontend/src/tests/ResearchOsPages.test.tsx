@@ -244,6 +244,53 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("does not call an unreadable monitor history an empty configuration history", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "monitor").mockRejectedValue(
+      new Error("Monitor history unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor/config"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/monitor/config"
+            element={<MonitorConfigPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取 CaseMonitor 版本历史",
+    );
+  });
+
+  it("keeps an unavailable Case-scoped stock profile explicit and retryable", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "marketExpression").mockRejectedValue(
+      new Error("Market expression unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/stocks/stock-demo"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/stocks/:stockId"
+            element={<CaseStockProfilePage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取当前 Case 的市场表达",
+    );
+    expect(
+      screen.getByRole("button", { name: "重试读取市场表达" }),
+    ).toBeEnabled();
+  });
+
   it("keeps all eight stable Case research workbenches discoverable", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>

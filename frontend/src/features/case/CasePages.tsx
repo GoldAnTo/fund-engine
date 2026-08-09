@@ -3695,17 +3695,40 @@ export function MonitorConfigPage() {
 }
 function MonitorHistory({ caseId }: { caseId: string }) {
   const [history, setHistory] = useState<Monitor[]>([]);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
+    let active = true;
+    setLoadError(false);
     researchOsApi
       .monitor(caseId)
-      .then((value) => setHistory(value.history ?? []))
-      .catch(() => setHistory([]));
-  }, [caseId]);
+      .then((value) => {
+        if (!active) return;
+        setHistory(value.history ?? []);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, reload]);
   return (
     <section className="ros-rule-history">
       <p className="ros-eyebrow">CaseMonitor 版本历史</p>
       <h2>配置由谁、为何变更</h2>
-      {history.length ? (
+      {loadError ? (
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>无法读取 CaseMonitor 版本历史</strong>
+          <p>当前不会把不可读取的审计记录表示为“尚无配置”。</p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重新读取监控版本历史
+          </button>
+        </div>
+      ) : history.length ? (
         <ol>
           {history.map((monitor) => (
             <li key={monitor.id}>
