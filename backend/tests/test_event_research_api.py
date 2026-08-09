@@ -953,6 +953,52 @@ def test_event_workbench_evidence_links_only_to_the_case_frozen_document(
     assert evidence[0]["source_visible_in_case"] is True
 
 
+def test_event_workbench_redacts_evidence_from_a_source_not_allowed_for_display(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/restricted-quarterly-results",
+        title="Restricted investor relations release",
+    )
+    document = cmd_session.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.source_url
+            == "https://investor.tsmc.com/restricted-quarterly-results"
+        )
+    )
+    assert document is not None
+    accepted = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "reviewed under the permitted workflow",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+    assert accepted.status_code == 201
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="uploaded_file",
+        source_metadata={"permissions": {"display": False}},
+        declared_by="tester",
+    )
+
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+
+    assert workbench.status_code == 200
+    evidence = workbench.json()["evidence"][0]
+    assert evidence["source_visible_in_case"] is False
+    assert evidence["source_title"] is None
+    assert evidence["source_url"] is None
+    assert evidence["excerpt"] == ""
+    assert evidence["locator"] == {}
+
+
 def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client, cmd_session) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     case_id = uuid.UUID(created["case_id"])
