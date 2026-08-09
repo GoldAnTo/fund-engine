@@ -1,6 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
-const port = Number(process.env.PW_PORT ?? "5173");
+// Do not reuse the common development port: a different worktree may already
+// serve an older frontend there, producing false E2E results.
+const port = Number(process.env.PW_PORT ?? "5182");
 const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
@@ -8,7 +10,7 @@ export default defineConfig({
   webServer: {
     command: `npm run dev:mock -- --host 127.0.0.1 --port ${port}`,
     url: baseURL,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 30000,
   },
   use: {
