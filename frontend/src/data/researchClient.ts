@@ -27,6 +27,7 @@ export const researchClient: ResearchClient = {
   extractEventResearch: (input) => _client.extractEventResearch(input),
   createEventResearch: (input) => _client.createEventResearch(input),
   attachEventMaterial: (input) => _client.attachEventMaterial(input),
+  uploadEventMaterial: (input) => _client.uploadEventMaterial(input),
   listEventResearch: (status) => _client.listEventResearch(status),
   getEventWorkbench: (caseId) => _client.getEventWorkbench(caseId),
   getEventConclusionHistory: (caseId) => _client.getEventConclusionHistory(caseId),

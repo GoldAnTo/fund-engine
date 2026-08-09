@@ -4247,6 +4247,59 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/uploaded-materials": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Upload Event Material",
+        "operationId": "upload_event_material_api_v1_event_research__case_id__uploaded_materials_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadEventMaterialResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/published-material-decisions": {
       "post": {
         "tags": [
@@ -6467,6 +6520,30 @@
           "source_type"
         ],
         "title": "AttachEventMaterialResponse"
+      },
+      "Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "source_metadata": {
+            "type": "string",
+            "title": "Source Metadata",
+            "default": "{}"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "actor"
+        ],
+        "title": "Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post"
       },
       "CancelRunRequest": {
         "properties": {
@@ -9317,6 +9394,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SourceContractDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "original_file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OriginalFileDTO"
               },
               {
                 "type": "null"
@@ -13973,6 +14060,46 @@
         ],
         "title": "MetricSeriesResponse",
         "description": "冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断)."
+      },
+      "OriginalFileDTO": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "byte_size": {
+            "type": "integer",
+            "title": "Byte Size"
+          },
+          "object_version": {
+            "type": "string",
+            "title": "Object Version"
+          },
+          "uploaded_by": {
+            "type": "string",
+            "title": "Uploaded By"
+          },
+          "retention_policy": {
+            "type": "string",
+            "title": "Retention Policy"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_name",
+          "mime_type",
+          "byte_size",
+          "object_version",
+          "uploaded_by",
+          "retention_policy"
+        ],
+        "title": "OriginalFileDTO",
+        "description": "Inspectable provenance for a retained upload; never includes bytes."
       },
       "OutcomeBindingDTO": {
         "properties": {
@@ -18648,6 +18775,39 @@
           "tags"
         ],
         "title": "UpdateThemeTagsRequest"
+      },
+      "UploadEventMaterialResponse": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "parse_state": {
+            "type": "string",
+            "enum": [
+              "parsed",
+              "partial",
+              "failed"
+            ],
+            "title": "Parse State"
+          },
+          "next_action": {
+            "type": "string",
+            "enum": [
+              "review_original",
+              "supplement_original"
+            ],
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "parse_state",
+          "next_action"
+        ],
+        "title": "UploadEventMaterialResponse"
       },
       "ValidationError": {
         "properties": {

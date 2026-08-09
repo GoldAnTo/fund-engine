@@ -21,6 +21,17 @@ class ProviderRecordDTO(V1Model):
     retrieval_reference: str | None
 
 
+class OriginalFileDTO(V1Model):
+    """Inspectable provenance for a retained upload; never includes bytes."""
+
+    file_name: str
+    mime_type: str
+    byte_size: int
+    object_version: str
+    uploaded_by: str
+    retention_policy: str
+
+
 class SourceContractDTO(V1Model):
     source_type: str
     provider_or_tenant: str
@@ -71,6 +82,7 @@ class DocumentSummaryDTO(V1Model):
     # code matches a known Stock, the raw code otherwise, None when absent.
     entity: str | None = None
     source_contract: SourceContractDTO | None = None
+    original_file: OriginalFileDTO | None = None
 
 
 class SourceSpanDTO(V1Model):

@@ -81,6 +81,16 @@ def test_uploaded_text_original_is_frozen_attached_and_readable_without_a_run(
         )
     )
     assert [span.verbatim_text for span in spans] == [raw.decode()]
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["document"]["original_file"] == {
+        "file_name": "disclosure.txt",
+        "mime_type": "text/plain",
+        "byte_size": len(raw),
+        "object_version": f"sha256:{hashlib.sha256(raw).hexdigest()}",
+        "uploaded_by": "human:lin",
+        "retention_policy": "case_retained",
+    }
     assert cmd_session.scalars(
         select(ResearchRun).where(ResearchRun.research_case_id == case_id)
     ).all() == []

@@ -13,7 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import AIRun, CaseDocumentVersion, DocumentVersion, Stock
+from app.models.ledger import (
+    AIRun,
+    CaseDocumentVersion,
+    DocumentUploadArtifact,
+    DocumentVersion,
+    Stock,
+)
 from app.models.source_governance import ProviderRecord, SourceContract
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
@@ -25,6 +31,7 @@ from app.schemas.v1.documents import (
     DocumentDetailResponse,
     DocumentListResponse,
     DocumentSummaryDTO,
+    OriginalFileDTO,
     ProviderRecordDTO,
     SourceSpanDTO,
     SourceContractDTO,
@@ -107,6 +114,16 @@ class DocumentReadQueries:
                 )
             )
         } if page_items else {}
+        upload_artifacts = {
+            artifact.document_version_id: artifact
+            for artifact in self._session.scalars(
+                select(DocumentUploadArtifact).where(
+                    DocumentUploadArtifact.document_version_id.in_(
+                        [v.id for v in page_items]
+                    )
+                )
+            )
+        } if page_items else {}
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
             spans = self._docs.spans_for_version(version.id)
@@ -122,6 +139,7 @@ class DocumentReadQueries:
                     latest_run=run_map.get(version.id),
                     source_contract=contracts.get(version.id),
                     provider_record=provider_records.get(version.id),
+                    upload_artifact=upload_artifacts.get(version.id),
                 )
             )
         return DocumentListResponse(
@@ -200,6 +218,7 @@ class DocumentReadQueries:
                 ),
                 source_contract=self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == version_id)),
                 provider_record=self._session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == version_id)),
+                upload_artifact=self._session.scalar(select(DocumentUploadArtifact).where(DocumentUploadArtifact.document_version_id == version_id)),
             ),
             spans=span_dtos,
         )
@@ -287,6 +306,7 @@ class DocumentReadQueries:
         latest_run: AIRun | None = None,
         source_contract: SourceContract | None = None,
         provider_record: ProviderRecord | None = None,
+        upload_artifact: DocumentUploadArtifact | None = None,
     ) -> DocumentSummaryDTO:
         meta = self._locator_metadata(spans or [])
         quality, quality_reasons = assess_span_texts(
@@ -335,6 +355,18 @@ class DocumentReadQueries:
                 meta["sec_code"], meta["title"], meta["sec_name"]
             ),
             source_contract=self._source_contract_dto(source_contract, provider_record),
+            original_file=(
+                OriginalFileDTO(
+                    file_name=upload_artifact.file_name,
+                    mime_type=upload_artifact.mime_type,
+                    byte_size=upload_artifact.byte_size,
+                    object_version=upload_artifact.object_version,
+                    uploaded_by=upload_artifact.uploaded_by,
+                    retention_policy=upload_artifact.retention_policy,
+                )
+                if upload_artifact is not None
+                else None
+            ),
         )
 
     @staticmethod

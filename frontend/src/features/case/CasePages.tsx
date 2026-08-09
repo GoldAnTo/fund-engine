@@ -841,6 +841,7 @@ function DocumentReader({
 }) {
   const { document, spans } = detail;
   const contract = document.source_contract;
+  const originalFile = document.original_file;
   const permissionText = contract
     ? `AI ${contract.permissions.ai_processing ? "允许" : "禁止"} · 展示 ${contract.permissions.display ? "允许" : "禁止"} · 导出 ${contract.permissions.export ? "允许" : "禁止"} · API ${contract.permissions.api ? "允许" : "禁止"}`
     : "未记录；不得据此推定可处理或可导出";
@@ -884,7 +885,13 @@ function DocumentReader({
           {contract?.status === "admitted" ? "来源已准入" : "许可未完整记录"}
         </span>
         <h3>{document.title || "未命名资料"}</h3>
-        <p>内容快照（当前 V1 未提供原件文件）</p>
+        <p>
+          {originalFile
+            ? originalFile.mime_type === "application/pdf"
+              ? "PDF 原件已冻结；解析定位另行保存。"
+              : "文本原件已冻结；解析内容作为定位片段另行展示。"
+            : "内容快照（当前 V1 未提供原件文件）"}
+        </p>
       </header>
       <dl className="ros-definition">
         <div>
@@ -941,6 +948,22 @@ function DocumentReader({
             {document.parser_version} · {document.parse_quality}
           </dd>
         </div>
+        {originalFile && (
+          <>
+            <div>
+              <dt>原件文件</dt>
+              <dd>{originalFile.file_name} · {originalFile.mime_type} · {originalFile.byte_size} B</dd>
+            </div>
+            <div>
+              <dt>对象版本</dt>
+              <dd><code>{originalFile.object_version}</code></dd>
+            </div>
+            <div>
+              <dt>上传人 / 保留</dt>
+              <dd>{originalFile.uploaded_by} · {originalFile.retention_policy}</dd>
+            </div>
+          </>
+        )}
         <div>
           <dt>许可 / 展示范围</dt>
           <dd>{permissionText}</dd>

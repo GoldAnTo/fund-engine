@@ -4030,6 +4030,75 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ documentVersionId });
   }
 
+  async uploadEventMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string; parseState: "parsed" | "partial" | "failed"; nextAction: "review_original" | "supplement_original" }> {
+    this.throwIfOffline();
+    const caseItem = this.eventResearchItems().find((item) => item.id === input.caseId);
+    if (!caseItem) throw new Error("event research case not found");
+    if (caseItem.status === "published") throw new Error("published Case requires an explicit material decision");
+    const sequence = this.createdDocuments.size + 1;
+    const documentVersionId = `document-original-upload-${sequence}`;
+    const isPdf = input.file.type === "application/pdf";
+    const parseState = isPdf ? "failed" as const : "partial" as const;
+    const rawText = isPdf ? "" : await input.file.text();
+    const permissions = input.sourceMetadata.permissions && typeof input.sourceMetadata.permissions === "object"
+      ? input.sourceMetadata.permissions as Record<string, unknown>
+      : {};
+    this.createdDocuments.set(documentVersionId, {
+      document: {
+        id: documentVersionId,
+        title: input.file.name,
+        publisher: input.actor,
+        document_type: "uploaded_file",
+        publish_date: null,
+        available_at: "2026-08-09T12:00:00Z",
+        acquired_at: "2026-08-09T12:00:00Z",
+        parser_version: isPdf ? "pypdf-v1" : "uploaded-text-v1",
+        source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "user_supplied",
+        parse_quality: parseState,
+        linked_cases: [{ id: input.caseId, title: caseItem.eventTitle }],
+        span_count: isPdf ? 0 : 1,
+        statement_count: 0,
+        version_label: "v1 · 2026-08-09",
+        source_contract: {
+          source_type: "uploaded_file",
+          provider_or_tenant: input.actor,
+          permissions: {
+            ai_processing: typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : true,
+            display: typeof permissions.display === "boolean" ? permissions.display : true,
+            export: typeof permissions.export === "boolean" ? permissions.export : false,
+            api: typeof permissions.api === "boolean" ? permissions.api : false,
+          },
+          status: "admitted",
+          region: "not_recorded",
+          retention_policy: typeof input.sourceMetadata.retention_policy === "string" ? input.sourceMetadata.retention_policy : "case_retained",
+          deletion_policy: "not_recorded",
+          downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+          contract_version: null,
+        },
+        original_file: {
+          file_name: input.file.name,
+          mime_type: input.file.type || "text/plain",
+          byte_size: input.file.size,
+          object_version: `sha256:mock-${documentVersionId}`,
+          uploaded_by: input.actor,
+          retention_policy: typeof input.sourceMetadata.retention_policy === "string" ? input.sourceMetadata.retention_policy : "case_retained",
+        },
+      },
+      spans: isPdf ? [] : [{
+        id: `span-original-upload-${sequence}`,
+        document_id: documentVersionId,
+        locator: { kind: "uploaded_file", file_name: input.file.name, mime_type: input.file.type || "text/plain", line_start: 1 },
+        verbatim_text: rawText,
+        cited_by: [],
+      }],
+    });
+    return simulateLatency({
+      documentVersionId,
+      parseState,
+      nextAction: isPdf ? "supplement_original" as const : "review_original" as const,
+    });
+  }
+
   async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     this.throwIfOffline();
     const events = this.eventResearchItems().map((event) => {
@@ -4151,7 +4220,7 @@ export class MockResearchAdapter implements ResearchClient {
         parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : "user-pasted-v1",
         source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "unknown",
         parse_quality: "partial",
-        linked_cases: [{ id: input.caseId, title: (await this.getEventWorkbench(input.caseId)).eventTitle }],
+        linked_cases: [{ id: input.caseId, title: (await this.getEventWorkbench(input.caseId)).event.eventTitle }],
         span_count: 1,
         statement_count: 0,
         version_label: "v1 · 2026-08-09",

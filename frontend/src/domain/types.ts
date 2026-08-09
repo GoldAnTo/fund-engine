@@ -369,6 +369,14 @@ export interface SourceDocumentView {
       retrieval_reference: string | null;
     } | null;
   } | null;
+  original_file?: {
+    file_name: string;
+    mime_type: string;
+    byte_size: number;
+    object_version: string;
+    uploaded_by: string;
+    retention_policy: string;
+  } | null;
   supplements_document_id?: string | null;
   claimed_page_reference?: string | null;
 }

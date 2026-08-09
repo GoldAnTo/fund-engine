@@ -420,6 +420,25 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("公司补充披露订单交付节奏。");
   });
 
+  test("freezes an uploaded original into an existing Case and exposes its immutable file record", async ({ page }) => {
+    await page.goto("/events/new?client=mock");
+
+    await page.getByLabel("来源接入方式").selectOption("uploaded_file");
+    await page.getByLabel("选择上传原件文件").setInputFiles({
+      name: "disclosure.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("公司披露本季度订单金额增长。"),
+    });
+    await expect(page.getByText(/原件待冻结 · disclosure.txt/)).toBeVisible();
+    await page.getByLabel("选择原件目标 Case").selectOption("event-tsm");
+    await page.getByRole("button", { name: "冻结原件并归入当前 Case" }).click();
+
+    await expect(page.getByRole("heading", { name: "disclosure.txt" })).toBeVisible();
+    await expect(page.getByText("文本原件已冻结；解析内容作为定位片段另行展示。")).toBeVisible();
+    await expect(page.getByText("原件文件")).toBeVisible();
+    await expect(page.getByText(/human:researcher · case_retained/)).toBeVisible();
+  });
+
   test("published Case cannot freeze a provider material without its reproducible record", async ({ page }) => {
     await page.goto("/events/event-published/documents?client=mock");
 
