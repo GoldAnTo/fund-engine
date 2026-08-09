@@ -1,17 +1,22 @@
 """Grouped ledger search v1 read contract."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    Company,
     DocumentVersion,
     EvidenceLink,
     EvidenceReview,
     ResearchCase,
     SourceSpan,
     SourceStatement,
+    ThemeRole,
     Thesis,
 )
+from tests.tenant_admission import admit_case
 
 
 def test_search_groups_case_thesis_and_statement(api_client, workbench_case):
@@ -147,6 +152,7 @@ def test_search_evidence_excludes_future_statement_thesis_case(
         )
     )
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         "/api/v1/search",
@@ -184,6 +190,7 @@ def test_search_has_more_when_group_truncated(api_client, session):
         )
     )
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         "/api/v1/search", params={"q": "CapEx", "limit": 1}
@@ -195,6 +202,154 @@ def test_search_has_more_when_group_truncated(api_client, session):
     )
     assert len(thesis_group["hits"]) == 1
     assert payload["page"]["has_more"] is True
+
+
+def test_search_excludes_assets_not_yet_admitted_or_no_longer_applicable(
+    api_client, session
+):
+    created = datetime(2025, 1, 1, tzinfo=UTC)
+    cutoff = datetime(2026, 1, 15, tzinfo=UTC)
+    admitted_later = datetime(2026, 2, 1, tzinfo=UTC)
+    document = DocumentVersion(
+        content_sha256="a" * 64,
+        source_url="https://example.test/admission",
+        available_at=created,
+        acquired_at=created,
+        parser_version="1",
+    )
+    case = ResearchCase(
+        title="过期主题 Case",
+        industry_topic="t",
+        created_by="u",
+        created_at=created,
+    )
+    company = Company(
+        code="000001", name="过期主题公司", type="listed", created_at=created
+    )
+    session.add_all([document, case, company])
+    session.flush()
+    session.add_all(
+        [
+            CaseTenantAdmission(
+                research_case_id=case.id,
+                tenant_id="test-team",
+                initial_document_version_id=document.id,
+                admitted_by="human:ops",
+                admission_reason="历史迁移后才完成归属核验",
+                admitted_at=admitted_later,
+            ),
+            ThemeRole(
+                company_id=company.id,
+                research_case_id=case.id,
+                role="beneficiary",
+                scope={},
+                applicable_from=date(2025, 1, 1),
+                applicable_to=date(2025, 12, 31),
+                source_statement_id=None,
+                created_at=created,
+            ),
+        ]
+    )
+    session.commit()
+
+    response = api_client.get(
+        "/api/v1/search",
+        params={
+            "q": "过期主题",
+            "types": "case,company",
+            "cutoff": cutoff.isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert all(group["hits"] == [] for group in response.json()["groups"])
+
+
+def test_search_deduplicates_assets_before_calculating_has_more(
+    api_client, session
+):
+    created = datetime(2025, 1, 1, tzinfo=UTC)
+    document = DocumentVersion(
+        content_sha256="b" * 64,
+        source_url="https://example.test/deduplication",
+        available_at=created,
+        acquired_at=created,
+        parser_version="1",
+    )
+    case = ResearchCase(
+        title="主题映射 Case", industry_topic="t", created_by="u", created_at=created
+    )
+    companies = [
+        Company(
+            code="000001",
+            name="重复公司甲",
+            type="listed",
+            created_at=created,
+        ),
+        Company(
+            code="000002",
+            name="重复公司乙",
+            type="listed",
+            created_at=created,
+        ),
+    ]
+    session.add_all([document, case, *companies])
+    session.flush()
+    session.add(
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=document.id,
+            admitted_by="human:ops",
+            admission_reason="测试研究资产归属",
+            admitted_at=created,
+        )
+    )
+    session.add_all(
+        [
+            ThemeRole(
+                company_id=companies[0].id,
+                research_case_id=case.id,
+                role="beneficiary",
+                scope={},
+                applicable_from=None,
+                applicable_to=None,
+                source_statement_id=None,
+                created_at=created,
+            ),
+            ThemeRole(
+                company_id=companies[0].id,
+                research_case_id=case.id,
+                role="supplier",
+                scope={},
+                applicable_from=None,
+                applicable_to=None,
+                source_statement_id=None,
+                created_at=created,
+            ),
+            ThemeRole(
+                company_id=companies[1].id,
+                research_case_id=case.id,
+                role="competitor",
+                scope={},
+                applicable_from=None,
+                applicable_to=None,
+                source_statement_id=None,
+                created_at=created,
+            ),
+        ]
+    )
+    session.commit()
+
+    response = api_client.get(
+        "/api/v1/search",
+        params={"q": "重复公司", "types": "company", "limit": 1},
+    )
+
+    assert response.status_code == 200
+    company_group = response.json()["groups"][0]
+    assert len(company_group["hits"]) == 1
+    assert response.json()["page"]["has_more"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +426,24 @@ def _seed_link_for_review(session, *, link_created_at, review=None):
             )
         )
         session.flush()
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=version.id,
+            linked_at=link_created_at,
+        )
+    )
+    session.add(
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=version.id,
+            admitted_by="test-fixture",
+            admission_reason="历史搜索夹具的初始资料准入",
+            admitted_at=link_created_at,
+        )
+    )
+    session.flush()
     return link
 
 
@@ -302,6 +475,7 @@ def test_search_evidence_surfaces_after_human_review(cmd_client, cmd_session):
         span.id, "CapEx 同比增长 40%", kind="disclosed_fact"
     )
     case = research.add_case(title="t", industry_topic="t", created_by="tester")
+    admit_case(cmd_session, case.id, document_version_id=version.id)
     thesis = research.add_thesis(case.id, statement="t", created_by="tester")
     link = research.link_evidence(
         thesis.id, statement.id, role="supports", reason="r", scope={"s": "d"}

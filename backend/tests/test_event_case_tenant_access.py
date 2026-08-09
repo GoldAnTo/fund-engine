@@ -144,6 +144,77 @@ def test_case_read_models_only_list_and_open_the_callers_admitted_cases(
     assert foreign_overview.status_code == 404
 
 
+def test_global_search_only_returns_cases_admitted_to_the_calling_tenant(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    payload = _event_payload()
+    payload["event_title"] = "仅团队 A 可检索的订单节奏"
+    created = cmd_client.post(
+        "/api/v1/event-research", json=payload, headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+
+    owner = cmd_client.get(
+        "/api/v1/search", params={"q": "团队 A"}, headers=_auth("token-a")
+    )
+    foreign = cmd_client.get(
+        "/api/v1/search", params={"q": "团队 A"}, headers=_auth("token-b")
+    )
+
+    owner_cases = next(group for group in owner.json()["groups"] if group["object_type"] == "case")
+    foreign_cases = next(group for group in foreign.json()["groups"] if group["object_type"] == "case")
+    assert owner_cases["hits"]
+    assert foreign_cases["hits"] == []
+
+
+def test_global_search_only_returns_companies_mapped_to_the_callers_cases(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.models.ledger import Company, ThemeRole
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    now = datetime.now(timezone.utc)
+    company = Company(
+        code="000001", name="团队 A 专属公司", type="listed", created_at=now
+    )
+    cmd_session.add(company)
+    cmd_session.flush()
+    cmd_session.add(
+        ThemeRole(
+            company_id=company.id,
+            research_case_id=uuid.UUID(created.json()["case_id"]),
+            role="beneficiary",
+            scope={},
+            applicable_from=None,
+            applicable_to=None,
+            source_statement_id=None,
+            created_at=now,
+        )
+    )
+    cmd_session.commit()
+
+    owner = cmd_client.get(
+        "/api/v1/search", params={"q": "专属公司"}, headers=_auth("token-a")
+    )
+    foreign = cmd_client.get(
+        "/api/v1/search", params={"q": "专属公司"}, headers=_auth("token-b")
+    )
+
+    owner_companies = next(group for group in owner.json()["groups"] if group["object_type"] == "company")
+    foreign_companies = next(group for group in foreign.json()["groups"] if group["object_type"] == "company")
+    assert owner_companies["hits"]
+    assert foreign_companies["hits"] == []
+
+
 def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
     cmd_client, monkeypatch
 ) -> None:
