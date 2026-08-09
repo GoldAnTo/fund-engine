@@ -69,6 +69,19 @@ class CreateEventResearchResponse(V1Model):
     lifecycle: EventResearchLifecycleDTO
 
 
+class AttachEventMaterialRequest(V1Model):
+    raw_input: str = Field(min_length=1)
+    source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = Field(min_length=1, max_length=128)
+
+
+class AttachEventMaterialResponse(V1Model):
+    document_version_id: str
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"]
+
+
 class EventResearchScopeFactorDTO(V1Model):
     statement: str = Field(min_length=1)
     description: str | None = None

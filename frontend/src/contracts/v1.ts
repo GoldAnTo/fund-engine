@@ -1228,6 +1228,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/materials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach Event Material */
+        post: operations["attach_event_material_api_v1_event_research__case_id__materials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/published-material-decisions": {
         parameters: {
             query?: never;
@@ -1937,6 +1954,35 @@ export interface components {
             reason: string;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** AttachEventMaterialRequest */
+        AttachEventMaterialRequest: {
+            /** Raw Input */
+            raw_input: string;
+            /** Source Url */
+            source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
+            /** Actor */
+            actor: string;
+        };
+        /** AttachEventMaterialResponse */
+        AttachEventMaterialResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
         };
         /**
          * CancelRunRequest
@@ -8902,6 +8948,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContinueEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_event_material_api_v1_event_research__case_id__materials_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachEventMaterialRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachEventMaterialResponse"];
                 };
             };
             /** @description Validation Error */

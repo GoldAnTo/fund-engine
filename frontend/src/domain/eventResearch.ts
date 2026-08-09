@@ -193,6 +193,7 @@ export interface PublishedMaterialDecision {
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
+  attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
   getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;

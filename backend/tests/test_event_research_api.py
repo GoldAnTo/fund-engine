@@ -290,6 +290,69 @@ def test_case_relations_only_returns_associations_for_the_current_case(
     assert payload["candidate_relations"] == []
 
 
+def test_existing_case_material_is_frozen_and_attached_without_starting_a_new_case_or_run(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle_before = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle_before is not None
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/materials",
+        json={
+            "raw_input": "公司补充说明订单交付节奏，需进入现有 Case 由研究员核验。",
+            "source_type": "uploaded_file",
+            "source_metadata": {
+                "file_name": "delivery-note.txt",
+                "mime_type": "text/plain",
+                "authority_level": "primary_disclosure",
+            },
+            "actor": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    document = cmd_session.get(DocumentVersion, uuid.UUID(payload["document_version_id"]))
+    assert document is not None
+    assert document.parser_version == "uploaded-text-v1"
+    assert cmd_session.scalar(
+        select(CaseDocumentVersion).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == document.id,
+        )
+    ) is not None
+    lifecycle_after = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle_after is not None
+    assert lifecycle_after.status == lifecycle_before.status
+    assert lifecycle_after.active_run_id is None
+
+
+def test_existing_case_material_cannot_bypass_a_published_case_change_decision(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "published"
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/materials",
+        json={
+            "raw_input": "这份新材料不能绕过已发布结论的变化比较。",
+            "source_type": "pasted_snapshot",
+            "actor": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "published case" in response.json()["error"]["message"]
+    assert cmd_session.query(DocumentVersion).count() == 1
+
+
 def test_reviewing_a_case_relation_candidate_appends_a_reviewed_relation_without_rewriting_the_candidate(
     cmd_client, cmd_session
 ) -> None:

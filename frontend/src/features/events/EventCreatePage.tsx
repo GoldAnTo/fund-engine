@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { researchClient } from "../../data/researchClient";
@@ -16,9 +16,24 @@ export function EventCreatePage() {
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [draft, setDraft] = useState<EventExtraction | null>(null);
   const [factors, setFactors] = useState<string[]>(EMPTY_FACTORS);
+  const [destination, setDestination] = useState<"new" | "existing">("new");
+  const [existingCases, setExistingCases] = useState<Array<{ id: string; eventTitle: string; status: string }>>([]);
+  const [selectedExistingCase, setSelectedExistingCase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const frozenSourceMetadata = { ...sourceMetadata, authority_level: sourceAuthority };
+
+  useEffect(() => {
+    let active = true;
+    researchClient.listEventResearch()
+      .then((items) => {
+        if (!active) return;
+        const eligible = items.filter((item) => item.status !== "published");
+        setExistingCases(eligible);
+      })
+      .catch(() => active && setExistingCases([]));
+    return () => { active = false; };
+  }, []);
 
   async function extract() {
     if (!rawInput.trim()) return;
@@ -53,6 +68,24 @@ export function EventCreatePage() {
     } finally { setBusy(false); }
   }
 
+  async function attachToExistingCase() {
+    if (!selectedExistingCase || !rawInput.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const attached = await researchClient.attachEventMaterial({
+        caseId: selectedExistingCase,
+        rawInput: rawInput.trim(),
+        sourceUrl: sourceUrl.trim() || undefined,
+        sourceType,
+        sourceMetadata: frozenSourceMetadata,
+        actor: "human:researcher",
+      });
+      navigate(`/events/${selectedExistingCase}/documents?document=${encodeURIComponent(attached.documentVersionId)}`);
+    } catch {
+      setError("材料未能归入当前 Case。已发布 Case 必须从原文资料页进行变化比较和人工决定。");
+    } finally { setBusy(false); }
+  }
+
   function updateFactor(index: number, value: string) {
     setFactors((current) => current.map((factor, position) => position === index ? value : factor));
   }
@@ -84,12 +117,25 @@ export function EventCreatePage() {
           <small className="ros-form-note">当前选择：{sourceType === "licensed_provider" ? "授权数据源快照（合同权限仍需后端配置）" : sourceType === "uploaded_file" ? "上传文本快照（原件未保存）" : "粘贴快照（需后续核验）"}；权威性为 {sourceAuthority}。来源类型与本次输入元数据会随 Case 冻结。</small>
         </section>
         <section className={`ros-form-card ros-form-card--scope${draft ? " is-ready" : ""}`} aria-live="polite"><div className="ros-step"><span>02</span><div><h2>确认可验证的研究范围</h2><p>系统仅提出候选；研究员决定问题和要验证的因素。</p></div></div>
-          {!draft ? <div className="ros-empty ros-empty--compact">先识别事件，才能编辑研究问题与关键因素。</div> : <>
+          {!draft ? <div className="ros-empty ros-empty--compact">先识别事件，才能决定它应创建新研究还是归入已有 Case。</div> : <>
+            <fieldset className="ros-material-destination">
+              <legend>决定材料归属</legend>
+              <label><input type="radio" name="material-destination" checked={destination === "new"} onChange={() => setDestination("new")} /> 创建新 Case</label>
+              <label><input type="radio" name="material-destination" checked={destination === "existing"} onChange={() => setDestination("existing")} /> 归入已有 Case</label>
+              <small>归入已有 Case 只冻结材料并保留来源元数据，不会启动运行、改写结论或改变既有研究范围。</small>
+            </fieldset>
+            {destination === "new" ? <>
             <label>事件标题<input value={draft.eventTitle ?? ""} onChange={(event) => setDraft({ ...draft, eventTitle: event.target.value })} /></label>
             <label>研究问题<textarea aria-label="研究问题" value={draft.researchQuestion} onChange={(event) => setDraft({ ...draft, researchQuestion: event.target.value })} /></label>
             <div className="ros-factor-fields"><p className="ros-field-label">关键因素（至少 3 个）</p>{factors.map((factor, index) => <label key={index} className="ros-factor-input"><span>{String(index + 1).padStart(2, "0")}</span><input aria-label={`关键因素 ${index + 1}`} value={factor} onChange={(event) => updateFactor(index, event.target.value)} /></label>)}</div>
             <div className="ros-protocol-optin"><span><b>新建 Case 默认采用严格研究协议</b><small>必须固定结果指标、范围、基线、时间窗、机制与反证规则，才能进入正式验证。既有 Case 的历史标记不会被这里改写。</small></span></div>
             <button className="ros-button ros-button--primary" type="button" disabled={busy || factors.filter((factor) => factor.trim()).length < 3 || !draft.researchQuestion.trim()} onClick={create}>{busy ? "正在建立…" : "建立 Case，进入资料核验"} <span aria-hidden>→</span></button>
+            </> : <section className="ros-existing-case-intake">
+              <p>这份材料将作为当前 Case 内的新冻结版本。研究员仍需在资料页核验原文，再决定是否提出或审核关系。</p>
+              <label>选择目标 Case<select aria-label="选择目标 Case" value={selectedExistingCase} onChange={(event) => setSelectedExistingCase(event.target.value)}><option value="" disabled>{existingCases.length ? "请选择 Case" : "暂无可归入的未发布 Case"}</option>{existingCases.map((item) => <option key={item.id} value={item.id}>{item.eventTitle} · {item.status}</option>)}</select></label>
+              <p className="ros-note">已发布 Case 必须走变化比较和人工决定，不能从收件箱直接归入。</p>
+              <button className="ros-button ros-button--primary" type="button" disabled={busy || !selectedExistingCase} onClick={attachToExistingCase}>{busy ? "正在冻结材料…" : "冻结并归入当前 Case"} <span aria-hidden>→</span></button>
+            </section>}
           </>}
           {error && <p className="ros-error" role="alert">{error}</p>}
         </section>

@@ -127,7 +127,7 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/new?client=mock");
 
     await expect(page.getByRole("heading", { name: "先固定研究范围，再让系统开始工作" })).toBeVisible();
-    await expect(page.getByText("先识别事件，才能编辑研究问题与关键因素。")).toBeVisible();
+    await expect(page.getByText("先识别事件，才能决定它应创建新研究还是归入已有 Case。")).toBeVisible();
 
     await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
     await page.getByRole("button", { name: "识别事件与研究问题" }).click();
@@ -151,6 +151,23 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-created-1\/documents$/);
     await expect(page.getByRole("heading", { name: "事件原始材料快照" })).toBeVisible();
     await expect(page.getByRole("blockquote").filter({ hasText: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
+  });
+
+  test("inbox freezes a material into a chosen active Case without starting a new Case", async ({ page }) => {
+    await page.goto("/events/new?client=mock");
+
+    await page.getByLabel("事件原始输入").fill("公司补充说明订单交付节奏，需进入现有 Case 由研究员核验。");
+    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
+    await page.getByRole("radio", { name: "归入已有 Case" }).check();
+    await expect(page.getByLabel("选择目标 Case")).toHaveValue("");
+    await expect(page.getByRole("button", { name: "冻结并归入当前 Case" })).toBeDisabled();
+
+    await page.getByLabel("选择目标 Case").selectOption("event-tsm");
+    await page.getByRole("button", { name: "冻结并归入当前 Case" }).click();
+
+    await expect(page).toHaveURL(/\/events\/event-tsm\/documents\?document=document-attached-/);
+    await expect(page.getByRole("heading", { name: "收件箱新增材料" })).toBeVisible();
+    await expect(page.getByRole("blockquote").filter({ hasText: "公司补充说明订单交付节奏" })).toBeVisible();
   });
 
   test("mock recovery keeps the original and opens its frozen supplement in the same Case", async ({ page }) => {

@@ -604,6 +604,32 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/新建 Case 默认采用严格研究协议/)).toBeVisible();
   });
 
+  it("lets a frozen inbox material be assigned to an existing non-published Case", async () => {
+    const user = userEvent.setup();
+    setResearchClient(new MockResearchAdapter());
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes>
+          <Route path="/events/new" element={<EventCreatePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      screen.getByLabelText("事件原始输入"),
+      "公司补充订单交付节奏，需归入已有研究。",
+    );
+    await user.click(screen.getByRole("button", { name: "识别事件与研究问题" }));
+
+    expect(await screen.findByText("决定材料归属")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "归入已有 Case" }));
+    expect(screen.getByLabelText("选择目标 Case")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "冻结并归入当前 Case" })).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText("选择目标 Case"), "event-tsm");
+    expect(screen.getByRole("button", { name: "冻结并归入当前 Case" })).toBeEnabled();
+    expect(screen.getByText(/已发布 Case 必须走变化比较/)).toBeVisible();
+  });
+
   it("reads an uploaded text snapshot without claiming that the original file was stored", async () => {
     const user = userEvent.setup();
     render(
