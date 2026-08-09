@@ -12,6 +12,7 @@ from app.models.research_protocol import (
     MechanismTemplateVersion,
     MetricDefinitionVersion,
     OutcomeBindingVersion,
+    VerificationRuleVersion,
 )
 
 
@@ -143,3 +144,49 @@ class ResearchProtocolRepository:
 
     def template(self, template_version_id: uuid.UUID) -> MechanismTemplateVersion | None:
         return self._session.get(MechanismTemplateVersion, template_version_id)
+
+    def add_verification_rule_version(
+        self,
+        *,
+        mechanism_edge_id: uuid.UUID,
+        metric_definition_id: uuid.UUID,
+        expected_direction: str,
+        support_predicate: str,
+        contradiction_predicate: str,
+        allowed_source_roles: list[str],
+        observed_period_start: date,
+        observed_period_end: date,
+        available_at_deadline: date,
+        next_verification_event: str,
+        reviewer: str,
+        reason: str,
+        created_at: datetime,
+    ) -> VerificationRuleVersion:
+        prior = self.effective_rule(mechanism_edge_id)
+        rule = VerificationRuleVersion(
+            mechanism_edge_id=mechanism_edge_id,
+            metric_definition_id=metric_definition_id,
+            expected_direction=expected_direction,
+            support_predicate=support_predicate,
+            contradiction_predicate=contradiction_predicate,
+            allowed_source_roles=allowed_source_roles,
+            observed_period_start=observed_period_start,
+            observed_period_end=observed_period_end,
+            available_at_deadline=available_at_deadline,
+            next_verification_event=next_verification_event,
+            supersedes_id=prior.id if prior else None,
+            reviewer=reviewer,
+            reason=reason,
+            created_at=created_at,
+        )
+        self._session.add(rule)
+        self._session.flush()
+        return rule
+
+    def effective_rule(self, mechanism_edge_id: uuid.UUID) -> VerificationRuleVersion | None:
+        return self._session.scalar(
+            select(VerificationRuleVersion)
+            .where(VerificationRuleVersion.mechanism_edge_id == mechanism_edge_id)
+            .order_by(VerificationRuleVersion.created_at.desc(), VerificationRuleVersion.id.desc())
+            .limit(1)
+        )

@@ -5,10 +5,16 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ResearchCase, Thesis, ValidationError
-from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
+from app.models.research_protocol import (
+    MechanismEdgeVersion,
+    MechanismNodeVersion,
+    MetricDefinitionVersion,
+    OutcomeBindingVersion,
+)
 from app.repositories.research_protocol import ResearchProtocolRepository
 
 
@@ -43,6 +49,21 @@ class OutcomeBindingInput:
     baseline: dict[str, str]
     horizon_start: date
     horizon_end: date
+    reviewer: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationRuleInput:
+    metric_definition_id: uuid.UUID
+    expected_direction: str
+    support_predicate: str
+    contradiction_predicate: str
+    allowed_source_roles: list[str]
+    observed_period_start: date
+    observed_period_end: date
+    available_at_deadline: date
+    next_verification_event: str
     reviewer: str
     reason: str
 
@@ -149,6 +170,39 @@ class ResearchProtocolService:
             created_at=_utcnow(),
         )
 
+    def add_verification_rule(self, mechanism_edge_id: uuid.UUID, value: VerificationRuleInput):
+        edge = self._session.get(MechanismEdgeVersion, mechanism_edge_id)
+        metric = self._session.get(MetricDefinitionVersion, value.metric_definition_id)
+        if edge is None:
+            raise ValidationError("mechanism edge not found")
+        if metric is None:
+            raise ValidationError("verification metric not found")
+        if value.expected_direction not in _OUTCOME_DIRECTIONS:
+            raise ValidationError("verification expected_direction is invalid")
+        if not value.support_predicate.strip() or not value.contradiction_predicate.strip():
+            raise ValidationError("verification needs support and contradiction predicates")
+        if not value.allowed_source_roles or not set(value.allowed_source_roles).issubset(set(metric.allowed_source_roles)):
+            raise ValidationError("verification source roles exceed metric permission")
+        if value.observed_period_start > value.observed_period_end:
+            raise ValidationError("verification observed period is invalid")
+        if not value.next_verification_event.strip() or not value.reviewer.strip() or not value.reason.strip():
+            raise ValidationError("verification event, reviewer and reason must not be empty")
+        return self._repo.add_verification_rule_version(
+            mechanism_edge_id=mechanism_edge_id,
+            metric_definition_id=metric.id,
+            expected_direction=value.expected_direction,
+            support_predicate=value.support_predicate.strip(),
+            contradiction_predicate=value.contradiction_predicate.strip(),
+            allowed_source_roles=list(value.allowed_source_roles),
+            observed_period_start=value.observed_period_start,
+            observed_period_end=value.observed_period_end,
+            available_at_deadline=value.available_at_deadline,
+            next_verification_event=value.next_verification_event.strip(),
+            reviewer=value.reviewer.strip(),
+            reason=value.reason.strip(),
+            created_at=_utcnow(),
+        )
+
     def approve_outcome_binding(
         self, binding_id: uuid.UUID, *, reviewer: str, reason: str
     ) -> OutcomeBindingVersion:
@@ -200,14 +254,30 @@ class ResearchProtocolService:
                 effective_binding_id=binding.id,
                 next_action="审核结果绑定",
             )
-        return ResearchabilityResult(
-            status="blocked",
-            reason_codes=[
-                "missing_mechanism_template",
-                "missing_verification_rule",
-                "insufficient_primary_metrics",
-                "missing_counter_hypothesis",
-            ],
-            effective_binding_id=binding.id,
-            next_action="选择机制模板并补齐可验证规则",
-        )
+        selection = self._repo.effective_case_template(thesis.research_case_id)
+        if selection is None:
+            return ResearchabilityResult("blocked", ["missing_mechanism_template"], binding.id, "选择已审核机制模板")
+        edges = list(self._session.scalars(
+            select(MechanismEdgeVersion)
+            .where(MechanismEdgeVersion.template_version_id == selection.template_version_id)
+        ))
+        node_roles = {
+            node.id: node.role for node in self._session.scalars(
+                select(MechanismNodeVersion)
+                .where(MechanismNodeVersion.template_version_id == selection.template_version_id)
+            )
+        }
+        required_edges = [edge for edge in edges if node_roles.get(edge.target_node_id) in {"required_for_outcome", "required_for_attribution"}]
+        rules = {edge.id: self._repo.effective_rule(edge.id) for edge in edges}
+        reasons: list[str] = []
+        if any(rules.get(edge.id) is None for edge in required_edges):
+            reasons.append("missing_verification_rule")
+        primary_metrics = {rule.metric_definition_id for edge in required_edges if (rule := rules.get(edge.id)) is not None}
+        if binding.entity_scope.get("business_line") and len(primary_metrics) < 2:
+            reasons.append("insufficient_primary_metrics")
+        alternative_edges = [edge for edge in edges if node_roles.get(edge.source_node_id) == "alternative_explanation" or node_roles.get(edge.target_node_id) == "alternative_explanation"]
+        if not any(rules.get(edge.id) and rules[edge.id].contradiction_predicate for edge in alternative_edges) and not any(rule and rule.contradiction_predicate for rule in rules.values()):
+            reasons.append("missing_counter_hypothesis")
+        if reasons:
+            return ResearchabilityResult("blocked", reasons, binding.id, "补齐机制边的验证规则与竞争解释")
+        return ResearchabilityResult("ready", [], binding.id, "研究协议完整；仍须按规则采集并人工审核证据")

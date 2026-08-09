@@ -61,7 +61,7 @@ def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_ses
     gate = cmd_client.get(f"/api/v1/theses/{thesis.id}/researchability")
     assert gate.status_code == 200
     assert gate.json()["status"] == "blocked"
-    assert gate.json()["reason_codes"] == ["missing_mechanism_template", "missing_verification_rule", "insufficient_primary_metrics", "missing_counter_hypothesis"]
+    assert gate.json()["reason_codes"] == ["missing_mechanism_template"]
     assert cmd_session.get(MetricDefinitionVersion, uuid.UUID(metric_id)) is not None
 
 

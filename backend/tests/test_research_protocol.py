@@ -163,9 +163,4 @@ def test_approved_outcome_binding_exposes_remaining_protocol_blockers(session) -
     result = service.check_researchability(thesis.id)
 
     assert result.status == "blocked"
-    assert result.reason_codes == [
-        "missing_mechanism_template",
-        "missing_verification_rule",
-        "insufficient_primary_metrics",
-        "missing_counter_hypothesis",
-    ]
+    assert result.reason_codes == ["missing_mechanism_template"]
