@@ -10043,7 +10043,9 @@ export interface operations {
     list_metrics_api_v1_metric_definitions_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10058,12 +10060,23 @@ export interface operations {
                     "application/json": components["schemas"]["MetricDefinitionDTO"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     create_metric_api_v1_metric_definitions_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10096,7 +10109,9 @@ export interface operations {
     create_binding_api_v1_theses__thesis_id__outcome_bindings_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 thesis_id: string;
             };
@@ -10131,7 +10146,9 @@ export interface operations {
     approve_binding_api_v1_outcome_bindings__binding_id__approve_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 binding_id: string;
             };
@@ -10166,7 +10183,9 @@ export interface operations {
     researchability_api_v1_theses__thesis_id__researchability_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 thesis_id: string;
             };
@@ -10197,7 +10216,9 @@ export interface operations {
     list_mechanism_templates_api_v1_mechanism_templates_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10212,12 +10233,23 @@ export interface operations {
                     "application/json": components["schemas"]["MechanismTemplateDTO"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -10252,7 +10284,9 @@ export interface operations {
     case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -10283,7 +10317,9 @@ export interface operations {
     create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
                 edge_id: string;
