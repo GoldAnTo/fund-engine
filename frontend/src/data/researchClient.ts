@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import type { Conclusion, ReviewOutcome } from "../domain/types";
-import type { ResearchClient } from "../domain/prototypeTypes";
+import type { ActiveResearchClient } from "../domain/prototypeTypes";
 import { HttpResearchAdapter } from "./httpResearchAdapter";
 
 // The application always reads from the real HTTP ledger by default. Use an
@@ -8,7 +8,7 @@ import { HttpResearchAdapter } from "./httpResearchAdapter";
 // the same-origin /api/v1 path works with the Vite proxy and production host.
 // MockResearchAdapter remains available only through explicit setResearchClient
 // calls in tests and prototypes.
-function defaultClient(): ResearchClient {
+function defaultClient(): ActiveResearchClient {
   const baseUrl = import.meta.env.VITE_RESEARCH_API_URL || "/api/v1";
   return new HttpResearchAdapter({
     baseUrl: baseUrl.replace(/\/$/, ""),
@@ -16,9 +16,9 @@ function defaultClient(): ResearchClient {
   });
 }
 
-let _client: ResearchClient = defaultClient();
+let _client: ActiveResearchClient = defaultClient();
 
-export function setResearchClient(client: ResearchClient): void {
+export function setResearchClient(client: ActiveResearchClient): void {
   _client = client;
 }
 
@@ -26,7 +26,7 @@ export function resetResearchClient(): void {
   _client = defaultClient();
 }
 
-export const researchClient: ResearchClient = {
+export const researchClient: ActiveResearchClient = {
   extractEventResearch: (input) => _client.extractEventResearch(input),
   createEventResearch: (input) => _client.createEventResearch(input),
   attachEventMaterial: (input) => _client.attachEventMaterial(input),
@@ -52,12 +52,8 @@ export const researchClient: ResearchClient = {
     _client.updateResearchTask(taskId, status, assignee),
   submitReviewDecision: (itemId, decision) =>
     _client.submitReviewDecision(itemId, decision),
-  getWorkspaceOverviewView: () => _client.getWorkspaceOverviewView(),
-  getWorkspaceOverviewScreen: () => _client.getWorkspaceOverviewScreen(),
-  getNewResearchView: () => _client.getNewResearchView(),
   createCase: (input) => _client.createCase(input),
   listCaseSummaries: () => _client.listCaseSummaries(),
-  getResearchPlanView: (caseId) => _client.getResearchPlanView(caseId),
   getCaseWorkbenchView: (id, options) =>
     _client.getCaseWorkbenchView(id, options),
   getRelationshipGraphView: (id, thesisId) =>

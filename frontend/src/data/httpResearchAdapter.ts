@@ -38,7 +38,7 @@ import type {
   EventSourceStatus,
   EventWorkbench,
 } from "../domain/eventResearch";
-import type { ResearchClient } from "../domain/prototypeTypes";
+import type { ActiveResearchClient } from "../domain/prototypeTypes";
 import type {
   AssessmentReviewPayload,
   AssessmentReviewResult,
@@ -335,7 +335,7 @@ function buildRevisionComparison(
   };
 }
 
-export class HttpResearchAdapter implements ResearchClient {
+export class HttpResearchAdapter implements ActiveResearchClient {
   constructor(
     private readonly options: { baseUrl: string; bearerToken?: string },
   ) {}

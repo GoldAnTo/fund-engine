@@ -1133,6 +1133,19 @@ export type ResearchClient = BaseResearchClient &
   EngineClient &
   DataCenterClient &
   CompanyThemeClient;
+
+/**
+ * The event-first Research OS never exposes the retired overview/new-plan
+ * prototype screens.  Keep this boundary explicit so no current page can
+ * accidentally revive their fixture-backed calls.
+ */
+export type ActiveResearchClient = Omit<
+  ResearchClient,
+  | "getWorkspaceOverviewView"
+  | "getWorkspaceOverviewScreen"
+  | "getNewResearchView"
+  | "getResearchPlanView"
+>;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 
 /** One pending link-level review, mapped from ReviewQueueItemDTO. */

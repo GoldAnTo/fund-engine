@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetResearchOsApi, researchOsApi, setResearchOsApi, type MonitorDetail, type ResearchOsApi } from "../app/researchOsApi";
+import { researchClient } from "../data/researchClient";
 
 describe("research OS API selection", () => {
   afterEach(() => {
@@ -38,5 +39,16 @@ describe("research OS API selection", () => {
         headers: expect.objectContaining({ Authorization: "Bearer team-token" }),
       }),
     );
+  });
+
+  it("does not expose retired prototype screen calls on the active client", () => {
+    for (const retiredMethod of [
+      "getWorkspaceOverviewView",
+      "getWorkspaceOverviewScreen",
+      "getNewResearchView",
+      "getResearchPlanView",
+    ]) {
+      expect(researchClient).not.toHaveProperty(retiredMethod);
+    }
   });
 });
