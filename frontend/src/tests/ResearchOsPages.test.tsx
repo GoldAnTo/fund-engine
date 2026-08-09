@@ -249,6 +249,15 @@ describe("Research OS event entry", () => {
     expect(
       await screen.findByRole("link", { name: "审核此候选关系" }),
     ).toHaveAttribute("href", "/events/event-tsm/review");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "case AI 服务器订单验证 已进入 Case 图谱",
+      }),
+    );
+    expect(
+      await screen.findByRole("link", { name: "审核关联 Case 候选" }),
+    ).toHaveAttribute("href", "/events/event-tsm/relations");
   });
 
   it("lets a researcher begin registering a reviewed claim from an admitted frozen source", async () => {

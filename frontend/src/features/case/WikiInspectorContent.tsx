@@ -78,6 +78,9 @@ export function WikiInspectorContent({ caseId }: { caseId: string }) {
     ? selectedProperties.document_id
     : selected?.kind === "document" ? selected?.id : null;
   const canLocateFrozenSource = selectedProperties.source_visible_in_case === true && Boolean(frozenDocumentId);
+  const hasCandidateCaseRelation = selected?.kind === "case" && selectedEdges.some(
+    (edge) => edge.semantic_kind === "case_relation" && isCandidateEdge(edge),
+  );
 
   return <section className="ros-wiki">
     <header className="ros-section-heading">
@@ -112,6 +115,7 @@ export function WikiInspectorContent({ caseId }: { caseId: string }) {
           {typeof selected.properties?.verbatim_text === "string" && <blockquote className="ros-wiki-quote">{selected.properties.verbatim_text}</blockquote>}
           {canLocateFrozenSource && <Link className="ros-button ros-button--secondary" to={`/events/${caseId}/documents?document=${encodeURIComponent(frozenDocumentId!)}`}>定位到冻结原文</Link>}
           {isCandidateNode(selected) && <Link className="ros-button" to={`/events/${caseId}/review`}>审核此候选关系</Link>}
+          {hasCandidateCaseRelation && <Link className="ros-button" to={`/events/${caseId}/relations`}>审核关联 Case 候选</Link>}
           {selected.kind === "case" && selected.id !== caseId && <Link className="ros-button ros-button--secondary" to={`/events/${selected.id}`}>打开关联 Case</Link>}
           {selectedEdges.length > 0 && <section className="ros-wiki-inspector__relations" aria-label="关联审核与时点">
             <h4>关联审核与时点</h4>

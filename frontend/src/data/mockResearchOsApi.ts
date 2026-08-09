@@ -713,6 +713,13 @@ export class MockResearchOsApi implements ResearchOsApi {
           target: "related-case",
           review_state: "reviewed",
         },
+        {
+          id: "edge-case-candidate",
+          semantic_kind: "case_relation",
+          source: "factor-capex",
+          target: "related-case",
+          review_state: "machine_generated",
+        },
       ],
       paths: [
         {
