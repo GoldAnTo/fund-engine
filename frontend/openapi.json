@@ -8223,6 +8223,52 @@
           "source": {
             "type": "string",
             "title": "Source"
+          },
+          "source_document_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Document Version Id"
+          },
+          "source_span_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Span Id"
+          },
+          "provider_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Record Id"
+          },
+          "coverage_status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "not_recorded"
+            ],
+            "title": "Coverage Status",
+            "default": "not_recorded"
           }
         },
         "additionalProperties": false,
@@ -10945,6 +10991,44 @@
             "type": "string",
             "title": "Source"
           },
+          "source_document_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Document Version Id"
+          },
+          "source_locator": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Locator"
+          },
+          "provider_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Record Id"
+          },
+          "source_permission_status": {
+            "type": "string",
+            "title": "Source Permission Status"
+          },
           "coverage_status": {
             "type": "string",
             "title": "Coverage Status"
@@ -10965,6 +11049,10 @@
           "published_at",
           "acquired_at",
           "source",
+          "source_document_version_id",
+          "source_locator",
+          "provider_record_id",
+          "source_permission_status",
           "coverage_status",
           "freshness_status"
         ],
@@ -11582,6 +11670,46 @@
             "type": "string",
             "title": "Source"
           },
+          "source_document_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Document Version Id"
+          },
+          "source_span_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Span Id"
+          },
+          "provider_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Record Id"
+          },
+          "coverage_status": {
+            "type": "string",
+            "title": "Coverage Status"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -11599,6 +11727,10 @@
           "published_at",
           "acquired_at",
           "source",
+          "source_document_version_id",
+          "source_span_id",
+          "provider_record_id",
+          "coverage_status",
           "created_at"
         ],
         "title": "HoldingDisclosureDTO"

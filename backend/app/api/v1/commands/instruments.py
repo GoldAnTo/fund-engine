@@ -162,6 +162,10 @@ def create_holding_disclosure(
             "report_period": payload.report_period,
             "published_at": payload.published_at,
             "source": payload.source,
+            "source_document_version_id": payload.source_document_version_id,
+            "source_span_id": payload.source_span_id,
+            "provider_record_id": payload.provider_record_id,
+            "coverage_status": payload.coverage_status,
         },
     )
     commit_or_rollback(db)

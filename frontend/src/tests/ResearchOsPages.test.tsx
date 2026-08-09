@@ -93,6 +93,14 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/市场窗口只记录发生了什么/)).toBeVisible();
   });
 
+  it("shows the frozen source and coverage for a fund disclosure instead of implying a live position", async () => {
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText(/来源版本 doc-fund-holdings-2026q2/)).toBeVisible();
+    expect(screen.getByText(/覆盖 complete · 时效 historical_disclosure/)).toBeVisible();
+  });
+
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-published"]}>

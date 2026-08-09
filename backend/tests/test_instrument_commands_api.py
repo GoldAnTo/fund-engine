@@ -260,6 +260,49 @@ def test_create_holding_disclosure_persists_ledger_row(cmd_client, cmd_session):
     assert row.published_at.tzinfo is not None or row.published_at is not None
 
 
+def test_holding_disclosure_keeps_source_version_provider_and_coverage(cmd_client, cmd_session):
+    from hashlib import sha256
+
+    from app.models.ledger import DocumentVersion
+    from app.models.source_governance import ProviderRecord
+    from app.services.source_governance import SourceGovernanceService
+
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+    fund_id = _create_fund(cmd_client)["id"]
+    now = datetime(2026, 7, 21, tzinfo=UTC)
+    document = DocumentVersion(
+        content_sha256=sha256(b"fund-2026q2-holdings").hexdigest(),
+        source_url="https://licensed.example/fund/005827/2026q2",
+        title="易方达蓝筹精选 2026 年二季报",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fund-provider-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "provider_record_id": "fund-005827-2026q2", "permissions": {"display": True, "ai_processing": True}},
+        declared_by="tester",
+    )
+    provider = cmd_session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == document.id))
+    assert provider is not None
+    cmd_session.commit()
+
+    payload = _disclosure_payload(stock.id)
+    payload.update({"coverage_status": "complete", "source_document_version_id": str(document.id), "provider_record_id": str(provider.id)})
+    response = cmd_client.post(f"/api/v1/funds/{fund_id}/holding-disclosures", json=payload)
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["coverage_status"] == "complete"
+    assert body["source_document_version_id"] == str(document.id)
+    assert body["provider_record_id"] == str(provider.id)
+
+
 def test_holding_disclosure_missing_fund_is_404(cmd_client, cmd_session):
     company = _seed_company(cmd_session)
     stock = _seed_stock(cmd_session, company)

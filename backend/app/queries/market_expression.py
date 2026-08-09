@@ -195,7 +195,22 @@ class MarketExpressionQueries:
                 stock = self._db.get(Stock, disclosure.stock_id)
                 if stock is None:
                     continue
-                positions.append(FundDisclosurePositionDTO(stock_id=str(stock.id), stock_code=stock.code, stock_name=stock.name, weight=float(disclosure.weight), report_period=disclosure.report_period, published_at=disclosure.published_at, acquired_at=disclosure.acquired_at, source=disclosure.source, coverage_status="not_recorded", freshness_status="unknown"))
+                document = self._db.get(DocumentVersion, disclosure.source_document_version_id) if disclosure.source_document_version_id else None
+                contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
+                span = self._db.get(SourceSpan, disclosure.source_span_id) if disclosure.source_span_id else None
+                source_visible = bool(contract and contract.allow_display)
+                positions.append(FundDisclosurePositionDTO(
+                    stock_id=str(stock.id), stock_code=stock.code, stock_name=stock.name,
+                    weight=float(disclosure.weight), report_period=disclosure.report_period,
+                    published_at=disclosure.published_at, acquired_at=disclosure.acquired_at,
+                    source=disclosure.source,
+                    source_document_version_id=str(document.id) if document and source_visible else None,
+                    source_locator=span.locator if span and source_visible else None,
+                    provider_record_id=str(disclosure.provider_record_id) if disclosure.provider_record_id and source_visible else None,
+                    source_permission_status="admitted" if source_visible else "not_recorded" if document is None else "restricted",
+                    coverage_status=disclosure.coverage_status,
+                    freshness_status="coverage_incomplete" if disclosure.coverage_status != "complete" else "historical_disclosure" if source_visible else "source_unlinked",
+                ))
             coverage_complete = positions and all(
                 position.coverage_status == "complete" for position in positions
             )

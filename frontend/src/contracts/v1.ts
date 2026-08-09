@@ -2625,6 +2625,18 @@ export interface components {
             published_at: string;
             /** Source */
             source: string;
+            /** Source Document Version Id */
+            source_document_version_id?: string | null;
+            /** Source Span Id */
+            source_span_id?: string | null;
+            /** Provider Record Id */
+            provider_record_id?: string | null;
+            /**
+             * Coverage Status
+             * @default not_recorded
+             * @enum {string}
+             */
+            coverage_status: "complete" | "partial" | "not_recorded";
         };
         /** CreateStockRequest */
         CreateStockRequest: {
@@ -3508,6 +3520,16 @@ export interface components {
             acquired_at: string;
             /** Source */
             source: string;
+            /** Source Document Version Id */
+            source_document_version_id: string | null;
+            /** Source Locator */
+            source_locator: {
+                [key: string]: unknown;
+            } | null;
+            /** Provider Record Id */
+            provider_record_id: string | null;
+            /** Source Permission Status */
+            source_permission_status: string;
             /** Coverage Status */
             coverage_status: string;
             /** Freshness Status */
@@ -3759,6 +3781,14 @@ export interface components {
             acquired_at: string;
             /** Source */
             source: string;
+            /** Source Document Version Id */
+            source_document_version_id: string | null;
+            /** Source Span Id */
+            source_span_id: string | null;
+            /** Provider Record Id */
+            provider_record_id: string | null;
+            /** Coverage Status */
+            coverage_status: string;
             /**
              * Created At
              * Format: date-time

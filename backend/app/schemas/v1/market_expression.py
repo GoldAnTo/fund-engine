@@ -225,6 +225,10 @@ class FundDisclosurePositionDTO(V1Model):
     published_at: datetime
     acquired_at: datetime
     source: str
+    source_document_version_id: str | None
+    source_locator: dict | None
+    provider_record_id: str | None
+    source_permission_status: str
     coverage_status: str
     freshness_status: str
 

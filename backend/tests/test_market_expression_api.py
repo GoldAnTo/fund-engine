@@ -162,6 +162,8 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         published_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
         acquired_at=now,
         source="licensed_provider",
+        source_document_version_id=document.id,
+        coverage_status="partial",
         created_at=now,
     ))
     cmd_session.commit()
@@ -186,8 +188,9 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert position["published_at"].startswith("2026-07-20")
     assert position["acquired_at"].startswith("2026-08-09")
     assert position["source"] == "licensed_provider"
-    assert position["coverage_status"] == "not_recorded"
-    assert position["freshness_status"] == "unknown"
+    assert position["coverage_status"] == "partial"
+    assert position["source_document_version_id"] == str(document.id)
+    assert position["freshness_status"] == "coverage_incomplete"
     # A position weight is observable, but the ledger does not yet record a
     # complete fund portfolio coverage ratio. Do not promote this subset into
     # a precise fund-level exposure total.

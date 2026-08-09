@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -571,6 +571,9 @@ class ValuationSnapshot(Base):
 
 class HoldingDisclosure(Base):
     __tablename__ = "holding_disclosures"
+    __table_args__ = (
+        CheckConstraint("coverage_status IN ('complete', 'partial', 'not_recorded')", name="ck_holding_disclosures_coverage_status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     fund_id: Mapped[uuid.UUID] = mapped_column(
@@ -588,6 +591,10 @@ class HoldingDisclosure(Base):
         DateTime(timezone=True), nullable=False
     )
     source: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_document_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("document_versions.id"), nullable=True)
+    source_span_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=True)
+    provider_record_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("provider_records.id"), nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_recorded")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
