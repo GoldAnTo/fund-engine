@@ -12,9 +12,11 @@ import { EventDeskPage } from "../features/events/EventDeskPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
+  CaseFundProfilePage,
   CaseMarketPage,
   CaseReviewPage,
   CaseScopePage,
+  CaseStockProfilePage,
 } from "../features/case/CasePages";
 import {
   CaseDocumentsPage,
@@ -202,6 +204,39 @@ describe("Research OS event entry", () => {
       screen.getByText(/覆盖：完整 · 时效：报告期仍在有效期/),
     ).toBeVisible();
     expect(screen.getAllByText(/许可：已准入/).slice(-1)[0]).toBeVisible();
+  });
+
+  it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/stocks/stock-tsm"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/stocks/:stockId"
+            element={<CaseStockProfilePage />}
+          />
+          <Route
+            path="/events/:caseId/funds/:fundId"
+            element={<CaseFundProfilePage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "台积电 · 股票研究档案" }),
+    ).toBeVisible();
+    expect(screen.getByText("基本面传导")).toBeVisible();
+    expect(screen.getByText("市场观测")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "基金历史披露" })).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "演示成长基金" }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "演示成长基金 · 基金披露档案",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("命中股票与披露来源")).toBeVisible();
   });
 
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {

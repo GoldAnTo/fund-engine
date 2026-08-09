@@ -26,6 +26,17 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。")).toBeVisible();
   });
 
+  test("market expression drills from a reviewed stock to its Case-scoped fund disclosure", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await page.getByRole("link", { name: "台积电" }).first().click();
+    await expect(page.getByRole("heading", { name: "台积电 · 股票研究档案" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "市场观测" })).toBeVisible();
+    await page.getByRole("link", { name: "演示成长基金" }).click();
+    await expect(page.getByRole("heading", { name: "演示成长基金 · 基金披露档案" })).toBeVisible();
+    await expect(page.getByText("命中股票与披露来源")).toBeVisible();
+  });
+
   test("market expression records an explicit instrument link before a fundamental impact", async ({ page }) => {
     await page.goto("/events/event-tsm/market?client=mock");
 

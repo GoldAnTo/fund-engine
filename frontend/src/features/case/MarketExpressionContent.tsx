@@ -357,10 +357,15 @@ export function MarketExpressionContent({
                   fundamentals.map((impact) => (
                     <article className="ros-expression-card" key={impact.id}>
                       <strong>
-                        {impact.company_name}
-                        {impact.stock_code
-                          ? ` · ${impact.stock_code}`
-                          : " · 未上市/未映射"}
+                        {impact.stock_id ? (
+                          <Link
+                            to={`/events/${caseId}/stocks/${impact.stock_id}`}
+                          >
+                            {impact.company_name} · {impact.stock_code}
+                          </Link>
+                        ) : (
+                          `${impact.company_name} · 未上市/未映射`
+                        )}
                       </strong>
                       <small>
                         {impact.metric_name} ·{" "}
@@ -392,7 +397,12 @@ export function MarketExpressionContent({
                       key={observation.id}
                     >
                       <strong>
-                        {observation.stock_name} · {observation.window_label}
+                        <Link
+                          to={`/events/${caseId}/stocks/${observation.stock_id}`}
+                        >
+                          {observation.stock_name}
+                        </Link>{" "}
+                        · {observation.window_label}
                       </strong>
                       <small>
                         事件{" "}
@@ -487,7 +497,10 @@ export function MarketExpressionContent({
               return (
                 <article className="ros-fund-row" key={fund.fund_id}>
                   <strong>
-                    {fund.fund_name} <small>{fund.fund_code}</small>
+                    <Link to={`/events/${caseId}/funds/${fund.fund_id}`}>
+                      {fund.fund_name}
+                    </Link>{" "}
+                    <small>{fund.fund_code}</small>
                   </strong>
                   <span>
                     {disclosedExposure !== null
@@ -496,8 +509,12 @@ export function MarketExpressionContent({
                   </span>
                   {fund.positions.map((position) => (
                     <small key={position.stock_id}>
-                      {position.stock_name} ·{" "}
-                      {(position.weight * 100).toFixed(2)}%<br />
+                      <Link
+                        to={`/events/${caseId}/stocks/${position.stock_id}`}
+                      >
+                        {position.stock_name}
+                      </Link>{" "}
+                      · {(position.weight * 100).toFixed(2)}%<br />
                       报告期 {position.report_period} · 披露{" "}
                       {new Date(position.published_at).toLocaleDateString(
                         "zh-CN",
@@ -665,10 +682,13 @@ function MarketInstrumentWorkspace({
           bindings.map((binding) => (
             <article key={binding.id}>
               <strong>
-                {binding.company_name}
-                {binding.stock_code
-                  ? ` · ${binding.stock_code}`
-                  : " · 未上市/未映射"}
+                {binding.stock_id ? (
+                  <Link to={`/events/${caseId}/stocks/${binding.stock_id}`}>
+                    {binding.company_name} · {binding.stock_code}
+                  </Link>
+                ) : (
+                  `${binding.company_name} · 未上市/未映射`
+                )}
               </strong>
               <small>
                 {instrumentRoleLabels[binding.relationship_role] ??
