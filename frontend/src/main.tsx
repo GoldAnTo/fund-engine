@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { ResearchOsRoutes } from "./app/routes";
+import { setResearchOsApi } from "./app/researchOsApi";
 import { setResearchClient } from "./data/researchClient";
 
 // 测试钩子：?client=mock 强制使用内存 mock 适配器。
@@ -16,7 +17,9 @@ async function bootstrap() {
     import.meta.env.VITE_RESEARCH_CLIENT === "mock"
   ) {
     const { MockResearchAdapter } = await import("./data/mockResearchAdapter");
+    const { MockResearchOsApi } = await import("./data/mockResearchOsApi");
     setResearchClient(new MockResearchAdapter());
+    setResearchOsApi(new MockResearchOsApi());
   }
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>

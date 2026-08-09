@@ -26,7 +26,7 @@ export type CaseMechanismProtocol = Schemas["CaseMechanismProtocolDTO"];
 export type AtomicClaimCandidate = Schemas["AtomicClaimCandidateDTO"];
 export type AtomicClaimReview = Schemas["AtomicClaimReviewDTO"];
 
-export const researchOsApi = {
+const httpResearchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
   saveMonitor: (caseId: string, input: Schemas["UpdateCaseMonitorRequest"]) => request<Monitor>(`/research-cases/${caseId}/monitor`, { method: "PUT", body: JSON.stringify(input) }),
   setMonitorStatus: (caseId: string, status: "active" | "paused", changeReason: string) => request<Monitor>(`/research-cases/${caseId}/monitor/${status}`, { method: "POST", body: JSON.stringify({ actor: "human:researcher", change_reason: changeReason }) }),
@@ -50,4 +50,47 @@ export const researchOsApi = {
   atomicClaims: (caseId: string) => request<Schemas["AtomicClaimQueueResponse"]>(`/research-cases/${caseId}/atomic-claims`),
   reviewAtomicClaim: (candidateId: string, input: Schemas["AtomicClaimReviewRequest"]) => request<AtomicClaimReview>(`/atomic-claims/${candidateId}/reviews`, { method: "POST", body: JSON.stringify(input) }),
   createDocumentSupplement: (documentId: string, input: Schemas["CreateDocumentSupplementRequest"]) => request<Schemas["CreateDocumentSupplementResponse"]>(`/documents/${documentId}/supplements`, { method: "POST", body: JSON.stringify(input) }),
+};
+
+/**
+ * The Research OS has its own V1 endpoints in addition to the legacy research
+ * client.  Keep that boundary replaceable so the explicitly requested mock
+ * workspace never silently falls back to the live ledger.
+ */
+export type ResearchOsApi = typeof httpResearchOsApi;
+
+let selectedResearchOsApi: ResearchOsApi = httpResearchOsApi;
+
+export function setResearchOsApi(api: ResearchOsApi): void {
+  selectedResearchOsApi = api;
+}
+
+export function resetResearchOsApi(): void {
+  selectedResearchOsApi = httpResearchOsApi;
+}
+
+export const researchOsApi: ResearchOsApi = {
+  monitor: (caseId) => selectedResearchOsApi.monitor(caseId),
+  saveMonitor: (caseId, input) => selectedResearchOsApi.saveMonitor(caseId, input),
+  setMonitorStatus: (caseId, status, changeReason) => selectedResearchOsApi.setMonitorStatus(caseId, status, changeReason),
+  runEvents: (runId) => selectedResearchOsApi.runEvents(runId),
+  activeRuns: () => selectedResearchOsApi.activeRuns(),
+  runs: () => selectedResearchOsApi.runs(),
+  network: () => selectedResearchOsApi.network(),
+  caseRelations: (caseId) => selectedResearchOsApi.caseRelations(caseId),
+  graph: (caseId) => selectedResearchOsApi.graph(caseId),
+  exposure: (caseId) => selectedResearchOsApi.exposure(caseId),
+  marketExpression: (caseId) => selectedResearchOsApi.marketExpression(caseId),
+  metrics: () => selectedResearchOsApi.metrics(),
+  createMetric: (input) => selectedResearchOsApi.createMetric(input),
+  createOutcomeBinding: (thesisId, input) => selectedResearchOsApi.createOutcomeBinding(thesisId, input),
+  approveOutcomeBinding: (bindingId, input) => selectedResearchOsApi.approveOutcomeBinding(bindingId, input),
+  researchability: (thesisId) => selectedResearchOsApi.researchability(thesisId),
+  mechanismTemplates: () => selectedResearchOsApi.mechanismTemplates(),
+  caseMechanismProtocol: (caseId) => selectedResearchOsApi.caseMechanismProtocol(caseId),
+  selectMechanismTemplate: (caseId, input) => selectedResearchOsApi.selectMechanismTemplate(caseId, input),
+  createVerificationRule: (caseId, edgeId, input) => selectedResearchOsApi.createVerificationRule(caseId, edgeId, input),
+  atomicClaims: (caseId) => selectedResearchOsApi.atomicClaims(caseId),
+  reviewAtomicClaim: (candidateId, input) => selectedResearchOsApi.reviewAtomicClaim(candidateId, input),
+  createDocumentSupplement: (documentId, input) => selectedResearchOsApi.createDocumentSupplement(documentId, input),
 };

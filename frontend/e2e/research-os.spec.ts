@@ -1,6 +1,18 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Event-first Research OS", () => {
+  test("explicit mock mode renders the Research OS without live API traffic", async ({ page }) => {
+    const liveRequests: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/v1/")) liveRequests.push(request.url());
+    });
+
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await expect(page.getByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" })).toBeVisible();
+    expect(liveRequests).toEqual([]);
+  });
+
   test("research dispatch keeps priority, human review and system activity visible", async ({ page }) => {
     await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
       items: [{ run_id: "run-alphabet", case_id: "event-alphabet", case_title: "Alphabet 财报超预期后股价下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["licensed_provider"], budget: 20 } }], next_cursor: null, has_more: false,
@@ -10,7 +22,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
     await expect(page.getByText("当前优先")).toBeVisible();
     await expect(page.getByRole("main").getByText("研究网络")).toBeVisible();
-    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · retrieve");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · review");
     await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("licensed_provider");
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
@@ -75,12 +87,12 @@ test.describe("Event-first Research OS", () => {
     } }));
     await page.goto("/events/event-tsm/wiki?client=mock");
 
-    await expect(page.getByRole("button", { name: "source 冻结公告 已进入 Case 图谱" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "proposal AI 候选 AI 候选，未经人工复核" })).toBeVisible();
-    await page.getByRole("button", { name: "source 冻结公告 已进入 Case 图谱" }).click();
+    await expect(page.getByRole("button", { name: "document 冻结公司披露 已进入 Case 图谱" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "proposal 自由现金流承压持续 AI 候选，未经人工复核" })).toBeVisible();
+    await page.getByRole("button", { name: "document 冻结公司披露 已进入 Case 图谱" }).click();
     await expect(page.getByText("可追溯检查器")).toBeVisible();
     await expect(page.getByText("已审核对象")).toBeVisible();
-    await expect(page.getByText("冻结原文：资本开支指引已上调。")).toBeVisible();
+    await expect(page.getByText("公司上调全年资本开支指引，同时市场关注自由现金流承压。")).toBeVisible();
   });
 
   test("immediate replenishment starts from a visible frozen monitor scope", async ({ page }) => {
@@ -95,8 +107,8 @@ test.describe("Event-first Research OS", () => {
     await expect(start).toBeEnabled();
     await start.click();
     await expect(page.getByRole("complementary", { name: "运行详情" })).toBeVisible();
-    await expect(page.getByText("monitor-v2", { exact: true })).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "运行详情" }).getByText("company_disclosure", { exact: true })).toBeVisible();
+    await expect(page.getByText("monitor-event-tsm-v1", { exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "运行详情" })).toContainText("company_disclosure");
   });
 
   test("saving a monitor configuration immediately shows the new effective version", async ({ page }) => {
@@ -113,7 +125,7 @@ test.describe("Event-first Research OS", () => {
 
     await expect(page.getByText("当前生效版本 v2")).toBeVisible();
     await expect(page.getByText(/已保存监控版本 v2/)).toBeVisible();
-    await expect(page.getByText(/licensed_provider/)).toBeVisible();
+    await expect(page.getByText(/licensed_provider/).last()).toBeVisible();
   });
 
   test("global network keeps reviewed Case relations separate from AI candidates", async ({ page }) => {
@@ -124,9 +136,9 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/network?client=mock");
 
     await expect(page.getByRole("heading", { name: "跨 Case 研究网络" })).toBeVisible();
-    await expect(page.getByText("共同验证资本开支预期差")).toBeVisible();
+    await expect(page.getByText("均需核验上游资本开支节奏")).toBeVisible();
     await expect(page.getByText("AI 候选，未经人工复核").first()).toBeVisible();
-    await page.getByRole("link", { name: "台积电 Case" }).first().click();
+    await page.getByRole("link", { name: "TSM 资本开支与自由现金流验证" }).first().click();
     await expect(page).toHaveURL(/\/events\/event-tsm/);
   });
 
@@ -143,12 +155,12 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText(/每 15 秒自动刷新/)).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新运行档案" })).toBeVisible();
     await expect(page.getByRole("main")).toContainText("company_disclosure");
-    await expect(page.getByRole("main")).toContainText("monitor-v2");
-    await expect(page.getByRole("main")).toContainText("task_failed");
+    await expect(page.getByRole("main")).toContainText("monitor-event-tsm-v1");
+    await expect(page.getByRole("main")).toContainText("awaiting_review");
     await page.getByRole("main").getByRole("button", { name: "展开本次运行记录" }).click();
-    await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("授权来源返回失败");
+    await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("已按许可读取候选资料");
     await page.getByRole("button", { name: "关闭全局运行记录" }).click();
-    await page.getByRole("main").getByRole("link", { name: "查看失败原因", exact: true }).click();
+    await page.getByRole("main").getByRole("link", { name: "查看运行详情", exact: true }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
   });
 
@@ -163,7 +175,7 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/event-tsm/market?client=mock");
 
     await expect(page.getByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" })).toBeVisible();
-    await expect(page.getByText("得到支持")).toBeVisible();
+    await expect(page.getByText("尚未到验证时点")).toBeVisible();
     await expect(page.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
     await expect(page.getByText(/报告期 2026-06-30/)).toBeVisible();
   });
@@ -177,7 +189,7 @@ test.describe("Event-first Research OS", () => {
 
     await expect(page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
     await expect(page.getByText("不得自动进入本 Case")).toBeVisible();
-    await page.getByRole("link", { name: "Alphabet Case" }).click();
-    await expect(page).toHaveURL(/\/events\/event-alphabet/);
+    await page.getByRole("link", { name: "AI 服务器订单验证" }).first().click();
+    await expect(page).toHaveURL(/\/events\/event-ai-server/);
   });
 });
