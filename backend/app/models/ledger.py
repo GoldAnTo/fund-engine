@@ -333,6 +333,7 @@ class CaseTenantAdmission(Base):
         Uuid, ForeignKey("document_versions.id"), nullable=False
     )
     admitted_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    admission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     admitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

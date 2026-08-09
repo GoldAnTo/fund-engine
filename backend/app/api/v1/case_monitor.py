@@ -22,9 +22,17 @@ from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
 from app.schemas.v1.auto_research import ResearchRunResponse
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
 
 
-router = APIRouter(tags=["case-monitor-v1"])
+router = APIRouter(
+    tags=["case-monitor-v1"], dependencies=[Depends(require_research_tenant)]
+)
+
+
+def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
 
 
 def _dto(monitor) -> CaseMonitorDTO:
@@ -44,7 +52,12 @@ def _dto(monitor) -> CaseMonitorDTO:
 
 
 @router.get("/research-cases/{case_id}/monitor", response_model=CaseMonitorDetailResponse)
-def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_monitor(
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_case(db, case_id, tenant_id)
     query = CaseMonitorQuery(db)
     monitor = query.effective(case_id)
     run = query.latest_run(case_id)
@@ -71,7 +84,9 @@ def save_monitor(
     case_id: uuid.UUID,
     request: UpdateCaseMonitorRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    _require_case(db, case_id, tenant_id)
     try:
         monitor = CaseMonitorService(db).save(
             case_id,
@@ -97,8 +112,13 @@ def save_monitor(
     response_model=ResearchRunResponse,
     status_code=201,
 )
-def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
+def start_manual_monitor_run(
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
     """Queue an explicit replenishment using the effective monitor version."""
+    _require_case(db, case_id, tenant_id)
     try:
         service = AutoResearchService(db)
         run = service.start_from_monitor(case_id)
@@ -113,7 +133,13 @@ def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
     response_model=ResearchRunResponse,
     status_code=201,
 )
-def start_factor_monitor_run(case_id: uuid.UUID, request: StartFactorMonitorRunRequest, db: Session = Depends(get_db)):
+def start_factor_monitor_run(
+    case_id: uuid.UUID,
+    request: StartFactorMonitorRunRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_case(db, case_id, tenant_id)
     try:
         service = AutoResearchService(db)
         run = service.start_from_key_factor(case_id, key_factor_id=uuid.UUID(request.key_factor_id))
@@ -124,7 +150,14 @@ def start_factor_monitor_run(case_id: uuid.UUID, request: StartFactorMonitorRunR
 
 
 @router.post("/research-cases/{case_id}/monitor/{target_status}", response_model=CaseMonitorDTO)
-def set_monitor_status(case_id: uuid.UUID, target_status: str, request: SetCaseMonitorStatusRequest, db: Session = Depends(get_db)):
+def set_monitor_status(
+    case_id: uuid.UUID,
+    target_status: str,
+    request: SetCaseMonitorStatusRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_case(db, case_id, tenant_id)
     try:
         monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason)
         db.commit()

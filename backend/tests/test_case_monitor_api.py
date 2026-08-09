@@ -3,7 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from app.models.ledger import ResearchCase, Thesis
+from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    Thesis,
+)
 from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent  # noqa: F401
 from app.models.research_expression import KeyFactor
@@ -19,6 +25,31 @@ def _case_with_confirmed_factor(cmd_session) -> tuple[ResearchCase, Thesis]:
     )
     cmd_session.add(case)
     cmd_session.flush()
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/monitor-source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    cmd_session.add_all(
+        [
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=document.id,
+                linked_at=now,
+            ),
+            CaseTenantAdmission(
+                research_case_id=case.id,
+                tenant_id="test-team",
+                initial_document_version_id=document.id,
+                admitted_by="test-fixture",
+                admitted_at=now,
+            ),
+        ]
+    )
     factor = Thesis(
         research_case_id=case.id,
         statement="订单指引是否高于市场预期",

@@ -1143,6 +1143,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/tenant-admission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit Legacy Event Case
+         * @description Explicitly admit one legacy Case; never infer its tenant ownership.
+         */
+        post: operations["admit_legacy_event_case_api_v1_event_research__case_id__tenant_admission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/scope": {
         parameters: {
             query?: never;
@@ -4314,6 +4334,35 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** LegacyCaseAdmissionRequest */
+        LegacyCaseAdmissionRequest: {
+            /** Tenant Id */
+            tenant_id: string;
+            /** Initial Document Version Id */
+            initial_document_version_id: string;
+            /** Admitted By */
+            admitted_by: string;
+            /** Reason */
+            reason: string;
+        };
+        /** LegacyCaseAdmissionResponse */
+        LegacyCaseAdmissionResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Initial Document Version Id */
+            initial_document_version_id: string;
+            /** Admitted By */
+            admitted_by: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Admitted At
+             * Format: date-time
+             */
+            admitted_at: string;
         };
         /**
          * LinkReviewRequest
@@ -8434,7 +8483,9 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8465,7 +8516,9 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8498,7 +8551,9 @@ export interface operations {
                 after_created_at?: string | null;
                 after_id?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8529,7 +8584,9 @@ export interface operations {
     start_run_api_v1_research_cases__case_id__runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8564,7 +8621,9 @@ export interface operations {
     cancel_run_api_v1_research_runs__run_id__cancel_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 run_id: string;
             };
@@ -8601,7 +8660,9 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 run_id: string;
             };
@@ -8632,7 +8693,9 @@ export interface operations {
     get_run_api_v1_research_runs__run_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 run_id: string;
             };
@@ -8920,6 +8983,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExtractEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admit_legacy_event_case_api_v1_event_research__case_id__tenant_admission_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegacyCaseAdmissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegacyCaseAdmissionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9290,7 +9390,9 @@ export interface operations {
     get_monitor_api_v1_research_cases__case_id__monitor_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9321,7 +9423,9 @@ export interface operations {
     save_monitor_api_v1_research_cases__case_id__monitor_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9356,7 +9460,9 @@ export interface operations {
     start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9387,7 +9493,9 @@ export interface operations {
     start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9422,7 +9530,9 @@ export interface operations {
     set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
                 target_status: string;

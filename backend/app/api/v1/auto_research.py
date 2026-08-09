@@ -25,8 +25,24 @@ from app.schemas.v1.auto_research import (
     ResearchRunResponse,
 )
 from app.services.auto_research import AutoResearchService
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
 
-router = APIRouter(tags=["auto-research-v1"])
+router = APIRouter(
+    tags=["auto-research-v1"], dependencies=[Depends(require_research_tenant)]
+)
+
+
+def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
+
+
+def _require_run(db: Session, run_id: uuid.UUID, tenant_id: str) -> ResearchRun:
+    run = db.get(ResearchRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"research run {run_id} not found")
+    _require_case(db, run.research_case_id, tenant_id)
+    return run
 
 
 def _frozen_scope(db: Session, run: ResearchRun) -> FrozenRunScopeDTO:
@@ -77,11 +93,13 @@ def _run_item(db: Session, run: ResearchRun) -> ActiveResearchRunDTO:
 def list_active_runs(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
     """Return active work with the run's recorded scope, never live monitor settings."""
     runs = list(
         db.scalars(
             select(ResearchRun)
+            .where(ResearchRun.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)))
             .where(ResearchRun.status.in_(("queued", "running", "waiting_for_review")))
             .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(limit + 1)
@@ -100,11 +118,13 @@ def list_active_runs(
 def list_run_archive(
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
     """List current and terminal runs without reconstructing their scope."""
     runs = list(
         db.scalars(
             select(ResearchRun)
+            .where(ResearchRun.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)))
             .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(limit + 1)
         )
@@ -125,7 +145,13 @@ def list_run_archive(
     )
 
 @router.post("/research-cases/{case_id}/runs", response_model=ResearchRunResponse, status_code=status.HTTP_201_CREATED)
-def start_run(case_id: uuid.UUID, request: StartResearchRunRequest, db: Session = Depends(get_db)):
+def start_run(
+    case_id: uuid.UUID,
+    request: StartResearchRunRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_case(db, case_id, tenant_id)
     try:
         run = AutoResearchService(db).start(case_id, max_rounds=request.max_rounds, budget=request.budget, auto_execute=request.auto_execute)
     except ValueError as exc:
@@ -139,7 +165,9 @@ def list_runs(
     after_created_at: datetime | None = Query(default=None),
     after_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    _require_case(db, case_id, tenant_id)
     service = AutoResearchService(db)
     runs = service.list_runs(
         case_id,
@@ -161,7 +189,13 @@ def list_runs(
 
 
 @router.post("/research-runs/{run_id}/cancel", response_model=CancelRunResponse)
-def cancel_run(run_id: uuid.UUID, request: CancelRunRequest, db: Session = Depends(get_db)):
+def cancel_run(
+    run_id: uuid.UUID,
+    request: CancelRunRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_run(db, run_id, tenant_id)
     service = AutoResearchService(db)
     try:
         summary = service.cancel_run(
@@ -181,7 +215,9 @@ def get_run_events(
     run_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    _require_run(db, run_id, tenant_id)
     service = AutoResearchService(db)
     detail = service.detail(run_id)
     if detail is None:
@@ -214,7 +250,12 @@ def get_run_events(
 
 
 @router.get("/research-runs/{run_id}", response_model=ResearchRunResponse)
-def get_run(run_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_run(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    _require_run(db, run_id, tenant_id)
     detail = AutoResearchService(db).detail(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"research run {run_id} not found")

@@ -69,6 +69,22 @@ class CreateEventResearchResponse(V1Model):
     lifecycle: EventResearchLifecycleDTO
 
 
+class LegacyCaseAdmissionRequest(V1Model):
+    tenant_id: str = Field(min_length=1, max_length=256)
+    initial_document_version_id: str = Field(min_length=1)
+    admitted_by: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class LegacyCaseAdmissionResponse(V1Model):
+    case_id: str
+    tenant_id: str
+    initial_document_version_id: str
+    admitted_by: str
+    reason: str
+    admitted_at: datetime
+
+
 class AttachEventMaterialRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
