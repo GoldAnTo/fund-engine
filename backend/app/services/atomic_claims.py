@@ -29,6 +29,8 @@ class AtomicClaimService:
             raise ValidationError("atomic claim type is invalid")
         if authority_level not in _AUTHORITY_LEVELS:
             raise ValidationError("atomic claim authority level is invalid")
+        if draft.claim_type == "disclosed_fact" and authority_level != "primary_disclosure":
+            raise ValidationError("disclosed facts require primary authority")
         if not run_ref.strip():
             raise ValidationError("atomic claim run_ref must not be empty")
         if draft.quote_start < 0 or draft.quote_end <= draft.quote_start or span.verbatim_text[draft.quote_start:draft.quote_end] != draft.quote:

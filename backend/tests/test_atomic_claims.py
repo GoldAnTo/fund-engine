@@ -11,6 +11,7 @@ from app.models.ledger import (
     ImmutableLedgerError,
     SourceSpan,
     SourceStatement,
+    ValidationError,
 )
 from app.services.atomic_claims import AtomicClaimService
 
@@ -99,3 +100,16 @@ def test_confirmed_atomic_claim_is_the_only_path_that_publishes_a_statement(sess
     assert statement is not None
     assert statement.atomic_claim_candidate_id == candidate.id
     assert statement.kind == "forecast"
+
+
+def test_secondary_or_unknown_material_cannot_admit_a_disclosed_fact(session) -> None:
+    now = datetime.now(timezone.utc)
+    document = DocumentVersion(content_sha256="c" * 64, source_url="https://license-safe.example.org/authority", available_at=now, acquired_at=now, parser_version="fixture-v1")
+    session.add(document); session.flush()
+    quote = "订单同比增长20%"
+    span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text=quote)
+    session.add(span); session.flush()
+    draft = AtomicClaimDraft(source_span_id=span.id, quote=quote, quote_start=0, quote_end=len(quote), normalized_text="订单同比增长 20%", claim_type="disclosed_fact", assertion_actor=None, subject="订单", predicate="同比增长", object_text="20%", numeric_value="20", unit="%", observed_period=None, scope={})
+
+    with pytest.raises(ValidationError, match="primary authority"):
+        AtomicClaimService(session).admit(draft, authority_level="secondary_source", run_ref="extract:secondary")

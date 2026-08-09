@@ -44,6 +44,7 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     for candidate in candidates:
         assert candidate.claim_type in {
             "disclosed_fact",
+            "reported_claim",
             "management_attribution",
             "forecast",
             "research_opinion",

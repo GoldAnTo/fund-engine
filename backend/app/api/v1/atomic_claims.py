@@ -25,6 +25,7 @@ from app.schemas.v1.commands import (
     PublishedSourceStatementDTO,
 )
 from app.services.atomic_claims import AtomicClaimService
+from app.repositories.operational import TaskRepository
 
 
 router = APIRouter(tags=["atomic-claim-review-v1"])
@@ -135,6 +136,11 @@ def review_atomic_claim(
         idempotency_key=payload.idempotency_key,
         normalized_text=payload.normalized_text,
         observed_period=payload.observed_period,
+    )
+    TaskRepository(db).close_review_task(
+        "review_atomic_claim",
+        "atomic_claim_candidate",
+        candidate_id,
     )
     commit_or_rollback(db)
     return _review_dto(db, review)

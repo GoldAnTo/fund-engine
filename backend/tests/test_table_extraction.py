@@ -148,7 +148,7 @@ def test_extractor_routes_table_spans_to_rules(
 
     rule_based = [s for s in candidates if s.source_span_id == table_span.id]
     assert len(rule_based) >= 8  # 4 个指标 × 2 年
-    assert all(s.claim_type == "disclosed_fact" for s in rule_based)
+    assert all(s.claim_type == "reported_claim" for s in rule_based)
     assert any(s.structured_fields["observed_period"] == "2025-12-31" for s in rule_based)
     assert all(table_span.verbatim_text[s.quote_start:s.quote_end] == s.quote for s in rule_based)
 

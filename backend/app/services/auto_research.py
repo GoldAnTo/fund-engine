@@ -14,7 +14,15 @@ from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
-from app.models.ledger import EvidenceLink, ResearchCase, Thesis
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    AtomicClaimReview,
+    CaseDocumentVersion,
+    EvidenceLink,
+    ResearchCase,
+    SourceSpan,
+    Thesis,
+)
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion
@@ -159,6 +167,10 @@ class AutoResearchService:
                 except Exception:
                     used += 1
                 self.session.commit()
+            pending_claims = self._pending_atomic_claims(run.research_case_id)
+            if pending_claims:
+                self._pause_for_atomic_claim_review(run, pending_claims, used)
+                break
             proposer, generator = EvidenceProposer(self.client), AssessmentGenerator(self.client)
             for task in self.repo.queued_tasks_for_run(run.id, current_round):
                 if self._is_cancelled(run):
@@ -301,6 +313,17 @@ class AutoResearchService:
             run.research_case_id
         )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
+        pending_claim_count = len(self._pending_atomic_claims(run.research_case_id))
+        if pending_claim_count:
+            lifecycle_repo.update(
+                lifecycle,
+                status="awaiting_key_review",
+                active_run_id=run.id,
+                summary=f"已抽取 {pending_claim_count} 条原子陈述，等待人工核对原文后再继续研究",
+                current_gap="待审核抽取候选尚未形成正式 SourceStatement",
+                next_human_action=f"审核 {pending_claim_count} 条原子陈述",
+            )
+            return
         if review_count:
             lifecycle_repo.update(
                 lifecycle,
@@ -536,6 +559,65 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
+        for candidate in self._pending_atomic_claims(run.research_case_id):
+            if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
+                continue
+            self.task_repo.add_task(
+                title="审核自动抽取的原子陈述",
+                description="核对原文、字符定位、来源权限与规范表述；未审核前不会进入证据提议或结论。",
+                task_type="review_atomic_claim",
+                ref_type="atomic_claim_candidate",
+                ref_id=candidate.id,
+                research_case_id=run.research_case_id,
+                priority="high",
+            )
+
+    def _pending_atomic_claims(self, case_id: uuid.UUID) -> list[AtomicClaimCandidate]:
+        """Return only candidates from this Case that have no human decision."""
+        reviewed = (
+            select(AtomicClaimReview.id)
+            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+            .exists()
+        )
+        return list(self.session.scalars(
+            select(AtomicClaimCandidate)
+            .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+            .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == SourceSpan.document_version_id)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(~reviewed)
+            .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
+        ))
+
+    def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
+        """Persist an explicit, replayable stop before any propose/assess work."""
+        self.repo.update_run(
+            run,
+            status="waiting_for_review",
+            stage="claim_review",
+            budget_used=used,
+            stop_reason="pending_atomic_claim_review",
+        )
+        for task in self.repo.queued_tasks_for_run(run.id, run.round):
+            self.repo.update_task(
+                task,
+                status="blocked",
+                stage="claim_review",
+                result={
+                    "task_type": task.task_type,
+                    "blocked_by": "pending_atomic_claim_review",
+                    "candidate_count": len(candidates),
+                },
+            )
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="claim_review",
+            status="waiting_for_review",
+            message=f"发现 {len(candidates)} 条待审核原子陈述，已在提议证据和生成结论前暂停",
+            payload_json={
+                "candidate_ids": [str(candidate.id) for candidate in candidates],
+                "next_action": "review_atomic_claims",
+            },
+        )
 
     def _propose_for_task(
         self, proposer: EvidenceProposer, task, run

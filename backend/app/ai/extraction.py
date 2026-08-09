@@ -84,7 +84,11 @@ class StatementExtractor:
                             quote_start=fact.quote_start,
                             quote_end=fact.quote_end,
                             normalized_text=fact.statement_text,
-                            claim_type="disclosed_fact",
+                            # A table's shape alone cannot establish that its
+                            # document is a primary disclosure. Until source
+                            # authority is explicitly recorded, retain the
+                            # fact as a reviewable reported claim.
+                            claim_type="reported_claim",
                             assertion_actor=None,
                             subject=None,
                             predicate=fact.metric_name,
@@ -144,7 +148,11 @@ class StatementExtractor:
                                 quote_start=quote_start,
                                 quote_end=quote_end,
                                 normalized_text=stmt_data["normalized_text"],
-                                claim_type=stmt_data["kind"],
+                                claim_type=(
+                                    "reported_claim"
+                                    if stmt_data["kind"] == "disclosed_fact"
+                                    else stmt_data["kind"]
+                                ),
                                 assertion_actor=stmt_data.get("assertion_actor"),
                                 subject=stmt_data.get("subject"),
                                 predicate=stmt_data.get("predicate"),
