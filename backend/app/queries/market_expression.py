@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
 from app.models.source_governance import SourceContract
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketObservation, ReportClaim
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
@@ -20,6 +20,11 @@ from app.schemas.v1.market_expression import (
     FundamentalImpactDTO,
     KeyFactorDTO,
     MarketExpressionResponse,
+    MarketInstrumentBindingDTO,
+    MarketInstrumentBindingsResponse,
+    MarketInstrumentCatalogItemDTO,
+    MarketInstrumentCatalogResponse,
+    MarketInstrumentStockOptionDTO,
     MarketObservationDTO,
     ReportClaimDTO,
     SourceStatementOptionDTO,
@@ -73,6 +78,51 @@ class MarketExpressionQueries:
             for statement, span, document in rows
         ])
 
+    def market_instruments(self, case_id: uuid.UUID) -> MarketInstrumentBindingsResponse:
+        if ResearchRepository(self._db).get_case(case_id) is None:
+            raise NotFoundError(f"research case {case_id} not found")
+        bindings = self._db.scalars(
+            select(MarketInstrumentBinding)
+            .where(MarketInstrumentBinding.research_case_id == case_id)
+            .where(MarketInstrumentBinding.review_state == "reviewed")
+            .order_by(MarketInstrumentBinding.created_at, MarketInstrumentBinding.id)
+        )
+        return MarketInstrumentBindingsResponse(items=[
+            self._market_instrument(item)
+            for item in bindings
+            if self._case_has_source(case_id, item.source_statement_id)
+        ])
+
+    def market_instrument_catalog(self, query: str = "") -> MarketInstrumentCatalogResponse:
+        needle = query.strip()
+        clause = None
+        if needle:
+            pattern = f"%{needle}%"
+            clause = or_(
+                Company.code.ilike(pattern), Company.name.ilike(pattern),
+                Stock.code.ilike(pattern), Stock.name.ilike(pattern),
+            )
+        statement = select(Company, Stock).outerjoin(Stock, Stock.company_id == Company.id)
+        if clause is not None:
+            statement = statement.where(clause)
+        rows = self._db.execute(statement.order_by(Company.code, Stock.code).limit(100)).all()
+        grouped: dict[uuid.UUID, tuple[Company, list[Stock]]] = {}
+        for company, stock in rows:
+            current = grouped.get(company.id)
+            if current is None:
+                current = (company, [])
+                grouped[company.id] = current
+            if stock is not None:
+                current[1].append(stock)
+        return MarketInstrumentCatalogResponse(items=[
+            MarketInstrumentCatalogItemDTO(
+                company_id=str(company.id), company_code=company.code,
+                company_name=company.name, company_type=company.type,
+                stocks=[MarketInstrumentStockOptionDTO(id=str(stock.id), code=stock.code, name=stock.name, market=stock.market) for stock in stocks],
+            )
+            for company, stocks in grouped.values()
+        ])
+
     def _source(self, statement_id: uuid.UUID | None) -> ExpressionSourceDTO:
         if statement_id is None:
             return ExpressionSourceDTO(source_statement_id=None, document_version_id=None, document_title=None, source_url=None, locator=None, available_at=None, permission_status="not_recorded")
@@ -94,6 +144,23 @@ class MarketExpressionQueries:
 
     def _claim(self, item: ReportClaim) -> ReportClaimDTO:
         return ReportClaimDTO(id=str(item.id), text=item.text, claim_kind=item.claim_kind, asserted_period=item.asserted_period, asserted_by=item.asserted_by, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id))
+
+    def _market_instrument(self, item: MarketInstrumentBinding) -> MarketInstrumentBindingDTO:
+        company = self._db.get(Company, item.company_id)
+        stock = self._db.get(Stock, item.stock_id) if item.stock_id else None
+        return MarketInstrumentBindingDTO(
+            id=str(item.id), company_id=str(item.company_id),
+            company_code=company.code if company else "已删除公司",
+            company_name=company.name if company else "已删除公司",
+            stock_id=str(item.stock_id) if item.stock_id else None,
+            stock_code=stock.code if stock else None,
+            stock_name=stock.name if stock else None,
+            relationship_role=item.relationship_role,
+            reviewed_by=item.reviewed_by or "未记录",
+            review_reason=item.review_reason or "未记录",
+            reviewed_at=item.reviewed_at or item.created_at,
+            source=self._source(item.source_statement_id),
+        )
 
     def _factor(self, item: KeyFactor, cutoff: datetime) -> KeyFactorDTO:
         verification = self._db.scalar(select(ClaimVerification).where(ClaimVerification.key_factor_id == item.id).where(ClaimVerification.review_state == "reviewed").where(ClaimVerification.created_at <= cutoff).where(ClaimVerification.reviewed_at <= cutoff).order_by(ClaimVerification.created_at.desc(), ClaimVerification.id.desc()).limit(1))

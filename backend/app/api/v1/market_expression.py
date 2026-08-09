@@ -12,15 +12,21 @@ from app.db import get_db
 from app.queries.market_expression import MarketExpressionQueries
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
+    FundamentalImpactDTO,
     KeyFactorDTO,
+    MarketInstrumentBindingDTO,
+    MarketInstrumentBindingsResponse,
+    MarketInstrumentCatalogResponse,
     MarketExpressionResponse,
     RegisterKeyFactorRequest,
     RegisterClaimVerificationRequest,
+    RegisterFundamentalImpactRequest,
+    RegisterMarketInstrumentBindingRequest,
     RegisterReportClaimRequest,
     ReportClaimDTO,
     SourceStatementOptionsResponse,
 )
-from app.services.market_expression import ClaimVerificationInput, KeyFactorInput, MarketExpressionService, ReportClaimInput
+from app.services.market_expression import ClaimVerificationInput, FundamentalImpactInput, KeyFactorInput, MarketExpressionService, MarketInstrumentBindingInput, ReportClaimInput
 
 
 router = APIRouter(tags=["market-expression-v1"])
@@ -36,6 +42,52 @@ def get_market_expression(case_id: uuid.UUID, as_of: date | None = None, cutoff:
 @router.get("/research-cases/{case_id}/source-statements", response_model=SourceStatementOptionsResponse)
 def admitted_source_statements(case_id: uuid.UUID, db: Session = Depends(get_db)) -> SourceStatementOptionsResponse:
     return MarketExpressionQueries(db).admitted_source_statements(case_id)
+
+
+@router.get("/research-cases/{case_id}/market-instruments", response_model=MarketInstrumentBindingsResponse)
+def market_instruments(case_id: uuid.UUID, db: Session = Depends(get_db)) -> MarketInstrumentBindingsResponse:
+    return MarketExpressionQueries(db).market_instruments(case_id)
+
+
+@router.get("/market-instruments", response_model=MarketInstrumentCatalogResponse)
+def market_instrument_catalog(query: str = "", db: Session = Depends(get_db)) -> MarketInstrumentCatalogResponse:
+    return MarketExpressionQueries(db).market_instrument_catalog(query)
+
+
+@router.post("/research-cases/{case_id}/market-instruments", response_model=MarketInstrumentBindingDTO, status_code=status.HTTP_201_CREATED)
+def register_market_instrument_binding(case_id: uuid.UUID, payload: RegisterMarketInstrumentBindingRequest, db: Session = Depends(get_db)) -> MarketInstrumentBindingDTO:
+    record = translate_validation(
+        MarketExpressionService(db).register_market_instrument_binding,
+        case_id,
+        MarketInstrumentBindingInput(
+            company_id=payload.company_id, stock_id=payload.stock_id,
+            source_statement_id=payload.source_statement_id,
+            relationship_role=payload.relationship_role,
+            reviewed_by=payload.reviewed_by, review_reason=payload.review_reason,
+        ),
+    )
+    commit_or_rollback(db)
+    return MarketExpressionQueries(db)._market_instrument(record)
+
+
+@router.post("/research-cases/{case_id}/key-factors/{factor_id}/fundamental-impacts", response_model=FundamentalImpactDTO, status_code=status.HTTP_201_CREATED)
+def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterFundamentalImpactRequest, db: Session = Depends(get_db)) -> FundamentalImpactDTO:
+    record = translate_validation(
+        MarketExpressionService(db).register_fundamental_impact,
+        case_id,
+        factor_id,
+        FundamentalImpactInput(
+            market_instrument_binding_id=payload.market_instrument_binding_id,
+            source_statement_id=payload.source_statement_id,
+            metric_name=payload.metric_name,
+            expected_direction=payload.expected_direction,
+            rationale=payload.rationale,
+            reviewed_by=payload.reviewed_by,
+            review_reason=payload.review_reason,
+        ),
+    )
+    commit_or_rollback(db)
+    return MarketExpressionQueries(db)._fundamental(record)
 
 
 @router.post("/research-cases/{case_id}/report-claims", response_model=ReportClaimDTO, status_code=status.HTTP_201_CREATED)

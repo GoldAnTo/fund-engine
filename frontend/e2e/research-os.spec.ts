@@ -13,6 +13,23 @@ test.describe("Event-first Research OS", () => {
     expect(liveRequests).toEqual([]);
   });
 
+  test("market expression records an explicit instrument link before a fundamental impact", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await expect(page.getByRole("heading", { name: "关联公司与股票" })).toBeVisible();
+    await expect(page.getByText("不会从事件标题或代码自动推断。每一条关联都必须由本 Case 已准入的冻结原文、审核人和理由支持。")).toBeVisible();
+    await page.getByRole("button", { name: "关联公司与股票" }).click();
+    await page.getByLabel("标的审核理由").fill("冻结原文明确该公司处于本 Case 的传导范围。");
+    await page.getByRole("button", { name: "保存已审核标的关联" }).click();
+    await expect(page.getByText(/已追加已审核标的关联/)).toBeVisible();
+
+    await page.getByRole("button", { name: "登记基本面传导" }).click();
+    await page.getByLabel("传导机制").fill("订单兑现将按履约周期传导为收入增长。");
+    await page.getByLabel("传导审核理由").fill("已核对来源、标的绑定和指标口径。");
+    await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
+    await expect(page.getByText(/已追加已审核基本面传导/)).toBeVisible();
+  });
+
   test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {
     await page.goto("/workspace?client=mock");
 

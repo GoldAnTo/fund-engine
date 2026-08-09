@@ -53,6 +53,7 @@ IMMUTABLE_TABLES = frozenset(
         "report_claims",
         "key_factors",
         "claim_verifications",
+        "market_instrument_bindings",
         "fundamental_impacts",
         "market_observations",
         "source_contracts",

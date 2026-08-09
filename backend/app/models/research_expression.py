@@ -78,6 +78,39 @@ class ClaimVerification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class MarketInstrumentBinding(Base):
+    """A reviewed, source-backed Case association to a company or security.
+
+    This is deliberately distinct from ``ThemeRole``.  Theme taxonomy can be
+    useful context, but it is not evidence that a Case's factor applies to a
+    company or stock.
+    """
+
+    __tablename__ = "market_instrument_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "relationship_role IN ('directly_affected', 'supply_chain', 'competitor', 'beneficiary', 'risk_exposure')",
+            name="ck_market_instrument_bindings_role",
+        ),
+        CheckConstraint(
+            "review_state IN ('machine_generated', 'reviewed', 'rejected')",
+            name="ck_market_instrument_bindings_review_state",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("companies.id"), nullable=False)
+    stock_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("stocks.id"), nullable=True)
+    source_statement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=False)
+    relationship_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class FundamentalImpact(Base):
     __tablename__ = "fundamental_impacts"
     __table_args__ = (

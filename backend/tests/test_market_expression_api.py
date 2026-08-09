@@ -389,3 +389,157 @@ def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
     assert response.status_code == 201
     assert response.json()["outcome"] == "supported"
     assert response.json()["source"]["document_version_id"] == str(document.id)
+
+
+def test_researcher_can_bind_a_case_to_an_explicit_company_and_stock_from_an_admitted_source(
+    cmd_client, cmd_session
+) -> None:
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"instrument-binding-source").hexdigest(),
+        source_url="https://licensed.example/disclosure/supplier",
+        title="供应商订单披露",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 3, "paragraph": 1}, verbatim_text="供应商确认进入本期订单范围。")
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(source_span_id=span.id, kind="disclosed_fact", normalized_text="供应商确认进入本期订单范围", created_at=now)
+    company = Company(code="688001", name="供应链公司", type="listed", created_at=now)
+    cmd_session.add_all([statement, company])
+    cmd_session.flush()
+    stock = Stock(company_id=company.id, code="688001.SH", name="供应链公司", market="SSE", created_at=now)
+    cmd_session.add(stock)
+    cmd_session.commit()
+
+    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
+        "company_id": str(company.id),
+        "stock_id": str(stock.id),
+        "source_statement_id": str(statement.id),
+        "relationship_role": "supply_chain",
+        "reviewed_by": "human:researcher",
+        "review_reason": "原文明确提及该公司与订单传导范围。",
+    })
+
+    assert response.status_code == 201
+    binding = response.json()
+    assert binding["company_id"] == str(company.id)
+    assert binding["stock_code"] == "688001.SH"
+    assert binding["source"]["locator"] == {"page": 3, "paragraph": 1}
+
+    listed = cmd_client.get(f"/api/v1/research-cases/{case_id}/market-instruments")
+
+    assert listed.status_code == 200
+    assert listed.json()["items"] == [binding]
+
+
+def test_researcher_can_append_a_source_backed_fundamental_impact_only_after_binding_the_instrument(
+    cmd_client, cmd_session
+) -> None:
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"fundamental-impact-source").hexdigest(),
+        source_url="https://licensed.example/disclosure/fundamental-impact",
+        title="订单与收入披露",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 6}, verbatim_text="订单增长将确认在后续收入中。")
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(source_span_id=span.id, kind="disclosed_fact", normalized_text="订单增长将确认在后续收入中", created_at=now)
+    factor = KeyFactor(
+        research_case_id=case_id, report_claim_id=None, thesis_id=None,
+        name="订单转收入", expected_direction="positive", metric_name="收入同比增速",
+        allowed_source_types=["company_disclosure"], verification_window_start=None,
+        verification_window_end=None, support_condition="收入增长", refutation_condition="收入未增长",
+        next_verification_event="下一次财报", review_state="reviewed",
+        reviewed_by="human:researcher", review_reason="口径已固定", reviewed_at=now, created_at=now,
+    )
+    company = Company(code="688002", name="传导公司", type="listed", created_at=now)
+    cmd_session.add_all([statement, factor, company])
+    cmd_session.flush()
+    stock = Stock(company_id=company.id, code="688002.SH", name="传导公司", market="SSE", created_at=now)
+    cmd_session.add(stock)
+    cmd_session.commit()
+
+    unbound = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/fundamental-impacts", json={
+        "market_instrument_binding_id": str(uuid.uuid4()),
+        "source_statement_id": str(statement.id),
+        "metric_name": "收入同比增速",
+        "expected_direction": "positive",
+        "rationale": "未审核标的不应进入传导。",
+        "reviewed_by": "human:researcher",
+        "review_reason": "尝试绕过标的绑定。",
+    })
+    assert unbound.status_code == 422
+
+    binding = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
+        "company_id": str(company.id), "stock_id": str(stock.id),
+        "source_statement_id": str(statement.id), "relationship_role": "supply_chain",
+        "reviewed_by": "human:researcher", "review_reason": "冻结原文明确该公司处于订单传导范围。",
+    })
+    assert binding.status_code == 201
+
+    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/fundamental-impacts", json={
+        "market_instrument_binding_id": binding.json()["id"],
+        "source_statement_id": str(statement.id),
+        "metric_name": "收入同比增速",
+        "expected_direction": "positive",
+        "rationale": "订单增长通过履约和确认节奏传导至收入。",
+        "reviewed_by": "human:researcher",
+        "review_reason": "已核对标的关系、指标口径和原文定位。",
+    })
+
+    assert response.status_code == 201
+    impact = response.json()
+    assert impact["company_id"] == str(company.id)
+    assert impact["stock_id"] == str(stock.id)
+    assert impact["metric_name"] == "收入同比增速"
+
+    expression = cmd_client.get(f"/api/v1/research-cases/{case_id}/market-expression")
+
+    assert expression.status_code == 200
+    assert expression.json()["fundamentals"] == [impact]
+
+
+def test_market_instrument_catalog_searches_only_explicit_ledger_instruments(cmd_client, cmd_session) -> None:
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    company = Company(code="688003", name="可选择的公司", type="listed", created_at=now)
+    cmd_session.add(company)
+    cmd_session.flush()
+    cmd_session.add(Stock(company_id=company.id, code="688003.SH", name="可选择的公司", market="SSE", created_at=now))
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/market-instruments?query=688003")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["company_id"] == str(company.id)
+    assert item["company_code"] == "688003"
+    assert item["stocks"][0]["code"] == "688003.SH"

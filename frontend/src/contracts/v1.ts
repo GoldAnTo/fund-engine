@@ -1334,6 +1334,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/market-instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market Instruments */
+        get: operations["market_instruments_api_v1_research_cases__case_id__market_instruments_get"];
+        put?: never;
+        /** Register Market Instrument Binding */
+        post: operations["register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market Instrument Catalog */
+        get: operations["market_instrument_catalog_api_v1_market_instruments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/fundamental-impacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Fundamental Impact */
+        post: operations["register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/report-claims": {
         parameters: {
             query?: never;
@@ -4063,6 +4115,69 @@ export interface components {
             /** Fund Exposure */
             fund_exposure: components["schemas"]["FundDisclosureExposureDTO"][];
         };
+        /** MarketInstrumentBindingDTO */
+        MarketInstrumentBindingDTO: {
+            /** Id */
+            id: string;
+            /** Company Id */
+            company_id: string;
+            /** Company Code */
+            company_code: string;
+            /** Company Name */
+            company_name: string;
+            /** Stock Id */
+            stock_id: string | null;
+            /** Stock Code */
+            stock_code: string | null;
+            /** Stock Name */
+            stock_name: string | null;
+            /** Relationship Role */
+            relationship_role: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
+        };
+        /** MarketInstrumentBindingsResponse */
+        MarketInstrumentBindingsResponse: {
+            /** Items */
+            items: components["schemas"]["MarketInstrumentBindingDTO"][];
+        };
+        /** MarketInstrumentCatalogItemDTO */
+        MarketInstrumentCatalogItemDTO: {
+            /** Company Id */
+            company_id: string;
+            /** Company Code */
+            company_code: string;
+            /** Company Name */
+            company_name: string;
+            /** Company Type */
+            company_type: string;
+            /** Stocks */
+            stocks: components["schemas"]["MarketInstrumentStockOptionDTO"][];
+        };
+        /** MarketInstrumentCatalogResponse */
+        MarketInstrumentCatalogResponse: {
+            /** Items */
+            items: components["schemas"]["MarketInstrumentCatalogItemDTO"][];
+        };
+        /** MarketInstrumentStockOptionDTO */
+        MarketInstrumentStockOptionDTO: {
+            /** Id */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Market */
+            market: string;
+        };
         /** MarketObservationDTO */
         MarketObservationDTO: {
             /** Id */
@@ -4571,6 +4686,32 @@ export interface components {
             /** Review Reason */
             review_reason: string;
         };
+        /** RegisterFundamentalImpactRequest */
+        RegisterFundamentalImpactRequest: {
+            /**
+             * Market Instrument Binding Id
+             * Format: uuid
+             */
+            market_instrument_binding_id: string;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Metric Name */
+            metric_name: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "positive" | "negative" | "neutral";
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
         /** RegisterKeyFactorRequest */
         RegisterKeyFactorRequest: {
             /**
@@ -4601,6 +4742,30 @@ export interface components {
             refutation_condition: string;
             /** Next Verification Event */
             next_verification_event: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterMarketInstrumentBindingRequest */
+        RegisterMarketInstrumentBindingRequest: {
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /** Stock Id */
+            stock_id?: string | null;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /**
+             * Relationship Role
+             * @enum {string}
+             */
+            relationship_role: "directly_affected" | "supply_chain" | "competitor" | "beneficiary" | "risk_exposure";
             /** Reviewed By */
             reviewed_by: string;
             /** Review Reason */
@@ -8794,6 +8959,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceStatementOptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_instruments_api_v1_research_cases__case_id__market_instruments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentBindingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMarketInstrumentBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_instrument_catalog_api_v1_market_instruments_get: {
+        parameters: {
+            query?: {
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterFundamentalImpactRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalImpactDTO"];
                 };
             };
             /** @description Validation Error */

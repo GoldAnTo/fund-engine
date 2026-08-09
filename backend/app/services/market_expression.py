@@ -8,8 +8,8 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import CaseDocumentVersion, SourceSpan, SourceStatement, Thesis, ValidationError
-from app.models.research_expression import ClaimVerification, KeyFactor, ReportClaim
+from app.models.ledger import CaseDocumentVersion, Company, SourceSpan, SourceStatement, Stock, Thesis, ValidationError
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, ReportClaim
 from app.models.source_governance import SourceContract
 from app.repositories.research import ResearchRepository
 
@@ -50,6 +50,27 @@ class KeyFactorInput:
 class ClaimVerificationInput:
     source_statement_id: uuid.UUID
     outcome: str
+    rationale: str
+    reviewed_by: str
+    review_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class MarketInstrumentBindingInput:
+    company_id: uuid.UUID
+    stock_id: uuid.UUID | None
+    source_statement_id: uuid.UUID
+    relationship_role: str
+    reviewed_by: str
+    review_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class FundamentalImpactInput:
+    market_instrument_binding_id: uuid.UUID
+    source_statement_id: uuid.UUID
+    metric_name: str
+    expected_direction: str
     rationale: str
     reviewed_by: str
     review_reason: str
@@ -136,6 +157,69 @@ class MarketExpressionService:
             source_statement_id=value.source_statement_id,
             outcome=value.outcome,
             rationale=value.rationale.strip(),
+            review_state="reviewed",
+            reviewed_by=value.reviewed_by.strip(),
+            review_reason=value.review_reason.strip(),
+            reviewed_at=_utcnow(),
+            created_at=_utcnow(),
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record
+
+    def register_market_instrument_binding(
+        self, case_id: uuid.UUID, value: MarketInstrumentBindingInput
+    ) -> MarketInstrumentBinding:
+        self._require_case(case_id)
+        company = self._session.get(Company, value.company_id)
+        if company is None:
+            raise ValidationError("company not found")
+        if value.stock_id is not None:
+            stock = self._session.get(Stock, value.stock_id)
+            if stock is None or stock.company_id != company.id:
+                raise ValidationError("stock must belong to the selected company")
+        self._require_admitted_case_statement(case_id, value.source_statement_id)
+        for name in ("reviewed_by", "review_reason"):
+            self._require_text(getattr(value, name), name)
+        record = MarketInstrumentBinding(
+            research_case_id=case_id,
+            company_id=company.id,
+            stock_id=value.stock_id,
+            source_statement_id=value.source_statement_id,
+            relationship_role=value.relationship_role,
+            review_state="reviewed",
+            reviewed_by=value.reviewed_by.strip(),
+            review_reason=value.review_reason.strip(),
+            reviewed_at=_utcnow(),
+            created_at=_utcnow(),
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record
+
+    def register_fundamental_impact(
+        self, case_id: uuid.UUID, factor_id: uuid.UUID, value: FundamentalImpactInput
+    ) -> FundamentalImpact:
+        self._require_case(case_id)
+        factor = self._session.get(KeyFactor, factor_id)
+        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed":
+            raise ValidationError("key factor must be a reviewed record in this research case")
+        binding = self._session.get(MarketInstrumentBinding, value.market_instrument_binding_id)
+        if binding is None or binding.research_case_id != case_id or binding.review_state != "reviewed":
+            raise ValidationError("market instrument binding must be a reviewed record in this research case")
+        self._require_admitted_case_statement(case_id, binding.source_statement_id)
+        self._require_admitted_case_statement(case_id, value.source_statement_id)
+        for name in ("metric_name", "rationale", "reviewed_by", "review_reason"):
+            self._require_text(getattr(value, name), name)
+        record = FundamentalImpact(
+            research_case_id=case_id,
+            key_factor_id=factor.id,
+            company_id=binding.company_id,
+            stock_id=binding.stock_id,
+            metric_name=value.metric_name.strip(),
+            expected_direction=value.expected_direction,
+            rationale=value.rationale.strip(),
+            source_statement_id=value.source_statement_id,
             review_state="reviewed",
             reviewed_by=value.reviewed_by.strip(),
             review_reason=value.review_reason.strip(),

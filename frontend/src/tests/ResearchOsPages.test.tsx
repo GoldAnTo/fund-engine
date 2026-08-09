@@ -71,6 +71,17 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/不会把运行结果自动写成支持或反证/)).toBeVisible();
   });
 
+  it("keeps the company and stock link explicit before opening fundamental-impact registration", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "关联公司与股票" })).toBeVisible();
+    expect(screen.getByText(/不会从事件标题或代码自动推断/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "登记基本面传导" }));
+    expect(await screen.findByLabelText("传导标的" )).toBeVisible();
+  });
+
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-published"]}>

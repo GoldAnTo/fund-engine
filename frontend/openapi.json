@@ -4567,6 +4567,206 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/market-instruments": {
+      "get": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Market Instruments",
+        "operationId": "market_instruments_api_v1_research_cases__case_id__market_instruments_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketInstrumentBindingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Register Market Instrument Binding",
+        "operationId": "register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterMarketInstrumentBindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketInstrumentBindingDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/market-instruments": {
+      "get": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Market Instrument Catalog",
+        "operationId": "market_instrument_catalog_api_v1_market_instruments_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Query"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketInstrumentCatalogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/fundamental-impacts": {
+      "post": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Register Fundamental Impact",
+        "operationId": "register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "factor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Factor Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFundamentalImpactRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundamentalImpactDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/report-claims": {
       "post": {
         "tags": [
@@ -12453,6 +12653,196 @@
         ],
         "title": "MarketExpressionResponse"
       },
+      "MarketInstrumentBindingDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "company_id": {
+            "type": "string",
+            "title": "Company Id"
+          },
+          "company_code": {
+            "type": "string",
+            "title": "Company Code"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "stock_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "relationship_role": {
+            "type": "string",
+            "title": "Relationship Role"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "company_id",
+          "company_code",
+          "company_name",
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "relationship_role",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at",
+          "source"
+        ],
+        "title": "MarketInstrumentBindingDTO"
+      },
+      "MarketInstrumentBindingsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MarketInstrumentBindingDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "MarketInstrumentBindingsResponse"
+      },
+      "MarketInstrumentCatalogItemDTO": {
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "title": "Company Id"
+          },
+          "company_code": {
+            "type": "string",
+            "title": "Company Code"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "company_type": {
+            "type": "string",
+            "title": "Company Type"
+          },
+          "stocks": {
+            "items": {
+              "$ref": "#/components/schemas/MarketInstrumentStockOptionDTO"
+            },
+            "type": "array",
+            "title": "Stocks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "company_id",
+          "company_code",
+          "company_name",
+          "company_type",
+          "stocks"
+        ],
+        "title": "MarketInstrumentCatalogItemDTO"
+      },
+      "MarketInstrumentCatalogResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MarketInstrumentCatalogItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "MarketInstrumentCatalogResponse"
+      },
+      "MarketInstrumentStockOptionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "market"
+        ],
+        "title": "MarketInstrumentStockOptionDTO"
+      },
       "MarketObservationDTO": {
         "properties": {
           "id": {
@@ -13735,6 +14125,61 @@
         ],
         "title": "RegisterClaimVerificationRequest"
       },
+      "RegisterFundamentalImpactRequest": {
+        "properties": {
+          "market_instrument_binding_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Market Instrument Binding Id"
+          },
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
+          "metric_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Metric Name"
+          },
+          "expected_direction": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "neutral"
+            ],
+            "title": "Expected Direction"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Rationale"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Review Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "market_instrument_binding_id",
+          "source_statement_id",
+          "metric_name",
+          "expected_direction",
+          "rationale",
+          "reviewed_by",
+          "review_reason"
+        ],
+        "title": "RegisterFundamentalImpactRequest"
+      },
       "RegisterKeyFactorRequest": {
         "properties": {
           "report_claim_id": {
@@ -13846,6 +14291,63 @@
           "review_reason"
         ],
         "title": "RegisterKeyFactorRequest"
+      },
+      "RegisterMarketInstrumentBindingRequest": {
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "stock_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Id"
+          },
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
+          "relationship_role": {
+            "type": "string",
+            "enum": [
+              "directly_affected",
+              "supply_chain",
+              "competitor",
+              "beneficiary",
+              "risk_exposure"
+            ],
+            "title": "Relationship Role"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Review Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "company_id",
+          "source_statement_id",
+          "relationship_role",
+          "reviewed_by",
+          "review_reason"
+        ],
+        "title": "RegisterMarketInstrumentBindingRequest"
       },
       "RegisterReportClaimRequest": {
         "properties": {

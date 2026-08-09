@@ -72,6 +72,63 @@ class RegisterClaimVerificationRequest(V1Model):
     review_reason: str = Field(min_length=1)
 
 
+class RegisterMarketInstrumentBindingRequest(V1Model):
+    company_id: uuid.UUID
+    stock_id: uuid.UUID | None = None
+    source_statement_id: uuid.UUID
+    relationship_role: Literal["directly_affected", "supply_chain", "competitor", "beneficiary", "risk_exposure"]
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
+
+
+class RegisterFundamentalImpactRequest(V1Model):
+    market_instrument_binding_id: uuid.UUID
+    source_statement_id: uuid.UUID
+    metric_name: str = Field(min_length=1)
+    expected_direction: Literal["positive", "negative", "neutral"]
+    rationale: str = Field(min_length=1)
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
+
+
+class MarketInstrumentBindingDTO(V1Model):
+    id: str
+    company_id: str
+    company_code: str
+    company_name: str
+    stock_id: str | None
+    stock_code: str | None
+    stock_name: str | None
+    relationship_role: str
+    reviewed_by: str
+    review_reason: str
+    reviewed_at: datetime
+    source: ExpressionSourceDTO
+
+
+class MarketInstrumentBindingsResponse(V1Model):
+    items: list[MarketInstrumentBindingDTO]
+
+
+class MarketInstrumentStockOptionDTO(V1Model):
+    id: str
+    code: str
+    name: str
+    market: str
+
+
+class MarketInstrumentCatalogItemDTO(V1Model):
+    company_id: str
+    company_code: str
+    company_name: str
+    company_type: str
+    stocks: list[MarketInstrumentStockOptionDTO]
+
+
+class MarketInstrumentCatalogResponse(V1Model):
+    items: list[MarketInstrumentCatalogItemDTO]
+
+
 class ClaimVerificationDTO(V1Model):
     outcome: str
     rationale: str
