@@ -232,17 +232,25 @@ export function CaseEvidencePage() {
                         : "AI 候选，未经复核"}
                     </span>
                     <h3>{evidence.factorStatement}</h3>
-                    <blockquote>{evidence.excerpt}</blockquote>
+                    {evidence.sourceVisibleInCase ? (
+                      <blockquote>{evidence.excerpt}</blockquote>
+                    ) : (
+                      <p className="ros-muted">
+                        原文内容受当前来源许可控制，不能在此 Case 展示。
+                      </p>
+                    )}
                   </div>
                   <dl>
                     <div>
                       <dt>关系角色</dt>
                       <dd>{evidence.role}</dd>
                     </div>
-                    <div>
-                      <dt>精确定位</dt>
-                      <dd>{JSON.stringify(evidence.locator)}</dd>
-                    </div>
+                    {evidence.sourceVisibleInCase && (
+                      <div>
+                        <dt>精确定位</dt>
+                        <dd>{JSON.stringify(evidence.locator)}</dd>
+                      </div>
+                    )}
                     <div>
                       <dt>可用时点</dt>
                       <dd>{evidence.availableAt}</dd>

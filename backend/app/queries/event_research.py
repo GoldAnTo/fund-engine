@@ -625,21 +625,22 @@ class EventResearchQueries:
             .where(CaseDocumentVersion.document_version_id == document.id)
             .limit(1)
         )
+        source_visible_in_case = bool(
+            linked_to_case is not None
+            and contract is not None
+            and contract.allow_display
+        )
         return EventKeyEvidenceDTO(
             case_id=str(case_id),
             factor_statement=thesis.statement,
             role=link.role,
             review_state=link.review_state,
-            source_title=document.title,
-            source_url=document.source_url,
+            source_title=document.title if source_visible_in_case else None,
+            source_url=document.source_url if source_visible_in_case else None,
             document_version_id=str(document.id),
-            source_visible_in_case=bool(
-                linked_to_case is not None
-                and contract is not None
-                and contract.allow_display
-            ),
-            excerpt=span.verbatim_text,
-            locator=span.locator,
+            source_visible_in_case=source_visible_in_case,
+            excerpt=span.verbatim_text if source_visible_in_case else "",
+            locator=span.locator if source_visible_in_case else {},
             available_at=link.available_at,
         )
 

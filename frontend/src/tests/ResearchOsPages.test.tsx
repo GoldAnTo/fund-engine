@@ -180,6 +180,39 @@ describe("Research OS event entry", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not render source contents when the Case cannot display that material", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventWorkbench").mockResolvedValue({
+      ...(await adapter.getEventWorkbench("event-tsm")),
+      evidence: [{
+        caseId: "event-tsm",
+        factorStatement: "受限来源的研究因素",
+        role: "supports",
+        reviewState: "reviewed",
+        sourceTitle: null,
+        sourceUrl: null,
+        documentVersionId: "doc-restricted",
+        sourceVisibleInCase: false,
+        excerpt: "这段受限原文绝不能显示",
+        locator: { page: 12 },
+        availableAt: "2026-08-08T00:00:00Z",
+      }],
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
+        <Routes>
+          <Route path="/events/:caseId/evidence" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("受限来源的研究因素")).toBeVisible();
+    expect(screen.getByText("当前未获在此 Case 定位原文的许可")).toBeVisible();
+    expect(screen.queryByText("这段受限原文绝不能显示")).not.toBeInTheDocument();
+    expect(screen.queryByText('{"page":12}')).not.toBeInTheDocument();
+  });
+
   it("turns a Case Wiki source and AI candidate into traceable researcher actions", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
