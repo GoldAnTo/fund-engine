@@ -277,6 +277,22 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("searches the current Case registry and makes the matched Case directly navigable", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], next_cursor: null, has_more: false }), { status: 200, headers: { "content-type": "application/json" } })));
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route element={<AppShell />}><Route path="/events" element={<p>工作台内容</p>} /><Route path="/events/:caseId" element={<p>Case 详情</p>} /></Route></Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("搜索事件、公司、命题或证据"), "台积");
+    const result = await screen.findByRole("link", { name: /台积电上调 CoWoS 指引后下跌/ });
+    expect(result).toHaveAttribute("href", "/events/event-tsm");
+    await user.click(result);
+    expect(await screen.findByText("Case 详情")).toBeVisible();
+  });
+
   it("expands the immutable active-run event chain without leaving the current page", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
