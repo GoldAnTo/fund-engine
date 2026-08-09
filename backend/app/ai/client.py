@@ -203,6 +203,9 @@ def _mock_extract(data: dict) -> dict:
             {
                 "span_id": span.get("span_id", ""),
                 "kind": kind,
+                "quote": text,
+                "quote_start": 0,
+                "quote_end": len(text),
                 "normalized_text": text,
                 "observed_period": None,
             }

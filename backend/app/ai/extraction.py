@@ -1,11 +1,10 @@
-"""StatementExtractor: LLM-driven extraction of SourceStatements from spans.
+"""StatementExtractor: produce review-gated atomic claims from frozen spans.
 
-Reads the evidence ledger (SourceSpans for a DocumentVersion).  Table-like
-spans first go through the deterministic ``FinancialTableExtractor`` (rule
-based, auditable, free); only spans the rules could not handle are sent to
-the LLM, which extracts atomic statements from the verbatim text.  All
-statements are written through ``ResearchService.add_statement`` with full
-kind validation.
+Reads the evidence ledger (SourceSpans for a DocumentVersion). Table-like
+spans first go through the deterministic ``FinancialTableExtractor``; only
+spans the rules could not handle are sent to the LLM. Both paths create only
+``AtomicClaimCandidate`` records with continuous source quotes. A human review
+is the sole path that may publish a formal ``SourceStatement``.
 
 Every extraction operation writes exactly one ``AIRun`` audit record
 (``kind=extract``) capturing the model/prompt versions, span IDs processed,
@@ -23,14 +22,14 @@ from sqlalchemy.orm import Session
 from app.ai.client import LLMClient
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
-from app.models.ledger import SourceSpan, SourceStatement
-from app.repositories.research import ResearchRepository
-from app.services.research import ResearchService
+from app.domain.atomic_claims import AtomicClaimDraft
+from app.models.ledger import AtomicClaimCandidate, SourceSpan
+from app.services.atomic_claims import AtomicClaimService
 from app.services.table_extraction import FinancialTableExtractor
 
 
 class StatementExtractor:
-    """Extracts atomic SourceStatements from a DocumentVersion's spans."""
+    """Extracts atomic candidates; formal statements require human review."""
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
@@ -38,9 +37,10 @@ class StatementExtractor:
 
     def extract(
         self, document_version_id: uuid.UUID, session: Session
-    ) -> list[SourceStatement]:
+    ) -> list[AtomicClaimCandidate]:
         started_at = datetime.now(timezone.utc)
-        research = ResearchService(ResearchRepository(session))
+        claims = AtomicClaimService(session)
+        run_ref = f"extract:{uuid.uuid4()}"
 
         spans = list(
             session.scalars(
@@ -72,23 +72,37 @@ class StatementExtractor:
         try:
             # 1. Deterministic pass: table-like spans yield disclosed facts
             #    without involving the LLM.
-            rule_based: list[SourceStatement] = []
+            rule_based: list[AtomicClaimCandidate] = []
             handled_span_ids: set[str] = set()
             for span in spans:
                 facts = self._table_extractor.extract(span.verbatim_text)
                 for fact in facts:
-                    statement = research.add_statement(
-                        span.id,
-                        fact.statement_text,
-                        kind="disclosed_fact",
-                        observed_period=fact.observed_period,
+                    candidate = claims.admit(
+                        AtomicClaimDraft(
+                            source_span_id=span.id,
+                            quote=fact.quote,
+                            quote_start=fact.quote_start,
+                            quote_end=fact.quote_end,
+                            normalized_text=fact.statement_text,
+                            claim_type="disclosed_fact",
+                            assertion_actor=None,
+                            subject=None,
+                            predicate=fact.metric_name,
+                            object_text=fact.statement_text,
+                            numeric_value=None,
+                            unit=None,
+                            observed_period=fact.observed_period,
+                            scope={},
+                        ),
+                        authority_level="unknown",
+                        run_ref=run_ref,
                     )
-                    rule_based.append(statement)
+                    rule_based.append(candidate)
                 if facts:
                     handled_span_ids.add(str(span.id))
 
             # 2. LLM pass: narrative spans only.
-            created: list[SourceStatement] = list(rule_based)
+            created: list[AtomicClaimCandidate] = list(rule_based)
             llm_spans = [s for s in spans if str(s.id) not in handled_span_ids]
             if llm_spans:
                 span_ids_by_text_id = {
@@ -117,14 +131,35 @@ class StatementExtractor:
                     source_span_id = span_ids_by_text_id.get(span_id)
                     if source_span_id is None:
                         continue
-                    observed_period = stmt_data.get("observed_period")
-                    statement = research.add_statement(
-                        source_span_id,
-                        stmt_data["normalized_text"],
-                        kind=stmt_data["kind"],
-                        observed_period=_parse_period(observed_period),
-                    )
-                    created.append(statement)
+                    quote = stmt_data.get("quote")
+                    quote_start = stmt_data.get("quote_start")
+                    quote_end = stmt_data.get("quote_end")
+                    if not isinstance(quote, str) or not isinstance(quote_start, int) or not isinstance(quote_end, int):
+                        continue
+                    try:
+                        candidate = claims.admit(
+                            AtomicClaimDraft(
+                                source_span_id=source_span_id,
+                                quote=quote,
+                                quote_start=quote_start,
+                                quote_end=quote_end,
+                                normalized_text=stmt_data["normalized_text"],
+                                claim_type=stmt_data["kind"],
+                                assertion_actor=stmt_data.get("assertion_actor"),
+                                subject=stmt_data.get("subject"),
+                                predicate=stmt_data.get("predicate"),
+                                object_text=stmt_data.get("object_text"),
+                                numeric_value=stmt_data.get("numeric_value"),
+                                unit=stmt_data.get("unit"),
+                                observed_period=_parse_period(stmt_data.get("observed_period")),
+                                scope=dict(stmt_data.get("scope") or {}),
+                            ),
+                            authority_level="unknown",
+                            run_ref=run_ref,
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    created.append(candidate)
 
             record_run(
                 session,
@@ -133,7 +168,7 @@ class StatementExtractor:
                 prompt_version=EXTRACT_PROMPT_VERSION,
                 input_ref=input_ref,
                 output_summary=(
-                    f"extracted {len(created)} statements "
+                    f"extracted {len(created)} atomic candidates awaiting review "
                     f"({len(rule_based)} rule-based, "
                     f"{len(created) - len(rule_based)} llm) from {len(spans)} spans"
                     + (
