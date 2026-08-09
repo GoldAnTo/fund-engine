@@ -65,6 +65,7 @@ export class MockResearchOsApi implements ResearchOsApi {
   private claims = new Map<string, AtomicClaim[]>();
   private reviewedClaimIds = new Set<string>();
   private bindings = new Map<string, Schemas["OutcomeBindingDTO"]>();
+  private manualRuns = new Map<string, { caseId: string; monitor: Monitor }>();
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
@@ -88,7 +89,37 @@ export class MockResearchOsApi implements ResearchOsApi {
     return next;
   }
 
+  async startMonitorRun(caseId: string): ReturnType<ResearchOsApi["startMonitorRun"]> {
+    const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
+    this.monitors.set(caseId, monitor);
+    const id = `run-${caseId}-manual-v${monitor.version}`;
+    this.manualRuns.set(id, { caseId, monitor });
+    return {
+      id,
+      case_id: caseId,
+      status: "queued",
+      stage: "queued",
+      round: 0,
+      max_rounds: 3,
+      budget: monitor.budget,
+      budget_used: 0,
+      stop_reason: null,
+      scope_thesis_ids: [...monitor.factor_ids],
+      progress: {}, evidence: {}, by_thesis: {}, gaps: [], gap_tasks: [],
+      failed_tasks: [], assessments: [], pending_proposals: [], review_tasks: [],
+      next_action: "查看运行详情", tasks: [],
+    };
+  }
+
   async runEvents(runId: string): ReturnType<ResearchOsApi["runEvents"]> {
+    const manualRun = this.manualRuns.get(runId);
+    if (manualRun) {
+      const { monitor } = manualRun;
+      return { run_id: runId, has_more: false, items: [
+        { seq: 1, stage: "scope", status: "completed", message: "已冻结本次运行范围", details: { trigger: "manual", monitor_version_id: monitor.id, factor_ids: monitor.factor_ids, factor_statements: factors.filter((factor) => monitor.factor_ids.includes(factor.id)).map((factor) => factor.statement), allowed_source_types: monitor.allowed_source_types, budget: monitor.budget }, created_at: now },
+        { seq: 2, stage: "retrieve", status: "queued", message: "等待工作器按已冻结的来源许可补证", details: {} , created_at: now },
+      ] };
+    }
     return { run_id: runId, has_more: false, items: [
       { seq: 1, stage: "scope", status: "completed", message: "已冻结本次运行范围", details: { trigger: "schedule", monitor_version_id: "monitor-event-tsm-v1", factor_ids: factors.map((factor) => factor.id), factor_statements: factors.map((factor) => factor.statement), allowed_source_types: ["licensed_provider", "company_disclosure"], budget: 20 }, created_at: now },
       { seq: 2, stage: "retrieve", status: "completed", message: "已按许可读取候选资料", details: { accepted: 2, excluded: 1, exclusion_reason: "来源许可不足" }, created_at: now },

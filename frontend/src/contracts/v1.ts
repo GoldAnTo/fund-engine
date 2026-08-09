@@ -1178,6 +1178,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/monitor/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Manual Monitor Run
+         * @description Queue an explicit replenishment using the effective monitor version.
+         */
+        post: operations["start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
         parameters: {
             query?: never;
@@ -8064,6 +8084,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
                 };
             };
             /** @description Validation Error */

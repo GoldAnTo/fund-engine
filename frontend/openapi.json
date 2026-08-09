@@ -4086,6 +4086,50 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/monitor/runs": {
+      "post": {
+        "tags": [
+          "case-monitor-v1"
+        ],
+        "summary": "Start Manual Monitor Run",
+        "description": "Queue an explicit replenishment using the effective monitor version.",
+        "operationId": "start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
       "post": {
         "tags": [

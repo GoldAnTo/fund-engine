@@ -146,6 +146,31 @@ class AutoResearchService:
         del auto_execute
         return run
 
+    def start_from_monitor(self, case_id: uuid.UUID, *, trigger: str = "manual"):
+        """Create a run from one immutable CaseMonitor version.
+
+        The interactive monitor entry point deliberately accepts no caller
+        budget, factor, or source overrides.  Those values must be read from
+        the saved version so the first scope event can be replayed exactly.
+        A paused monitor still permits an explicit human run; only the
+        scheduler is prevented from dispatching it.
+        """
+        monitor = self.session.scalar(
+            select(CaseMonitorVersion)
+            .where(CaseMonitorVersion.research_case_id == case_id)
+            .order_by(CaseMonitorVersion.version.desc())
+            .limit(1)
+        )
+        if monitor is None:
+            raise ValueError("a saved case monitor is required before starting a monitor run")
+        return self.start(
+            case_id,
+            max_rounds=3,
+            budget=monitor.budget,
+            monitor_version_id=monitor.id,
+            trigger=trigger,
+        )
+
     def execute(self, run):
         self.repo.update_run(run, status="running", stage="extract")
         ResearchRunEventRepository(self.session).append(

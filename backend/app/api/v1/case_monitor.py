@@ -18,6 +18,8 @@ from app.schemas.v1.case_monitor import (
     SetCaseMonitorStatusRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
+from app.services.auto_research import AutoResearchService
+from app.schemas.v1.auto_research import ResearchRunResponse
 
 
 router = APIRouter(tags=["case-monitor-v1"])
@@ -84,6 +86,22 @@ def save_monitor(
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
     return _dto(monitor)
+
+
+@router.post(
+    "/research-cases/{case_id}/monitor/runs",
+    response_model=ResearchRunResponse,
+    status_code=201,
+)
+def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Queue an explicit replenishment using the effective monitor version."""
+    try:
+        service = AutoResearchService(db)
+        run = service.start_from_monitor(case_id)
+        return service.detail(run.id)
+    except ValueError as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
 
 
 @router.post("/research-cases/{case_id}/monitor/{target_status}", response_model=CaseMonitorDTO)

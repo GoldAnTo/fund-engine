@@ -80,6 +80,69 @@ def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_sess
     assert item["details"]["factor_ids"] == [str(factor.id)]
 
 
+def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    first = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(
+            factor.id,
+            allowed_source_types=["company_disclosure"],
+            budget=7,
+        ),
+    )
+    assert first.status_code == 200, first.text
+
+    started = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+
+    assert started.status_code == 201, started.text
+    first_scope = cmd_client.get(
+        f"/api/v1/research-runs/{started.json()['id']}/events"
+    ).json()["items"][0]["details"]
+    assert first_scope == {
+        "trigger": "manual",
+        "monitor_version_id": first.json()["id"],
+        "factor_ids": [str(factor.id)],
+        "factor_statements": [factor.statement],
+        "allowed_source_types": ["company_disclosure"],
+        "budget": 7,
+    }
+
+    second = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(
+            factor.id,
+            allowed_source_types=["uploaded_file"],
+            budget=13,
+            change_reason="改为人工上传补证",
+        ),
+    )
+    assert second.status_code == 200, second.text
+    next_started = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+    assert next_started.status_code == 201, next_started.text
+    second_scope = cmd_client.get(
+        f"/api/v1/research-runs/{next_started.json()['id']}/events"
+    ).json()["items"][0]["details"]
+    assert second_scope["monitor_version_id"] == second.json()["id"]
+    assert second_scope["allowed_source_types"] == ["uploaded_file"]
+    assert second_scope["budget"] == 13
+
+    replayed_first_scope = cmd_client.get(
+        f"/api/v1/research-runs/{started.json()['id']}/events"
+    ).json()["items"][0]["details"]
+    assert replayed_first_scope == first_scope
+
+
+def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) -> None:
+    case, _factor = _case_with_confirmed_factor(cmd_session)
+
+    response = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
 def test_monitor_rejects_unsupported_source_type(cmd_client, cmd_session) -> None:
     case, factor = _case_with_confirmed_factor(cmd_session)
 
