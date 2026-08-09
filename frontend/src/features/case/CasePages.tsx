@@ -907,6 +907,24 @@ function DocumentReader({
             {contract?.provider_or_tenant || document.publisher || "未记录"}
           </dd>
         </div>
+        {contract?.provider_record && (
+          <>
+            <div>
+              <dt>供应商记录</dt>
+              <dd>
+                {contract.provider_record.provider_name} · {contract.provider_record.provider_record_id}
+              </dd>
+            </div>
+            <div>
+              <dt>获取口径</dt>
+              <dd>{JSON.stringify(contract.provider_record.request_scope) || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>可重取凭证</dt>
+              <dd>{contract.provider_record.retrieval_reference || "未记录"}</dd>
+            </div>
+          </>
+        )}
         <div>
           <dt>发布日期</dt>
           <dd>{document.publish_date || "未记录"}</dd>

@@ -150,7 +150,12 @@ test.describe("Event-first Research OS", () => {
     await page.getByLabel("供应商名称").fill("聚源");
     await page.getByLabel("供应商记录 ID").fill("report-2026-001");
     await page.getByLabel("允许 AI 处理").check();
+    await page.getByLabel("允许团队展示").check();
     await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
+    await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
+    await page.getByRole("link", { name: "核验冻结原文" }).click();
+    await expect(page.getByText("供应商记录")).toBeVisible();
+    await expect(page.getByText("聚源 · report-2026-001")).toBeVisible();
   });
 
   test("new strict Case opens its own intake workbench before any run starts", async ({ page }) => {

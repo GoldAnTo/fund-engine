@@ -14366,6 +14366,43 @@
         "title": "ProposedLinkDTO",
         "description": "One evidence_link Proposal created by the proposer (pending review)."
       },
+      "ProviderRecordDTO": {
+        "properties": {
+          "provider_name": {
+            "type": "string",
+            "title": "Provider Name"
+          },
+          "provider_record_id": {
+            "type": "string",
+            "title": "Provider Record Id"
+          },
+          "request_scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request Scope"
+          },
+          "retrieval_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Reference"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider_name",
+          "provider_record_id",
+          "request_scope",
+          "retrieval_reference"
+        ],
+        "title": "ProviderRecordDTO"
+      },
       "ProviderRunDTO": {
         "properties": {
           "id": {
@@ -16618,6 +16655,16 @@
               }
             ],
             "title": "Contract Version"
+          },
+          "provider_record": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderRecordDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
