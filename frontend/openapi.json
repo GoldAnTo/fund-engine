@@ -9529,6 +9529,13 @@
             "type": "array",
             "title": "Factor Ids"
           },
+          "factor_statements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factor Statements"
+          },
           "allowed_source_types": {
             "items": {
               "type": "string"

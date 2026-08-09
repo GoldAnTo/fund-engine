@@ -29,6 +29,7 @@ class FrozenRunScopeDTO(V1Model):
     trigger: str | None = None
     monitor_version_id: str | None = None
     factor_ids: list[str] = Field(default_factory=list)
+    factor_statements: list[str] = Field(default_factory=list)
     allowed_source_types: list[str] = Field(default_factory=list)
     budget: int | None = None
 

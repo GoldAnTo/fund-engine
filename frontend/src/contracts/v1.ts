@@ -3041,6 +3041,8 @@ export interface components {
             monitor_version_id?: string | null;
             /** Factor Ids */
             factor_ids?: string[];
+            /** Factor Statements */
+            factor_statements?: string[];
             /** Allowed Source Types */
             allowed_source_types?: string[];
             /** Budget */

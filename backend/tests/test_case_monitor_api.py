@@ -115,6 +115,7 @@ def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current
     assert item["case_id"] == str(case.id)
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
+    assert item["scope"]["factor_statements"] == [factor.statement]
 
 
 def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(

@@ -97,6 +97,7 @@ class AutoResearchService:
                 "trigger": trigger,
                 "monitor_version_id": str(monitor.id) if monitor is not None else None,
                 "factor_ids": [str(thesis.id) for thesis in theses],
+                "factor_statements": [thesis.statement for thesis in theses],
                 "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
                 "budget": run.budget,
             },

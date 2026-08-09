@@ -41,6 +41,7 @@ def _frozen_scope(db: Session, run: ResearchRun) -> FrozenRunScopeDTO:
         trigger=payload.get("trigger"),
         monitor_version_id=payload.get("monitor_version_id"),
         factor_ids=list(payload.get("factor_ids") or []),
+        factor_statements=list(payload.get("factor_statements") or []),
         allowed_source_types=list(payload.get("allowed_source_types") or []),
         budget=payload.get("budget"),
     )
