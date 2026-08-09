@@ -17,11 +17,14 @@ from datetime import datetime, timedelta, timezone
 from app.db import SessionLocal
 from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
+from app.services.monitor_scheduler import MonitorScheduler
 
 
 def run_once(*, recover_after_minutes: int = 30) -> bool:
     """Claim and execute one persisted run; return whether work was found."""
     with SessionLocal() as session:
+        MonitorScheduler(session).dispatch_due()
+        session.commit()
         service = AutoResearchService(session)
         service.repo.recover_stale_run_jobs(
             before=datetime.now(timezone.utc) - timedelta(minutes=recover_after_minutes)
