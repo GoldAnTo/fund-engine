@@ -340,6 +340,7 @@ export interface SourceDocumentView {
   available_at: string;
   acquired_at: string;
   parser_version: string;
+  source_authority?: string;
   parse_quality: "ok" | "partial" | "failed";
   parse_failure_stage?: string;
   linked_cases: { id: string; title: string }[];

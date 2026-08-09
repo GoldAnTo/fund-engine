@@ -156,6 +156,27 @@ def test_extractor_routes_table_spans_to_rules(
     assert "rule-based" in run.output_summary
 
 
+def test_extractor_keeps_primary_disclosure_table_candidates_as_disclosed_facts(
+    session, document_service
+):
+    document = document_service.freeze(
+        raw=TABLE_SNIPPET.encode(),
+        source_url="https://issuer.example/disclosure/q1",
+        source_authority="primary_disclosure",
+    )
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text=TABLE_SNIPPET,
+    )
+
+    candidates = StatementExtractor(LLMClient(model_version="mock-test", mock=True)).extract(document.id, session)
+
+    assert candidates
+    assert all(candidate.claim_type == "disclosed_fact" for candidate in candidates)
+    assert all(candidate.authority_level == "primary_disclosure" for candidate in candidates)
+
+
 def test_extractor_commits_rule_fallback_before_narrative_provider(
     session, document_service, document
 ):

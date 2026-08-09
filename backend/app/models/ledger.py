@@ -181,6 +181,12 @@ class DocumentVersion(Base):
     parse_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="success"
     )
+    # The authority of the frozen source is a declared, immutable intake
+    # attribute. It controls what kind of *candidate* extraction may retain;
+    # it never replaces the later human review gate.
+    source_authority: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unknown"
+    )
 
 
 class CaseDocumentVersion(Base):

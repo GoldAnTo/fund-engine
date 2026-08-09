@@ -36,6 +36,7 @@ class DocumentSummaryDTO(V1Model):
     available_at: str
     acquired_at: str
     parser_version: str
+    source_authority: str
     supersedes_id: str | None
     span_count: int
     statement_count: int

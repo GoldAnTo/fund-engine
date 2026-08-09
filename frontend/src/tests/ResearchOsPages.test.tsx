@@ -60,6 +60,14 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/不保存或冒充原件 PDF/)).toBeVisible();
   });
 
+  it("makes the frozen source authority explicit before event creation", async () => {
+    render(<MemoryRouter initialEntries={["/events/new"]}><Routes><Route path="/events/new" element={<EventCreatePage />} /></Routes></MemoryRouter>);
+
+    expect(screen.getByLabelText("来源权威性")).toHaveValue("unknown");
+    expect(screen.getByRole("option", { name: "公司或发行人一手披露" })).toBeVisible();
+    expect(screen.getByText(/不会直接把二手转述写成已披露事实/)).toBeVisible();
+  });
+
   it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
     const user = userEvent.setup();
     render(

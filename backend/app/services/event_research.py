@@ -59,6 +59,7 @@ class EventResearchService:
             source_url=document_url,
             parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1"}[payload.source_type],
             parse_state="partial",
+            source_authority=payload.source_metadata.get("authority_level", "unknown"),
         )
         document_service.attach_to_case(
             research_case_id=case.id, document_version_id=document.id

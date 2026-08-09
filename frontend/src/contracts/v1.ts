@@ -2509,6 +2509,8 @@ export interface components {
             acquired_at: string;
             /** Parser Version */
             parser_version: string;
+            /** Source Authority */
+            source_authority: string;
             /** Supersedes Id */
             supersedes_id: string | null;
             /** Span Count */

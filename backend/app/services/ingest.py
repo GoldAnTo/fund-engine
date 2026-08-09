@@ -15,6 +15,10 @@ PARSER_VERSION = "docling-v1"
 
 _WS_RE = re.compile(r"\s+")
 _BRACKET_RE = re.compile(r"[\[\]【】\(\)（）：:]")
+_SOURCE_AUTHORITIES = frozenset({
+    "primary_disclosure", "licensed_research", "secondary_source",
+    "user_supplied", "unknown",
+})
 
 
 def _utcnow() -> datetime:
@@ -52,6 +56,11 @@ def compute_natural_key(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
+def normalize_source_authority(value: object) -> str:
+    """Fail closed for intake metadata that does not name a known authority."""
+    return value if isinstance(value, str) and value in _SOURCE_AUTHORITIES else "unknown"
+
+
 class DocumentService:
     """Freezes source material into immutable, content-addressed versions.
 
@@ -75,6 +84,7 @@ class DocumentService:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
+        source_authority: str = "unknown",
     ) -> DocumentVersion:
         """Freeze bytes into a DocumentVersion, deduping on two levels:
 
@@ -104,6 +114,7 @@ class DocumentService:
             byte_size=byte_size,
             language=language,
             parse_state=parse_state,
+            source_authority=source_authority,
         )
         return version
 
@@ -119,6 +130,7 @@ class DocumentService:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
+        source_authority: str = "unknown",
     ) -> tuple[DocumentVersion, bool]:
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
@@ -155,6 +167,7 @@ class DocumentService:
             byte_size=byte_size if byte_size is not None else len(raw),
             language=language,
             parse_state=parse_state,
+            source_authority=normalize_source_authority(source_authority),
         )
         return version, True
 

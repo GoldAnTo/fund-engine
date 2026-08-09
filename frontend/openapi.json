@@ -7790,6 +7790,10 @@
             "type": "string",
             "title": "Parser Version"
           },
+          "source_authority": {
+            "type": "string",
+            "title": "Source Authority"
+          },
           "supersedes_id": {
             "anyOf": [
               {
@@ -7920,6 +7924,7 @@
           "available_at",
           "acquired_at",
           "parser_version",
+          "source_authority",
           "supersedes_id",
           "span_count",
           "statement_count",

@@ -115,6 +115,31 @@ def test_licensed_provider_intake_preserves_provider_record_and_contract_version
     assert provider.content_sha256 == cmd_session.get(DocumentVersion, document_id).content_sha256
 
 
+def test_event_intake_freezes_declared_source_authority_and_exposes_it_to_readers(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="uploaded_file",
+            source_metadata={"authority_level": "primary_disclosure", "issuer": "示例公司"},
+        ),
+    )
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    document = cmd_session.get(DocumentVersion, document_id)
+
+    assert document.source_authority == "primary_disclosure"
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["document"]["source_authority"] == "primary_disclosure"
+
+
 def test_reusing_the_same_frozen_snapshot_reuses_its_original_contract(
     cmd_client, cmd_session
 ) -> None:

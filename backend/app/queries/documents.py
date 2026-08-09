@@ -288,6 +288,7 @@ class DocumentReadQueries:
             available_at=_iso(version.available_at),
             acquired_at=_iso(version.acquired_at),
             parser_version=version.parser_version,
+            source_authority=version.source_authority,
             supersedes_id=(
                 str(version.supersedes_id) if version.supersedes_id else None
             ),

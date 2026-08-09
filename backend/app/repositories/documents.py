@@ -58,6 +58,7 @@ class DocumentRepository:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
+        source_authority: str = "unknown",
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
@@ -72,6 +73,7 @@ class DocumentRepository:
             byte_size=byte_size,
             language=language,
             parse_state=parse_state,
+            source_authority=source_authority,
         )
         self._session.add(version)
         self._session.flush()

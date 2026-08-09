@@ -23,7 +23,7 @@ from app.ai.client import LLMClient
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.models.ledger import AtomicClaimCandidate, SourceSpan
+from app.models.ledger import AtomicClaimCandidate, DocumentVersion, SourceSpan
 from app.services.atomic_claims import AtomicClaimService
 from app.services.table_extraction import FinancialTableExtractor
 
@@ -41,6 +41,8 @@ class StatementExtractor:
         started_at = datetime.now(timezone.utc)
         claims = AtomicClaimService(session)
         run_ref = f"extract:{uuid.uuid4()}"
+        document = session.get(DocumentVersion, document_version_id)
+        authority_level = document.source_authority if document is not None else "unknown"
 
         spans = list(
             session.scalars(
@@ -85,10 +87,10 @@ class StatementExtractor:
                             quote_end=fact.quote_end,
                             normalized_text=fact.statement_text,
                             # A table's shape alone cannot establish that its
-                            # document is a primary disclosure. Until source
-                            # authority is explicitly recorded, retain the
-                            # fact as a reviewable reported claim.
-                            claim_type="reported_claim",
+                            # document is a primary disclosure. Only an
+                            # immutable intake authority declaration may keep
+                            # the candidate as a disclosed fact.
+                            claim_type=("disclosed_fact" if authority_level == "primary_disclosure" else "reported_claim"),
                             assertion_actor=None,
                             subject=None,
                             predicate=fact.metric_name,
@@ -98,7 +100,7 @@ class StatementExtractor:
                             observed_period=fact.observed_period,
                             scope={},
                         ),
-                        authority_level="unknown",
+                        authority_level=authority_level,
                         run_ref=run_ref,
                     )
                     rule_based.append(candidate)
@@ -149,7 +151,9 @@ class StatementExtractor:
                                 quote_end=quote_end,
                                 normalized_text=stmt_data["normalized_text"],
                                 claim_type=(
-                                    "reported_claim"
+                                    "disclosed_fact"
+                                    if stmt_data["kind"] == "disclosed_fact" and authority_level == "primary_disclosure"
+                                    else "reported_claim"
                                     if stmt_data["kind"] == "disclosed_fact"
                                     else stmt_data["kind"]
                                 ),
@@ -162,7 +166,7 @@ class StatementExtractor:
                                 observed_period=_parse_period(stmt_data.get("observed_period")),
                                 scope=dict(stmt_data.get("scope") or {}),
                             ),
-                            authority_level="unknown",
+                            authority_level=authority_level,
                             run_ref=run_ref,
                         )
                     except (KeyError, TypeError, ValueError):

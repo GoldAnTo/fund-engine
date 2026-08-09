@@ -710,6 +710,7 @@ export class HttpResearchAdapter implements ResearchClient {
       available_at: dto.available_at,
       acquired_at: dto.acquired_at,
       parser_version: dto.parser_version,
+      source_authority: dto.source_authority,
       parse_quality: dto.parse_state === "parsed" ? "ok" : "partial",
       linked_cases: [],
       span_count: dto.span_count,
