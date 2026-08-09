@@ -57,6 +57,22 @@ describe("Research OS event entry", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("keeps the research dispatch structure visible while Cases are loading", () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockReturnValue(new Promise(() => {}));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route path="/events" element={<EventDeskPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("研究调度加载中")).toBeVisible();
+    expect(screen.getAllByTestId("research-dispatch-skeleton")).toHaveLength(4);
+  });
+
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
