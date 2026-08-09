@@ -1,13 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import {
-  BrowserRouter,
-  Navigate,
-  Route,
-  Routes,
-} from "react-router-dom";
-import { LegacyEventRedirect } from "./components/LegacyEventRedirect";
-import { PrototypeShell } from "./components/PrototypeShell";
+import { BrowserRouter } from "react-router-dom";
+import { ResearchOsRoutes } from "./app/routes";
 import { setResearchClient } from "./data/researchClient";
 import { MockResearchAdapter } from "./data/mockResearchAdapter";
 
@@ -20,52 +14,13 @@ if (
 ) {
   setResearchClient(new MockResearchAdapter());
 }
-import { LibraryScreen } from "./pages/prototype/LibraryScreen";
-import { VersionsScreen } from "./pages/prototype/VersionsScreen";
-import { EventResearchCreateScreen } from "./pages/prototype/EventResearchCreateScreen";
-import { EventResearchListScreen } from "./pages/prototype/EventResearchListScreen";
-import { EventResearchWorkbenchScreen } from "./pages/prototype/EventResearchWorkbenchScreen";
-import { KeyEvidenceReviewScreen } from "./pages/prototype/KeyEvidenceReviewScreen";
-import { EventConclusionReviewScreen } from "./pages/prototype/EventConclusionReviewScreen";
-import { EventEvidenceLibraryScreen } from "./pages/prototype/EventEvidenceLibraryScreen";
-import { EventMonitoringScreen } from "./pages/prototype/EventMonitoringScreen";
-import { EventResearchBasisScreen } from "./pages/prototype/EventResearchBasisScreen";
 import "./styles.css";
-import "./styles-prototype.css";
+import "./styles/research-os.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <Routes>
-        <Route element={<PrototypeShell />}>
-          <Route index element={<Navigate to="/events" replace />} />
-          <Route path="events" element={<EventResearchListScreen />} />
-          <Route path="events/new" element={<EventResearchCreateScreen />} />
-          <Route path="events/:caseId" element={<EventResearchWorkbenchScreen />} />
-          <Route path="events/:caseId/review" element={<KeyEvidenceReviewScreen />} />
-          <Route path="events/:caseId/conclusion" element={<EventConclusionReviewScreen />} />
-          <Route path="events/:caseId/basis" element={<EventResearchBasisScreen />} />
-          <Route path="library" element={<EventEvidenceLibraryScreen />} />
-          <Route path="versions" element={<EventMonitoringScreen />} />
-          <Route path="themes/*" element={<LegacyEventRedirect />} />
-          <Route path="workspace" element={<LegacyEventRedirect />} />
-          <Route path="auto-research/*" element={<LegacyEventRedirect />} />
-          <Route path="new-research" element={<LegacyEventRedirect />} />
-          <Route path="plan" element={<LegacyEventRedirect />} />
-          <Route path="relationships" element={<LegacyEventRedirect />} />
-          <Route path="relationships/:caseId" element={<LegacyEventRedirect />} />
-          <Route path="conclusion/*" element={<LegacyEventRedirect />} />
-          <Route path="review" element={<LegacyEventRedirect />} />
-          <Route path="legacy/library" element={<LibraryScreen />} />
-          <Route path="data" element={<LegacyEventRedirect />} />
-          <Route path="legacy/versions" element={<VersionsScreen />} />
-          <Route path="cases" element={<LegacyEventRedirect />} />
-          <Route path="cases/:caseId" element={<LegacyEventRedirect />} />
-          <Route path="companies/*" element={<LegacyEventRedirect />} />
-          <Route path="topics/*" element={<LegacyEventRedirect />} />
-          <Route path="*" element={<Navigate to="/events" replace />} />
-        </Route>
-      </Routes>
+      <ResearchOsRoutes />
     </BrowserRouter>
   </React.StrictMode>,
 );

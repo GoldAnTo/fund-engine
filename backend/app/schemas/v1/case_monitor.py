@@ -45,6 +45,12 @@ class LatestResearchRunDTO(V1Model):
     updated_at: datetime
 
 
+class ConfirmedFactorOptionDTO(V1Model):
+    id: str
+    statement: str
+
+
 class CaseMonitorDetailResponse(V1Model):
     monitor: CaseMonitorDTO | None
     latest_run: LatestResearchRunDTO | None
+    confirmed_factors: list[ConfirmedFactorOptionDTO]

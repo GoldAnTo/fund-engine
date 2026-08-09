@@ -12,6 +12,7 @@ from app.queries.case_monitor import CaseMonitorQuery
 from app.schemas.v1.case_monitor import (
     CaseMonitorDTO,
     CaseMonitorDetailResponse,
+    ConfirmedFactorOptionDTO,
     LatestResearchRunDTO,
     UpdateCaseMonitorRequest,
 )
@@ -51,6 +52,10 @@ def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
             if run is not None
             else None
         ),
+        confirmed_factors=[
+            ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
+            for factor in query.confirmed_factors(case_id)
+        ],
     )
 
 

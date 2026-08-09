@@ -4570,13 +4570,21 @@
                 "type": "null"
               }
             ]
+          },
+          "confirmed_factors": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmedFactorOptionDTO"
+            },
+            "type": "array",
+            "title": "Confirmed Factors"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "monitor",
-          "latest_run"
+          "latest_run",
+          "confirmed_factors"
         ],
         "title": "CaseMonitorDetailResponse"
       },
@@ -5346,6 +5354,25 @@
         ],
         "title": "ConclusionResponse",
         "description": "「结论与关键因素」页面完整响应."
+      },
+      "ConfirmedFactorOptionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "statement"
+        ],
+        "title": "ConfirmedFactorOptionDTO"
       },
       "CounterResearchTaskDTO": {
         "properties": {

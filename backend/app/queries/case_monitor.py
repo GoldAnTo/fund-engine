@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion
+from app.models.ledger import Thesis
 
 
 class CaseMonitorQuery:
@@ -28,4 +29,14 @@ class CaseMonitorQuery:
             .where(ResearchRun.research_case_id == case_id)
             .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(1)
+        )
+
+    def confirmed_factors(self, case_id: uuid.UUID) -> list[Thesis]:
+        return list(
+            self._session.scalars(
+                select(Thesis)
+                .where(Thesis.research_case_id == case_id)
+                .where(Thesis.review_state == "confirmed")
+                .order_by(Thesis.created_at, Thesis.id)
+            )
         )

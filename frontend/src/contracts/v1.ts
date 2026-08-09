@@ -1362,6 +1362,8 @@ export interface components {
         CaseMonitorDetailResponse: {
             monitor: components["schemas"]["CaseMonitorDTO"] | null;
             latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
+            /** Confirmed Factors */
+            confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };
         /**
          * CaseSnapshotDTO
@@ -1654,6 +1656,13 @@ export interface components {
             /** Causal Path */
             causal_path: components["schemas"]["app__schemas__v1__conclusion__CausalStepDTO"][];
             gap_explanation: components["schemas"]["GapExplanationDTO"];
+        };
+        /** ConfirmedFactorOptionDTO */
+        ConfirmedFactorOptionDTO: {
+            /** Id */
+            id: string;
+            /** Statement */
+            statement: string;
         };
         /** CounterResearchTaskDTO */
         CounterResearchTaskDTO: {

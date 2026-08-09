@@ -61,6 +61,9 @@ def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_sess
     assert effective.status_code == 200
     assert effective.json()["monitor"]["id"] == saved.json()["id"]
     assert effective.json()["latest_run"] is None
+    assert effective.json()["confirmed_factors"] == [
+        {"id": str(factor.id), "statement": factor.statement}
+    ]
 
     started = cmd_client.post(
         f"/api/v1/research-cases/{case.id}/runs",

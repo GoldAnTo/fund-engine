@@ -638,7 +638,7 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  private mapCausalStep(dto: Schemas["CausalStepDTO"]): {
+  private mapCausalStep(dto: Schemas["app__schemas__v1__cases__CausalStepDTO"]): {
     id: string;
     sequence: number;
     title: string;
@@ -808,7 +808,7 @@ export class HttpResearchAdapter implements ResearchClient {
       })),
       framework: dto.framework
         .filter(
-          (f): f is Schemas["CausalStepDTO"] =>
+          (f): f is Schemas["app__schemas__v1__cases__CausalStepDTO"] =>
             typeof f.id === "string" &&
             typeof f.sequence === "number" &&
             typeof f.description === "string",
@@ -1463,7 +1463,7 @@ export class HttpResearchAdapter implements ResearchClient {
         `/research-cases/${first.id}/gaps`,
       ),
       this.get<Schemas["DocumentListResponse"]>(`/documents`),
-      this.get<Schemas["ReviewQueueResponse"]>(
+      this.get<Schemas["app__schemas__v1__commands__ReviewQueueResponse"]>(
         `/review-queue${this.buildQuery({ case_id: first.id, limit: "50" })}`,
       ),
       this.get<Schemas["ProviderRunsResponse"]>(
@@ -1951,7 +1951,7 @@ export class HttpResearchAdapter implements ResearchClient {
       this.get<Schemas["KnowledgeResponse"]>(
         `/knowledge${this.buildQuery({ review_state: "reviewed", limit: "1" })}`,
       ),
-      this.get<Schemas["ReviewQueueResponse"]>(
+      this.get<Schemas["app__schemas__v1__commands__ReviewQueueResponse"]>(
         `/review-queue${this.buildQuery({ limit: "1" })}`,
       ),
     ]);
@@ -2535,7 +2535,7 @@ export class HttpResearchAdapter implements ResearchClient {
 
   async getReviewQueueView(caseId?: string): Promise<ReviewQueueView> {
     const query = caseId ? this.buildQuery({ case_id: caseId }) : "";
-    const dto = await this.get<Schemas["ReviewQueueResponse"]>(
+    const dto = await this.get<Schemas["app__schemas__v1__commands__ReviewQueueResponse"]>(
       `/review-queue${query}`,
     );
     return { items: dto.items.map((i) => this.mapReviewQueueItem(i)) };
