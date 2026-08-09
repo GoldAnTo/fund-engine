@@ -737,6 +737,12 @@ export class HttpResearchAdapter implements ResearchClient {
         deletion_policy: dto.source_contract.deletion_policy,
         downstream_restrictions: dto.source_contract.downstream_restrictions,
         contract_version: dto.source_contract.contract_version,
+        provider_record: dto.source_contract.provider_record ? {
+          provider_name: dto.source_contract.provider_record.provider_name,
+          provider_record_id: dto.source_contract.provider_record.provider_record_id,
+          request_scope: dto.source_contract.provider_record.request_scope,
+          retrieval_reference: dto.source_contract.provider_record.retrieval_reference,
+        } : null,
       } : null,
       supplements_document_id: dto.supplements_document_version_id ?? null,
       claimed_page_reference: dto.claimed_page_reference ?? null,

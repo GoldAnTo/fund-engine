@@ -151,10 +151,30 @@ describe("HttpResearchAdapter", () => {
         available_at: "2024-01-01T00:00:00Z",
         acquired_at: "2024-01-01T00:00:00Z",
         parser_version: "1",
+        source_authority: "licensed_research",
         supersedes_id: null,
         span_count: 1,
         statement_count: 1,
         parse_state: "parsed",
+        source_contract: {
+          source_type: "licensed_provider",
+          provider_or_tenant: "聚源",
+          permissions: { ai_processing: true, display: true, export: false, api: false },
+          status: "admitted",
+          region: "CN",
+          effective_from: null,
+          effective_until: null,
+          retention_policy: "case_retained",
+          deletion_policy: "not_recorded",
+          downstream_restrictions: [],
+          contract_version: null,
+          provider_record: {
+            provider_name: "聚源",
+            provider_record_id: "report-2026-003",
+            request_scope: { report_type: "industry" },
+            retrieval_reference: "provider://report-2026-003",
+          },
+        },
       },
       spans: [
         {
@@ -177,6 +197,12 @@ describe("HttpResearchAdapter", () => {
     expect(out.spans[0].cited_by).toEqual([
       { evidence_id: "l-1", thesis_id: "t-1", role: "supports" },
     ]);
+    expect(out.document.source_contract?.provider_record).toEqual({
+      provider_name: "聚源",
+      provider_record_id: "report-2026-003",
+      request_scope: { report_type: "industry" },
+      retrieval_reference: "provider://report-2026-003",
+    });
   });
 
   it("search returns empty for queries shorter than the backend minimum", async () => {

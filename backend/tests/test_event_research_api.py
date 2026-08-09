@@ -329,6 +329,44 @@ def test_existing_case_material_is_frozen_and_attached_without_starting_a_new_ca
     assert lifecycle_after.active_run_id is None
 
 
+def test_document_read_exposes_the_frozen_provider_record_for_reproducibility(
+    cmd_client,
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = created["case_id"]
+    attached = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/materials",
+        json={
+            "raw_input": "供应商研报的原始记录必须可回到具体资料。",
+            "source_type": "licensed_provider",
+            "source_metadata": {
+                "provider_name": "聚源",
+                "provider_record_id": "report-2026-003",
+                "request_scope": {"report_type": "industry"},
+                "retrieval_reference": "provider://report-2026-003",
+                "permissions": {"ai_processing": True, "display": True},
+            },
+            "actor": "human:researcher",
+        },
+    )
+    assert attached.status_code == 201
+
+    documents = cmd_client.get("/api/v1/documents", params={"case_id": case_id})
+
+    assert documents.status_code == 200
+    provider_document = next(
+        item
+        for item in documents.json()["items"]
+        if item["id"] == attached.json()["document_version_id"]
+    )
+    assert provider_document["source_contract"]["provider_record"] == {
+        "provider_name": "聚源",
+        "provider_record_id": "report-2026-003",
+        "request_scope": {"report_type": "industry"},
+        "retrieval_reference": "provider://report-2026-003",
+    }
+
+
 def test_existing_case_material_cannot_bypass_a_published_case_change_decision(
     cmd_client, cmd_session
 ) -> None:

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import AIRun, CaseDocumentVersion, DocumentVersion, Stock
-from app.models.source_governance import SourceContract
+from app.models.source_governance import ProviderRecord, SourceContract
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
@@ -25,6 +25,7 @@ from app.schemas.v1.documents import (
     DocumentDetailResponse,
     DocumentListResponse,
     DocumentSummaryDTO,
+    ProviderRecordDTO,
     SourceSpanDTO,
     SourceContractDTO,
 )
@@ -98,6 +99,14 @@ class DocumentReadQueries:
                 select(SourceContract).where(SourceContract.document_version_id.in_([v.id for v in page_items]))
             )
         } if page_items else {}
+        provider_records = {
+            record.document_version_id: record
+            for record in self._session.scalars(
+                select(ProviderRecord).where(
+                    ProviderRecord.document_version_id.in_([v.id for v in page_items])
+                )
+            )
+        } if page_items else {}
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
             spans = self._docs.spans_for_version(version.id)
@@ -112,6 +121,7 @@ class DocumentReadQueries:
                     spans=spans,
                     latest_run=run_map.get(version.id),
                     source_contract=contracts.get(version.id),
+                    provider_record=provider_records.get(version.id),
                 )
             )
         return DocumentListResponse(
@@ -189,6 +199,7 @@ class DocumentReadQueries:
                     version_id
                 ),
                 source_contract=self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == version_id)),
+                provider_record=self._session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == version_id)),
             ),
             spans=span_dtos,
         )
@@ -275,6 +286,7 @@ class DocumentReadQueries:
         spans: list | None = None,
         latest_run: AIRun | None = None,
         source_contract: SourceContract | None = None,
+        provider_record: ProviderRecord | None = None,
     ) -> DocumentSummaryDTO:
         meta = self._locator_metadata(spans or [])
         quality, quality_reasons = assess_span_texts(
@@ -322,11 +334,13 @@ class DocumentReadQueries:
             entity=self._resolve_entity(
                 meta["sec_code"], meta["title"], meta["sec_name"]
             ),
-            source_contract=self._source_contract_dto(source_contract),
+            source_contract=self._source_contract_dto(source_contract, provider_record),
         )
 
     @staticmethod
-    def _source_contract_dto(contract: SourceContract | None) -> SourceContractDTO | None:
+    def _source_contract_dto(
+        contract: SourceContract | None, provider_record: ProviderRecord | None
+    ) -> SourceContractDTO | None:
         if contract is None:
             return None
         permissions = {
@@ -347,4 +361,14 @@ class DocumentReadQueries:
             deletion_policy=contract.deletion_policy,
             downstream_restrictions=list(contract.downstream_restrictions or []),
             contract_version=contract.contract_version,
+            provider_record=(
+                ProviderRecordDTO(
+                    provider_name=provider_record.provider_name,
+                    provider_record_id=provider_record.provider_record_id,
+                    request_scope=dict(provider_record.request_scope or {}),
+                    retrieval_reference=provider_record.retrieval_reference,
+                )
+                if provider_record is not None
+                else None
+            ),
         )

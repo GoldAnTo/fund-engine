@@ -4748,6 +4748,19 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ProviderRecordDTO */
+        ProviderRecordDTO: {
+            /** Provider Name */
+            provider_name: string;
+            /** Provider Record Id */
+            provider_record_id: string;
+            /** Request Scope */
+            request_scope: {
+                [key: string]: unknown;
+            };
+            /** Retrieval Reference */
+            retrieval_reference: string | null;
+        };
         /**
          * ProviderRunDTO
          * @description One AI/provider invocation audit record.
@@ -5567,6 +5580,7 @@ export interface components {
             downstream_restrictions: string[];
             /** Contract Version */
             contract_version: string | null;
+            provider_record?: components["schemas"]["ProviderRecordDTO"] | null;
         };
         /**
          * SourceGroupDTO

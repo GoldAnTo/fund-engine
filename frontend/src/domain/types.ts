@@ -362,6 +362,12 @@ export interface SourceDocumentView {
     deletion_policy: string;
     downstream_restrictions: string[];
     contract_version: string | null;
+    provider_record?: {
+      provider_name: string;
+      provider_record_id: string;
+      request_scope: Record<string, unknown>;
+      retrieval_reference: string | null;
+    } | null;
   } | null;
   supplements_document_id?: string | null;
   claimed_page_reference?: string | null;

@@ -14,6 +14,13 @@ from pydantic import Field
 from app.schemas.v1.common import CursorPage, HistoricalBasisDTO, V1Model
 
 
+class ProviderRecordDTO(V1Model):
+    provider_name: str
+    provider_record_id: str
+    request_scope: dict[str, Any]
+    retrieval_reference: str | None
+
+
 class SourceContractDTO(V1Model):
     source_type: str
     provider_or_tenant: str
@@ -26,6 +33,7 @@ class SourceContractDTO(V1Model):
     deletion_policy: str
     downstream_restrictions: list[str]
     contract_version: str | None
+    provider_record: ProviderRecordDTO | None = None
 
 
 class DocumentSummaryDTO(V1Model):

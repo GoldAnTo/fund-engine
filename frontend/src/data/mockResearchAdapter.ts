@@ -3898,6 +3898,12 @@ export class MockResearchAdapter implements ResearchClient {
         deletion_policy: typeof sourceMetadata.deletion_policy === "string" ? sourceMetadata.deletion_policy : "not_recorded",
         downstream_restrictions: Array.isArray(sourceMetadata.downstream_restrictions) ? sourceMetadata.downstream_restrictions.filter((value): value is string => typeof value === "string") : userControlled ? ["仅限当前 Case 研究与人工审核"] : ["权限未完整记录；不得作为正式证据"],
         contract_version: typeof sourceMetadata.contract_version === "string" ? sourceMetadata.contract_version : null,
+        provider_record: sourceType === "licensed_provider" && typeof sourceMetadata.provider_name === "string" && typeof sourceMetadata.provider_record_id === "string" ? {
+          provider_name: sourceMetadata.provider_name,
+          provider_record_id: sourceMetadata.provider_record_id,
+          request_scope: sourceMetadata.request_scope && typeof sourceMetadata.request_scope === "object" ? sourceMetadata.request_scope as Record<string, unknown> : {},
+          retrieval_reference: typeof sourceMetadata.retrieval_reference === "string" ? sourceMetadata.retrieval_reference : null,
+        } : null,
       },
     };
     this.createdDocuments.set(documentId, {
