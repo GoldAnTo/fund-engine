@@ -28,6 +28,11 @@
 .ros-atomic-claim dd { margin: .15rem 0 0; overflow-wrap: anywhere; font-size: .7rem; line-height: 1.4; }
 .ros-atomic-claim .ros-review-actions { grid-column: 1 / -1; }
 .ros-atomic-claim .ros-review-decision, .ros-atomic-claim > .ros-success { grid-column: 1 / -1; }
+.ros-atomic-source-check { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(11rem, .7fr) minmax(0, 1.3fr); gap: .8rem 1rem; padding: .95rem; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .5rem; background: var(--ros-paper, #fbfaf6); }
+.ros-atomic-source-check strong, .ros-atomic-source-check small { display: block; }
+.ros-atomic-source-check small { margin-top: .35rem; color: var(--ros-muted, #75756e); font-size: .68rem; }
+.ros-atomic-source-check blockquote { margin: 0; padding: .75rem .85rem; border-left: 3px solid var(--ros-accent, #285b54); background: var(--ros-moss-soft, #edf4ec); font-size: .78rem; line-height: 1.55; }
+.ros-atomic-source-check code { grid-column: 2; overflow-wrap: anywhere; color: var(--ros-muted, #75756e); font-size: .66rem; }
 .ros-evidence-page { padding-top: 1.4rem; max-width: 980px; }
 .ros-evidence-list { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--ros-rule, #ded9ce); }
 .ros-evidence-row { display: grid; grid-template-columns: minmax(0, 1fr) 13rem; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
@@ -175,6 +180,8 @@
   .ros-header-actions { width: 100%; justify-content: flex-start; }
   .ros-review-decision { grid-template-columns: 1fr; }
   .ros-atomic-claim { grid-template-columns: 1fr; }
+  .ros-atomic-source-check { grid-template-columns: 1fr; }
+  .ros-atomic-source-check code { grid-column: auto; }
   .ros-evidence-row { grid-template-columns: 1fr; }
   .ros-documents-grid { grid-template-columns: 1fr; }
   .ros-document-reader { min-height: 0; }

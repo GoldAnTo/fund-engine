@@ -149,7 +149,7 @@ describe("Research OS event entry", () => {
   it("keeps extracted atomic claims visible until a reviewer publishes them", async () => {
     const user = userEvent.setup();
     const atomicClaim = {
-      id: "atomic-1", source_span_id: "span-1", document_version_id: "document-1", document_source_url: "https://disclosure.example/1",
+      id: "atomic-1", source_span_id: "sp-tsm-capex", document_version_id: "doc-event-tsm-q2", document_source_url: "https://disclosure.example/1",
       locator: { page: 2, paragraph: 3 }, quote: "订单同比增长20%", quote_start: 14, quote_end: 23, quote_sha256: "a".repeat(64),
       normalized_text: "公司披露订单同比增长 20%", claim_type: "disclosed_fact", assertion_actor: "公司", authority_level: "primary_disclosure",
       structured_fields: { run_ref: "extract:run-1" }, validation_result: { quote_continuous: true }, created_at: "2026-08-09T00:00:00Z",
@@ -172,7 +172,10 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("原子陈述审核")).toBeVisible();
     expect(screen.getByText("订单同比增长20%")).toBeVisible();
     expect(screen.getByText(/extract:run-1/)).toBeVisible();
-    expect(screen.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=document-1&span=span-1");
+    expect(screen.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=doc-event-tsm-q2&span=sp-tsm-capex");
+    await user.click(screen.getByRole("button", { name: "在此页核对原文" }));
+    expect(await screen.findByText("在此页核对的冻结原文")).toBeVisible();
+    expect(screen.getByText("公司上调全年资本开支指引，同时市场关注自由现金流承压。")).toBeVisible();
     await user.type(screen.getByLabelText("原子陈述审核理由"), "原文和定位已复核");
     await user.click(screen.getByRole("button", { name: "确认并发布" }));
     expect(await screen.findByText(/已发布为正式陈述/)).toBeVisible();
