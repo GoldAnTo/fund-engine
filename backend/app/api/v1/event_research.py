@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.errors import ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
@@ -20,6 +21,8 @@ from app.schemas.v1.event_research import (
     EventWorkbenchDTO,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
+    ContinueEventResearchRequest,
+    ContinueEventResearchResponse,
     UpdateEventResearchScopeRequest,
     UpdateEventResearchScopeResponse,
 )
@@ -29,6 +32,8 @@ from app.services.event_research import EventResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
+from app.services.auto_research import AutoResearchService
+from app.repositories.event_research import EventResearchLifecycleRepository
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -142,3 +147,35 @@ def publish_event_conclusion(
     )
     db.commit()
     return PublishEventConclusionResponse(conclusion_id=str(published.id), state=published.state)
+
+
+@router.post("/{case_id}/continuations", response_model=ContinueEventResearchResponse, status_code=status.HTTP_201_CREATED)
+def continue_event_research(
+    case_id: uuid.UUID,
+    payload: ContinueEventResearchRequest,
+    db: Session = Depends(get_db),
+) -> ContinueEventResearchResponse:
+    try:
+        run = AutoResearchService(db).continue_published_event(
+            case_id,
+            document_version_id=uuid.UUID(payload.document_version_id),
+            reason=payload.reason,
+            triggered_by=payload.triggered_by,
+        )
+        db.commit()
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = EventResearchLifecycleRepository(db).get(case_id)
+    assert lifecycle is not None
+    return ContinueEventResearchResponse(
+        run_id=str(run.id),
+        lifecycle=EventResearchLifecycleDTO(
+            status=lifecycle.status,
+            active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
+            current_round=lifecycle.current_round,
+            status_summary=lifecycle.status_summary,
+            current_gap=lifecycle.current_gap,
+            next_human_action=lifecycle.next_human_action,
+        ),
+    )

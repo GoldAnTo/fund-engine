@@ -3117,7 +3117,9 @@ export class MockResearchAdapter implements ResearchClient {
             d.linked_cases.some((c) => c.title.toLowerCase().includes(q))
         )
       : docs;
-    const caseScoped = query?.caseId
+    const caseScoped = query?.caseId === "event-published"
+      ? filtered.slice(0, 1)
+      : query?.caseId
       ? filtered.filter((document) => document.linked_cases.some((item) => item.id === query.caseId))
       : filtered;
     return simulateLatency(caseScoped);
@@ -3992,6 +3994,17 @@ export class MockResearchAdapter implements ResearchClient {
       { id: `draft-${caseId}-v1`, sequence: 1, state: "ai_draft" as const, text: "当前结论草案等待人工复核。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: null, reviewer: null, evidenceCount: 3, createdAt: "2026-08-07T07:00:00Z" },
       { id: `published-${caseId}-v1`, sequence: 2, state: "published" as const, text: "人工确认：当前材料不足以断定唯一原因。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: `draft-${caseId}-v1`, reviewer: "human:researcher", evidenceCount: 3, createdAt: "2026-08-07T08:00:00Z" },
     ] : []);
+  }
+
+  async continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<import("../domain/eventResearch").EventResearchContinuation> {
+    this.throwIfOffline();
+    if (!input.reason.trim()) throw new Error("continuation reason is required");
+    const runId = `run-continuation-${input.caseId}`;
+    const lifecycle: EventLifecycle = { status: "researching", activeRunId: runId, currentRound: 0, summary: "已记录新材料触发原因，开始新的受控补证周期", currentGap: "新材料尚未经过原文与证据审核；此前发布结论保持不变", nextHumanAction: null };
+    const previous = this.eventStates.get(input.caseId);
+    this.eventStates.set(input.caseId, { event: previous?.event, scope: previous?.scope ?? { version: 1, factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement) => ({ statement, description: null })), unmappedEvidenceCount: 0 }, lifecycle });
+    void input.documentVersionId; void input.triggeredBy;
+    return simulateLatency({ runId, lifecycle });
   }
 
   async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {

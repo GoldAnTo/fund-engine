@@ -64,6 +64,23 @@ describe("Research OS event entry", () => {
     expect(screen.getByRole("link", { name: "查看补证运行" })).toHaveAttribute("href", "/events/event-published/monitor");
   });
 
+  it("requires an explicit reason before a published Case can start a successor run from frozen material", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-published/documents"]}>
+        <Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "以此冻结版本重新核验" })).toBeVisible();
+    const start = screen.getByRole("button", { name: "以此资料启动重新研究" });
+    expect(start).toBeDisabled();
+    await user.type(screen.getByLabelText("重新研究原因"), "新增披露可能影响原有判断");
+    await user.click(start);
+    expect(await screen.findByText(/已创建后继运行/)).toBeVisible();
+    expect(screen.getByText(/此前发布结论未被改写/)).toBeVisible();
+  });
+
   it("keeps the research question and three factors editable before a Case is created", async () => {
     const user = userEvent.setup();
     render(

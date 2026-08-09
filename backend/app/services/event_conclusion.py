@@ -83,7 +83,15 @@ class EventConclusionService:
             text=text,
             primary_factor=primary_factor,
             evidence_link_ids=[str(link.id) for link, _ in evidence],
-            based_on_conclusion_id=None,
+            based_on_conclusion_id=(
+                self._session.scalar(
+                    select(EventResearchConclusion.id)
+                    .where(EventResearchConclusion.research_case_id == case_id)
+                    .where(EventResearchConclusion.state == "published")
+                    .order_by(EventResearchConclusion.created_at.desc())
+                    .limit(1)
+                )
+            ),
             reviewer=None,
             created_at=_utcnow(),
         )

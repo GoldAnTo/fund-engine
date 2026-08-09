@@ -2897,6 +2897,18 @@ export class HttpResearchAdapter implements ResearchClient {
     }));
   }
 
+  async continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<import("../domain/eventResearch").EventResearchContinuation> {
+    const dto = await this.post<{ run_id: string; lifecycle: {
+      status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
+      status_summary: string; current_gap: string | null; next_human_action: string | null;
+    } }>(`/event-research/${encodeURIComponent(input.caseId)}/continuations`, {
+      document_version_id: input.documentVersionId,
+      reason: input.reason,
+      triggered_by: input.triggeredBy,
+    });
+    return { runId: dto.run_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
   async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
     const dto = await this.requestJson<{
       version: number; factors: Array<string | { statement: string; description?: string | null }>; reclassified_evidence_count: number; unmapped_evidence_count: number;

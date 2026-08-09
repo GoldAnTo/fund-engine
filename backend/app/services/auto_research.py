@@ -16,8 +16,8 @@ from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
 from app.models.ledger import (
     AtomicClaimCandidate,
-    AtomicClaimReview,
     CaseDocumentVersion,
+    AtomicClaimReview,
     EvidenceLink,
     ResearchCase,
     SourceSpan,
@@ -26,6 +26,7 @@ from app.models.ledger import (
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion
+from app.models.event_research import EventResearchConclusion
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
@@ -58,6 +59,7 @@ class AutoResearchService:
         thesis_ids: list[uuid.UUID] | None = None,
         monitor_version_id: uuid.UUID | None = None,
         trigger: str = "manual",
+        scope_context: dict[str, object] | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -104,19 +106,23 @@ class AutoResearchService:
             scope_thesis_ids=[str(thesis.id) for thesis in theses],
             monitor_version_id=monitor.id if monitor is not None else None,
         )
+        scope_payload: dict[str, object] = {
+            "trigger": trigger,
+            "monitor_version_id": str(monitor.id) if monitor is not None else None,
+            "factor_ids": [str(thesis.id) for thesis in theses],
+            "factor_statements": [thesis.statement for thesis in theses],
+            "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
+            "budget": run.budget,
+        }
+        for key, value in (scope_context or {}).items():
+            if key not in scope_payload:
+                scope_payload[key] = value
         ResearchRunEventRepository(self.session).append(
             run.id,
             stage="scope",
             status="completed",
             message="已冻结本次运行范围",
-            payload_json={
-                "trigger": trigger,
-                "monitor_version_id": str(monitor.id) if monitor is not None else None,
-                "factor_ids": [str(thesis.id) for thesis in theses],
-                "factor_statements": [thesis.statement for thesis in theses],
-                "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
-                "budget": run.budget,
-            },
+            payload_json=scope_payload,
         )
         for thesis in theses:
             for task_type, label in (
@@ -146,7 +152,14 @@ class AutoResearchService:
         del auto_execute
         return run
 
-    def start_from_monitor(self, case_id: uuid.UUID, *, trigger: str = "manual"):
+    def start_from_monitor(
+        self,
+        case_id: uuid.UUID,
+        *,
+        trigger: str = "manual",
+        commit: bool = True,
+        scope_context: dict[str, object] | None = None,
+    ):
         """Create a run from one immutable CaseMonitor version.
 
         The interactive monitor entry point deliberately accepts no caller
@@ -169,7 +182,68 @@ class AutoResearchService:
             budget=monitor.budget,
             monitor_version_id=monitor.id,
             trigger=trigger,
+            commit=commit,
+            scope_context=scope_context,
         )
+
+    def continue_published_event(
+        self,
+        case_id: uuid.UUID,
+        *,
+        document_version_id: uuid.UUID,
+        reason: str,
+        triggered_by: str,
+    ):
+        """Start a successor run from a new, case-owned frozen document.
+
+        The earlier published conclusion remains immutable.  The explicit
+        document and reason become part of the successor run's frozen scope,
+        which makes the reopening decision inspectable rather than a hidden
+        status flip.
+        """
+        lifecycle = lock_event_research_lifecycle(self.session, case_id)
+        if lifecycle is None or lifecycle.status != "published":
+            raise ValidationFailedError("only a published event research case can start a material continuation")
+        if not reason.strip() or not triggered_by.strip():
+            raise ValidationFailedError("continuation reason and actor are required")
+        source = self.session.scalar(
+            select(CaseDocumentVersion)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(CaseDocumentVersion.document_version_id == document_version_id)
+            .limit(1)
+        )
+        if source is None:
+            raise ValidationFailedError("continuation document is not frozen in this case")
+        previous = self.session.scalar(
+            select(EventResearchConclusion)
+            .where(EventResearchConclusion.research_case_id == case_id)
+            .where(EventResearchConclusion.state == "published")
+            .order_by(EventResearchConclusion.created_at.desc())
+            .limit(1)
+        )
+        if previous is None:
+            raise ValidationFailedError("published lifecycle has no immutable published conclusion")
+        run = self.start_from_monitor(
+            case_id,
+            trigger="material_continuation",
+            commit=False,
+            scope_context={
+                "continuation_reason": reason.strip(),
+                "triggered_by": triggered_by.strip(),
+                "source_document_version_id": str(document_version_id),
+                "previous_conclusion_id": str(previous.id),
+            },
+        )
+        EventResearchLifecycleRepository(self.session).update(
+            lifecycle,
+            status="researching",
+            active_run_id=run.id,
+            current_round=0,
+            summary="已记录新材料触发原因，开始新的受控补证周期",
+            current_gap="新材料尚未经过原文与证据审核；此前发布结论保持不变",
+            next_human_action=None,
+        )
+        return run
 
     def execute(self, run):
         self.repo.update_run(run, status="running", stage="extract")

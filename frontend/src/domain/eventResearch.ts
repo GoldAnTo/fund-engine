@@ -175,12 +175,18 @@ export interface EventConclusionVersion {
   createdAt: string;
 }
 
+export interface EventResearchContinuation {
+  runId: string;
+  lifecycle: EventLifecycle;
+}
+
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
   getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;
+  continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<EventResearchContinuation>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;

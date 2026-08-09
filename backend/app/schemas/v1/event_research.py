@@ -244,6 +244,17 @@ class PublishEventConclusionResponse(V1Model):
     state: str
 
 
+class ContinueEventResearchRequest(V1Model):
+    document_version_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    triggered_by: str = Field(min_length=1, max_length=128)
+
+
+class ContinueEventResearchResponse(V1Model):
+    run_id: str
+    lifecycle: EventResearchLifecycleDTO
+
+
 class EventNextActionDTO(V1Model):
     kind: str
     label: str

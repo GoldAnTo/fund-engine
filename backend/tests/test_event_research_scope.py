@@ -32,6 +32,7 @@ from app.models.ledger import (
 )
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
 from app.models.proposals import Proposal
+from app.models.research_monitor import ResearchRunEvent
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
@@ -42,6 +43,7 @@ from app.services.event_research_scope_evidence import (
     lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
+from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.operational import TaskRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
@@ -1846,6 +1848,75 @@ def test_conclusion_history_keeps_drafts_and_published_versions_in_order(
             "created_at": "2026-08-09T09:00:00",
         },
     ]
+
+
+def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_conclusion(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "published"
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    thesis = cmd_session.scalar(
+        select(Thesis).where(Thesis.research_case_id == case_id).limit(1)
+    )
+    assert document_id is not None and thesis is not None
+    thesis.review_state = "confirmed"
+    prior = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="published",
+        text="原发布结论",
+        primary_factor=thesis.statement,
+        evidence_link_ids=[],
+        based_on_conclusion_id=None,
+        reviewer="human:lin",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(prior)
+    cmd_session.flush()
+    CaseMonitorService(cmd_session).save(
+        case_id,
+        actor="human:lin",
+        config=CaseMonitorConfig(
+            frequency="daily_20_00",
+            factor_ids=[thesis.id],
+            allowed_source_types=["uploaded_file"],
+            next_verification_event="补充资料复核",
+            budget=9,
+            change_reason="为新材料配置受控补证",
+        ),
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/continuations",
+        json={
+            "document_version_id": str(document_id),
+            "reason": "公司新增业绩说明，需核验是否影响原判断",
+            "triggered_by": "human:lin",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["lifecycle"]["status"] == "researching"
+    assert response.json()["lifecycle"]["active_run_id"] == response.json()["run_id"]
+    run_id = uuid.UUID(response.json()["run_id"])
+    scope = cmd_session.scalar(
+        select(ResearchRunEvent).where(ResearchRunEvent.run_id == run_id)
+    )
+    assert scope is not None
+    assert scope.payload_json["trigger"] == "material_continuation"
+    assert scope.payload_json["source_document_version_id"] == str(document_id)
+    assert scope.payload_json["previous_conclusion_id"] == str(prior.id)
+    assert scope.payload_json["continuation_reason"] == "公司新增业绩说明，需核验是否影响原判断"
+    assert cmd_session.get(EventResearchConclusion, prior.id).text == "原发布结论"
 
 
 @pytest.mark.parametrize(

@@ -4035,6 +4035,59 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/continuations": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Continue Event Research",
+        "operationId": "continue_event_research_api_v1_event_research__case_id__continuations_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContinueEventResearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContinueEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/monitor": {
       "get": {
         "tags": [
@@ -6878,6 +6931,53 @@
           "statement"
         ],
         "title": "ConfirmedFactorOptionDTO"
+      },
+      "ContinueEventResearchRequest": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Document Version Id"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "triggered_by": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Triggered By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "reason",
+          "triggered_by"
+        ],
+        "title": "ContinueEventResearchRequest"
+      },
+      "ContinueEventResearchResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/EventResearchLifecycleDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "lifecycle"
+        ],
+        "title": "ContinueEventResearchResponse"
       },
       "CounterResearchTaskDTO": {
         "properties": {
