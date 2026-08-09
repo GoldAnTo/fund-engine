@@ -98,7 +98,8 @@ describe("Research OS event entry", () => {
     render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
 
     expect(await screen.findByText(/来源版本 doc-fund-holdings-2026q2/)).toBeVisible();
-    expect(screen.getByText(/覆盖 complete · 时效 historical_disclosure/)).toBeVisible();
+    expect(screen.getByText(/覆盖：完整 · 时效：报告期仍在有效期/)).toBeVisible();
+    expect(screen.getAllByText(/许可：已准入/).slice(-1)[0]).toBeVisible();
   });
 
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
