@@ -146,7 +146,7 @@ class DocumentService:
         key = natural_key or (
             compute_natural_key(source_url, title, published_at)
             if title
-            else ""
+            else None
         )
         if key:
             prior_natural = self._repo.by_natural_key(key)
