@@ -1317,6 +1317,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/source-statements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admitted Source Statements */
+        get: operations["admitted_source_statements_api_v1_research_cases__case_id__source_statements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/report-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Report Claim */
+        post: operations["register_report_claim_api_v1_research_cases__case_id__report_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Key Factor */
+        post: operations["register_key_factor_api_v1_research_cases__case_id__key_factors_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metric-definitions": {
         parameters: {
             query?: never;
@@ -4484,6 +4535,64 @@ export interface components {
              */
             created_at: string;
         };
+        /** RegisterKeyFactorRequest */
+        RegisterKeyFactorRequest: {
+            /**
+             * Report Claim Id
+             * Format: uuid
+             */
+            report_claim_id: string;
+            /** Thesis Id */
+            thesis_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "positive" | "negative" | "neutral";
+            /** Metric Name */
+            metric_name: string;
+            /** Allowed Source Types */
+            allowed_source_types: string[];
+            /** Verification Window Start */
+            verification_window_start?: string | null;
+            /** Verification Window End */
+            verification_window_end?: string | null;
+            /** Support Condition */
+            support_condition: string;
+            /** Refutation Condition */
+            refutation_condition: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterReportClaimRequest */
+        RegisterReportClaimRequest: {
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Claim Kind
+             * @enum {string}
+             */
+            claim_kind: "disclosed_fact" | "forecast" | "research_opinion";
+            /** Asserted Period */
+            asserted_period?: string | null;
+            /** Asserted By */
+            asserted_by: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
         /** RelatedThesisDTO */
         RelatedThesisDTO: {
             /**
@@ -5068,6 +5177,43 @@ export interface components {
             } | null;
             /** Text Sha256 */
             text_sha256?: string | null;
+        };
+        /**
+         * SourceStatementOptionDTO
+         * @description A Case-owned, display-and-processing-admitted statement selectable by a researcher.
+         */
+        SourceStatementOptionDTO: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Text */
+            text: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Document Title */
+            document_title: string;
+            /** Source Url */
+            source_url: string | null;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /**
+             * Permission Status
+             * @constant
+             */
+            permission_status: "admitted";
+        };
+        /** SourceStatementOptionsResponse */
+        SourceStatementOptionsResponse: {
+            /** Items */
+            items: components["schemas"]["SourceStatementOptionDTO"][];
         };
         /**
          * SourceStatus
@@ -8581,6 +8727,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketExpressionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admitted_source_statements_api_v1_research_cases__case_id__source_statements_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceStatementOptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_report_claim_api_v1_research_cases__case_id__report_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterReportClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportClaimDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_key_factor_api_v1_research_cases__case_id__key_factors_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterKeyFactorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyFactorDTO"];
                 };
             };
             /** @description Validation Error */

@@ -1,7 +1,11 @@
 """Read-only, reviewed market-expression DTOs."""
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
+from typing import Literal
+
+from pydantic import Field
 
 from app.schemas.v1.common import V1Model
 
@@ -14,6 +18,50 @@ class ExpressionSourceDTO(V1Model):
     locator: dict | None
     available_at: datetime | None
     permission_status: str
+
+
+class SourceStatementOptionDTO(V1Model):
+    """A Case-owned, display-and-processing-admitted statement selectable by a researcher."""
+
+    id: str
+    kind: str
+    text: str
+    document_version_id: str
+    document_title: str
+    source_url: str | None
+    locator: dict
+    available_at: datetime
+    permission_status: Literal["admitted"]
+
+
+class SourceStatementOptionsResponse(V1Model):
+    items: list[SourceStatementOptionDTO]
+
+
+class RegisterReportClaimRequest(V1Model):
+    source_statement_id: uuid.UUID
+    text: str = Field(min_length=1)
+    claim_kind: Literal["disclosed_fact", "forecast", "research_opinion"]
+    asserted_period: date | None = None
+    asserted_by: str = Field(min_length=1)
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
+
+
+class RegisterKeyFactorRequest(V1Model):
+    report_claim_id: uuid.UUID
+    thesis_id: uuid.UUID | None = None
+    name: str = Field(min_length=1)
+    expected_direction: Literal["positive", "negative", "neutral"]
+    metric_name: str = Field(min_length=1)
+    allowed_source_types: list[str] = Field(min_length=1)
+    verification_window_start: date | None = None
+    verification_window_end: date | None = None
+    support_condition: str = Field(min_length=1)
+    refutation_condition: str = Field(min_length=1)
+    next_verification_event: str = Field(min_length=1)
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
 
 
 class ClaimVerificationDTO(V1Model):

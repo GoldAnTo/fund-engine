@@ -261,3 +261,80 @@ def test_market_expression_records_are_append_only(cmd_client, cmd_session) -> N
 
     with pytest.raises(ImmutableLedgerError):
         cmd_session.execute(update(ReportClaim).where(ReportClaim.id == claim.id).values(text="被改写"))
+
+
+def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitted_case_source(
+    cmd_client, cmd_session
+) -> None:
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"reviewed-source").hexdigest(),
+        source_url="https://licensed.example/report/reviewed-source",
+        title="已准入研报",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 8, "paragraph": 2}, verbatim_text="管理层预计下半年订单加速。")
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(source_span_id=span.id, kind="research_opinion", normalized_text="管理层预计下半年订单加速", created_at=now)
+    cmd_session.add(statement)
+    cmd_session.commit()
+
+    options = cmd_client.get(f"/api/v1/research-cases/{case_id}/source-statements")
+
+    assert options.status_code == 200
+    assert len(options.json()["items"]) == 1
+    source = options.json()["items"][0]
+    assert source["id"] == str(statement.id)
+    assert source["document_version_id"] == str(document.id)
+    assert source["locator"] == {"page": 8, "paragraph": 2}
+    assert source["available_at"].startswith("2026-08-09T09:00:00")
+    assert source["permission_status"] == "admitted"
+
+    claim_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/report-claims", json={
+        "source_statement_id": str(statement.id),
+        "text": "管理层预计下半年订单加速",
+        "claim_kind": "research_opinion",
+        "asserted_by": "管理层（经研究员转述）",
+        "reviewed_by": "human:researcher",
+        "review_reason": "逐句核对冻结原文，作为研究意见保留。",
+    })
+
+    assert claim_response.status_code == 201
+    claim = claim_response.json()
+    assert claim["source"]["source_statement_id"] == str(statement.id)
+    assert claim["review_reason"] == "逐句核对冻结原文，作为研究意见保留。"
+
+    factor_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors", json={
+        "report_claim_id": claim["id"],
+        "name": "下半年订单增速",
+        "expected_direction": "positive",
+        "metric_name": "订单同比增速",
+        "allowed_source_types": ["company_disclosure", "licensed_provider"],
+        "verification_window_start": "2026-07-01",
+        "verification_window_end": "2026-12-31",
+        "support_condition": "公司在定期报告中披露订单同比增长。",
+        "refutation_condition": "订单增速未达预期或出现延后。",
+        "next_verification_event": "2026 年三季报",
+        "reviewed_by": "human:researcher",
+        "review_reason": "指标、窗口和反证条件均已明确。",
+    })
+
+    assert factor_response.status_code == 201
+    factor = factor_response.json()
+    assert factor["report_claim_id"] == claim["id"]
+    assert factor["allowed_source_types"] == ["company_disclosure", "licensed_provider"]
+    assert factor["verification"] is None

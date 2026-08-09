@@ -78,6 +78,21 @@
 .ros-network-path i { color: var(--ros-muted, #767b76); font-style: normal; }
 .ros-network-relation > p { margin: .65rem 0; color: var(--ros-soft, #59615d); }
 .ros-network-relation footer { display: flex; justify-content: space-between; gap: .8rem; color: var(--ros-muted, #767b76); font-size: .72rem; }
+.ros-market-register { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; margin: 1rem 0 1.2rem; padding: 1rem 1.1rem; border: 1px solid var(--ros-strong, #cfc9bd); border-left: 3px solid var(--ros-accent, #285b54); border-radius: .55rem; background: var(--ros-paper, #fbfaf6); }
+.ros-market-register h3 { margin: .25rem 0 .4rem; font-size: 1rem; }
+.ros-market-register > div > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; }
+.ros-market-register__body { grid-column: 1 / -1; display: grid; gap: .85rem; padding-top: .9rem; border-top: 1px solid var(--ros-rule, #ded9ce); }
+.ros-market-register__body > label, .ros-market-register__grid label { display: grid; gap: .35rem; color: var(--ros-soft, #59615d); font-size: .73rem; }
+.ros-market-register select, .ros-market-register input, .ros-market-register textarea { width: 100%; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; padding: .48rem .55rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); font: inherit; }
+.ros-market-register textarea { min-height: 4.1rem; resize: vertical; }
+.ros-market-register__source { display: grid; gap: .3rem; padding: .7rem .8rem; border: 1px solid oklch(.75 .05 145); border-radius: .45rem; background: var(--ros-moss-soft, #edf4ec); }
+.ros-market-register__source strong { font-size: .8rem; }
+.ros-market-register__source small { color: var(--ros-soft, #59615d); font-size: .7rem; }
+.ros-market-register__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.ros-market-register__grid .is-wide { grid-column: 1 / -1; }
+.ros-market-register__factor { display: grid; gap: .8rem; margin-top: .35rem; padding: 1rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: var(--ros-deep, #f6f3ec); }
+.ros-market-register__factor h4 { margin: 0; font-size: .9rem; }
+@media (max-width: 720px) { .ros-market-register { grid-template-columns: 1fr; } .ros-market-register__grid { grid-template-columns: 1fr; } .ros-market-register__grid .is-wide { grid-column: auto; } }
 .ros-global-monitoring { max-width: 1100px; }
 .ros-global-run-list { display: grid; gap: .8rem; margin-top: 1.4rem; }
 .ros-global-run { padding: 1rem; background: #fffdf8; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .55rem; }

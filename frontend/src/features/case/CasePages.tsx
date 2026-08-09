@@ -198,7 +198,7 @@ function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearc
 export function CaseWikiPage() { return <CaseFrame>{(_data, caseId) => <WikiInspectorContent caseId={caseId} />}</CaseFrame>; }
 export function CaseRelationsPage() { return <CaseFrame>{(_data, caseId) => <CaseRelationsContent caseId={caseId} />}</CaseFrame>; }
 
-export function CaseMarketPage() { return <CaseFrame>{(_data, caseId) => <MarketExpressionContent caseId={caseId} />}</CaseFrame>; }
+export function CaseMarketPage() { return <CaseFrame>{(data, caseId) => <MarketExpressionContent caseId={caseId} theses={data.factors.flatMap((factor) => factor.thesisId ? [{ id: factor.thesisId, statement: factor.statement }] : [])} />}</CaseFrame>; }
 const protocolReason: Record<string, string> = { missing_outcome_binding: "尚未固定结果指标、实体范围、可回溯基线和观察窗口", binding_not_approved: "结果绑定仍是草案，尚未经过人工审核", missing_mechanism_template: "尚未选择可检验的机制模板", missing_verification_rule: "尚未声明支持、反证与证据优先级规则", insufficient_primary_metrics: "仅一个独立主指标：只能受限监测，正式判断仅可为证据不足或未到验证时点", missing_counter_hypothesis: "尚未定义竞争解释或反向检验" };
 
 export function CaseProtocolPage() { return <CaseFrame>{(data, caseId) => <><ProtocolContent caseId={caseId} data={data} /><MechanismProtocolPanel caseId={caseId} /><MechanismRuleConfig caseId={caseId} /><MechanismRuleHistory caseId={caseId} /></>}</CaseFrame>; }

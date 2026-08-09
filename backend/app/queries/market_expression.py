@@ -8,7 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
-from app.models.ledger import Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
+from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
 from app.models.source_governance import SourceContract
 from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
@@ -22,6 +22,8 @@ from app.schemas.v1.market_expression import (
     MarketExpressionResponse,
     MarketObservationDTO,
     ReportClaimDTO,
+    SourceStatementOptionDTO,
+    SourceStatementOptionsResponse,
 )
 
 
@@ -47,6 +49,30 @@ class MarketExpressionQueries:
             fund_exposure=self._fund_exposure(fundamentals, as_of, cutoff),
         )
 
+    def admitted_source_statements(self, case_id: uuid.UUID) -> SourceStatementOptionsResponse:
+        if ResearchRepository(self._db).get_case(case_id) is None:
+            raise NotFoundError(f"research case {case_id} not found")
+        rows = self._db.execute(
+            select(SourceStatement, SourceSpan, DocumentVersion)
+            .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
+            .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+            .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
+            .join(SourceContract, SourceContract.document_version_id == DocumentVersion.id)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(SourceContract.allow_ai_processing.is_(True))
+            .where(SourceContract.allow_display.is_(True))
+            .order_by(DocumentVersion.available_at.desc(), SourceStatement.created_at.desc(), SourceStatement.id)
+        ).all()
+        return SourceStatementOptionsResponse(items=[
+            SourceStatementOptionDTO(
+                id=str(statement.id), kind=statement.kind, text=statement.normalized_text,
+                document_version_id=str(document.id), document_title=document.title,
+                source_url=document.source_url, locator=span.locator,
+                available_at=document.available_at, permission_status="admitted",
+            )
+            for statement, span, document in rows
+        ])
+
     def _source(self, statement_id: uuid.UUID | None) -> ExpressionSourceDTO:
         if statement_id is None:
             return ExpressionSourceDTO(source_statement_id=None, document_version_id=None, document_title=None, source_url=None, locator=None, available_at=None, permission_status="not_recorded")
@@ -64,7 +90,6 @@ class MarketExpressionQueries:
         span = self._db.get(SourceSpan, statement.source_span_id) if statement else None
         if span is None:
             return False
-        from app.models.ledger import CaseDocumentVersion
         return self._db.scalar(select(CaseDocumentVersion.id).where(CaseDocumentVersion.research_case_id == case_id).where(CaseDocumentVersion.document_version_id == span.document_version_id).limit(1)) is not None
 
     def _claim(self, item: ReportClaim) -> ReportClaimDTO:

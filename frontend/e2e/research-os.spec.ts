@@ -219,6 +219,20 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
   });
 
+  test("market expression registers a reviewed claim only from an admitted frozen source", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await page.getByRole("button", { name: "选择冻结原文并登记主张" }).click();
+    await expect(page.getByLabel("冻结原文陈述")).toBeVisible();
+    await expect(page.getByText("公司季度业绩说明", { exact: true })).toBeVisible();
+    await expect(page.getByText(/只可选择本 Case 内已准入/)).toBeVisible();
+    await page.getByLabel("主张归属").fill("公司管理层");
+    await page.getByLabel("主张审核理由").fill("已核对冻结原文、定位与许可范围。");
+    await page.getByRole("button", { name: "登记已审核主张" }).click();
+    await expect(page.getByText(/已登记已审核主张/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "固定关键因素的验证口径" })).toBeVisible();
+  });
+
   test("published Case exposes immutable conclusion versions instead of implying an automatic rewrite", async ({ page }) => {
     await page.goto("/events/event-published/history?client=mock");
 

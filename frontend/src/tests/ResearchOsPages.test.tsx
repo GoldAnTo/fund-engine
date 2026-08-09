@@ -4,17 +4,19 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
+import { MockResearchOsApi } from "../data/mockResearchOsApi";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
+import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
-import { CaseConclusionHistoryPage, CaseConclusionPage, CaseReviewPage, CaseScopePage } from "../features/case/CasePages";
+import { CaseConclusionHistoryPage, CaseConclusionPage, CaseMarketPage, CaseReviewPage, CaseScopePage } from "../features/case/CasePages";
 import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage, MonitorConfigPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 
 describe("Research OS event entry", () => {
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
-  afterEach(() => { resetResearchClient(); vi.unstubAllGlobals(); });
+  afterEach(() => { resetResearchClient(); resetResearchOsApi(); vi.unstubAllGlobals(); });
 
   it("puts the next human action ahead of automatic event work", async () => {
     render(
@@ -38,6 +40,27 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
     expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+  });
+
+  it("lets a researcher begin registering a reviewed claim from an admitted frozen source", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "登记已审核主张与关键因素" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "选择冻结原文并登记主张" }));
+    expect(await screen.findByLabelText("冻结原文陈述")).toBeVisible();
+    expect(screen.getByText("公司季度业绩说明")).toBeVisible();
+    expect(screen.getByText(/只可选择本 Case 内已准入/)).toBeVisible();
+    await user.type(screen.getByLabelText("主张归属"), "公司管理层");
+    await user.type(screen.getByLabelText("主张审核理由"), "已核对冻结原文、定位与许可范围。");
+    await user.click(screen.getByRole("button", { name: "登记已审核主张" }));
+    expect(await screen.findByText(/已登记已审核主张/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "固定关键因素的验证口径" })).toBeVisible();
   });
 
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
