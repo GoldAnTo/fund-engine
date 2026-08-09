@@ -21,6 +21,7 @@ from app.models.ledger import (
     Thesis,
     ValuationSnapshot,
 )
+from app.models.event_research import CaseRelation
 from app.models.source_governance import SourceContract
 
 
@@ -578,6 +579,47 @@ def test_graph_marks_only_case_admitted_sources_as_locatable(
     )
     assert evidence_edge["properties"]["reviewer"] == "human:researcher"
     assert evidence_edge["properties"]["review_reason"] == "已逐字核对冻结原文与定位。"
+
+
+def test_graph_includes_related_case_without_inheriting_its_review_state(
+    api_client, session, workbench_case
+):
+    related_case = ResearchCase(
+        title="关联事件的独立研究",
+        industry_topic="ai_compute",
+        created_by="human:researcher",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    session.add(related_case)
+    session.flush()
+    session.add(
+        CaseRelation(
+            source_case_id=workbench_case.case.id,
+            target_case_id=related_case.id,
+            relation_type="shared_driver",
+            reason="两项研究共享同一个资本开支验证因素。",
+            created_by="human:researcher",
+            review_state="reviewed",
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+    )
+    session.commit()
+
+    response = api_client.get(
+        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
+        params={
+            "thesis_id": str(workbench_case.thesis.id),
+            "cutoff": "2026-12-31T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    related_node = next(node for node in payload["nodes"] if node["id"] == str(related_case.id))
+    assert related_node["kind"] == "case"
+    assert related_node["properties"]["inherited"] is False
+    relation_edge = next(edge for edge in payload["edges"] if edge["semantic_kind"] == "case_relation")
+    assert relation_edge["review_state"] == "reviewed"
+    assert relation_edge["properties"]["reason"] == "两项研究共享同一个资本开支验证因素。"
 
 
 def test_graph_excludes_post_cutoff_document_layer(api_client, session):

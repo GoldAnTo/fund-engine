@@ -13,11 +13,12 @@ import uuid
 from collections import defaultdict, deque
 from datetime import UTC, date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
+from app.models.event_research import CaseRelation
 from app.models.source_governance import SourceContract
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
@@ -124,6 +125,54 @@ class RelationshipGraphQueries:
                 "contains_thesis",
                 case.id,
                 thesis.id,
+            )
+
+        # Related Cases remain separate research records.  A reviewed relation
+        # is navigable context, never inherited evidence or conclusion state.
+        relation_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
+        relations = self._session.scalars(
+            select(CaseRelation)
+            .where(
+                or_(
+                    CaseRelation.source_case_id == case.id,
+                    CaseRelation.target_case_id == case.id,
+                )
+            )
+            .where(CaseRelation.created_at <= basis.cutoff)
+            .order_by(CaseRelation.created_at, CaseRelation.id)
+        )
+        for relation in relations:
+            if relation.review_state not in relation_states:
+                continue
+            related_case_id = (
+                relation.target_case_id
+                if relation.source_case_id == case.id
+                else relation.source_case_id
+            )
+            related_case = self._research.get_case(
+                related_case_id, cutoff=basis.cutoff
+            )
+            if related_case is None:
+                continue
+            add_node(
+                related_case.id,
+                "case",
+                related_case.title,
+                topic=related_case.industry_topic,
+                inherited=False,
+            )
+            add_edge(
+                relation.id,
+                "case_relation",
+                case.id,
+                related_case.id,
+                review_state=relation.review_state,
+                available_at=_iso(relation.created_at),
+                properties={
+                    "relation_type": relation.relation_type,
+                    "reason": relation.reason,
+                    "created_by": relation.created_by,
+                },
             )
 
         # 2-3. evidence links (research_mode-gated) and causal steps
