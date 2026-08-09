@@ -861,6 +861,26 @@ export interface paths {
         patch: operations["update_task_api_v1_tasks__task_id__patch"];
         trace?: never;
     };
+    "/api/v1/research-runs/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Active Runs
+         * @description Return active work with the run's recorded scope, never live monitor settings.
+         */
+        get: operations["list_active_runs_api_v1_research_runs_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/runs": {
         parameters: {
             query?: never;
@@ -1123,6 +1143,38 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActiveResearchRunDTO */
+        ActiveResearchRunDTO: {
+            /** Run Id */
+            run_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Updated At */
+            updated_at: string;
+            /** Processed Count */
+            processed_count: number;
+            /** Next Action */
+            next_action: string;
+            scope: components["schemas"]["FrozenRunScopeDTO"];
+        };
+        /** ActiveResearchRunsResponse */
+        ActiveResearchRunsResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ActiveResearchRunDTO"][];
+        };
         /** ActivityItemDTO */
         ActivityItemDTO: {
             /** Event Id */
@@ -2503,6 +2555,22 @@ export interface components {
             normalized_text: string;
             /** Observed Period */
             observed_period: string | null;
+        };
+        /**
+         * FrozenRunScopeDTO
+         * @description Scope recorded when a run started; never reconstructed from current settings.
+         */
+        FrozenRunScopeDTO: {
+            /** Trigger */
+            trigger?: string | null;
+            /** Monitor Version Id */
+            monitor_version_id?: string | null;
+            /** Factor Ids */
+            factor_ids?: string[];
+            /** Allowed Source Types */
+            allowed_source_types?: string[];
+            /** Budget */
+            budget?: number | null;
         };
         /**
          * FundCompositionResponse
@@ -6180,6 +6248,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskItemDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_active_runs_api_v1_research_runs_active_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActiveResearchRunsResponse"];
                 };
             };
             /** @description Validation Error */

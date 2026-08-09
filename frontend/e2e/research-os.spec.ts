@@ -2,12 +2,16 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Event-first Research OS", () => {
   test("research dispatch keeps priority, human review and system activity visible", async ({ page }) => {
+    await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
+      items: [{ run_id: "run-alphabet", case_id: "event-alphabet", case_title: "Alphabet 财报超预期后股价下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["licensed_provider"], budget: 20 } }], next_cursor: null, has_more: false,
+    } }));
     await page.goto("/?client=mock");
 
     await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
     await expect(page.getByText("当前优先")).toBeVisible();
     await expect(page.getByRole("main").getByText("研究网络")).toBeVisible();
-    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在补证");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · retrieve");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("licensed_provider");
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
 

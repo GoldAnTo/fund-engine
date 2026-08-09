@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -8,10 +8,11 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
+import { AppShell } from "../app/AppShell";
 
 describe("Research OS event entry", () => {
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
-  afterEach(() => resetResearchClient());
+  afterEach(() => { resetResearchClient(); vi.unstubAllGlobals(); });
 
   it("puts the next human action ahead of automatic event work", async () => {
     render(
@@ -59,5 +60,22 @@ describe("Research OS event entry", () => {
     await user.click(screen.getByRole("button", { name: "确认采纳" }));
 
     expect(await screen.findByText("当前没有待审核候选。")) .toBeVisible();
+  });
+
+  it("keeps a frozen active-run scope visible above every workbench route", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电上调 CoWoS 指引后下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }],
+      next_cursor: null, has_more: false,
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route element={<AppShell />}><Route path="/events" element={<p>工作台内容</p>} /></Route></Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("台积电上调 CoWoS 指引后下跌");
+    expect(strip).toHaveTextContent("company_disclosure");
+    expect(strip).toHaveTextContent("已处理 3");
   });
 });

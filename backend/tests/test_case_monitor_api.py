@@ -89,3 +89,28 @@ def test_monitor_rejects_unsupported_source_type(cmd_client, cmd_session) -> Non
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current_config(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(factor.id, allowed_source_types=["company_disclosure"]),
+    )
+    assert saved.status_code == 200
+    started = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/runs",
+        json={"max_rounds": 1, "budget": 20},
+    )
+    assert started.status_code == 201
+
+    response = cmd_client.get("/api/v1/research-runs/active")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["run_id"] == started.json()["id"]
+    assert item["case_id"] == str(case.id)
+    assert item["scope"]["monitor_version_id"] == saved.json()["id"]
+    assert item["scope"]["allowed_source_types"] == ["company_disclosure"]

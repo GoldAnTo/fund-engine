@@ -23,6 +23,32 @@ class RunListResponse(CursorPage):
     items: list[RunSummaryDTO]
 
 
+class FrozenRunScopeDTO(V1Model):
+    """Scope recorded when a run started; never reconstructed from current settings."""
+
+    trigger: str | None = None
+    monitor_version_id: str | None = None
+    factor_ids: list[str] = Field(default_factory=list)
+    allowed_source_types: list[str] = Field(default_factory=list)
+    budget: int | None = None
+
+
+class ActiveResearchRunDTO(V1Model):
+    run_id: str
+    case_id: str
+    case_title: str
+    status: str
+    stage: str
+    updated_at: str
+    processed_count: int
+    next_action: str
+    scope: FrozenRunScopeDTO
+
+
+class ActiveResearchRunsResponse(CursorPage):
+    items: list[ActiveResearchRunDTO]
+
+
 class CancelRunResponse(RunSummaryDTO):
     pass
 

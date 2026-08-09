@@ -3038,6 +3038,52 @@
         }
       }
     },
+    "/api/v1/research-runs/active": {
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "List Active Runs",
+        "description": "Return active work with the run's recorded scope, never live monitor settings.",
+        "operationId": "list_active_runs_api_v1_research_runs_active_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveResearchRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/runs": {
       "post": {
         "tags": [
@@ -3933,6 +3979,92 @@
   },
   "components": {
     "schemas": {
+      "ActiveResearchRunDTO": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "processed_count": {
+            "type": "integer",
+            "title": "Processed Count"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/FrozenRunScopeDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "case_id",
+          "case_title",
+          "status",
+          "stage",
+          "updated_at",
+          "processed_count",
+          "next_action",
+          "scope"
+        ],
+        "title": "ActiveResearchRunDTO"
+      },
+      "ActiveResearchRunsResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActiveResearchRunDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ActiveResearchRunsResponse"
+      },
       "ActivityItemDTO": {
         "properties": {
           "event_id": {
@@ -7993,6 +8125,61 @@
         ],
         "title": "ExtractStatementDTO",
         "description": "One statement produced by the extraction step."
+      },
+      "FrozenRunScopeDTO": {
+        "properties": {
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "monitor_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Version Id"
+          },
+          "factor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factor Ids"
+          },
+          "allowed_source_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Source Types"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FrozenRunScopeDTO",
+        "description": "Scope recorded when a run started; never reconstructed from current settings."
       },
       "FundCompositionResponse": {
         "properties": {
