@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
-from app.models.event_research import CaseRelation
+from app.models.event_research import CaseRelation, CaseRelationReview
 from app.models.source_governance import SourceContract
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
@@ -130,7 +130,7 @@ class RelationshipGraphQueries:
         # Related Cases remain separate research records.  A reviewed relation
         # is navigable context, never inherited evidence or conclusion state.
         relation_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
-        relations = self._session.scalars(
+        relations = list(self._session.scalars(
             select(CaseRelation)
             .where(
                 or_(
@@ -140,8 +140,29 @@ class RelationshipGraphQueries:
             )
             .where(CaseRelation.created_at <= basis.cutoff)
             .order_by(CaseRelation.created_at, CaseRelation.id)
-        )
+        ))
+        candidate_ids = [relation.id for relation in relations if relation.review_state == "machine_generated"]
+        terminal_candidates: set[uuid.UUID] = set()
+        if candidate_ids:
+            review_rows = self._session.execute(
+                select(CaseRelationReview.case_relation_id, CaseRelationReview.outcome)
+                .where(CaseRelationReview.case_relation_id.in_(candidate_ids))
+                .order_by(
+                    CaseRelationReview.case_relation_id,
+                    CaseRelationReview.created_at.desc(),
+                    CaseRelationReview.id.desc(),
+                )
+            )
+            seen_candidates: set[uuid.UUID] = set()
+            for candidate_id, outcome in review_rows:
+                if candidate_id in seen_candidates:
+                    continue
+                seen_candidates.add(candidate_id)
+                if outcome in {"confirmed", "modified", "rejected"}:
+                    terminal_candidates.add(candidate_id)
         for relation in relations:
+            if relation.id in terminal_candidates:
+                continue
             if relation.review_state not in relation_states:
                 continue
             related_case_id = (

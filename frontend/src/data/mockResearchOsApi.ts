@@ -202,6 +202,10 @@ export class MockResearchOsApi implements ResearchOsApi {
     string,
     Schemas["MarketObservationDTO"][]
   >();
+  private relationReviews = new Map<
+    string,
+    Map<string, Schemas["CaseRelationReviewDTO"]>
+  >();
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
@@ -506,47 +510,71 @@ export class MockResearchOsApi implements ResearchOsApi {
   }
 
   async network(): ReturnType<ResearchOsApi["network"]> {
+    const candidate = {
+      id: "relation-candidate",
+      source_case: {
+        case_id: "event-tsm",
+        title: "TSM 资本开支与自由现金流验证",
+        lifecycle_status: "awaiting_key_review",
+      },
+      target_case: {
+        case_id: "event-ai-server",
+        title: "AI 服务器订单验证",
+        lifecycle_status: "continuing",
+      },
+      relation_type: "potential_conflict" as const,
+      reason: "候选：需求节奏可能不同",
+      created_by: "machine:relation",
+      review_state: "machine_generated" as const,
+      created_at: now,
+    };
+    const candidateHistory = Array.from(
+      this.relationReviews.get(candidate.id)?.values() ?? [],
+    );
+    const latestCandidateReview = candidateHistory[candidateHistory.length - 1];
+    const reviewedRelations: Schemas["CaseRelationDTO"][] = [
+      {
+        id: "relation-demo",
+        source_case: candidate.source_case,
+        target_case: candidate.target_case,
+        relation_type: "shared_driver",
+        reason: "均需核验上游资本开支节奏",
+        created_by: "human:researcher",
+        review_state: "reviewed",
+        created_at: now,
+      },
+    ];
+    if (
+      latestCandidateReview?.outcome === "confirmed" ||
+      latestCandidateReview?.outcome === "modified"
+    ) {
+      reviewedRelations.unshift({
+        ...candidate,
+        id: latestCandidateReview.reviewed_relation_id ?? "relation-candidate-reviewed",
+        relation_type: latestCandidateReview.relation_type,
+        reason: latestCandidateReview.reason,
+        created_by: latestCandidateReview.reviewer,
+        review_state: "reviewed",
+        created_at: latestCandidateReview.created_at,
+        review_history: candidateHistory,
+        candidate_origin: {
+          relation_type: candidate.relation_type,
+          reason: candidate.reason,
+          created_by: candidate.created_by,
+          created_at: candidate.created_at,
+        },
+      });
+    }
     return {
-      reviewed_relations: [
-        {
-          id: "relation-demo",
-          source_case: {
-            case_id: "event-tsm",
-            title: "TSM 资本开支与自由现金流验证",
-            lifecycle_status: "awaiting_key_review",
-          },
-          target_case: {
-            case_id: "event-ai-server",
-            title: "AI 服务器订单验证",
-            lifecycle_status: "continuing",
-          },
-          relation_type: "shared_driver",
-          reason: "均需核验上游资本开支节奏",
-          created_by: "human:researcher",
-          review_state: "reviewed",
-          created_at: now,
-        },
-      ],
-      candidate_relations: [
-        {
-          id: "relation-candidate",
-          source_case: {
-            case_id: "event-tsm",
-            title: "TSM 资本开支与自由现金流验证",
-            lifecycle_status: "awaiting_key_review",
-          },
-          target_case: {
-            case_id: "event-ai-server",
-            title: "AI 服务器订单验证",
-            lifecycle_status: "continuing",
-          },
-          relation_type: "potential_conflict",
-          reason: "候选：需求节奏可能不同",
-          created_by: "machine:relation",
-          review_state: "machine_generated",
-          created_at: now,
-        },
-      ],
+      reviewed_relations: reviewedRelations,
+      candidate_relations:
+        !latestCandidateReview || latestCandidateReview.outcome === "needs_more_evidence"
+          ? [{ ...candidate, review_history: candidateHistory }]
+          : [],
+      resolved_candidates:
+        latestCandidateReview?.outcome === "rejected"
+          ? [{ ...candidate, review_history: candidateHistory }]
+          : [],
     } as ReturnType<ResearchOsApi["network"]> extends Promise<infer T>
       ? T
       : never;
@@ -569,6 +597,31 @@ export class MockResearchOsApi implements ResearchOsApi {
           relation.target_case.case_id === caseId,
       ),
     };
+  }
+
+  async reviewCaseRelation(
+    candidateId: string,
+    input: Schemas["CaseRelationReviewRequest"],
+  ): ReturnType<ResearchOsApi["reviewCaseRelation"]> {
+    const reviews = this.relationReviews.get(candidateId) ?? new Map();
+    const existing = reviews.get(input.idempotency_key);
+    if (existing) return existing;
+    const review: Schemas["CaseRelationReviewDTO"] = {
+      id: `review-${candidateId}-${reviews.size + 1}`,
+      case_relation_id: candidateId,
+      outcome: input.outcome,
+      relation_type: input.relation_type,
+      reviewer: input.reviewer,
+      reason: input.reason,
+      reviewed_relation_id:
+        input.outcome === "confirmed" || input.outcome === "modified"
+          ? `reviewed-${candidateId}`
+          : null,
+      created_at: now,
+    };
+    reviews.set(input.idempotency_key, review);
+    this.relationReviews.set(candidateId, reviews);
+    return review;
   }
 
   async graph(caseId: string): ReturnType<ResearchOsApi["graph"]> {

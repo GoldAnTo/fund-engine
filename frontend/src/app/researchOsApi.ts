@@ -28,6 +28,7 @@ export type MechanismTemplate = Schemas["MechanismTemplateDTO"];
 export type CaseMechanismProtocol = Schemas["CaseMechanismProtocolDTO"];
 export type AtomicClaimCandidate = Schemas["AtomicClaimCandidateDTO"];
 export type AtomicClaimReview = Schemas["AtomicClaimReviewDTO"];
+export type CaseRelationReview = Schemas["CaseRelationReviewDTO"];
 
 const httpResearchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
@@ -42,6 +43,7 @@ const httpResearchOsApi = {
   runs: () => request<Schemas["ResearchRunArchiveResponse"]>("/research-runs"),
   network: () => request<ResearchNetwork>("/event-research/network"),
   caseRelations: (caseId: string) => request<ResearchNetwork>(`/event-research/${caseId}/relations`),
+  reviewCaseRelation: (candidateId: string, input: Schemas["CaseRelationReviewRequest"]) => request<CaseRelationReview>(`/event-research/case-relations/${candidateId}/reviews`, { method: "POST", body: JSON.stringify(input) }),
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
   marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),
@@ -98,6 +100,7 @@ export const researchOsApi: ResearchOsApi = {
   runs: () => selectedResearchOsApi.runs(),
   network: () => selectedResearchOsApi.network(),
   caseRelations: (caseId) => selectedResearchOsApi.caseRelations(caseId),
+  reviewCaseRelation: (candidateId, input) => selectedResearchOsApi.reviewCaseRelation(candidateId, input),
   graph: (caseId) => selectedResearchOsApi.graph(caseId),
   exposure: (caseId) => selectedResearchOsApi.exposure(caseId),
   marketExpression: (caseId) => selectedResearchOsApi.marketExpression(caseId),

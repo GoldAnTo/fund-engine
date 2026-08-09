@@ -2112,4 +2112,26 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("等待人工核对")).toBeVisible();
     expect(screen.getByText("不得自动进入本 Case")).toBeVisible();
   });
+
+  it("offers a separate human review action for a Case relation candidate", async () => {
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/relations"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "审核关联候选" }));
+    expect(screen.getByRole("heading", { name: "审核关联候选" })).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("审核结果"), "modified");
+    await user.selectOptions(screen.getByLabelText("关系类型"), "follow_up_validation");
+    await user.type(screen.getByLabelText("审核理由"), "需作为后续验证单独跟踪。");
+    await user.click(screen.getByRole("button", { name: "保存可回放的审核记录" }));
+
+    expect(await screen.findByText(/已记录：修改后确认/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "审核关联候选" })).not.toBeInTheDocument();
+    expect(screen.getByText("需作为后续验证单独跟踪。")).toBeVisible();
+    expect(screen.getByText(/源候选：可能冲突 · 候选：需求节奏可能不同/)).toBeVisible();
+  });
 });

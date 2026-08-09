@@ -3769,6 +3769,59 @@
         }
       }
     },
+    "/api/v1/event-research/case-relations/{candidate_id}/reviews": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Review Case Relation",
+        "operationId": "review_case_relation_api_v1_event_research_case_relations__candidate_id__reviews_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseRelationReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseRelationReviewDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/extract": {
       "post": {
         "tags": [
@@ -6707,6 +6760,42 @@
         ],
         "title": "CaseMonitorDetailResponse"
       },
+      "CaseRelationCandidateOriginDTO": {
+        "properties": {
+          "relation_type": {
+            "type": "string",
+            "enum": [
+              "shared_driver",
+              "follow_up_validation",
+              "potential_conflict",
+              "shared_material"
+            ],
+            "title": "Relation Type"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "relation_type",
+          "reason",
+          "created_by",
+          "created_at"
+        ],
+        "title": "CaseRelationCandidateOriginDTO"
+      },
       "CaseRelationCaseDTO": {
         "properties": {
           "case_id": {
@@ -6774,6 +6863,23 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "review_history": {
+            "items": {
+              "$ref": "#/components/schemas/CaseRelationReviewDTO"
+            },
+            "type": "array",
+            "title": "Review History"
+          },
+          "candidate_origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaseRelationCandidateOriginDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -6789,6 +6895,127 @@
           "created_at"
         ],
         "title": "CaseRelationDTO"
+      },
+      "CaseRelationReviewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "case_relation_id": {
+            "type": "string",
+            "title": "Case Relation Id"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected",
+              "needs_more_evidence"
+            ],
+            "title": "Outcome"
+          },
+          "relation_type": {
+            "type": "string",
+            "enum": [
+              "shared_driver",
+              "follow_up_validation",
+              "potential_conflict",
+              "shared_material"
+            ],
+            "title": "Relation Type"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewed_relation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Relation Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "case_relation_id",
+          "outcome",
+          "relation_type",
+          "reviewer",
+          "reason",
+          "reviewed_relation_id",
+          "created_at"
+        ],
+        "title": "CaseRelationReviewDTO"
+      },
+      "CaseRelationReviewRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected",
+              "needs_more_evidence"
+            ],
+            "title": "Outcome"
+          },
+          "relation_type": {
+            "type": "string",
+            "enum": [
+              "shared_driver",
+              "follow_up_validation",
+              "potential_conflict",
+              "shared_material"
+            ],
+            "title": "Relation Type"
+          },
+          "reviewer": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "relation_type",
+          "reviewer",
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "CaseRelationReviewRequest"
       },
       "CaseSnapshotDTO": {
         "properties": {
@@ -14969,6 +15196,13 @@
             },
             "type": "array",
             "title": "Candidate Relations"
+          },
+          "resolved_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CaseRelationDTO"
+            },
+            "type": "array",
+            "title": "Resolved Candidates"
           }
         },
         "additionalProperties": false,
