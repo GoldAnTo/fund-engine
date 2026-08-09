@@ -82,6 +82,12 @@ class AttachEventMaterialResponse(V1Model):
     source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"]
 
 
+class UploadEventMaterialResponse(V1Model):
+    document_version_id: str
+    parse_state: Literal["parsed", "partial", "failed"]
+    next_action: Literal["review_original", "supplement_original"]
+
+
 class EventResearchScopeFactorDTO(V1Model):
     statement: str = Field(min_length=1)
     description: str | None = None
