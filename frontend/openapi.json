@@ -3818,6 +3818,83 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/market-expression": {
+      "get": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Get Market Expression",
+        "operationId": "get_market_expression_api_v1_research_cases__case_id__market_expression_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketExpressionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/review-proposals": {
       "get": {
         "tags": [
@@ -5030,6 +5107,40 @@
           "claimed_at"
         ],
         "title": "ClaimResponse"
+      },
+      "ClaimVerificationDTO": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "rationale",
+          "reviewed_by",
+          "reviewed_at",
+          "source"
+        ],
+        "title": "ClaimVerificationDTO"
       },
       "CompanyDTO": {
         "properties": {
@@ -8040,6 +8151,82 @@
         ],
         "title": "ExposurePositionDTO"
       },
+      "ExpressionSourceDTO": {
+        "properties": {
+          "source_statement_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Statement Id"
+          },
+          "document_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator"
+          },
+          "available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At"
+          },
+          "permission_status": {
+            "type": "string",
+            "title": "Permission Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_statement_id",
+          "document_title",
+          "source_url",
+          "locator",
+          "available_at",
+          "permission_status"
+        ],
+        "title": "ExpressionSourceDTO"
+      },
       "ExtractEventResearchRequest": {
         "properties": {
           "raw_input": {
@@ -8412,6 +8599,105 @@
         ],
         "title": "FundDTO"
       },
+      "FundDisclosureExposureDTO": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "disclosed_exposure": {
+            "type": "number",
+            "title": "Disclosed Exposure"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosurePositionDTO"
+            },
+            "type": "array",
+            "title": "Positions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_id",
+          "fund_code",
+          "fund_name",
+          "disclosed_exposure",
+          "positions"
+        ],
+        "title": "FundDisclosureExposureDTO"
+      },
+      "FundDisclosurePositionDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "report_period": {
+            "type": "string",
+            "format": "date",
+            "title": "Report Period"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "acquired_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Acquired At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "coverage_status": {
+            "type": "string",
+            "title": "Coverage Status"
+          },
+          "freshness_status": {
+            "type": "string",
+            "title": "Freshness Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "weight",
+          "report_period",
+          "published_at",
+          "acquired_at",
+          "source",
+          "coverage_status",
+          "freshness_status"
+        ],
+        "title": "FundDisclosurePositionDTO"
+      },
       "FundExposureDTO": {
         "properties": {
           "fund_id": {
@@ -8550,6 +8836,106 @@
           "source"
         ],
         "title": "FundHolderDTO"
+      },
+      "FundamentalImpactDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "key_factor_id": {
+            "type": "string",
+            "title": "Key Factor Id"
+          },
+          "company_id": {
+            "type": "string",
+            "title": "Company Id"
+          },
+          "company_name": {
+            "type": "string",
+            "title": "Company Name"
+          },
+          "stock_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "expected_direction": {
+            "type": "string",
+            "title": "Expected Direction"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "key_factor_id",
+          "company_id",
+          "company_name",
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "metric_name",
+          "expected_direction",
+          "rationale",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at",
+          "source"
+        ],
+        "title": "FundamentalImpactDTO"
       },
       "GapExplanationDTO": {
         "properties": {
@@ -9502,6 +9888,123 @@
         ],
         "title": "KeyChangeDTO"
       },
+      "KeyFactorDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "report_claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Claim Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "expected_direction": {
+            "type": "string",
+            "title": "Expected Direction"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "allowed_source_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Source Types"
+          },
+          "verification_window_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Window Start"
+          },
+          "verification_window_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Window End"
+          },
+          "support_condition": {
+            "type": "string",
+            "title": "Support Condition"
+          },
+          "refutation_condition": {
+            "type": "string",
+            "title": "Refutation Condition"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "title": "Next Verification Event"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaimVerificationDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "report_claim_id",
+          "name",
+          "expected_direction",
+          "metric_name",
+          "allowed_source_types",
+          "verification_window_start",
+          "verification_window_end",
+          "support_condition",
+          "refutation_condition",
+          "next_verification_event",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at",
+          "verification"
+        ],
+        "title": "KeyFactorDTO"
+      },
       "KeyFactorRowDTO": {
         "properties": {
           "factor_id": {
@@ -9862,6 +10365,168 @@
           "review"
         ],
         "title": "LinkReviewResponse"
+      },
+      "MarketExpressionResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/ReportClaimDTO"
+            },
+            "type": "array",
+            "title": "Claims"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/KeyFactorDTO"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "fundamentals": {
+            "items": {
+              "$ref": "#/components/schemas/FundamentalImpactDTO"
+            },
+            "type": "array",
+            "title": "Fundamentals"
+          },
+          "market_observations": {
+            "items": {
+              "$ref": "#/components/schemas/MarketObservationDTO"
+            },
+            "type": "array",
+            "title": "Market Observations"
+          },
+          "fund_exposure": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosureExposureDTO"
+            },
+            "type": "array",
+            "title": "Fund Exposure"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "as_of",
+          "cutoff",
+          "claims",
+          "factors",
+          "fundamentals",
+          "market_observations",
+          "fund_exposure"
+        ],
+        "title": "MarketExpressionResponse"
+      },
+      "MarketObservationDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "key_factor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Factor Id"
+          },
+          "stock_id": {
+            "type": "string",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "event_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Event At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "window_label": {
+            "type": "string",
+            "title": "Window Label"
+          },
+          "benchmark": {
+            "type": "string",
+            "title": "Benchmark"
+          },
+          "price_source": {
+            "type": "string",
+            "title": "Price Source"
+          },
+          "relative_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Return"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "key_factor_id",
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "event_at",
+          "available_at",
+          "window_label",
+          "benchmark",
+          "price_source",
+          "relative_return",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at"
+        ],
+        "title": "MarketObservationDTO"
       },
       "MetricCatalogEntryDTO": {
         "properties": {
@@ -10430,6 +11095,68 @@
           "statement"
         ],
         "title": "RelatedThesisDTO"
+      },
+      "ReportClaimDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "claim_kind": {
+            "type": "string",
+            "title": "Claim Kind"
+          },
+          "asserted_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asserted Period"
+          },
+          "asserted_by": {
+            "type": "string",
+            "title": "Asserted By"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "claim_kind",
+          "asserted_period",
+          "asserted_by",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at",
+          "source"
+        ],
+        "title": "ReportClaimDTO"
       },
       "ReproductionManifestDTO": {
         "properties": {

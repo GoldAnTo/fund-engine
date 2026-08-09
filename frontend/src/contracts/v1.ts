@@ -1088,6 +1088,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/market-expression": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Market Expression */
+        get: operations["get_market_expression_api_v1_research_cases__case_id__market_expression_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/review-proposals": {
         parameters: {
             query?: never;
@@ -1549,6 +1566,21 @@ export interface components {
             claimed_at: string;
             /** Lease Expires At */
             lease_expires_at?: string | null;
+        };
+        /** ClaimVerificationDTO */
+        ClaimVerificationDTO: {
+            /** Outcome */
+            outcome: string;
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /** CompanyDTO */
         CompanyDTO: {
@@ -2540,6 +2572,23 @@ export interface components {
             /** Pb */
             pb: number | null;
         };
+        /** ExpressionSourceDTO */
+        ExpressionSourceDTO: {
+            /** Source Statement Id */
+            source_statement_id: string | null;
+            /** Document Title */
+            document_title: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            } | null;
+            /** Available At */
+            available_at: string | null;
+            /** Permission Status */
+            permission_status: string;
+        };
         /** ExtractEventResearchRequest */
         ExtractEventResearchRequest: {
             /** Raw Input */
@@ -2665,6 +2714,51 @@ export interface components {
              */
             created_at: string;
         };
+        /** FundDisclosureExposureDTO */
+        FundDisclosureExposureDTO: {
+            /** Fund Id */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /** Disclosed Exposure */
+            disclosed_exposure: number;
+            /** Positions */
+            positions: components["schemas"]["FundDisclosurePositionDTO"][];
+        };
+        /** FundDisclosurePositionDTO */
+        FundDisclosurePositionDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Weight */
+            weight: number;
+            /**
+             * Report Period
+             * Format: date
+             */
+            report_period: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /**
+             * Acquired At
+             * Format: date-time
+             */
+            acquired_at: string;
+            /** Source */
+            source: string;
+            /** Coverage Status */
+            coverage_status: string;
+            /** Freshness Status */
+            freshness_status: string;
+        };
         /**
          * FundExposureDTO
          * @description One fund's aggregate exposure to the case's theme stocks.
@@ -2721,6 +2815,39 @@ export interface components {
             acquired_at?: string | null;
             /** Source */
             source: string;
+        };
+        /** FundamentalImpactDTO */
+        FundamentalImpactDTO: {
+            /** Id */
+            id: string;
+            /** Key Factor Id */
+            key_factor_id: string;
+            /** Company Id */
+            company_id: string;
+            /** Company Name */
+            company_name: string;
+            /** Stock Id */
+            stock_id: string | null;
+            /** Stock Code */
+            stock_code: string | null;
+            /** Stock Name */
+            stock_name: string | null;
+            /** Metric Name */
+            metric_name: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /**
          * GapExplanationDTO
@@ -3062,6 +3189,41 @@ export interface components {
             /** Review State */
             review_state: ("machine_generated" | "reviewed" | "rejected") | null;
         };
+        /** KeyFactorDTO */
+        KeyFactorDTO: {
+            /** Id */
+            id: string;
+            /** Report Claim Id */
+            report_claim_id: string | null;
+            /** Name */
+            name: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Allowed Source Types */
+            allowed_source_types: string[];
+            /** Verification Window Start */
+            verification_window_start: string | null;
+            /** Verification Window End */
+            verification_window_end: string | null;
+            /** Support Condition */
+            support_condition: string;
+            /** Refutation Condition */
+            refutation_condition: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            verification: components["schemas"]["ClaimVerificationDTO"] | null;
+        };
         /**
          * KeyFactorRowDTO
          * @description 单个命题下的「关键因素」行（含 AI / 人工角色 + 复盘链路）.
@@ -3188,6 +3350,71 @@ export interface components {
         /** LinkReviewResponse */
         LinkReviewResponse: {
             review: components["schemas"]["EvidenceReviewDTO"];
+        };
+        /** MarketExpressionResponse */
+        MarketExpressionResponse: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Claims */
+            claims: components["schemas"]["ReportClaimDTO"][];
+            /** Factors */
+            factors: components["schemas"]["KeyFactorDTO"][];
+            /** Fundamentals */
+            fundamentals: components["schemas"]["FundamentalImpactDTO"][];
+            /** Market Observations */
+            market_observations: components["schemas"]["MarketObservationDTO"][];
+            /** Fund Exposure */
+            fund_exposure: components["schemas"]["FundDisclosureExposureDTO"][];
+        };
+        /** MarketObservationDTO */
+        MarketObservationDTO: {
+            /** Id */
+            id: string;
+            /** Key Factor Id */
+            key_factor_id: string | null;
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Window Label */
+            window_label: string;
+            /** Benchmark */
+            benchmark: string;
+            /** Price Source */
+            price_source: string;
+            /** Relative Return */
+            relative_return: number | null;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
         };
         /**
          * MetricCatalogEntryDTO
@@ -3402,6 +3629,29 @@ export interface components {
             title?: string | null;
             ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
             review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
+        /** ReportClaimDTO */
+        ReportClaimDTO: {
+            /** Id */
+            id: string;
+            /** Text */
+            text: string;
+            /** Claim Kind */
+            claim_kind: string;
+            /** Asserted Period */
+            asserted_period: string | null;
+            /** Asserted By */
+            asserted_by: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /**
          * ReproductionManifestDTO
@@ -6819,6 +7069,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_market_expression_api_v1_research_cases__case_id__market_expression_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketExpressionResponse"];
                 };
             };
             /** @description Validation Error */

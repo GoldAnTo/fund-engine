@@ -71,6 +71,17 @@
 .ros-global-run__scope dt { color: var(--ros-muted, #767b76); font-size: .68rem; }
 .ros-global-run__scope dd { margin: .2rem 0 0; overflow-wrap: anywhere; font-size: .78rem; }
 .ros-global-run > footer p { max-width: 42rem; margin: 0; color: var(--ros-muted, #767b76); font-size: .74rem; line-height: 1.5; }
+.ros-market-expression > .ros-section-heading p { margin-bottom: 0; }
+.ros-expression-lane { margin: 1.4rem 0; padding: 1rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .55rem; background: var(--ros-deep, #f6f3ec); }
+.ros-expression-lane > header h3, .ros-market-chain h3, .ros-market-rail h3 { margin: .25rem 0 .8rem; font-size: 1rem; }
+.ros-expression-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.ros-expression-grid h4 { margin: 0 0 .6rem; color: var(--ros-soft, #59615d); font-size: .76rem; }
+.ros-expression-card { display: grid; gap: .42rem; margin-top: .65rem; padding: .8rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: #fffdf8; }
+.ros-expression-card > p { margin: 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.5; }
+.ros-expression-card small { color: var(--ros-muted, #767b76); font-size: .7rem; line-height: 1.4; }
+.ros-expression-status { font-size: .74rem; color: var(--ros-accent, #285b54); }
+.ros-expression-status.is-contradicted { color: #a44c3b; }
+.ros-expression-status.is-insufficient_evidence, .ros-expression-status.is-not_due { color: var(--ros-muted, #767b76); }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }
@@ -85,6 +96,7 @@
   .ros-network-note, .ros-network-lane > header, .ros-network-relation footer { align-items: flex-start; flex-direction: column; }
   .ros-global-run > header, .ros-global-run > footer { align-items: flex-start; flex-direction: column; }
   .ros-global-run__scope { grid-template-columns: 1fr; }
+  .ros-expression-grid { grid-template-columns: 1fr; }
   .ros-wiki-edge { grid-template-columns: minmax(0, 1fr) 1rem minmax(0, 1fr); }
   .ros-wiki-edge > b { grid-column: 1 / -1; }
 }

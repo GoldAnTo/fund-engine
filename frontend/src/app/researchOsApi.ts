@@ -15,6 +15,7 @@ export type RunEvent = Schemas["ResearchRunEventsItemDTO"];
 export type ActiveResearchRun = Schemas["ActiveResearchRunDTO"];
 export type Graph = Schemas["GraphResponse"];
 export type FundExposure = Schemas["FundExposureResponse"];
+export type MarketExpression = Schemas["MarketExpressionResponse"];
 export type ResearchNetwork = Schemas["ResearchNetworkResponse"];
 
 export const researchOsApi = {
@@ -25,4 +26,5 @@ export const researchOsApi = {
   network: () => request<ResearchNetwork>("/event-research/network"),
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
+  marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),
 };

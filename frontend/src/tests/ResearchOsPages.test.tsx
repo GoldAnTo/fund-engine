@@ -160,4 +160,20 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("company_disclosure")).toBeVisible();
     expect(screen.getByRole("link", { name: "查看本次运行" })).toHaveAttribute("href", "/events/event-tsm/monitor");
   });
+
+  it("keeps reviewed claims, market observations and disclosed fund holdings in separate layers", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).endsWith("/research-cases/event-tsm/market-expression")
+        ? { case_id: "event-tsm", as_of: "2026-08-09", cutoff: "2026-08-09T23:59:59Z", claims: [{ id: "claim-1", text: "订单将增长", claim_kind: "research_opinion", asserted_period: null, asserted_by: "某券商", reviewed_by: "human:researcher", review_reason: "已审核", reviewed_at: "2026-08-09T00:00:00Z", source: { source_statement_id: "statement-1", document_title: "研报", source_url: "https://example.test/report", locator: { page: 12 }, available_at: "2026-08-09T00:00:00Z", permission_status: "not_recorded" } }], factors: [{ id: "factor-1", report_claim_id: "claim-1", name: "订单转化", expected_direction: "positive", metric_name: "订单金额", allowed_source_types: ["company_disclosure"], verification_window_start: "2026-07-01", verification_window_end: "2026-10-31", support_condition: "订单增长", refutation_condition: "订单下降", next_verification_event: "财报", reviewed_by: "human:researcher", review_reason: "已审核", reviewed_at: "2026-08-09T00:00:00Z", verification: { outcome: "supported", rationale: "披露支持", reviewed_by: "human:researcher", reviewed_at: "2026-08-09T00:00:00Z", source: { source_statement_id: "statement-1", document_title: "研报", source_url: "https://example.test/report", locator: { page: 12 }, available_at: "2026-08-09T00:00:00Z", permission_status: "not_recorded" } } }], fundamentals: [{ id: "impact-1", key_factor_id: "factor-1", company_id: "company-1", company_name: "供应链公司", stock_id: "stock-1", stock_code: "688000.SH", stock_name: "供应链公司", metric_name: "订单金额", expected_direction: "positive", rationale: "已审核传导", reviewed_by: "human:researcher", review_reason: "已审核", reviewed_at: "2026-08-09T00:00:00Z", source: { source_statement_id: "statement-1", document_title: "研报", source_url: "https://example.test/report", locator: { page: 12 }, available_at: "2026-08-09T00:00:00Z", permission_status: "not_recorded" } }], market_observations: [{ id: "observation-1", key_factor_id: "factor-1", stock_id: "stock-1", stock_code: "688000.SH", stock_name: "供应链公司", event_at: "2026-08-01T09:30:00Z", available_at: "2026-08-09T00:00:00Z", window_label: "T0 至 T+5", benchmark: "中证全指", price_source: "licensed_provider", relative_return: 0.034, reviewed_by: "human:researcher", review_reason: "仅观测", reviewed_at: "2026-08-09T00:00:00Z" }], fund_exposure: [{ fund_id: "fund-1", fund_code: "000001", fund_name: "示例成长基金", disclosed_exposure: 0.056, positions: [{ stock_id: "stock-1", stock_code: "688000.SH", stock_name: "供应链公司", weight: 0.056, report_period: "2026-06-30", published_at: "2026-07-20T00:00:00Z", acquired_at: "2026-08-09T00:00:00Z", source: "licensed_provider", coverage_status: "not_recorded", freshness_status: "unknown" }] }] }
+        : { items: [], next_cursor: null, has_more: false },
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><ResearchOsRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" })).toBeVisible();
+    expect(screen.getByText("研究意见")).toBeVisible();
+    expect(screen.getByText("得到支持")).toBeVisible();
+    expect(screen.getByText("事件窗口观测")).toBeVisible();
+    expect(screen.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
+    expect(screen.getByText(/报告期 2026-06-30/)).toBeVisible();
+  });
 });
