@@ -64,6 +64,8 @@ IMMUTABLE_TABLES = frozenset(
         "mechanism_edge_versions",
         "case_mechanism_selection_versions",
         "verification_rule_versions",
+        "atomic_claim_candidates",
+        "atomic_claim_reviews",
         "source_spans",
         "research_cases",
         "theses",
@@ -330,6 +332,42 @@ class SourceStatement(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+class AtomicClaimCandidate(Base):
+    """A validated but not-yet-formal statement candidate from frozen text."""
+
+    __tablename__ = "atomic_claim_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    source_span_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=False, index=True)
+    canonical_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    assertion_actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authority_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    structured_fields: Mapped[dict] = mapped_column(JSON, nullable=False)
+    validation_result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AtomicClaimReview(Base):
+    """Append-only human decision for one atomic claim candidate."""
+
+    __tablename__ = "atomic_claim_reviews"
+    __table_args__ = (UniqueConstraint("atomic_claim_candidate_id", "idempotency_key", name="uq_atomic_claim_reviews_idempotency"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    atomic_claim_candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=False, index=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class EvidenceLink(Base):
