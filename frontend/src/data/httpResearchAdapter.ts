@@ -2834,6 +2834,7 @@ export class HttpResearchAdapter implements ResearchClient {
       event_title: input.eventTitle, company_name: input.companyName, ticker: input.ticker,
       event_at: input.eventAt, market_reaction: input.marketReaction,
       research_question: input.researchQuestion, candidate_factors: input.candidateFactors,
+      research_protocol_required: input.researchProtocolRequired ?? false,
       created_by: input.createdBy,
     });
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
@@ -2854,7 +2855,7 @@ export class HttpResearchAdapter implements ResearchClient {
       event: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string };
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
       conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
-      factors: Array<{ statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
+      factors: Array<{ thesis_id: string; statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
       evidence: unknown[];
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
@@ -2864,7 +2865,7 @@ export class HttpResearchAdapter implements ResearchClient {
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
       conclusion: { ...dto.conclusion, confidence: dto.conclusion.confidence ?? "low", citations: dto.conclusion.citations as EventWorkbench["conclusion"]["citations"] },
-      factors: dto.factors.map((factor) => ({ statement: factor.statement, description: factor.description, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, pendingProposalCount: factor.pending_proposal_count ?? 0, currentGap: factor.current_gap })),
+      factors: dto.factors.map((factor) => ({ thesisId: factor.thesis_id, statement: factor.statement, description: factor.description, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, pendingProposalCount: factor.pending_proposal_count ?? 0, currentGap: factor.current_gap })),
       evidence,
       progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },

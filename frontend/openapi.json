@@ -4000,6 +4000,219 @@
         }
       }
     },
+    "/api/v1/metric-definitions": {
+      "get": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "List Metrics",
+        "operationId": "list_metrics_api_v1_metric_definitions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MetricDefinitionDTO"
+                  },
+                  "type": "array",
+                  "title": "Response List Metrics Api V1 Metric Definitions Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Create Metric",
+        "operationId": "create_metric_api_v1_metric_definitions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetricDefinitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricDefinitionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/outcome-bindings": {
+      "post": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Create Binding",
+        "operationId": "create_binding_api_v1_theses__thesis_id__outcome_bindings_post",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeBindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeBindingDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outcome-bindings/{binding_id}/approve": {
+      "post": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Approve Binding",
+        "operationId": "approve_binding_api_v1_outcome_bindings__binding_id__approve_post",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveOutcomeBindingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeBindingDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theses/{thesis_id}/researchability": {
+      "get": {
+        "tags": [
+          "research-protocol-v1"
+        ],
+        "summary": "Researchability",
+        "operationId": "researchability_api_v1_theses__thesis_id__researchability_get",
+        "parameters": [
+          {
+            "name": "thesis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Thesis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchabilityDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/review-proposals": {
       "get": {
         "tags": [
@@ -4395,6 +4608,27 @@
           "items"
         ],
         "title": "ActivityResponse"
+      },
+      "ApproveOutcomeBindingRequest": {
+        "properties": {
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reviewer",
+          "reason"
+        ],
+        "title": "ApproveOutcomeBindingRequest"
       },
       "AssessFailureDTO": {
         "properties": {
@@ -6200,6 +6434,11 @@
             "minItems": 3,
             "title": "Candidate Factors"
           },
+          "research_protocol_required": {
+            "type": "boolean",
+            "title": "Research Protocol Required",
+            "default": false
+          },
           "created_by": {
             "type": "string",
             "minLength": 1,
@@ -7378,6 +7617,10 @@
       },
       "EventResearchFactorDTO": {
         "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
           "statement": {
             "type": "string",
             "title": "Statement"
@@ -7424,6 +7667,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "thesis_id",
           "statement",
           "position",
           "reviewed_support_count",
@@ -10747,6 +10991,160 @@
         ],
         "title": "MetricCatalogResponse"
       },
+      "MetricDefinitionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "metric_id": {
+            "type": "string",
+            "title": "Metric Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "entity_scope": {
+            "type": "string",
+            "title": "Entity Scope"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "role_eligibility": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Role Eligibility"
+          },
+          "approved_by": {
+            "type": "string",
+            "title": "Approved By"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "metric_id",
+          "version",
+          "display_name",
+          "entity_scope",
+          "unit",
+          "role_eligibility",
+          "approved_by",
+          "reason",
+          "created_at"
+        ],
+        "title": "MetricDefinitionDTO"
+      },
+      "MetricDefinitionRequest": {
+        "properties": {
+          "metric_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Metric Id"
+          },
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Display Name"
+          },
+          "canonical_definition": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Canonical Definition"
+          },
+          "entity_scope": {
+            "type": "string",
+            "enum": [
+              "company",
+              "business_line",
+              "product_line"
+            ],
+            "title": "Entity Scope"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "frequency": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Frequency"
+          },
+          "period_semantics": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Period Semantics"
+          },
+          "allowed_source_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Allowed Source Roles"
+          },
+          "role_eligibility": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "outcome",
+                "driver",
+                "mediator",
+                "context"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Role Eligibility"
+          },
+          "approved_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Approved By"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_id",
+          "display_name",
+          "canonical_definition",
+          "entity_scope",
+          "unit",
+          "frequency",
+          "period_semantics",
+          "allowed_source_roles",
+          "role_eligibility",
+          "approved_by",
+          "reason"
+        ],
+        "title": "MetricDefinitionRequest"
+      },
       "MetricPointDTO": {
         "properties": {
           "value": {
@@ -10810,6 +11208,162 @@
         ],
         "title": "MetricSeriesResponse",
         "description": "冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断)."
+      },
+      "OutcomeBindingDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "metric_definition_id": {
+            "type": "string",
+            "title": "Metric Definition Id"
+          },
+          "entity_scope": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Entity Scope"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "baseline": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Baseline"
+          },
+          "horizon_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Horizon Start"
+          },
+          "horizon_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Horizon End"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "thesis_id",
+          "metric_definition_id",
+          "entity_scope",
+          "direction",
+          "baseline",
+          "horizon_start",
+          "horizon_end",
+          "state",
+          "supersedes_id",
+          "reviewer",
+          "reason",
+          "created_at"
+        ],
+        "title": "OutcomeBindingDTO"
+      },
+      "OutcomeBindingRequest": {
+        "properties": {
+          "metric_definition_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Metric Definition Id"
+          },
+          "entity_scope": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Entity Scope"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "increase",
+              "decrease",
+              "stable",
+              "mixed"
+            ],
+            "title": "Direction"
+          },
+          "baseline": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Baseline"
+          },
+          "horizon_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Horizon Start"
+          },
+          "horizon_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Horizon End"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_definition_id",
+          "entity_scope",
+          "direction",
+          "baseline",
+          "horizon_start",
+          "horizon_end",
+          "reviewer",
+          "reason"
+        ],
+        "title": "OutcomeBindingRequest"
       },
       "OverviewResponse": {
         "properties": {
@@ -11860,6 +12414,50 @@
           "result"
         ],
         "title": "ResearchTaskDTO"
+      },
+      "ResearchabilityDTO": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_applicable",
+              "blocked",
+              "ready"
+            ],
+            "title": "Status"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "effective_binding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Binding Id"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "reason_codes",
+          "effective_binding_id",
+          "next_action"
+        ],
+        "title": "ResearchabilityDTO"
       },
       "ReviewDecisionRequest": {
         "properties": {

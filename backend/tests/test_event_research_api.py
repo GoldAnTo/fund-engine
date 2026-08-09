@@ -833,6 +833,7 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     ).json()
     assert exhausted["progress"]["verified"] == 1
     assert exhausted["factors"][0] == {
+        "thesis_id": str(thesis.id),
         "statement": first_factor,
         "description": None,
         "position": 1,
@@ -1026,6 +1027,36 @@ def test_event_workbench_factor_statistics_use_a_fixed_query_count(
     four_factor_count = workbench_select_count()
 
     assert four_factor_count == three_factor_count
+
+
+def test_event_workbench_exposes_the_thesis_id_for_each_factor_protocol(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+
+    response = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    )
+
+    assert response.status_code == 200
+    factors = response.json()["factors"]
+    assert all(uuid.UUID(factor["thesis_id"]) for factor in factors)
+    assert [factor["statement"] for factor in factors] == _confirmed_event()[
+        "candidate_factors"
+    ]
+
+
+def test_event_case_can_explicitly_require_the_research_protocol(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload["research_protocol_required"] = True
+
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 201
+    theses = list(cmd_session.scalars(
+        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
+    ))
+    assert theses and all(thesis.research_protocol_required for thesis in theses)
 
 
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:

@@ -125,6 +125,7 @@ class EventResearchService:
                 created_by=payload.created_by,
                 creator_type="human",
                 review_state="confirmed",
+                research_protocol_required=payload.research_protocol_required,
             )
         self._session.flush()
 

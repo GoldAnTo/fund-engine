@@ -33,6 +33,7 @@ export interface CreateEventResearchInput extends EventExtraction {
   sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
   sourceMetadata?: Record<string, unknown>;
   eventTitle: string;
+  researchProtocolRequired?: boolean;
   createdBy: string;
 }
 
@@ -58,6 +59,7 @@ export interface EventResearchListItem {
 }
 
 export interface EventFactor {
+  thesisId?: string;
   statement: string;
   description?: string | null;
   position: number;

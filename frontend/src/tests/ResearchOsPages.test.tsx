@@ -8,7 +8,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
-import { CaseEvidencePage } from "../features/case/CasePages";
+import { CaseEvidencePage, CaseProtocolPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 
@@ -148,6 +148,23 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByText("命题与证据").length).toBeGreaterThan(0);
     expect(screen.getByText("精确定位")).toBeVisible();
     expect(screen.getAllByRole("link", { name: "原文资料" }).some((link) => link.getAttribute("href") === "/events/event-tsm/documents")).toBe(true);
+  });
+
+  it("shows the researchability gate as an explicit Case workflow, never a hidden worker state", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).includes("/researchability")
+        ? { status: "blocked", reason_codes: ["missing_outcome_binding"], effective_binding_id: null, next_action: "确认结果指标、范围、基线和时间窗" }
+        : [],
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/protocol"]}>
+        <Routes><Route path="/events/:caseId/protocol" element={<CaseProtocolPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "研究协议与可研究性门槛" })).toBeVisible();
+    expect(screen.getByText("确认结果指标、范围、基线和时间窗")).toBeVisible();
+    expect(screen.getByRole("button", { name: "设定结果指标与验证窗口" })).toBeVisible();
   });
 
   it("opens a Case-scoped frozen source snapshot with its exact locator", async () => {

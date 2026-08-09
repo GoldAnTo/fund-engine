@@ -45,6 +45,7 @@ class CreateEventResearchRequest(V1Model):
     market_reaction: str | None = None
     research_question: str = Field(min_length=1)
     candidate_factors: list[str] = Field(min_length=3, max_length=5)
+    research_protocol_required: bool = False
     created_by: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -186,6 +187,7 @@ class EventReviewQueueResponse(V1Model):
 
 
 class EventResearchFactorDTO(V1Model):
+    thesis_id: str
     statement: str
     description: str | None = None
     position: int

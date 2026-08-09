@@ -1139,6 +1139,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/metric-definitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Metrics */
+        get: operations["list_metrics_api_v1_metric_definitions_get"];
+        put?: never;
+        /** Create Metric */
+        post: operations["create_metric_api_v1_metric_definitions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/outcome-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Binding */
+        post: operations["create_binding_api_v1_theses__thesis_id__outcome_bindings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outcome-bindings/{binding_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Binding */
+        post: operations["approve_binding_api_v1_outcome_bindings__binding_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/researchability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Researchability */
+        get: operations["researchability_api_v1_theses__thesis_id__researchability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/review-proposals": {
         parameters: {
             query?: never;
@@ -1279,6 +1348,13 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** ApproveOutcomeBindingRequest */
+        ApproveOutcomeBindingRequest: {
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * AssessFailureDTO
@@ -1955,6 +2031,11 @@ export interface components {
             research_question: string;
             /** Candidate Factors */
             candidate_factors: string[];
+            /**
+             * Research Protocol Required
+             * @default false
+             */
+            research_protocol_required: boolean;
             /** Created By */
             created_by: string;
         };
@@ -2357,6 +2438,8 @@ export interface components {
         };
         /** EventResearchFactorDTO */
         EventResearchFactorDTO: {
+            /** Thesis Id */
+            thesis_id: string;
             /** Statement */
             statement: string;
             /** Description */
@@ -3498,6 +3581,60 @@ export interface components {
             /** Entries */
             entries: components["schemas"]["MetricCatalogEntryDTO"][];
         };
+        /** MetricDefinitionDTO */
+        MetricDefinitionDTO: {
+            /** Id */
+            id: string;
+            /** Metric Id */
+            metric_id: string;
+            /** Version */
+            version: number;
+            /** Display Name */
+            display_name: string;
+            /** Entity Scope */
+            entity_scope: string;
+            /** Unit */
+            unit: string;
+            /** Role Eligibility */
+            role_eligibility: string[];
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MetricDefinitionRequest */
+        MetricDefinitionRequest: {
+            /** Metric Id */
+            metric_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Canonical Definition */
+            canonical_definition: string;
+            /**
+             * Entity Scope
+             * @enum {string}
+             */
+            entity_scope: "company" | "business_line" | "product_line";
+            /** Unit */
+            unit: string;
+            /** Frequency */
+            frequency: string;
+            /** Period Semantics */
+            period_semantics: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /** Role Eligibility */
+            role_eligibility: ("outcome" | "driver" | "mediator" | "context")[];
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+        };
         /** MetricPointDTO */
         MetricPointDTO: {
             /** Value */
@@ -3520,6 +3657,83 @@ export interface components {
             metric_name: string;
             /** Points */
             points: components["schemas"]["MetricPointDTO"][];
+        };
+        /** OutcomeBindingDTO */
+        OutcomeBindingDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Metric Definition Id */
+            metric_definition_id: string;
+            /** Entity Scope */
+            entity_scope: {
+                [key: string]: string;
+            };
+            /** Direction */
+            direction: string;
+            /** Baseline */
+            baseline: {
+                [key: string]: string;
+            };
+            /**
+             * Horizon Start
+             * Format: date
+             */
+            horizon_start: string;
+            /**
+             * Horizon End
+             * Format: date
+             */
+            horizon_end: string;
+            /** State */
+            state: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** OutcomeBindingRequest */
+        OutcomeBindingRequest: {
+            /**
+             * Metric Definition Id
+             * Format: uuid
+             */
+            metric_definition_id: string;
+            /** Entity Scope */
+            entity_scope: {
+                [key: string]: string;
+            };
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease" | "stable" | "mixed";
+            /** Baseline */
+            baseline: {
+                [key: string]: string;
+            };
+            /**
+             * Horizon Start
+             * Format: date
+             */
+            horizon_start: string;
+            /**
+             * Horizon End
+             * Format: date
+             */
+            horizon_end: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /** OverviewResponse */
         OverviewResponse: {
@@ -3901,6 +4115,20 @@ export interface components {
             result: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** ResearchabilityDTO */
+        ResearchabilityDTO: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_applicable" | "blocked" | "ready";
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Effective Binding Id */
+            effective_binding_id: string | null;
+            /** Next Action */
+            next_action: string;
         };
         /** ReviewDecisionRequest */
         ReviewDecisionRequest: {
@@ -7262,6 +7490,160 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketExpressionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_metrics_api_v1_metric_definitions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricDefinitionDTO"][];
+                };
+            };
+        };
+    };
+    create_metric_api_v1_metric_definitions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricDefinitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricDefinitionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_binding_api_v1_theses__thesis_id__outcome_bindings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutcomeBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_binding_api_v1_outcome_bindings__binding_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveOutcomeBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    researchability_api_v1_theses__thesis_id__researchability_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchabilityDTO"];
                 };
             };
             /** @description Validation Error */

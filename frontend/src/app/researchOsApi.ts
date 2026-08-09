@@ -17,6 +17,9 @@ export type Graph = Schemas["GraphResponse"];
 export type FundExposure = Schemas["FundExposureResponse"];
 export type MarketExpression = Schemas["MarketExpressionResponse"];
 export type ResearchNetwork = Schemas["ResearchNetworkResponse"];
+export type MetricDefinition = Schemas["MetricDefinitionDTO"];
+export type OutcomeBinding = Schemas["OutcomeBindingDTO"];
+export type Researchability = Schemas["ResearchabilityDTO"];
 
 export const researchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
@@ -29,4 +32,9 @@ export const researchOsApi = {
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
   marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),
+  metrics: () => request<MetricDefinition[]>("/metric-definitions"),
+  createMetric: (input: Schemas["MetricDefinitionRequest"]) => request<MetricDefinition>("/metric-definitions", { method: "POST", body: JSON.stringify(input) }),
+  createOutcomeBinding: (thesisId: string, input: Schemas["OutcomeBindingRequest"]) => request<OutcomeBinding>(`/theses/${thesisId}/outcome-bindings`, { method: "POST", body: JSON.stringify(input) }),
+  approveOutcomeBinding: (bindingId: string, input: Schemas["ApproveOutcomeBindingRequest"]) => request<OutcomeBinding>(`/outcome-bindings/${bindingId}/approve`, { method: "POST", body: JSON.stringify(input) }),
+  researchability: (thesisId: string) => request<Researchability>(`/theses/${thesisId}/researchability`),
 };

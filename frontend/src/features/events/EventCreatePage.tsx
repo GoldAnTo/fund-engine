@@ -14,6 +14,7 @@ export function EventCreatePage() {
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [draft, setDraft] = useState<EventExtraction | null>(null);
   const [factors, setFactors] = useState<string[]>(EMPTY_FACTORS);
+  const [researchProtocolRequired, setResearchProtocolRequired] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +42,7 @@ export function EventCreatePage() {
         sourceMetadata,
         eventTitle: draft.eventTitle?.trim() || rawInput.trim().slice(0, 80),
         candidateFactors: factors.map((factor) => factor.trim()).filter(Boolean),
+        researchProtocolRequired,
         createdBy: "human:researcher",
       });
       navigate(`/events/${created.caseId}`);
@@ -83,6 +85,7 @@ export function EventCreatePage() {
             <label>事件标题<input value={draft.eventTitle ?? ""} onChange={(event) => setDraft({ ...draft, eventTitle: event.target.value })} /></label>
             <label>研究问题<textarea aria-label="研究问题" value={draft.researchQuestion} onChange={(event) => setDraft({ ...draft, researchQuestion: event.target.value })} /></label>
             <div className="ros-factor-fields"><p className="ros-field-label">关键因素（至少 3 个）</p>{factors.map((factor, index) => <label key={index} className="ros-factor-input"><span>{String(index + 1).padStart(2, "0")}</span><input aria-label={`关键因素 ${index + 1}`} value={factor} onChange={(event) => updateFactor(index, event.target.value)} /></label>)}</div>
+            <label className="ros-protocol-optin"><input type="checkbox" checked={researchProtocolRequired} onChange={(event) => setResearchProtocolRequired(event.target.checked)} /><span><b>启用严格研究协议</b><small>创建后必须固定结果指标、范围、基线、时间窗、机制与反证规则，才能进入正式验证；关闭时会明确标记为既有流程。</small></span></label>
             <button className="ros-button ros-button--primary" type="button" disabled={busy || factors.filter((factor) => factor.trim()).length < 3 || !draft.researchQuestion.trim()} onClick={create}>{busy ? "正在创建…" : "创建事件 Case"} <span aria-hidden>→</span></button>
           </>}
           {error && <p className="ros-error" role="alert">{error}</p>}

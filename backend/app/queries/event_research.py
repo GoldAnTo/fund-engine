@@ -315,6 +315,14 @@ class EventResearchQueries:
                 )
             )
         counts_by_factor: dict[str, dict[str, int]] = {}
+        thesis_ids_by_statement = {
+            statement: thesis_id
+            for thesis_id, statement in self._session.execute(
+                select(Thesis.id, Thesis.statement)
+                .where(Thesis.research_case_id == case_id)
+                .where(Thesis.statement.in_([factor.statement for factor in factors]))
+            )
+        }
         if scope is not None:
             rows = self._session.execute(
                 select(
@@ -349,6 +357,7 @@ class EventResearchQueries:
             counts = counts_by_factor.get(factor.statement, {})
             result.append(
                 EventResearchFactorDTO(
+                    thesis_id=str(thesis_ids_by_statement[factor.statement]),
                     statement=factor.statement,
                     description=getattr(factor, "description", None),
                     position=factor.position,
