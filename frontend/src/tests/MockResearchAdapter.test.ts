@@ -60,6 +60,43 @@ describe("MockResearchAdapter scenarios", () => {
     expect(docs.some((d) => d.parse_quality === "ok")).toBe(true);
   });
 
+  it("keeps a newly created strict Case in intake review without creating a run", async () => {
+    const adapter = new MockResearchAdapter();
+
+    const created = await adapter.createEventResearch({
+      rawInput: "公司上调资本开支指引，盘后股价下跌。",
+      eventTitle: "资本开支指引更新",
+      companyName: "示例公司",
+      ticker: "600000.SH",
+      eventAt: "2026-08-09T00:00:00Z",
+      marketReaction: "盘后下跌",
+      summary: null,
+      researchQuestion: "资本开支上调是否解释了市场反应？",
+      candidateFactors: ["现金流", "盈利预期", "估值"],
+      confirmationRequired: true,
+      researchProtocolRequired: true,
+      createdBy: "human:researcher",
+    });
+
+    expect(created.lifecycle).toMatchObject({
+      status: "awaiting_key_review",
+      activeRunId: null,
+      currentRound: 0,
+      nextHumanAction: "核验原文资料并完成研究协议",
+    });
+
+    const workbench = await adapter.getEventWorkbench(created.caseId);
+    expect(workbench.event).toMatchObject({
+      id: created.caseId,
+      eventTitle: "资本开支指引更新",
+      ticker: "600000.SH",
+    });
+    expect(workbench.nextAction).toMatchObject({
+      kind: "review_intake",
+      label: "核验原文资料并完成研究协议",
+    });
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);

@@ -42,6 +42,19 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
   });
 
+  test("new strict Case opens its own intake workbench before any run starts", async ({ page }) => {
+    await page.goto("/events/new?client=mock");
+
+    await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
+    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
+    await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
+
+    await expect(page).toHaveURL(/\/events\/event-created-1$/);
+    await expect(page.getByRole("heading", { name: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
+    await expect(page.getByText("无后台运行")).toBeVisible();
+    await expect(page.getByRole("link", { name: "核验冻结原文" })).toHaveAttribute("href", "/events/event-created-1/documents");
+  });
+
   test("Case Wiki renders reviewed and candidate relationships as inspectable paths", async ({ page }) => {
     await page.route("**/api/v1/research-cases/event-tsm/graph?research_mode=true", async (route) => route.fulfill({ json: {
       schema_version: "graph/v1", basis: { as_of: "2026-08-08T00:00:00Z", available_at: "2026-08-08T00:00:00Z" }, page: { items: 3, next_cursor: null }, paths: [],

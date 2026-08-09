@@ -2974,9 +2974,11 @@ export class MockResearchAdapter implements ResearchClient {
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmProposalPending = true;
   private eventStates = new Map<string, {
+    event?: EventResearchListItem;
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
   }>();
+  private createdEventCount = 0;
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2989,6 +2991,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.decisions = [];
     this.eventTsmProposalPending = true;
     this.eventStates.clear();
+    this.createdEventCount = 0;
   }
 
   getDecisions() {
@@ -3755,9 +3758,37 @@ export class MockResearchAdapter implements ResearchClient {
 
   async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
     this.throwIfOffline();
+    const caseId = `event-created-${++this.createdEventCount}`;
+    const lifecycle: EventLifecycle = {
+      status: "awaiting_key_review",
+      activeRunId: null,
+      currentRound: 0,
+      summary: "资料已冻结，等待核验原文与研究协议；尚未启动后台研究",
+      currentGap: "原文资料、来源许可与研究协议尚未完成核验",
+      nextHumanAction: "核验原文资料并完成研究协议",
+    };
+    this.eventStates.set(caseId, {
+      event: {
+        id: caseId,
+        eventTitle: input.eventTitle,
+        companyName: input.companyName,
+        ticker: input.ticker,
+        eventAt: input.eventAt,
+        status: lifecycle.status,
+        statusSummary: lifecycle.summary,
+        nextHumanAction: lifecycle.nextHumanAction,
+        updatedAt: "2026-08-09T12:00:00Z",
+      },
+      lifecycle,
+      scope: {
+        version: 1,
+        factors: input.candidateFactors.map((statement) => ({ statement, description: null })),
+        unmappedEvidenceCount: 0,
+      },
+    });
     return simulateLatency({
-      caseId: "event-created", briefId: "brief-created",
-      lifecycle: { status: "researching", activeRunId: "run-created", currentRound: 1, summary: "正在建立第一轮证据检索", currentGap: null, nextHumanAction: null },
+      caseId, briefId: `brief-created-${this.createdEventCount}`,
+      lifecycle,
     });
   }
 
@@ -3785,6 +3816,7 @@ export class MockResearchAdapter implements ResearchClient {
       { id: "event-exhausted", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
       { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
       { id: "event-published", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
+      ...[...this.eventStates.values()].flatMap((state) => state.event ? [state.event] : []),
     ];
   }
 
@@ -3815,7 +3847,9 @@ export class MockResearchAdapter implements ResearchClient {
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
     const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
-      ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
+      ? lifecycle.activeRunId === null && lifecycle.nextHumanAction === "核验原文资料并完成研究协议"
+        ? { kind: "review_intake", label: lifecycle.nextHumanAction }
+        : { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
       : event.status === "draft_ready"
         ? { kind: "review_conclusion", label: "审核结论草案" }
         : event.status === "published"
@@ -3851,6 +3885,7 @@ export class MockResearchAdapter implements ResearchClient {
       unmappedEvidenceCount: 0,
     };
     this.eventStates.set(event.id, {
+      event: previous?.event,
       scope,
       lifecycle: {
         status: "continuing",
