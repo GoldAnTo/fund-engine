@@ -9682,7 +9682,9 @@ export interface operations {
                 as_of?: string | null;
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9713,7 +9715,9 @@ export interface operations {
     admitted_source_statements_api_v1_research_cases__case_id__source_statements_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9744,7 +9748,9 @@ export interface operations {
     market_instruments_api_v1_research_cases__case_id__market_instruments_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9775,7 +9781,9 @@ export interface operations {
     register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9812,7 +9820,9 @@ export interface operations {
             query?: {
                 query?: string;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9841,7 +9851,9 @@ export interface operations {
     register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
                 factor_id: string;
@@ -9877,7 +9889,9 @@ export interface operations {
     register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
                 factor_id: string;
@@ -9913,7 +9927,9 @@ export interface operations {
     register_report_claim_api_v1_research_cases__case_id__report_claims_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9948,7 +9964,9 @@ export interface operations {
     register_key_factor_api_v1_research_cases__case_id__key_factors_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9983,7 +10001,9 @@ export interface operations {
     register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
                 factor_id: string;

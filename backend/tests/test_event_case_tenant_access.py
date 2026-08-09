@@ -173,6 +173,33 @@ def test_research_runs_and_monitoring_never_cross_the_case_tenant_boundary(
     assert foreign_monitor.status_code == 404
 
 
+def test_market_expression_side_pages_cannot_bypass_case_tenant_admission(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+
+    foreign_expression = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/market-expression", headers=_auth("token-b")
+    )
+    foreign_sources = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/source-statements", headers=_auth("token-b")
+    )
+    owner_expression = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/market-expression", headers=_auth("token-a")
+    )
+
+    assert foreign_expression.status_code == 404
+    assert foreign_sources.status_code == 404
+    assert owner_expression.status_code == 200
+
+
 def test_legacy_case_requires_explicit_admin_admission_before_it_is_visible(
     cmd_client, cmd_session, monkeypatch
 ) -> None:
