@@ -266,6 +266,11 @@ class ResearchRun(Base):
     # The exact thesis set selected when this run was created.  Later scope
     # revisions must not silently expand an in-flight run back to all case theses.
     scope_thesis_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # The monitor configuration that authorized this run.  Older / one-off
+    # runs legitimately have no monitor version and remain replayable.
+    monitor_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("case_monitor_versions.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

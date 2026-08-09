@@ -1,0 +1,45 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+
+import { MockResearchAdapter } from "../data/mockResearchAdapter";
+import { resetResearchClient, setResearchClient } from "../data/researchClient";
+import { EventCreatePage } from "../features/events/EventCreatePage";
+import { EventDeskPage } from "../features/events/EventDeskPage";
+
+describe("Research OS event entry", () => {
+  beforeEach(() => setResearchClient(new MockResearchAdapter()));
+  afterEach(() => resetResearchClient());
+
+  it("puts the next human action ahead of automatic event work", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "事件研究" })).toBeVisible();
+    expect(await screen.findByText("待你处理")).toBeVisible();
+    expect(screen.getByRole("link", { name: /Alphabet 财报超预期后股价下跌/ })).toBeVisible();
+  });
+
+  it("keeps the research question and three factors editable before a Case is created", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes><Route path="/events/new" element={<EventCreatePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      screen.getByLabelText("事件原始输入"),
+      "Alphabet 公布财报后上调资本开支指引，盘后股价下跌。",
+    );
+    await user.click(screen.getByRole("button", { name: "识别事件与研究问题" }));
+
+    expect(await screen.findByLabelText("研究问题")).toBeVisible();
+    expect(screen.getAllByLabelText(/关键因素/)).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "创建事件 Case" })).toBeEnabled();
+  });
+});

@@ -17,12 +17,14 @@ from app.errors import ValidationFailedError
 from app.models.ledger import EvidenceLink, ResearchCase, Thesis
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
+from app.models.research_monitor import CaseMonitorVersion
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
     lock_event_research_lifecycle,
@@ -45,10 +47,25 @@ class AutoResearchService:
         auto_execute: bool = False,
         commit: bool = True,
         thesis_ids: list[uuid.UUID] | None = None,
+        monitor_version_id: uuid.UUID | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
             raise ValueError(f"research case {case_id} not found")
+        monitor = None
+        if monitor_version_id is not None:
+            monitor = self.session.get(CaseMonitorVersion, monitor_version_id)
+            if monitor is None or monitor.research_case_id != case_id:
+                raise ValueError("case monitor version not found")
+        elif thesis_ids is None:
+            monitor = self.session.scalar(
+                select(CaseMonitorVersion)
+                .where(CaseMonitorVersion.research_case_id == case_id)
+                .order_by(CaseMonitorVersion.version.desc())
+                .limit(1)
+            )
+        if monitor is not None and thesis_ids is None:
+            thesis_ids = [uuid.UUID(value) for value in monitor.factor_ids]
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
@@ -58,6 +75,20 @@ class AutoResearchService:
             max_rounds=max(1, min(max_rounds, 3)),
             budget=max(1, budget),
             scope_thesis_ids=[str(thesis.id) for thesis in theses],
+            monitor_version_id=monitor.id if monitor is not None else None,
+        )
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="scope",
+            status="completed",
+            message="已冻结本次运行范围",
+            payload_json={
+                "trigger": "manual",
+                "monitor_version_id": str(monitor.id) if monitor is not None else None,
+                "factor_ids": [str(thesis.id) for thesis in theses],
+                "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
+                "budget": run.budget,
+            },
         )
         for thesis in theses:
             for task_type, label in (
@@ -89,6 +120,13 @@ class AutoResearchService:
 
     def execute(self, run):
         self.repo.update_run(run, status="running", stage="extract")
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="retrieve",
+            status="started",
+            message="研究工作器已开始执行",
+            payload_json={"round": run.round + 1, "budget": run.budget},
+        )
         self.session.commit()
         used = run.budget_used or 0
         previous = self._run_evidence_count(run)
@@ -223,6 +261,17 @@ class AutoResearchService:
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)
         self.refresh_event_lifecycle(run)
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="complete" if run.status != "failed" else "failed",
+            status="completed" if run.status != "failed" else "failed",
+            message="运行已结束，等待后续人工动作" if run.status != "failed" else "运行失败，需检查失败项",
+            payload_json={
+                "status": run.status,
+                "stop_reason": run.stop_reason,
+                "budget_used": run.budget_used,
+            },
+        )
         self.session.flush()
 
     def refresh_event_lifecycle(self, run) -> None:

@@ -99,6 +99,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/conclusion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Conclusion
+         * @description 读取「结论与关键因素」页面的完整读模型.
+         *
+         *     与 dossier / overview 共享同一个 HistoricalBasis：cutoff 为空时按当前时间。
+         */
+        get: operations["conclusion_api_v1_research_cases__case_id__conclusion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/compare": {
         parameters: {
             query?: never;
@@ -513,9 +535,10 @@ export interface paths {
          * Propose Evidence
          * @description Run the propose step for one thesis.
          *
-         *     Recall is cutoff-safe (only statements visible before this run started),
-         *     and every proposed link enters the review queue as machine_generated —
-         *     nothing is auto-confirmed.
+         *     Recall is cutoff-safe (only statements visible before this run started).
+         *     Every proposed link enters the review queue as a ``Proposal(kind=evidence_link)``
+         *     — nothing is auto-confirmed; a human decision publishes the formal link.
+         *     The work runs inside a Job row so progress / cancellation are observable.
          */
         post: operations["propose_evidence_api_v1_theses__thesis_id__propose_post"];
         delete?: never;
@@ -701,6 +724,384 @@ export interface paths {
         patch: operations["update_theme_tags_api_v1_research_cases__case_id__theme_tags_patch"];
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job */
+        get: operations["get_job_api_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job Events */
+        get: operations["get_job_events_api_v1_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Job */
+        post: operations["cancel_job_api_v1_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/retries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Job */
+        post: operations["retry_job_api_v1_jobs__job_id__retries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Activity */
+        get: operations["get_activity_api_v1_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evidence-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence Changes */
+        get: operations["get_evidence_changes_api_v1_evidence_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tasks */
+        get: operations["get_tasks_api_v1_tasks_get"];
+        put?: never;
+        /** Create Task */
+        post: operations["create_task_api_v1_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Task */
+        patch: operations["update_task_api_v1_tasks__task_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_api_v1_research_cases__case_id__runs_get"];
+        put?: never;
+        /** Start Run */
+        post: operations["start_run_api_v1_research_cases__case_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Run */
+        post: operations["cancel_run_api_v1_research_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run Events */
+        get: operations["get_run_events_api_v1_research_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_api_v1_research_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Event Research */
+        get: operations["list_event_research_api_v1_event_research_get"];
+        put?: never;
+        /** Create Event Research */
+        post: operations["create_event_research_api_v1_event_research_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/extract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Extract Event */
+        post: operations["extract_event_api_v1_event_research_extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Event Research Scope */
+        put: operations["update_event_research_scope_api_v1_event_research__case_id__scope_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workbench": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Research Workbench */
+        get: operations["event_research_workbench_api_v1_event_research__case_id__workbench_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/review-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Review Queue */
+        get: operations["event_review_queue_api_v1_event_research__case_id__review_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/conclusion/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Event Conclusion */
+        post: operations["publish_event_conclusion_api_v1_event_research__case_id__conclusion_publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Monitor */
+        get: operations["get_monitor_api_v1_research_cases__case_id__monitor_get"];
+        /** Save Monitor */
+        put: operations["save_monitor_api_v1_research_cases__case_id__monitor_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review-proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Proposals */
+        get: operations["list_proposals_api_v1_review_proposals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review-proposals/{proposal_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Proposal */
+        post: operations["claim_proposal_api_v1_review_proposals__proposal_id__claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review-proposals/{proposal_id}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Proposal */
+        post: operations["decide_proposal_api_v1_review_proposals__proposal_id__decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -722,6 +1123,43 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActivityItemDTO */
+        ActivityItemDTO: {
+            /** Event Id */
+            event_id: string;
+            /** Type */
+            type: string;
+            /** Aggregate Type */
+            aggregate_type: string;
+            /** Aggregate Id */
+            aggregate_id: string;
+            /** Ref Type */
+            ref_type?: string | null;
+            /** Ref Id */
+            ref_id?: string | null;
+            /** Origin */
+            origin: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Actor */
+            actor?: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** ActivityResponse */
+        ActivityResponse: {
+            /** Items */
+            items: components["schemas"]["ActivityItemDTO"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+        };
         /**
          * AssessFailureDTO
          * @description Latest failed assess attempt for the focus thesis.
@@ -756,7 +1194,7 @@ export interface components {
             gaps: string[];
             /** Provisional */
             provisional: boolean;
-            review: components["schemas"]["ReviewDecisionDTO"] | null;
+            review: components["schemas"]["app__schemas__v1__cases__ReviewDecisionDTO"] | null;
         };
         /** AssessmentReviewRequest */
         AssessmentReviewRequest: {
@@ -808,6 +1246,33 @@ export interface components {
             provisional: boolean;
             /** Assessed At */
             assessed_at?: string | null;
+        };
+        /** CancelRunResponse */
+        CancelRunResponse: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Round */
+            round: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Budget */
+            budget: number;
+            /** Budget Used */
+            budget_used: number;
+            /** Stop Reason */
+            stop_reason: string | null;
+            /** Scope Thesis Ids */
+            scope_thesis_ids: string[];
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+            /** Next Action */
+            next_action: string;
         };
         /**
          * CaseCompareResponse
@@ -864,6 +1329,41 @@ export interface components {
             /** Items */
             items: components["schemas"]["CaseSummaryDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** CaseMonitorDTO */
+        CaseMonitorDTO: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: number;
+            /** Status */
+            status: string;
+            /** Frequency */
+            frequency: string;
+            /** Factor Ids */
+            factor_ids: string[];
+            /** Allowed Source Types */
+            allowed_source_types: ("licensed_provider" | "company_disclosure" | "uploaded_file" | "pasted_snapshot")[];
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Budget */
+            budget: number;
+            /** Changed By */
+            changed_by: string;
+            /** Change Reason */
+            change_reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** CaseMonitorDetailResponse */
+        CaseMonitorDetailResponse: {
+            monitor: components["schemas"]["CaseMonitorDTO"] | null;
+            latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
+            /** Confirmed Factors */
+            confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };
         /**
          * CaseSnapshotDTO
@@ -935,14 +1435,16 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /** CausalStepDTO */
-        CausalStepDTO: {
-            /** Id */
-            id: string;
-            /** Sequence */
-            sequence: number;
-            /** Description */
-            description: string;
+        /** ClaimResponse */
+        ClaimResponse: {
+            /** Proposal Id */
+            proposal_id: string;
+            /** Assignee */
+            assignee: string;
+            /** Claimed At */
+            claimed_at: string;
+            /** Lease Expires At */
+            lease_expires_at?: string | null;
         };
         /** CompanyDTO */
         CompanyDTO: {
@@ -1045,6 +1547,44 @@ export interface components {
             /** Review State */
             review_state: string;
         };
+        /**
+         * ComparisonCellDTO
+         * @description 竞争性因素比较表的单个单元格.
+         */
+        ComparisonCellDTO: {
+            /** Factor Id */
+            factor_id: string;
+            /** Factor Label */
+            factor_label: string;
+            /** Column Id */
+            column_id: string;
+            /** Column Label */
+            column_label: string;
+            /** Text */
+            text: string;
+        };
+        /**
+         * ComparisonRowDTO
+         * @description 竞争性因素比较表中按因素聚合的行.
+         */
+        ComparisonRowDTO: {
+            /** Factor Id */
+            factor_id: string;
+            /** Factor Label */
+            factor_label: string;
+            /** Cells */
+            cells: components["schemas"]["ComparisonCellDTO"][];
+        };
+        /**
+         * ComparisonTableDTO
+         * @description 竞争性因素比较表（含表头 + 行）.
+         */
+        ComparisonTableDTO: {
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows: components["schemas"]["ComparisonRowDTO"][];
+        };
         /** CompositionPositionDTO */
         CompositionPositionDTO: {
             /** Stock Id */
@@ -1063,6 +1603,88 @@ export interface components {
             pb: number | null;
             /** Theme Hits */
             theme_hits: components["schemas"]["ThemeHitDTO"][];
+        };
+        /**
+         * ConclusionHeaderDTO
+         * @description 顶部「结论与关键因素」摘要 + 元信息.
+         */
+        ConclusionHeaderDTO: {
+            /** Research Case Id */
+            research_case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Industry Topic */
+            industry_topic: string;
+            /** Evidence Cutoff */
+            evidence_cutoff: string;
+            /** Conclusion Text */
+            conclusion_text: string;
+            /** Conclusion Status */
+            conclusion_status: ("supported" | "contradicted" | "insufficient_evidence") | null;
+            /** Rationale */
+            rationale: string;
+            /** Review State */
+            review_state: string;
+            /** Reviewer */
+            reviewer: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Snapshot Id */
+            snapshot_id: string | null;
+            /** Ai Provisional */
+            ai_provisional: boolean;
+        };
+        /**
+         * ConclusionResponse
+         * @description 「结论与关键因素」页面完整响应.
+         */
+        ConclusionResponse: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            basis: components["schemas"]["HistoricalBasisDTO"];
+            header: components["schemas"]["ConclusionHeaderDTO"];
+            /** Key Factors */
+            key_factors: components["schemas"]["KeyFactorRowDTO"][];
+            comparison: components["schemas"]["ComparisonTableDTO"];
+            /** Source Groups */
+            source_groups: components["schemas"]["SourceGroupDTO"][];
+            reproduction_manifest: components["schemas"]["ReproductionManifestDTO"];
+            /** Causal Path */
+            causal_path: components["schemas"]["app__schemas__v1__conclusion__CausalStepDTO"][];
+            gap_explanation: components["schemas"]["GapExplanationDTO"];
+        };
+        /** ConfirmedFactorOptionDTO */
+        ConfirmedFactorOptionDTO: {
+            /** Id */
+            id: string;
+            /** Statement */
+            statement: string;
+        };
+        /** CounterResearchTaskDTO */
+        CounterResearchTaskDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Thesis Statement */
+            thesis_statement: string;
+            /** Assessment Id */
+            assessment_id?: string | null;
+            /** Objective */
+            objective: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "待发起" | "已有反方证据" | "已形成反方";
+            /** Contradicts Count */
+            contradicts_count: number;
+            /** Next Action */
+            next_action: string;
         };
         /**
          * CreateCaseRequest
@@ -1132,6 +1754,37 @@ export interface components {
             name: string;
             /** Type */
             type: string;
+        };
+        /** CreateEventResearchRequest */
+        CreateEventResearchRequest: {
+            /** Raw Input */
+            raw_input: string;
+            /** Source Url */
+            source_url?: string | null;
+            /** Event Title */
+            event_title: string;
+            /** Company Name */
+            company_name?: string | null;
+            /** Ticker */
+            ticker?: string | null;
+            /** Event At */
+            event_at?: string | null;
+            /** Market Reaction */
+            market_reaction?: string | null;
+            /** Research Question */
+            research_question: string;
+            /** Candidate Factors */
+            candidate_factors: string[];
+            /** Created By */
+            created_by: string;
+        };
+        /** CreateEventResearchResponse */
+        CreateEventResearchResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Brief Id */
+            brief_id: string;
+            lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
         };
         /** CreateFundRequest */
         CreateFundRequest: {
@@ -1418,25 +2071,24 @@ export interface components {
         };
         /** DossierChangeDTO */
         DossierChangeDTO: {
+            /** Id */
             id: string;
+            /** Event Type */
             event_type: string;
+            /** Aggregate Type */
             aggregate_type: string;
+            /** Summary */
             summary: string;
+            /** Source */
             source?: string | null;
+            /** Actor */
             actor?: string | null;
+            /** Occurred At */
             occurred_at: string;
-            payload: { [key: string]: unknown };
-        };
-        /** CounterResearchTaskDTO */
-        CounterResearchTaskDTO: {
-            id: string;
-            thesis_id: string;
-            thesis_statement: string;
-            assessment_id?: string | null;
-            objective: string;
-            status: "待发起" | "已有反方证据" | "已形成反方";
-            contradicts_count: number;
-            next_action: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
         };
         /** DossierResponse */
         DossierResponse: {
@@ -1456,7 +2108,7 @@ export interface components {
             judgement_card?: components["schemas"]["ThesisJudgementCardDTO"] | null;
             assess_failure?: components["schemas"]["AssessFailureDTO"] | null;
             /** Causal Chain */
-            causal_chain: components["schemas"]["CausalStepDTO"][];
+            causal_chain: components["schemas"]["app__schemas__v1__cases__CausalStepDTO"][];
             /** Evidence */
             evidence: {
                 [key: string]: components["schemas"]["EvidenceRecordDTO"][];
@@ -1465,8 +2117,248 @@ export interface components {
             competitive_explanations: string[];
             /** Gaps */
             gaps: string[];
+            /**
+             * Changes
+             * @default []
+             */
             changes: components["schemas"]["DossierChangeDTO"][];
-            counter_research?: components["schemas"]["CounterResearchTaskDTO"][];
+            /**
+             * Counter Research
+             * @default []
+             */
+            counter_research: components["schemas"]["CounterResearchTaskDTO"][];
+        };
+        /** EventConclusionDraftDTO */
+        EventConclusionDraftDTO: {
+            /** State */
+            state: string;
+            /** Text */
+            text: string;
+            /** Confidence */
+            confidence: string;
+            /** Citations */
+            citations: components["schemas"]["EventKeyEvidenceDTO"][];
+        };
+        /** EventKeyEvidenceDTO */
+        EventKeyEvidenceDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Factor Statement */
+            factor_statement: string;
+            /** Role */
+            role: string;
+            /** Review State */
+            review_state: string;
+            /** Source Title */
+            source_title: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Excerpt */
+            excerpt: string;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+        };
+        /** EventNextActionDTO */
+        EventNextActionDTO: {
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Count */
+            count?: number | null;
+        };
+        /** EventResearchFactorDTO */
+        EventResearchFactorDTO: {
+            /** Statement */
+            statement: string;
+            /** Description */
+            description?: string | null;
+            /** Position */
+            position: number;
+            /** Reviewed Support Count */
+            reviewed_support_count: number;
+            /** Reviewed Contradiction Count */
+            reviewed_contradiction_count: number;
+            /** Pending Proposal Count */
+            pending_proposal_count: number;
+            /** Current Gap */
+            current_gap: string | null;
+        };
+        /** EventResearchLifecycleDTO */
+        EventResearchLifecycleDTO: {
+            /** Status */
+            status: string;
+            /** Active Run Id */
+            active_run_id: string | null;
+            /** Current Round */
+            current_round: number;
+            /** Status Summary */
+            status_summary: string;
+            /** Current Gap */
+            current_gap: string | null;
+            /** Next Human Action */
+            next_human_action: string | null;
+        };
+        /** EventResearchListItemDTO */
+        EventResearchListItemDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Event Title */
+            event_title: string;
+            /** Company Name */
+            company_name: string | null;
+            /** Ticker */
+            ticker: string | null;
+            /** Event At */
+            event_at: string | null;
+            /** Lifecycle Status */
+            lifecycle_status: string;
+            /** Status Summary */
+            status_summary: string;
+            /** Next Human Action */
+            next_human_action: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** EventResearchListResponse */
+        EventResearchListResponse: {
+            /** Items */
+            items: components["schemas"]["EventResearchListItemDTO"][];
+        };
+        /** EventResearchScopeDTO */
+        EventResearchScopeDTO: {
+            /** Version */
+            version: number;
+            /** Factors */
+            factors: components["schemas"]["EventResearchScopeFactorDTO"][];
+            /** Unmapped Evidence Count */
+            unmapped_evidence_count: number;
+        };
+        /** EventResearchScopeFactorDTO */
+        EventResearchScopeFactorDTO: {
+            /** Statement */
+            statement: string;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * EventReviewQueueItemDTO
+         * @description A pending event-evidence proposal, including source admission context.
+         */
+        EventReviewQueueItemDTO: {
+            /** Proposal Id */
+            proposal_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Proposed At
+             * Format: date-time
+             */
+            proposed_at: string;
+            /** Link Id */
+            link_id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
+            /** Case Id */
+            case_id: string;
+            /** Thesis Statement */
+            thesis_statement: string | null;
+            /** Ai Role */
+            ai_role: string;
+            /** Ai Reason */
+            ai_reason: string;
+            /** Ai Scope */
+            ai_scope: {
+                [key: string]: unknown;
+            };
+            /** Statement Id */
+            statement_id: string | null;
+            /** Statement Text */
+            statement_text: string | null;
+            /** Statement Kind */
+            statement_kind: string | null;
+            /** Span Id */
+            span_id: string | null;
+            /** Verbatim Text */
+            verbatim_text: string | null;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Document Version Id */
+            document_version_id: string | null;
+            /** Document Source Url */
+            document_source_url: string | null;
+            /** Document Published At */
+            document_published_at: string | null;
+            /** Available At */
+            available_at: string | null;
+            /** Source Title */
+            source_title: string | null;
+            source_status: components["schemas"]["SourceStatus"];
+            /** Source Status Reason */
+            source_status_reason: string;
+            /** Can Accept */
+            can_accept: boolean;
+            /** Proposal Reason */
+            proposal_reason: string;
+            /** Position */
+            position: number | null;
+        };
+        /** EventReviewQueueResponse */
+        EventReviewQueueResponse: {
+            /** Items */
+            items: components["schemas"]["EventReviewQueueItemDTO"][];
+            summary: components["schemas"]["EventReviewQueueSummaryDTO"];
+        };
+        /** EventReviewQueueSummaryDTO */
+        EventReviewQueueSummaryDTO: {
+            /** Total */
+            total: number;
+            /** Reviewed */
+            reviewed: number;
+            /** Pending */
+            pending: number;
+            /** Invalid Source */
+            invalid_source: number;
+            /** Current Round */
+            current_round: number;
+            /** Next Action */
+            next_action: string | null;
+        };
+        /** EventWorkbenchDTO */
+        EventWorkbenchDTO: {
+            event: components["schemas"]["EventResearchListItemDTO"];
+            lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
+            conclusion: components["schemas"]["EventConclusionDraftDTO"];
+            /** Factors */
+            factors: components["schemas"]["EventResearchFactorDTO"][];
+            /** Evidence */
+            evidence: components["schemas"]["EventKeyEvidenceDTO"][];
+            progress: components["schemas"]["EventWorkbenchProgressDTO"];
+            scope: components["schemas"]["EventResearchScopeDTO"];
+            next_action: components["schemas"]["EventNextActionDTO"];
+        };
+        /** EventWorkbenchProgressDTO */
+        EventWorkbenchProgressDTO: {
+            /** Verified */
+            verified: number;
+            /** Pending */
+            pending: number;
+            /** Invalid Source */
+            invalid_source: number;
+            /** Current Gap */
+            current_gap: string | null;
         };
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
@@ -1541,6 +2433,37 @@ export interface components {
             pe_ttm: number | null;
             /** Pb */
             pb: number | null;
+        };
+        /** ExtractEventResearchRequest */
+        ExtractEventResearchRequest: {
+            /** Raw Input */
+            raw_input: string;
+            /** Source Url */
+            source_url?: string | null;
+        };
+        /** ExtractEventResearchResponse */
+        ExtractEventResearchResponse: {
+            /** Event Title */
+            event_title: string | null;
+            /** Company Name */
+            company_name: string | null;
+            /** Ticker */
+            ticker: string | null;
+            /** Event At */
+            event_at: string | null;
+            /** Market Reaction */
+            market_reaction: string | null;
+            /** Summary */
+            summary: string | null;
+            /** Research Question */
+            research_question: string;
+            /** Candidate Factors */
+            candidate_factors: string[];
+            /**
+             * Confirmation Required
+             * @default true
+             */
+            confirmation_required: boolean;
         };
         /**
          * ExtractResponse
@@ -1676,6 +2599,28 @@ export interface components {
             acquired_at?: string | null;
             /** Source */
             source: string;
+        };
+        /**
+         * GapExplanationDTO
+         * @description 「所选因素解释」右栏的因子机制说明.
+         */
+        GapExplanationDTO: {
+            /** Factor Id */
+            factor_id: string;
+            /** Factor Label */
+            factor_label: string;
+            /** Why */
+            why: string;
+            /** Applicable Scope */
+            applicable_scope: string;
+            /** Category */
+            category: string;
+            /** Data Pattern */
+            data_pattern: string;
+            /** Category Alt */
+            category_alt: string;
+            /** Rationale */
+            rationale: string;
         };
         /** GraphEdgeDTO */
         GraphEdgeDTO: {
@@ -1903,6 +2848,66 @@ export interface components {
             /** Case Id */
             case_id: string | null;
         };
+        /** JobDTO */
+        JobDTO: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Progress */
+            progress: number;
+            /** Attempt */
+            attempt: number;
+            /** Step */
+            step?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Target Type */
+            target_type?: string | null;
+            /** Target Id */
+            target_id?: string | null;
+            /** Research Case Id */
+            research_case_id?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+        };
+        /** JobEventDTO */
+        JobEventDTO: {
+            /** Seq */
+            seq: number;
+            /** Status */
+            status?: string | null;
+            /** Step */
+            step?: string | null;
+            /** Progress */
+            progress?: number | null;
+            /** Message */
+            message?: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** JobEventsResponse */
+        JobEventsResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Events */
+            events: components["schemas"]["JobEventDTO"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+        };
         /**
          * JudgmentLatencyDTO
          * @description 判断时滞 (days): evidence -> AI judgment, and AI judgment -> human review.
@@ -1934,6 +2939,42 @@ export interface components {
             source_label: string;
             /** Review State */
             review_state: ("machine_generated" | "reviewed" | "rejected") | null;
+        };
+        /**
+         * KeyFactorRowDTO
+         * @description 单个命题下的「关键因素」行（含 AI / 人工角色 + 复盘链路）.
+         */
+        KeyFactorRowDTO: {
+            /** Factor Id */
+            factor_id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Thesis Title */
+            thesis_title: string;
+            /** Thesis Statement */
+            thesis_statement: string;
+            /** Status Label */
+            status_label: string;
+            /** Role Label */
+            role_label: string;
+            /** Factor Label */
+            factor_label: string;
+            /** Time Order */
+            time_order: string;
+            /** Mechanism */
+            mechanism: string;
+            /** Direct Evidence */
+            direct_evidence: string;
+            /** Alternatives */
+            alternatives: string;
+            /** Difference Explanation */
+            difference_explanation: string;
+            /** Scope Warning */
+            scope_warning: string | null;
+            /** Falsifier */
+            falsifier: string;
+            /** Impact Object */
+            impact_object: string;
         };
         /**
          * KnowledgeItemDTO
@@ -1986,6 +3027,20 @@ export interface components {
             case_id: string | null;
             /** Items */
             items: components["schemas"]["KnowledgeItemDTO"][];
+        };
+        /** LatestResearchRunDTO */
+        LatestResearchRunDTO: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * LinkReviewRequest
@@ -2106,19 +3161,32 @@ export interface components {
             /** Major Gaps */
             major_gaps: number;
         };
+        /** PendingProposalDTO */
+        PendingProposalDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
+            /** Task Id */
+            task_id: string | null;
+            /** Status */
+            status: string;
+        };
         /**
          * ProposeResponse
          * @description Result of running evidence proposal for one thesis.
          *
-         *     Every proposed link lands in the review queue as
-         *     ``machine_generated``; nothing is auto-confirmed.  ``mode`` is
-         *     ``mock`` without an LLM key (non-production only).
+         *     Every proposed link lands as a ``Proposal(kind=evidence_link)`` in the
+         *     review queue; nothing is auto-confirmed.  ``job_id`` lets the client track
+         *     progress / cancellation.  ``mode`` is ``mock`` without an LLM key.
          */
         ProposeResponse: {
             /** Thesis Id */
             thesis_id: string;
             /** Mode */
             mode: string;
+            /** Job Id */
+            job_id: string;
             /** Link Count */
             link_count: number;
             /** Links */
@@ -2126,11 +3194,11 @@ export interface components {
         };
         /**
          * ProposedLinkDTO
-         * @description One evidence link proposed by the proposer (pending review).
+         * @description One evidence_link Proposal created by the proposer (pending review).
          */
         ProposedLinkDTO: {
-            /** Link Id */
-            link_id: string;
+            /** Proposal Id */
+            proposal_id: string;
             /** Source Statement Id */
             source_statement_id: string;
             /** Role */
@@ -2178,6 +3246,20 @@ export interface components {
             /** Runs */
             runs: components["schemas"]["ProviderRunDTO"][];
         };
+        /** PublishEventConclusionRequest */
+        PublishEventConclusionRequest: {
+            /** Text */
+            text: string;
+            /** Reviewer */
+            reviewer: string;
+        };
+        /** PublishEventConclusionResponse */
+        PublishEventConclusionResponse: {
+            /** Conclusion Id */
+            conclusion_id: string;
+            /** State */
+            state: string;
+        };
         /** RelatedThesisDTO */
         RelatedThesisDTO: {
             /**
@@ -2198,6 +3280,32 @@ export interface components {
             title?: string | null;
             ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
             review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
+        /**
+         * ReproductionManifestDTO
+         * @description 「解释与重现」右栏的全部内容.
+         */
+        ReproductionManifestDTO: {
+            /** Current Selection Label */
+            current_selection_label: string;
+            /** Current Selection State */
+            current_selection_state: string;
+            /** Formal Judgment */
+            formal_judgment: string;
+            /** Research Snapshot */
+            research_snapshot: string;
+            /** Document Version */
+            document_version: string;
+            /** Publisher Record */
+            publisher_record: string;
+            /** Available At */
+            available_at: string;
+            /** Reproducer */
+            reproducer: string;
+            /** Factor Compare Version */
+            factor_compare_version: string;
+            /** Recheck Manifest */
+            recheck_manifest: string;
         };
         /** RerunAssessmentDTO */
         RerunAssessmentDTO: {
@@ -2245,21 +3353,138 @@ export interface components {
             agreement: components["schemas"]["HumanAiAgreementDTO"];
             latency: components["schemas"]["JudgmentLatencyDTO"];
         };
-        /** ReviewDecisionDTO */
-        ReviewDecisionDTO: {
+        /** ResearchRunEventsItemDTO */
+        ResearchRunEventsItemDTO: {
+            /** Seq */
+            seq: number;
+            /** Status */
+            status?: string | null;
+            /** Stage */
+            stage?: string | null;
+            /** Round */
+            round?: number | null;
+            /** Stop Reason */
+            stop_reason?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string;
+        };
+        /** ResearchRunEventsResponse */
+        ResearchRunEventsResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Items */
+            items: components["schemas"]["ResearchRunEventsItemDTO"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+        };
+        /** ResearchRunResponse */
+        ResearchRunResponse: {
+            /** Id */
+            id: string;
+            /** Case Id */
+            case_id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Round */
+            round: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Budget */
+            budget: number;
+            /** Budget Used */
+            budget_used: number;
+            /** Stop Reason */
+            stop_reason: string | null;
+            /** Scope Thesis Ids */
+            scope_thesis_ids: string[];
+            /** Progress */
+            progress: {
+                [key: string]: number;
+            };
+            /** Evidence */
+            evidence: {
+                [key: string]: number;
+            };
+            /** By Thesis */
+            by_thesis: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Gaps */
+            gaps: string[];
+            /** Gap Tasks */
+            gap_tasks: components["schemas"]["ResearchTaskDTO"][];
+            /** Failed Tasks */
+            failed_tasks: components["schemas"]["ResearchTaskDTO"][];
+            /** Assessments */
+            assessments: ({
+                [key: string]: unknown;
+            } | null)[];
+            /** Pending Proposals */
+            pending_proposals: components["schemas"]["PendingProposalDTO"][];
+            /** Review Tasks */
+            review_tasks: components["schemas"]["ReviewTaskDTO"][];
+            /** Next Action */
+            next_action: string;
+            /** Tasks */
+            tasks: components["schemas"]["ResearchTaskDTO"][];
+        };
+        /** ResearchTaskDTO */
+        ResearchTaskDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Round */
+            round: number;
+            /** Task Type */
+            task_type: string;
+            /** Query */
+            query: string;
+            /** Evidence Count */
+            evidence_count: number;
+            /** Gap Reason */
+            gap_reason: string | null;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ReviewDecisionRequest */
+        ReviewDecisionRequest: {
             /**
              * Outcome
              * @enum {string}
              */
             outcome: "confirmed" | "modified" | "rejected";
-            /** Conclusion */
-            conclusion: string | null;
             /** Reason */
             reason: string;
-            /** Reviewer */
-            reviewer: string;
-            /** Reviewed At */
-            reviewed_at: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Reviewer Id */
+            reviewer_id: string;
+            /** Replacement Payload */
+            replacement_payload?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ReviewQueueItemDTO
@@ -2305,10 +3530,18 @@ export interface components {
             /** Available At */
             available_at: string;
         };
-        /** ReviewQueueResponse */
-        ReviewQueueResponse: {
-            /** Items */
-            items: components["schemas"]["ReviewQueueItemDTO"][];
+        /** ReviewTaskDTO */
+        ReviewTaskDTO: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+            /** Task Type */
+            task_type: string;
+            /** Ref Type */
+            ref_type: string | null;
+            /** Ref Id */
+            ref_id: string | null;
         };
         /**
          * ReviewThroughputDTO
@@ -2344,6 +3577,45 @@ export interface components {
             reviewer?: string | null;
             /** Reviewed At */
             reviewed_at?: string | null;
+        };
+        /** RunListResponse */
+        RunListResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["RunSummaryDTO"][];
+        };
+        /** RunSummaryDTO */
+        RunSummaryDTO: {
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Round */
+            round: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Budget */
+            budget: number;
+            /** Budget Used */
+            budget_used: number;
+            /** Stop Reason */
+            stop_reason: string | null;
+            /** Scope Thesis Ids */
+            scope_thesis_ids: string[];
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+            /** Next Action */
+            next_action: string;
         };
         /** SearchGroupDTO */
         SearchGroupDTO: {
@@ -2387,6 +3659,37 @@ export interface components {
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
         };
+        /**
+         * SourceCitationDTO
+         * @description 「支持、反驳与缺口」下的一条支持/反驳引用.
+         */
+        SourceCitationDTO: {
+            /** Label */
+            label: string;
+            /**
+             * Relation
+             * @enum {string}
+             */
+            relation: "supports" | "contradicts" | "contextualizes";
+            /** Document Title */
+            document_title: string;
+            /** Publisher */
+            publisher: string | null;
+            /** Citation */
+            citation: string;
+            /** Locator */
+            locator: string;
+        };
+        /**
+         * SourceGroupDTO
+         * @description 「支持、反驳与缺口」分组.
+         */
+        SourceGroupDTO: {
+            /** Section Label */
+            section_label: string;
+            /** Relations */
+            relations: components["schemas"]["SourceCitationDTO"][];
+        };
         /** SourceSpanDTO */
         SourceSpanDTO: {
             /** Id */
@@ -2403,6 +3706,36 @@ export interface components {
             citations: {
                 [key: string]: unknown;
             }[];
+            /** Locator V1 */
+            locator_v1?: {
+                [key: string]: unknown;
+            } | null;
+            /** Text Sha256 */
+            text_sha256?: string | null;
+        };
+        /**
+         * SourceStatus
+         * @description The admissibility of a source link for event evidence.
+         * @enum {string}
+         */
+        SourceStatus: "accessible" | "pasted_unverified" | "invalid";
+        /** StartResearchRunRequest */
+        StartResearchRunRequest: {
+            /**
+             * Max Rounds
+             * @default 3
+             */
+            max_rounds: number;
+            /**
+             * Budget
+             * @default 100
+             */
+            budget: number;
+            /**
+             * Auto Execute
+             * @default false
+             */
+            auto_execute: boolean;
         };
         /** StockDTO */
         StockDTO: {
@@ -2442,6 +3775,80 @@ export interface components {
             /** Market */
             market: string;
         };
+        /** TaskCreateRequest */
+        TaskCreateRequest: {
+            /** Title */
+            title: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Task Type
+             * @default counter_research
+             */
+            task_type: string;
+            /**
+             * Priority
+             * @default normal
+             */
+            priority: string;
+            /** Ref Type */
+            ref_type?: string | null;
+            /** Ref Id */
+            ref_id?: string | null;
+            /** Research Case Id */
+            research_case_id?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+        };
+        /** TaskItemDTO */
+        TaskItemDTO: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description?: string | null;
+            /** Status */
+            status: string;
+            /** Priority */
+            priority: string;
+            /** Task Type */
+            task_type: string;
+            /** Ref Type */
+            ref_type?: string | null;
+            /** Ref Id */
+            ref_id?: string | null;
+            /** Research Case Id */
+            research_case_id?: string | null;
+            /** Assignee */
+            assignee?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Due At */
+            due_at?: string | null;
+        };
+        /** TaskUpdateRequest */
+        TaskUpdateRequest: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "in_progress" | "done" | "cancelled";
+            /** Assignee */
+            assignee?: string | null;
+        };
+        /** TasksResponse */
+        TasksResponse: {
+            /** Items */
+            items: components["schemas"]["TaskItemDTO"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+        };
         /** ThemeCaseDTO */
         ThemeCaseDTO: {
             /**
@@ -2469,29 +3876,20 @@ export interface components {
             statement: string;
             /** Title */
             title?: string | null;
-            evidence_counts?: {
-                [key: string]: number;
-            };
-            evidence?: components["schemas"]["ThemeEvidenceSummaryDTO"][];
             ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
             review?: components["schemas"]["RoleReviewDTO"] | null;
-        };
-        /** ThemeEvidenceSummaryDTO */
-        ThemeEvidenceSummaryDTO: {
-            /** Link Id */
-            link_id: string;
-            /** Role */
-            role: "supports" | "contradicts" | "contextualizes";
-            /** Statement */
-            statement: string;
-            /** Source Url */
-            source_url?: string | null;
-            /** Locator */
-            locator: { [key: string]: unknown };
-            /** Review State */
-            review_state: string;
-            /** Scope */
-            scope: { [key: string]: unknown };
+            /**
+             * Evidence Counts
+             * @default {}
+             */
+            evidence_counts: {
+                [key: string]: number;
+            };
+            /**
+             * Evidence
+             * @default []
+             */
+            evidence: components["schemas"]["ThemeEvidenceSummaryDTO"][];
         };
         /** ThemeCompanyRoleDTO */
         ThemeCompanyRoleDTO: {
@@ -2520,8 +3918,44 @@ export interface components {
             applicable_to?: string | null;
             /** Statement Id */
             statement_id?: string | null;
-            /** Valuations */
-            valuations?: components["schemas"]["ValuationViewDTO"][];
+            /**
+             * Valuations
+             * @default []
+             */
+            valuations: components["schemas"]["ValuationViewDTO"][];
+        };
+        /** ThemeEvidenceSummaryDTO */
+        ThemeEvidenceSummaryDTO: {
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "supports" | "contradicts" | "contextualizes";
+            /** Statement */
+            statement: string;
+            /** Source Url */
+            source_url?: string | null;
+            /**
+             * Locator
+             * @default {}
+             */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Review State */
+            review_state: string;
+            /**
+             * Scope
+             * @default {}
+             */
+            scope: {
+                [key: string]: unknown;
+            };
         };
         /** ThemeExposurePositionDTO */
         ThemeExposurePositionDTO: {
@@ -2549,6 +3983,52 @@ export interface components {
             report_period: string;
             /** Source */
             source: string;
+        };
+        /** ThemeExpressionCandidateDTO */
+        ThemeExpressionCandidateDTO: {
+            /**
+             * Stock Id
+             * Format: uuid
+             */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Company Role */
+            company_role: string;
+            /** Thesis Ids */
+            thesis_ids: string[];
+            /**
+             * Support Status
+             * @enum {string}
+             */
+            support_status: "supported" | "insufficient_evidence" | "contradicted" | "unreviewed";
+            /**
+             * Valuation
+             * @default []
+             */
+            valuation: components["schemas"]["ValuationViewDTO"][];
+            /**
+             * Holding Count
+             * @default 0
+             */
+            holding_count: number;
+            /** Latest Report Period */
+            latest_report_period?: string | null;
+            /**
+             * Freshness
+             * @default missing
+             * @enum {string}
+             */
+            freshness: "fresh" | "stale" | "missing";
+            /**
+             * Constraints
+             * @default []
+             */
+            constraints: string[];
+            /** Match Explanation */
+            match_explanation: string;
         };
         /** ThemeHitDTO */
         ThemeHitDTO: {
@@ -2668,33 +4148,6 @@ export interface components {
             /** Promoted Proposal Id */
             promoted_proposal_id?: string | null;
         };
-        /** ThemeExpressionCandidateDTO */
-        ThemeExpressionCandidateDTO: {
-            /** Stock Id */
-            stock_id: string;
-            /** Stock Code */
-            stock_code: string;
-            /** Stock Name */
-            stock_name: string;
-            /** Company Role */
-            company_role: string;
-            /** Thesis Ids */
-            thesis_ids: string[];
-            /** Support Status */
-            support_status: "supported" | "insufficient_evidence" | "contradicted" | "unreviewed";
-            /** Valuation */
-            valuation?: components["schemas"]["ValuationViewDTO"][];
-            /** Holding Count */
-            holding_count?: number;
-            /** Latest Report Period */
-            latest_report_period?: string | null;
-            /** Freshness */
-            freshness?: "fresh" | "stale" | "missing";
-            /** Constraints */
-            constraints?: string[];
-            /** Match Explanation */
-            match_explanation: string;
-        };
         /** ThemeViewResponse */
         ThemeViewResponse: {
             /**
@@ -2712,8 +4165,11 @@ export interface components {
             company_roles: components["schemas"]["ThemeCompanyRoleDTO"][];
             /** Fund Exposure */
             fund_exposure: components["schemas"]["ThemeExposurePositionDTO"][];
-            /** Expression Candidates */
-            expression_candidates?: components["schemas"]["ThemeExpressionCandidateDTO"][];
+            /**
+             * Expression Candidates
+             * @default []
+             */
+            expression_candidates: components["schemas"]["ThemeExpressionCandidateDTO"][];
             derived_from: components["schemas"]["DerivedFromDTO"];
         };
         /** ThesisCompareDTO */
@@ -2767,6 +4223,47 @@ export interface components {
              */
             creator_type: "human" | "ai";
         };
+        /**
+         * ThesisJudgementCardDTO
+         * @description Stable, auditable judgement card for the focused thesis.
+         */
+        ThesisJudgementCardDTO: {
+            /** Thesis Id */
+            thesis_id: string;
+            /** Statement */
+            statement: string;
+            /**
+             * Conclusion
+             * @enum {string}
+             */
+            conclusion: "supported" | "contradicted" | "insufficient_evidence" | "unreviewed";
+            /** Rationale */
+            rationale?: string | null;
+            /**
+             * Provisional
+             * @default true
+             */
+            provisional: boolean;
+            review?: components["schemas"]["app__schemas__v1__cases__ReviewDecisionDTO"] | null;
+            /** Support Condition */
+            support_condition?: string | null;
+            /** Falsification Condition */
+            falsification_condition?: string | null;
+            /** Next Verification Event */
+            next_verification_event?: string | null;
+            /** Evidence Counts */
+            evidence_counts: {
+                [key: string]: number;
+            };
+            /** Gaps */
+            gaps: string[];
+            /** Next Action */
+            next_action?: string | null;
+            /** Blocking Reason */
+            blocking_reason?: string | null;
+            /** Responsible */
+            responsible?: string | null;
+        };
         /** ThesisSummaryDTO */
         ThesisSummaryDTO: {
             /** Id */
@@ -2800,37 +4297,40 @@ export interface components {
              */
             review_state: string;
         };
-        /** TaskItemDTO */
-        TaskItemDTO: {
-            id: string;
-            title: string;
-            description?: string | null;
-            status: string;
-            priority: string;
-            task_type: string;
-            ref_type?: string | null;
-            ref_id?: string | null;
-            research_case_id?: string | null;
-            assignee?: string | null;
-            created_at: string;
-            due_at?: string | null;
+        /** UpdateCaseMonitorRequest */
+        UpdateCaseMonitorRequest: {
+            /** Actor */
+            actor: string;
+            /** Frequency */
+            frequency: string;
+            /** Factor Ids */
+            factor_ids: string[];
+            /** Allowed Source Types */
+            allowed_source_types: ("licensed_provider" | "company_disclosure" | "uploaded_file" | "pasted_snapshot")[];
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Budget */
+            budget: number;
+            /** Change Reason */
+            change_reason: string;
         };
-        /** ThesisJudgementCardDTO */
-        ThesisJudgementCardDTO: {
-            thesis_id: string;
-            statement: string;
-            conclusion: "supported" | "contradicted" | "insufficient_evidence" | "unreviewed";
-            rationale?: string | null;
-            provisional?: boolean;
-            review?: components["schemas"]["ReviewDecisionDTO"] | null;
-            support_condition?: string | null;
-            falsification_condition?: string | null;
-            next_verification_event?: string | null;
-            evidence_counts: { [key: string]: number };
-            gaps: string[];
-            next_action?: string | null;
-            blocking_reason?: string | null;
-            responsible?: string | null;
+        /** UpdateEventResearchScopeRequest */
+        UpdateEventResearchScopeRequest: {
+            /** Factors */
+            factors: (string | components["schemas"]["EventResearchScopeFactorDTO"])[];
+            /** Changed By */
+            changed_by: string;
+        };
+        /** UpdateEventResearchScopeResponse */
+        UpdateEventResearchScopeResponse: {
+            /** Version */
+            version: number;
+            /** Factors */
+            factors: components["schemas"]["EventResearchScopeFactorDTO"][];
+            /** Reclassified Evidence Count */
+            reclassified_evidence_count: number;
+            /** Unmapped Evidence Count */
+            unmapped_evidence_count: number;
         };
         /** UpdateThemeTagsRequest */
         UpdateThemeTagsRequest: {
@@ -2906,6 +4406,77 @@ export interface components {
             source: string;
             /** Definition */
             definition: string;
+        };
+        /** CausalStepDTO */
+        app__schemas__v1__cases__CausalStepDTO: {
+            /** Id */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** Description */
+            description: string;
+        };
+        /** ReviewDecisionDTO */
+        app__schemas__v1__cases__ReviewDecisionDTO: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Conclusion */
+            conclusion: string | null;
+            /** Reason */
+            reason: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reviewed At */
+            reviewed_at: string;
+        };
+        /** ReviewQueueResponse */
+        app__schemas__v1__commands__ReviewQueueResponse: {
+            /** Items */
+            items: components["schemas"]["ReviewQueueItemDTO"][];
+        };
+        /**
+         * CausalStepDTO
+         * @description 「结论形成路径」中的单步因果.
+         */
+        app__schemas__v1__conclusion__CausalStepDTO: {
+            /** Sequence */
+            sequence: number;
+            /** Description */
+            description: string;
+        };
+        /** ReviewDecisionDTO */
+        app__schemas__v1__operational__ReviewDecisionDTO: {
+            /** Id */
+            id: string;
+            /** Proposal Id */
+            proposal_id: string;
+            /** Outcome */
+            outcome: string;
+            /** Reason */
+            reason: string;
+            /** Reviewer Id */
+            reviewer_id: string;
+            /** Expected Proposal Version */
+            expected_proposal_version: number;
+            /** Decided At */
+            decided_at: string;
+            /** Published Entity Id */
+            published_entity_id?: string | null;
+        };
+        /** ReviewQueueResponse */
+        app__schemas__v1__operational__ReviewQueueResponse: {
+            /** Items */
+            items: unknown[];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
         };
         /** ErrorEnvelope */
         ErrorEnvelope: {
@@ -3114,6 +4685,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseGapsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conclusion_api_v1_research_cases__case_id__conclusion_get: {
+        parameters: {
+            query?: {
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConclusionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3798,7 +5402,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReviewQueueResponse"];
+                    "application/json": components["schemas"]["app__schemas__v1__commands__ReviewQueueResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4273,6 +5877,866 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ThemeTagsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_api_v1_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_events_api_v1_jobs__job_id__events_get: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobEventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_job_api_v1_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_job_api_v1_jobs__job_id__retries_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_activity_api_v1_activity_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                actor_id?: string | null;
+                event_type?: string | null;
+                /** @description opaque cursor = last event_id */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_changes_api_v1_evidence_changes_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                /** @description opaque cursor = last event_id */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tasks_api_v1_tasks_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
+                status?: string | null;
+                assignee?: string | null;
+                /** @description opaque cursor = last task id */
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TasksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_task_api_v1_tasks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskItemDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_task_api_v1_tasks__task_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskItemDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_api_v1_research_cases__case_id__runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                after_created_at?: string | null;
+                after_id?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_run_api_v1_research_cases__case_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartResearchRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_run_api_v1_research_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_events_api_v1_research_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunEventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_api_v1_research_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_event_research_api_v1_event_research_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventResearchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_event_research_api_v1_event_research_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEventResearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extract_event_api_v1_event_research_extract_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtractEventResearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtractEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_event_research_scope_api_v1_event_research__case_id__scope_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEventResearchScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateEventResearchScopeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_research_workbench_api_v1_event_research__case_id__workbench_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventWorkbenchDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_review_queue_api_v1_event_research__case_id__review_queue_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventReviewQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_event_conclusion_api_v1_event_research__case_id__conclusion_publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishEventConclusionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishEventConclusionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_monitor_api_v1_research_cases__case_id__monitor_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMonitorDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_monitor_api_v1_research_cases__case_id__monitor_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCaseMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_proposals_api_v1_review_proposals_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                case_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__schemas__v1__operational__ReviewQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_proposal_api_v1_review_proposals__proposal_id__claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_proposal_api_v1_review_proposals__proposal_id__decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__schemas__v1__operational__ReviewDecisionDTO"];
                 };
             };
             /** @description Validation Error */

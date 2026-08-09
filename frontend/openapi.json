@@ -279,7 +279,7 @@
           "research-cases-v1"
         ],
         "summary": "Gaps",
-        "description": "\u8bc1\u636e\u7f3a\u53e3\u805a\u5408 (prototype \u7814\u7a76\u8ba1\u5212): open gaps across latest assessments.",
+        "description": "证据缺口聚合 (prototype 研究计划): open gaps across latest assessments.",
         "operationId": "gaps_api_v1_research_cases__case_id__gaps_get",
         "parameters": [
           {
@@ -334,6 +334,67 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/conclusion": {
+      "get": {
+        "tags": [
+          "research-cases-v1"
+        ],
+        "summary": "Conclusion",
+        "description": "读取「结论与关键因素」页面的完整读模型.\n\n与 dossier / overview 共享同一个 HistoricalBasis：cutoff 为空时按当前时间。",
+        "operationId": "conclusion_api_v1_research_cases__case_id__conclusion_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConclusionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/compare": {
       "get": {
         "tags": [
@@ -359,10 +420,10 @@
             "schema": {
               "type": "string",
               "format": "date-time",
-              "description": "\u57fa\u51c6\u622a\u6b62\uff08\u8f83\u65e9\uff09",
+              "description": "基准截止（较早）",
               "title": "Base"
             },
-            "description": "\u57fa\u51c6\u622a\u6b62\uff08\u8f83\u65e9\uff09"
+            "description": "基准截止（较早）"
           },
           {
             "name": "compare",
@@ -371,10 +432,10 @@
             "schema": {
               "type": "string",
               "format": "date-time",
-              "description": "\u5bf9\u6bd4\u622a\u6b62\uff08\u8f83\u665a\uff09",
+              "description": "对比截止（较晚）",
               "title": "Compare"
             },
-            "description": "\u5bf9\u6bd4\u622a\u6b62\uff08\u8f83\u665a\uff09"
+            "description": "对比截止（较晚）"
           }
         ],
         "responses": {
@@ -407,7 +468,7 @@
           "snapshot-compare-v1"
         ],
         "summary": "Case Snapshots",
-        "description": "\u5feb\u7167\u5217\u8868 (prototype \u7248\u672c\u6bd4\u8f83 left rail), newest first.",
+        "description": "快照列表 (prototype 版本比较 left rail), newest first.",
         "operationId": "case_snapshots_api_v1_research_cases__case_id__snapshots_get",
         "parameters": [
           {
@@ -1440,7 +1501,7 @@
           "research-ops-v1"
         ],
         "summary": "Research Ops Kpis",
-        "description": "\u7814\u7a76\u6548\u80fd KPI \u5feb\u7167\uff1a\u5ba1\u6838\u541e\u5410\u3001\u4eba\u673a\u4e00\u81f4\u7387\u3001\u5224\u65ad\u65f6\u6ede\u3002\n\n``as_of`` \u7f3a\u7701\u4e3a\u5f53\u524d\u65f6\u95f4\uff1b\u4f20\u5165\u5386\u53f2\u65f6\u70b9\u5219\u6309\u65f6\u70b9\u56de\u653e\u8bed\u4e49\u7edf\u8ba1\uff08\u4e4b\u540e\n\u521b\u5efa\u7684\u8bb0\u5f55\u4e0d\u53c2\u4e0e\uff09\u3002",
+        "description": "研究效能 KPI 快照：审核吞吐、人机一致率、判断时滞。\n\n``as_of`` 缺省为当前时间；传入历史时点则按时点回放语义统计（之后\n创建的记录不参与）。",
         "operationId": "research_ops_kpis_api_v1_research_ops_kpis_get",
         "parameters": [
           {
@@ -1678,7 +1739,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReviewQueueResponse"
+                  "$ref": "#/components/schemas/app__schemas__v1__commands__ReviewQueueResponse"
                 }
               }
             }
@@ -1851,7 +1912,7 @@
           "engine-commands-v1"
         ],
         "summary": "Propose Evidence",
-        "description": "Run the propose step for one thesis.\n\nRecall is cutoff-safe (only statements visible before this run started),\nand every proposed link enters the review queue as machine_generated \u2014\nnothing is auto-confirmed.",
+        "description": "Run the propose step for one thesis.\n\nRecall is cutoff-safe (only statements visible before this run started).\nEvery proposed link enters the review queue as a ``Proposal(kind=evidence_link)``\n— nothing is auto-confirmed; a human decision publishes the formal link.\nThe work runs inside a Job row so progress / cancellation are observable.",
         "operationId": "propose_evidence_api_v1_theses__thesis_id__propose_post",
         "parameters": [
           {
@@ -2386,6 +2447,1467 @@
         }
       }
     },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs-v1"
+        ],
+        "summary": "Get Job",
+        "operationId": "get_job_api_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/events": {
+      "get": {
+        "tags": [
+          "jobs-v1"
+        ],
+        "summary": "Get Job Events",
+        "operationId": "get_job_events_api_v1_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After Seq"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEventsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs-v1"
+        ],
+        "summary": "Cancel Job",
+        "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/retries": {
+      "post": {
+        "tags": [
+          "jobs-v1"
+        ],
+        "summary": "Retry Job",
+        "operationId": "retry_job_api_v1_jobs__job_id__retries_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activity": {
+      "get": {
+        "tags": [
+          "activity-v1"
+        ],
+        "summary": "Get Activity",
+        "operationId": "get_activity_api_v1_activity_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Id"
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Type"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "opaque cursor = last event_id",
+              "title": "After"
+            },
+            "description": "opaque cursor = last event_id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evidence-changes": {
+      "get": {
+        "tags": [
+          "activity-v1"
+        ],
+        "summary": "Get Evidence Changes",
+        "operationId": "get_evidence_changes_api_v1_evidence_changes_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "opaque cursor = last event_id",
+              "title": "After"
+            },
+            "description": "opaque cursor = last event_id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "post": {
+        "tags": [
+          "activity-v1"
+        ],
+        "summary": "Create Task",
+        "operationId": "create_task_api_v1_tasks_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskItemDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "activity-v1"
+        ],
+        "summary": "Get Tasks",
+        "operationId": "get_tasks_api_v1_tasks_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "assignee",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assignee"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "opaque cursor = last task id",
+              "title": "After"
+            },
+            "description": "opaque cursor = last task id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TasksResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}": {
+      "patch": {
+        "tags": [
+          "activity-v1"
+        ],
+        "summary": "Update Task",
+        "operationId": "update_task_api_v1_tasks__task_id__patch",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskItemDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/runs": {
+      "post": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "Start Run",
+        "operationId": "start_run_api_v1_research_cases__case_id__runs_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartResearchRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "List Runs",
+        "operationId": "list_runs_api_v1_research_cases__case_id__runs_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "after_created_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Created At"
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "Cancel Run",
+        "operationId": "cancel_run_api_v1_research_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-runs/{run_id}/events": {
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "Get Run Events",
+        "operationId": "get_run_events_api_v1_research_runs__run_id__events_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunEventsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-runs/{run_id}": {
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "Get Run",
+        "operationId": "get_run_api_v1_research_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "List Event Research",
+        "operationId": "list_event_research_api_v1_event_research_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventResearchListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Create Event Research",
+        "operationId": "create_event_research_api_v1_event_research_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEventResearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/extract": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Extract Event",
+        "operationId": "extract_event_api_v1_event_research_extract_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractEventResearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/scope": {
+      "put": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Update Event Research Scope",
+        "operationId": "update_event_research_scope_api_v1_event_research__case_id__scope_put",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEventResearchScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateEventResearchScopeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/workbench": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Research Workbench",
+        "operationId": "event_research_workbench_api_v1_event_research__case_id__workbench_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWorkbenchDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/review-queue": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Review Queue",
+        "operationId": "event_review_queue_api_v1_event_research__case_id__review_queue_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReviewQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/conclusion/publish": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Publish Event Conclusion",
+        "operationId": "publish_event_conclusion_api_v1_event_research__case_id__conclusion_publish_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEventConclusionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishEventConclusionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/monitor": {
+      "get": {
+        "tags": [
+          "case-monitor-v1"
+        ],
+        "summary": "Get Monitor",
+        "operationId": "get_monitor_api_v1_research_cases__case_id__monitor_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseMonitorDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "case-monitor-v1"
+        ],
+        "summary": "Save Monitor",
+        "operationId": "save_monitor_api_v1_research_cases__case_id__monitor_put",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCaseMonitorRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseMonitorDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/review-proposals": {
+      "get": {
+        "tags": [
+          "proposal-review-commands-v1"
+        ],
+        "summary": "List Proposals",
+        "operationId": "list_proposals_api_v1_review_proposals_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__schemas__v1__operational__ReviewQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/review-proposals/{proposal_id}/claim": {
+      "post": {
+        "tags": [
+          "proposal-review-commands-v1"
+        ],
+        "summary": "Claim Proposal",
+        "operationId": "claim_proposal_api_v1_review_proposals__proposal_id__claim_post",
+        "parameters": [
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/review-proposals/{proposal_id}/decisions": {
+      "post": {
+        "tags": [
+          "proposal-review-commands-v1"
+        ],
+        "summary": "Decide Proposal",
+        "operationId": "decide_proposal_api_v1_review_proposals__proposal_id__decisions_post",
+        "parameters": [
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__schemas__v1__operational__ReviewDecisionDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -2411,6 +3933,117 @@
   },
   "components": {
     "schemas": {
+      "ActivityItemDTO": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "aggregate_type": {
+            "type": "string",
+            "title": "Aggregate Type"
+          },
+          "aggregate_id": {
+            "type": "string",
+            "title": "Aggregate Id"
+          },
+          "ref_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type"
+          },
+          "ref_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Id"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "type",
+          "aggregate_type",
+          "aggregate_id",
+          "origin",
+          "payload",
+          "created_at"
+        ],
+        "title": "ActivityItemDTO"
+      },
+      "ActivityResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ActivityResponse"
+      },
       "AssessFailureDTO": {
         "properties": {
           "model_version": {
@@ -2434,7 +4067,7 @@
           "failed_at"
         ],
         "title": "AssessFailureDTO",
-        "description": "Latest failed assess attempt for the focus thesis.\n\nSurfaced only when the failure is NEWER than the latest successful\nassessment (or no assessment exists) \u2014 e.g. a compliance refusal on\nthe last rerun.  The refused text itself never reached the ledger;\nthis is the audit-trail view of it."
+        "description": "Latest failed assess attempt for the focus thesis.\n\nSurfaced only when the failure is NEWER than the latest successful\nassessment (or no assessment exists) — e.g. a compliance refusal on\nthe last rerun.  The refused text itself never reached the ledger;\nthis is the audit-trail view of it."
       },
       "AssessmentDTO": {
         "properties": {
@@ -2473,7 +4106,7 @@
           "review": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ReviewDecisionDTO"
+                "$ref": "#/components/schemas/app__schemas__v1__cases__ReviewDecisionDTO"
               },
               {
                 "type": "null"
@@ -2629,6 +4262,85 @@
         "title": "AssessmentViewDTO",
         "description": "The latest AI assessment at the cutoff, always visibly provisional."
       },
+      "CancelRunResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "title": "Max Rounds"
+          },
+          "budget": {
+            "type": "integer",
+            "title": "Budget"
+          },
+          "budget_used": {
+            "type": "integer",
+            "title": "Budget Used"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "scope_thesis_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Thesis Ids"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "stage",
+          "round",
+          "max_rounds",
+          "budget",
+          "budget_used",
+          "stop_reason",
+          "scope_thesis_ids",
+          "created_at",
+          "updated_at",
+          "next_action"
+        ],
+        "title": "CancelRunResponse"
+      },
       "CaseCompareResponse": {
         "properties": {
           "case_id": {
@@ -2668,7 +4380,7 @@
           "theses"
         ],
         "title": "CaseCompareResponse",
-        "description": "\u51bb\u7ed3\u5feb\u7167\u6bd4\u8f83: what changed between two point-in-time views."
+        "description": "冻结快照比较: what changed between two point-in-time views."
       },
       "CaseGapDTO": {
         "properties": {
@@ -2731,7 +4443,7 @@
           "gaps"
         ],
         "title": "CaseGapsResponse",
-        "description": "\u8bc1\u636e\u7f3a\u53e3\u805a\u5408: every open gap across the case's latest assessments."
+        "description": "证据缺口聚合: every open gap across the case's latest assessments."
       },
       "CaseListResponse": {
         "properties": {
@@ -2759,6 +4471,122 @@
           "page"
         ],
         "title": "CaseListResponse"
+      },
+      "CaseMonitorDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "frequency": {
+            "type": "string",
+            "title": "Frequency"
+          },
+          "factor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Factor Ids"
+          },
+          "allowed_source_types": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "licensed_provider",
+                "company_disclosure",
+                "uploaded_file",
+                "pasted_snapshot"
+              ]
+            },
+            "type": "array",
+            "title": "Allowed Source Types"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "title": "Next Verification Event"
+          },
+          "budget": {
+            "type": "integer",
+            "title": "Budget"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "change_reason": {
+            "type": "string",
+            "title": "Change Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "status",
+          "frequency",
+          "factor_ids",
+          "allowed_source_types",
+          "next_verification_event",
+          "budget",
+          "changed_by",
+          "change_reason",
+          "created_at"
+        ],
+        "title": "CaseMonitorDTO"
+      },
+      "CaseMonitorDetailResponse": {
+        "properties": {
+          "monitor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaseMonitorDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestResearchRunDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmed_factors": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmedFactorOptionDTO"
+            },
+            "type": "array",
+            "title": "Confirmed Factors"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "monitor",
+          "latest_run",
+          "confirmed_factors"
+        ],
+        "title": "CaseMonitorDetailResponse"
       },
       "CaseSnapshotDTO": {
         "properties": {
@@ -2808,7 +4636,7 @@
           "link_count"
         ],
         "title": "CaseSnapshotDTO",
-        "description": "One frozen snapshot row (prototype \u7248\u672c\u6bd4\u8f83 \u00b7 \u5feb\u7167\u5217\u8868)."
+        "description": "One frozen snapshot row (prototype 版本比较 · 快照列表)."
       },
       "CaseSnapshotEventSummary": {
         "properties": {
@@ -2852,7 +4680,7 @@
           "reviewed_delta"
         ],
         "title": "CaseSnapshotEventSummary",
-        "description": "Incremental summary of what changed at this snapshot vs. the\ncase-wide previous distinct cutoff (prototype \u56de\u653e\u6a21\u5f0f).\n\n- link_delta: number of new evidence links the previous cutoff did not have\n- removed_link_delta: number of evidence links that disappeared\n- conclusion_flips: thesis_id -> {from, to, statement}; one entry per\n  conclusion that changed value between cutoffs\n- gaps_delta: {thesis_id: int} where positive = gaps grew, negative =\n  gaps shrank (signals the case is converging)\n- reviewed_delta: number of new AssessmentReview records at this cutoff"
+        "description": "Incremental summary of what changed at this snapshot vs. the\ncase-wide previous distinct cutoff (prototype 回放模式).\n\n- link_delta: number of new evidence links the previous cutoff did not have\n- removed_link_delta: number of evidence links that disappeared\n- conclusion_flips: thesis_id -> {from, to, statement}; one entry per\n  conclusion that changed value between cutoffs\n- gaps_delta: {thesis_id: int} where positive = gaps grew, negative =\n  gaps shrank (signals the case is converging)\n- reviewed_delta: number of new AssessmentReview records at this cutoff"
       },
       "CaseSnapshotsResponse": {
         "properties": {
@@ -2915,29 +4743,40 @@
         ],
         "title": "CaseSummaryDTO"
       },
-      "CausalStepDTO": {
+      "ClaimResponse": {
         "properties": {
-          "id": {
+          "proposal_id": {
             "type": "string",
-            "title": "Id"
+            "title": "Proposal Id"
           },
-          "sequence": {
-            "type": "integer",
-            "title": "Sequence"
-          },
-          "description": {
+          "assignee": {
             "type": "string",
-            "title": "Description"
+            "title": "Assignee"
+          },
+          "claimed_at": {
+            "type": "string",
+            "title": "Claimed At"
+          },
+          "lease_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expires At"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
-          "sequence",
-          "description"
+          "proposal_id",
+          "assignee",
+          "claimed_at"
         ],
-        "title": "CausalStepDTO"
+        "title": "ClaimResponse"
       },
       "CompanyDTO": {
         "properties": {
@@ -3198,6 +5037,95 @@
         ],
         "title": "CompareLinkDTO"
       },
+      "ComparisonCellDTO": {
+        "properties": {
+          "factor_id": {
+            "type": "string",
+            "title": "Factor Id"
+          },
+          "factor_label": {
+            "type": "string",
+            "title": "Factor Label"
+          },
+          "column_id": {
+            "type": "string",
+            "title": "Column Id"
+          },
+          "column_label": {
+            "type": "string",
+            "title": "Column Label"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factor_id",
+          "factor_label",
+          "column_id",
+          "column_label",
+          "text"
+        ],
+        "title": "ComparisonCellDTO",
+        "description": "竞争性因素比较表的单个单元格."
+      },
+      "ComparisonRowDTO": {
+        "properties": {
+          "factor_id": {
+            "type": "string",
+            "title": "Factor Id"
+          },
+          "factor_label": {
+            "type": "string",
+            "title": "Factor Label"
+          },
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonCellDTO"
+            },
+            "type": "array",
+            "title": "Cells"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factor_id",
+          "factor_label",
+          "cells"
+        ],
+        "title": "ComparisonRowDTO",
+        "description": "竞争性因素比较表中按因素聚合的行."
+      },
+      "ComparisonTableDTO": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonRowDTO"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "title": "ComparisonTableDTO",
+        "description": "竞争性因素比较表（含表头 + 行）."
+      },
       "CompositionPositionDTO": {
         "properties": {
           "stock_id": {
@@ -3263,6 +5191,248 @@
           "theme_hits"
         ],
         "title": "CompositionPositionDTO"
+      },
+      "ConclusionHeaderDTO": {
+        "properties": {
+          "research_case_id": {
+            "type": "string",
+            "title": "Research Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "industry_topic": {
+            "type": "string",
+            "title": "Industry Topic"
+          },
+          "evidence_cutoff": {
+            "type": "string",
+            "title": "Evidence Cutoff"
+          },
+          "conclusion_text": {
+            "type": "string",
+            "title": "Conclusion Text"
+          },
+          "conclusion_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "insufficient_evidence"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion Status"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "ai_provisional": {
+            "type": "boolean",
+            "title": "Ai Provisional"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "research_case_id",
+          "case_title",
+          "industry_topic",
+          "evidence_cutoff",
+          "conclusion_text",
+          "conclusion_status",
+          "rationale",
+          "review_state",
+          "reviewer",
+          "reviewed_at",
+          "snapshot_id",
+          "ai_provisional"
+        ],
+        "title": "ConclusionHeaderDTO",
+        "description": "顶部「结论与关键因素」摘要 + 元信息."
+      },
+      "ConclusionResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/HistoricalBasisDTO"
+          },
+          "header": {
+            "$ref": "#/components/schemas/ConclusionHeaderDTO"
+          },
+          "key_factors": {
+            "items": {
+              "$ref": "#/components/schemas/KeyFactorRowDTO"
+            },
+            "type": "array",
+            "title": "Key Factors"
+          },
+          "comparison": {
+            "$ref": "#/components/schemas/ComparisonTableDTO"
+          },
+          "source_groups": {
+            "items": {
+              "$ref": "#/components/schemas/SourceGroupDTO"
+            },
+            "type": "array",
+            "title": "Source Groups"
+          },
+          "reproduction_manifest": {
+            "$ref": "#/components/schemas/ReproductionManifestDTO"
+          },
+          "causal_path": {
+            "items": {
+              "$ref": "#/components/schemas/app__schemas__v1__conclusion__CausalStepDTO"
+            },
+            "type": "array",
+            "title": "Causal Path"
+          },
+          "gap_explanation": {
+            "$ref": "#/components/schemas/GapExplanationDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "header",
+          "key_factors",
+          "comparison",
+          "source_groups",
+          "reproduction_manifest",
+          "causal_path",
+          "gap_explanation"
+        ],
+        "title": "ConclusionResponse",
+        "description": "「结论与关键因素」页面完整响应."
+      },
+      "ConfirmedFactorOptionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "statement"
+        ],
+        "title": "ConfirmedFactorOptionDTO"
+      },
+      "CounterResearchTaskDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "thesis_statement": {
+            "type": "string",
+            "title": "Thesis Statement"
+          },
+          "assessment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessment Id"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "待发起",
+              "已有反方证据",
+              "已形成反方"
+            ],
+            "title": "Status"
+          },
+          "contradicts_count": {
+            "type": "integer",
+            "title": "Contradicts Count"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "thesis_id",
+          "thesis_statement",
+          "objective",
+          "status",
+          "contradicts_count",
+          "next_action"
+        ],
+        "title": "CounterResearchTaskDTO"
       },
       "CreateCaseRequest": {
         "properties": {
@@ -3463,6 +5633,128 @@
           "type"
         ],
         "title": "CreateCompanyRequest"
+      },
+      "CreateEventResearchRequest": {
+        "properties": {
+          "raw_input": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Input"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "event_title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Event Title"
+          },
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event At"
+          },
+          "market_reaction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Reaction"
+          },
+          "research_question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Research Question"
+          },
+          "candidate_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 3,
+            "title": "Candidate Factors"
+          },
+          "created_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Created By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_input",
+          "event_title",
+          "research_question",
+          "candidate_factors",
+          "created_by"
+        ],
+        "title": "CreateEventResearchRequest"
+      },
+      "CreateEventResearchResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "brief_id": {
+            "type": "string",
+            "title": "Brief Id"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/EventResearchLifecycleDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "brief_id",
+          "lifecycle"
+        ],
+        "title": "CreateEventResearchResponse"
       },
       "CreateFundRequest": {
         "properties": {
@@ -3767,7 +6059,7 @@
           "created_by"
         ],
         "title": "CreateThesisRequest",
-        "description": "Add one proposition to an existing case (AI \u534f\u52a9\u62c6\u5206 or human)."
+        "description": "Add one proposition to an existing case (AI 协助拆分 or human)."
       },
       "CreateThesisResponse": {
         "properties": {
@@ -4278,6 +6570,68 @@
         ],
         "title": "DocumentVersionAddedDTO"
       },
+      "DossierChangeDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "aggregate_type": {
+            "type": "string",
+            "title": "Aggregate Type"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "occurred_at": {
+            "type": "string",
+            "title": "Occurred At"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "aggregate_type",
+          "summary",
+          "occurred_at",
+          "payload"
+        ],
+        "title": "DossierChangeDTO"
+      },
       "DossierResponse": {
         "properties": {
           "schema_version": {
@@ -4313,6 +6667,16 @@
               }
             ]
           },
+          "judgement_card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ThesisJudgementCardDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "assess_failure": {
             "anyOf": [
               {
@@ -4325,7 +6689,7 @@
           },
           "causal_chain": {
             "items": {
-              "$ref": "#/components/schemas/CausalStepDTO"
+              "$ref": "#/components/schemas/app__schemas__v1__cases__CausalStepDTO"
             },
             "type": "array",
             "title": "Causal Chain"
@@ -4353,6 +6717,22 @@
             },
             "type": "array",
             "title": "Gaps"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/DossierChangeDTO"
+            },
+            "type": "array",
+            "title": "Changes",
+            "default": []
+          },
+          "counter_research": {
+            "items": {
+              "$ref": "#/components/schemas/CounterResearchTaskDTO"
+            },
+            "type": "array",
+            "title": "Counter Research",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4369,6 +6749,796 @@
           "gaps"
         ],
         "title": "DossierResponse"
+      },
+      "EventConclusionDraftDTO": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "confidence": {
+            "type": "string",
+            "title": "Confidence"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/EventKeyEvidenceDTO"
+            },
+            "type": "array",
+            "title": "Citations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "text",
+          "confidence",
+          "citations"
+        ],
+        "title": "EventConclusionDraftDTO"
+      },
+      "EventKeyEvidenceDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "factor_statement": {
+            "type": "string",
+            "title": "Factor Statement"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "factor_statement",
+          "role",
+          "review_state",
+          "source_title",
+          "source_url",
+          "excerpt",
+          "locator",
+          "available_at"
+        ],
+        "title": "EventKeyEvidenceDTO"
+      },
+      "EventNextActionDTO": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "label"
+        ],
+        "title": "EventNextActionDTO"
+      },
+      "EventResearchFactorDTO": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "reviewed_support_count": {
+            "type": "integer",
+            "title": "Reviewed Support Count"
+          },
+          "reviewed_contradiction_count": {
+            "type": "integer",
+            "title": "Reviewed Contradiction Count"
+          },
+          "pending_proposal_count": {
+            "type": "integer",
+            "title": "Pending Proposal Count"
+          },
+          "current_gap": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Gap"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "statement",
+          "position",
+          "reviewed_support_count",
+          "reviewed_contradiction_count",
+          "pending_proposal_count",
+          "current_gap"
+        ],
+        "title": "EventResearchFactorDTO"
+      },
+      "EventResearchLifecycleDTO": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "active_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Run Id"
+          },
+          "current_round": {
+            "type": "integer",
+            "title": "Current Round"
+          },
+          "status_summary": {
+            "type": "string",
+            "title": "Status Summary"
+          },
+          "current_gap": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Gap"
+          },
+          "next_human_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Human Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "active_run_id",
+          "current_round",
+          "status_summary",
+          "current_gap",
+          "next_human_action"
+        ],
+        "title": "EventResearchLifecycleDTO"
+      },
+      "EventResearchListItemDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "event_title": {
+            "type": "string",
+            "title": "Event Title"
+          },
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event At"
+          },
+          "lifecycle_status": {
+            "type": "string",
+            "title": "Lifecycle Status"
+          },
+          "status_summary": {
+            "type": "string",
+            "title": "Status Summary"
+          },
+          "next_human_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Human Action"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "event_title",
+          "company_name",
+          "ticker",
+          "event_at",
+          "lifecycle_status",
+          "status_summary",
+          "next_human_action",
+          "updated_at"
+        ],
+        "title": "EventResearchListItemDTO"
+      },
+      "EventResearchListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchListItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "EventResearchListResponse"
+      },
+      "EventResearchScopeDTO": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchScopeFactorDTO"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "unmapped_evidence_count": {
+            "type": "integer",
+            "title": "Unmapped Evidence Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "factors",
+          "unmapped_evidence_count"
+        ],
+        "title": "EventResearchScopeDTO"
+      },
+      "EventResearchScopeFactorDTO": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Statement"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "title": "EventResearchScopeFactorDTO"
+      },
+      "EventReviewQueueItemDTO": {
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "title": "Proposal Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "proposed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Proposed At"
+          },
+          "link_id": {
+            "type": "string",
+            "title": "Link Id"
+          },
+          "thesis_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thesis Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "thesis_statement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thesis Statement"
+          },
+          "ai_role": {
+            "type": "string",
+            "title": "Ai Role"
+          },
+          "ai_reason": {
+            "type": "string",
+            "title": "Ai Reason"
+          },
+          "ai_scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Ai Scope"
+          },
+          "statement_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Id"
+          },
+          "statement_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Text"
+          },
+          "statement_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Kind"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "verbatim_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verbatim Text"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Version Id"
+          },
+          "document_source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Source Url"
+          },
+          "document_published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Published At"
+          },
+          "available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At"
+          },
+          "source_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Title"
+          },
+          "source_status": {
+            "$ref": "#/components/schemas/SourceStatus"
+          },
+          "source_status_reason": {
+            "type": "string",
+            "title": "Source Status Reason"
+          },
+          "can_accept": {
+            "type": "boolean",
+            "title": "Can Accept"
+          },
+          "proposal_reason": {
+            "type": "string",
+            "title": "Proposal Reason"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "proposal_id",
+          "status",
+          "proposed_at",
+          "link_id",
+          "thesis_id",
+          "case_id",
+          "thesis_statement",
+          "ai_role",
+          "ai_reason",
+          "ai_scope",
+          "statement_id",
+          "statement_text",
+          "statement_kind",
+          "span_id",
+          "verbatim_text",
+          "locator",
+          "document_version_id",
+          "document_source_url",
+          "document_published_at",
+          "available_at",
+          "source_title",
+          "source_status",
+          "source_status_reason",
+          "can_accept",
+          "proposal_reason",
+          "position"
+        ],
+        "title": "EventReviewQueueItemDTO",
+        "description": "A pending event-evidence proposal, including source admission context."
+      },
+      "EventReviewQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventReviewQueueItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/EventReviewQueueSummaryDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "summary"
+        ],
+        "title": "EventReviewQueueResponse"
+      },
+      "EventReviewQueueSummaryDTO": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "reviewed": {
+            "type": "integer",
+            "title": "Reviewed"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "invalid_source": {
+            "type": "integer",
+            "title": "Invalid Source"
+          },
+          "current_round": {
+            "type": "integer",
+            "title": "Current Round"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "reviewed",
+          "pending",
+          "invalid_source",
+          "current_round",
+          "next_action"
+        ],
+        "title": "EventReviewQueueSummaryDTO"
+      },
+      "EventWorkbenchDTO": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventResearchListItemDTO"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/EventResearchLifecycleDTO"
+          },
+          "conclusion": {
+            "$ref": "#/components/schemas/EventConclusionDraftDTO"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchFactorDTO"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EventKeyEvidenceDTO"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/EventWorkbenchProgressDTO"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/EventResearchScopeDTO"
+          },
+          "next_action": {
+            "$ref": "#/components/schemas/EventNextActionDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event",
+          "lifecycle",
+          "conclusion",
+          "factors",
+          "evidence",
+          "progress",
+          "scope",
+          "next_action"
+        ],
+        "title": "EventWorkbenchDTO"
+      },
+      "EventWorkbenchProgressDTO": {
+        "properties": {
+          "verified": {
+            "type": "integer",
+            "title": "Verified"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "invalid_source": {
+            "type": "integer",
+            "title": "Invalid Source"
+          },
+          "current_gap": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Gap"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "verified",
+          "pending",
+          "invalid_source",
+          "current_gap"
+        ],
+        "title": "EventWorkbenchProgressDTO"
       },
       "EvidenceRecordDTO": {
         "properties": {
@@ -4612,6 +7782,132 @@
         ],
         "title": "ExposurePositionDTO"
       },
+      "ExtractEventResearchRequest": {
+        "properties": {
+          "raw_input": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Input"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_input"
+        ],
+        "title": "ExtractEventResearchRequest"
+      },
+      "ExtractEventResearchResponse": {
+        "properties": {
+          "event_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Title"
+          },
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          },
+          "event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event At"
+          },
+          "market_reaction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Reaction"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "research_question": {
+            "type": "string",
+            "title": "Research Question"
+          },
+          "candidate_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidate Factors"
+          },
+          "confirmation_required": {
+            "type": "boolean",
+            "title": "Confirmation Required",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_title",
+          "company_name",
+          "ticker",
+          "event_at",
+          "market_reaction",
+          "summary",
+          "research_question",
+          "candidate_factors"
+        ],
+        "title": "ExtractEventResearchResponse"
+      },
       "ExtractResponse": {
         "properties": {
           "document_version_id": {
@@ -4654,7 +7950,7 @@
           "statements"
         ],
         "title": "ExtractResponse",
-        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (\u65e0\u7247\u6bb5 / \u8868\u683c\u65e0\u53ef\u63d0\n\u4e8b\u5b9e / LLM \u62d2\u7b54)."
+        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (无片段 / 表格无可提\n事实 / LLM 拒答)."
       },
       "ExtractStatementDTO": {
         "properties": {
@@ -4729,7 +8025,7 @@
           "positions"
         ],
         "title": "FundCompositionResponse",
-        "description": "\u53cd\u5411\u7a7f\u900f: \u8fd9\u53ea\u57fa\u91d1\u300c\u771f\u6b63\u88c5\u4e86\u4ec0\u4e48\u300d\u2014\u2014\u6301\u4ed3 + \u547d\u4e2d\u7684\u4e3b\u9898."
+        "description": "反向穿透: 这只基金「真正装了什么」——持仓 + 命中的主题."
       },
       "FundDTO": {
         "properties": {
@@ -4867,7 +8163,7 @@
           "funds"
         ],
         "title": "FundExposureResponse",
-        "description": "\u6b63\u5411\u7a7f\u900f: \u4e3b\u9898/\u6848\u4ef6 \u2192 \u547d\u4e2d\u57fa\u91d1\uff08\u6309\u4e3b\u9898\u66b4\u9732\u5ea6\u6392\u5e8f\uff09."
+        "description": "正向穿透: 主题/案件 → 命中基金（按主题暴露度排序）."
       },
       "FundHolderDTO": {
         "properties": {
@@ -4941,6 +8237,56 @@
           "source"
         ],
         "title": "FundHolderDTO"
+      },
+      "GapExplanationDTO": {
+        "properties": {
+          "factor_id": {
+            "type": "string",
+            "title": "Factor Id"
+          },
+          "factor_label": {
+            "type": "string",
+            "title": "Factor Label"
+          },
+          "why": {
+            "type": "string",
+            "title": "Why"
+          },
+          "applicable_scope": {
+            "type": "string",
+            "title": "Applicable Scope"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "data_pattern": {
+            "type": "string",
+            "title": "Data Pattern"
+          },
+          "category_alt": {
+            "type": "string",
+            "title": "Category Alt"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factor_id",
+          "factor_label",
+          "why",
+          "applicable_scope",
+          "category",
+          "data_pattern",
+          "category_alt",
+          "rationale"
+        ],
+        "title": "GapExplanationDTO",
+        "description": "「所选因素解释」右栏的因子机制说明."
       },
       "GraphEdgeDTO": {
         "properties": {
@@ -5344,7 +8690,7 @@
           "link_modified"
         ],
         "title": "HumanAiAgreementDTO",
-        "description": "\u4eba\u673a\u4e00\u81f4\u7387: agreement between AI drafts and human decisions.\n\nAssessment level: a ``confirmed`` ReviewDecision is agreement; a\n``modified``/``rejected`` one is not; ``conclusion_changed`` counts\nreviews whose conclusion differs from the original AI conclusion.\n\nLink level: a ``confirmed`` EvidenceReview whose ``relation`` equals the\nlink's AI-proposed ``role`` is agreement; confirmed with a different\nrelation is a modification (counted separately); ``rejected`` and\n``needs_more_evidence`` are disagreement / deferral."
+        "description": "人机一致率: agreement between AI drafts and human decisions.\n\nAssessment level: a ``confirmed`` ReviewDecision is agreement; a\n``modified``/``rejected`` one is not; ``conclusion_changed`` counts\nreviews whose conclusion differs from the original AI conclusion.\n\nLink level: a ``confirmed`` EvidenceReview whose ``relation`` equals the\nlink's AI-proposed ``role`` is agreement; confirmed with a different\nrelation is a modification (counted separately); ``rejected`` and\n``needs_more_evidence`` are disagreement / deferral."
       },
       "IngestRequest": {
         "properties": {
@@ -5506,6 +8852,228 @@
         "title": "IngestResponse",
         "description": "Summary of one ingest run.\n\nIdempotent: documents dedupe by content hash and valuation snapshots\nby stock + date + metric + source, so re-runs report skips instead of\nduplicating rows."
       },
+      "JobDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "progress": {
+            "type": "integer",
+            "title": "Progress"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "target_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "progress",
+          "attempt",
+          "cancel_requested",
+          "created_at"
+        ],
+        "title": "JobDTO"
+      },
+      "JobEventDTO": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seq",
+          "created_at"
+        ],
+        "title": "JobEventDTO"
+      },
+      "JobEventsResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/JobEventDTO"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "events"
+        ],
+        "title": "JobEventsResponse"
+      },
       "JudgmentLatencyDTO": {
         "properties": {
           "evidence_to_assessment_avg_days": {
@@ -5562,7 +9130,7 @@
           "assessment_to_review_max_days"
         ],
         "title": "JudgmentLatencyDTO",
-        "description": "\u5224\u65ad\u65f6\u6ede (days): evidence -> AI judgment, and AI judgment -> human review."
+        "description": "判断时滞 (days): evidence -> AI judgment, and AI judgment -> human review."
       },
       "KeyChangeDTO": {
         "properties": {
@@ -5573,10 +9141,10 @@
           "tag": {
             "type": "string",
             "enum": [
-              "\u65b0\u589e",
-              "\u66f4\u65b0",
-              "\u98ce\u9669",
-              "\u7f3a\u53e3"
+              "新增",
+              "更新",
+              "风险",
+              "缺口"
             ],
             "title": "Tag"
           },
@@ -5620,6 +9188,98 @@
           "review_state"
         ],
         "title": "KeyChangeDTO"
+      },
+      "KeyFactorRowDTO": {
+        "properties": {
+          "factor_id": {
+            "type": "string",
+            "title": "Factor Id"
+          },
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "thesis_title": {
+            "type": "string",
+            "title": "Thesis Title"
+          },
+          "thesis_statement": {
+            "type": "string",
+            "title": "Thesis Statement"
+          },
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "role_label": {
+            "type": "string",
+            "title": "Role Label"
+          },
+          "factor_label": {
+            "type": "string",
+            "title": "Factor Label"
+          },
+          "time_order": {
+            "type": "string",
+            "title": "Time Order"
+          },
+          "mechanism": {
+            "type": "string",
+            "title": "Mechanism"
+          },
+          "direct_evidence": {
+            "type": "string",
+            "title": "Direct Evidence"
+          },
+          "alternatives": {
+            "type": "string",
+            "title": "Alternatives"
+          },
+          "difference_explanation": {
+            "type": "string",
+            "title": "Difference Explanation"
+          },
+          "scope_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Warning"
+          },
+          "falsifier": {
+            "type": "string",
+            "title": "Falsifier"
+          },
+          "impact_object": {
+            "type": "string",
+            "title": "Impact Object"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factor_id",
+          "thesis_id",
+          "thesis_title",
+          "thesis_statement",
+          "status_label",
+          "role_label",
+          "factor_label",
+          "time_order",
+          "mechanism",
+          "direct_evidence",
+          "alternatives",
+          "difference_explanation",
+          "scope_warning",
+          "falsifier",
+          "impact_object"
+        ],
+        "title": "KeyFactorRowDTO",
+        "description": "单个命题下的「关键因素」行（含 AI / 人工角色 + 复盘链路）."
       },
       "KnowledgeItemDTO": {
         "properties": {
@@ -5674,7 +9334,7 @@
           "links"
         ],
         "title": "KnowledgeItemDTO",
-        "description": "\u5df2\u590d\u6838\u77e5\u8bc6\u5c42\u4e00\u884c: \u89c4\u8303\u5316\u9648\u8ff0 + \u5b83\u7684\u8bc1\u636e\u94fe\u63a5\u4e0e\u4eba\u5de5\u5ba1\u6838\u3002"
+        "description": "已复核知识层一行: 规范化陈述 + 它的证据链接与人工审核。"
       },
       "KnowledgeLinkDTO": {
         "properties": {
@@ -5786,6 +9446,36 @@
         ],
         "title": "KnowledgeResponse"
       },
+      "LatestResearchRunDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "stage",
+          "updated_at"
+        ],
+        "title": "LatestResearchRunDTO"
+      },
       "LinkReviewRequest": {
         "properties": {
           "outcome": {
@@ -5845,7 +9535,7 @@
           "reviewer"
         ],
         "title": "LinkReviewRequest",
-        "description": "\u56db\u8981\u7d20\u5173\u7cfb\u7ea7\u5ba1\u6838: \u5173\u7cfb\u9009\u62e9/\u56e0\u7d20\u89d2\u8272/\u9002\u7528\u8fb9\u754c/\u5ba1\u6838\u7406\u7531 + \u52a8\u4f5c."
+        "description": "四要素关系级审核: 关系选择/因素角色/适用边界/审核理由 + 动作."
       },
       "LinkReviewResponse": {
         "properties": {
@@ -5996,7 +9686,7 @@
           "points"
         ],
         "title": "MetricSeriesResponse",
-        "description": "\u51bb\u7ed3\u65f6\u70b9\u5e8f\u5217: every frozen value, oldest first (\u53ef\u7528\u6027\u7531 as_of \u5224\u65ad)."
+        "description": "冻结时点序列: every frozen value, oldest first (可用性由 as_of 判断)."
       },
       "OverviewResponse": {
         "properties": {
@@ -6117,6 +9807,49 @@
         ],
         "title": "OverviewTotalsDTO"
       },
+      "PendingProposalDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "thesis_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thesis Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "thesis_id",
+          "task_id",
+          "status"
+        ],
+        "title": "PendingProposalDTO"
+      },
       "ProposeResponse": {
         "properties": {
           "thesis_id": {
@@ -6126,6 +9859,10 @@
           "mode": {
             "type": "string",
             "title": "Mode"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
           },
           "link_count": {
             "type": "integer",
@@ -6144,17 +9881,18 @@
         "required": [
           "thesis_id",
           "mode",
+          "job_id",
           "link_count",
           "links"
         ],
         "title": "ProposeResponse",
-        "description": "Result of running evidence proposal for one thesis.\n\nEvery proposed link lands in the review queue as\n``machine_generated``; nothing is auto-confirmed.  ``mode`` is\n``mock`` without an LLM key (non-production only)."
+        "description": "Result of running evidence proposal for one thesis.\n\nEvery proposed link lands as a ``Proposal(kind=evidence_link)`` in the\nreview queue; nothing is auto-confirmed.  ``job_id`` lets the client track\nprogress / cancellation.  ``mode`` is ``mock`` without an LLM key."
       },
       "ProposedLinkDTO": {
         "properties": {
-          "link_id": {
+          "proposal_id": {
             "type": "string",
-            "title": "Link Id"
+            "title": "Proposal Id"
           },
           "source_statement_id": {
             "type": "string",
@@ -6177,14 +9915,14 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "link_id",
+          "proposal_id",
           "source_statement_id",
           "role",
           "reason",
           "scope"
         ],
         "title": "ProposedLinkDTO",
-        "description": "One evidence link proposed by the proposer (pending review)."
+        "description": "One evidence_link Proposal created by the proposer (pending review)."
       },
       "ProviderRunDTO": {
         "properties": {
@@ -6259,7 +9997,7 @@
           "finished_at"
         ],
         "title": "ProviderRunDTO",
-        "description": "One AI/provider invocation audit record.\n\n\u6210\u529f = \u4fdd\u7559\u6765\u6e90\u7248\u672c\uff1b\u5931\u8d25 = \u672c\u6b21\u6ca1\u6709\u65b0\u6570\u636e\uff1b\u9519\u8bef\u4fe1\u606f\u539f\u6837\u5e26\u51fa\uff0c\n\u4e0d\u63a9\u9970\u3001\u4e0d\u63a8\u6d4b\uff08prototype Provider \u8fd0\u884c\u8bb0\u5f55\u7684\u5931\u8d25\u542b\u4e49\u7ea6\u5b9a\uff09\u3002"
+        "description": "One AI/provider invocation audit record.\n\n成功 = 保留来源版本；失败 = 本次没有新数据；错误信息原样带出，\n不掩饰、不推测（prototype Provider 运行记录的失败含义约定）。"
       },
       "ProviderRunsResponse": {
         "properties": {
@@ -6277,6 +10015,46 @@
           "runs"
         ],
         "title": "ProviderRunsResponse"
+      },
+      "PublishEventConclusionRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "reviewer"
+        ],
+        "title": "PublishEventConclusionRequest"
+      },
+      "PublishEventConclusionResponse": {
+        "properties": {
+          "conclusion_id": {
+            "type": "string",
+            "title": "Conclusion Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conclusion_id",
+          "state"
+        ],
+        "title": "PublishEventConclusionResponse"
       },
       "RelatedThesisDTO": {
         "properties": {
@@ -6339,6 +10117,66 @@
           "statement"
         ],
         "title": "RelatedThesisDTO"
+      },
+      "ReproductionManifestDTO": {
+        "properties": {
+          "current_selection_label": {
+            "type": "string",
+            "title": "Current Selection Label"
+          },
+          "current_selection_state": {
+            "type": "string",
+            "title": "Current Selection State"
+          },
+          "formal_judgment": {
+            "type": "string",
+            "title": "Formal Judgment"
+          },
+          "research_snapshot": {
+            "type": "string",
+            "title": "Research Snapshot"
+          },
+          "document_version": {
+            "type": "string",
+            "title": "Document Version"
+          },
+          "publisher_record": {
+            "type": "string",
+            "title": "Publisher Record"
+          },
+          "available_at": {
+            "type": "string",
+            "title": "Available At"
+          },
+          "reproducer": {
+            "type": "string",
+            "title": "Reproducer"
+          },
+          "factor_compare_version": {
+            "type": "string",
+            "title": "Factor Compare Version"
+          },
+          "recheck_manifest": {
+            "type": "string",
+            "title": "Recheck Manifest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_selection_label",
+          "current_selection_state",
+          "formal_judgment",
+          "research_snapshot",
+          "document_version",
+          "publisher_record",
+          "available_at",
+          "reproducer",
+          "factor_compare_version",
+          "recheck_manifest"
+        ],
+        "title": "ReproductionManifestDTO",
+        "description": "「解释与重现」右栏的全部内容."
       },
       "RerunAssessmentDTO": {
         "properties": {
@@ -6409,7 +10247,7 @@
           "assessment"
         ],
         "title": "RerunResponse",
-        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only \u2014 production fails closed per provider discipline)."
+        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
       },
       "ResearchOpsResponse": {
         "properties": {
@@ -6448,9 +10286,372 @@
           "latency"
         ],
         "title": "ResearchOpsResponse",
-        "description": "\u7814\u7a76\u6548\u80fd KPI \u5feb\u7167. ``as_of`` \u4e3a\u65f6\u70b9\u56de\u653e\u8fb9\u754c\uff1a\u4e4b\u540e\u521b\u5efa\u7684\u8bb0\u5f55\u4e0d\u53c2\u4e0e\u7edf\u8ba1\u3002"
+        "description": "研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。"
       },
-      "ReviewDecisionDTO": {
+      "ResearchRunEventsItemDTO": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seq",
+          "created_at"
+        ],
+        "title": "ResearchRunEventsItemDTO"
+      },
+      "ResearchRunEventsResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRunEventsItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "items"
+        ],
+        "title": "ResearchRunEventsResponse"
+      },
+      "ResearchRunResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "title": "Max Rounds"
+          },
+          "budget": {
+            "type": "integer",
+            "title": "Budget"
+          },
+          "budget_used": {
+            "type": "integer",
+            "title": "Budget Used"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "scope_thesis_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Thesis Ids"
+          },
+          "progress": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Progress"
+          },
+          "evidence": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Evidence"
+          },
+          "by_thesis": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "By Thesis"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "gap_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchTaskDTO"
+            },
+            "type": "array",
+            "title": "Gap Tasks"
+          },
+          "failed_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchTaskDTO"
+            },
+            "type": "array",
+            "title": "Failed Tasks"
+          },
+          "assessments": {
+            "items": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Assessments"
+          },
+          "pending_proposals": {
+            "items": {
+              "$ref": "#/components/schemas/PendingProposalDTO"
+            },
+            "type": "array",
+            "title": "Pending Proposals"
+          },
+          "review_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewTaskDTO"
+            },
+            "type": "array",
+            "title": "Review Tasks"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchTaskDTO"
+            },
+            "type": "array",
+            "title": "Tasks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "case_id",
+          "status",
+          "stage",
+          "round",
+          "max_rounds",
+          "budget",
+          "budget_used",
+          "stop_reason",
+          "scope_thesis_ids",
+          "progress",
+          "evidence",
+          "by_thesis",
+          "gaps",
+          "gap_tasks",
+          "failed_tasks",
+          "assessments",
+          "pending_proposals",
+          "review_tasks",
+          "next_action",
+          "tasks"
+        ],
+        "title": "ResearchRunResponse"
+      },
+      "ResearchTaskDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "thesis_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thesis Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "title": "Evidence Count"
+          },
+          "gap_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Reason"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "thesis_id",
+          "status",
+          "stage",
+          "round",
+          "task_type",
+          "query",
+          "evidence_count",
+          "gap_reason",
+          "result"
+        ],
+        "title": "ResearchTaskDTO"
+      },
+      "ReviewDecisionRequest": {
         "properties": {
           "outcome": {
             "type": "string",
@@ -6461,40 +10662,43 @@
             ],
             "title": "Outcome"
           },
-          "conclusion": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer Id"
+          },
+          "replacement_payload": {
             "anyOf": [
               {
-                "type": "string"
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Conclusion"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "reviewer": {
-            "type": "string",
-            "title": "Reviewer"
-          },
-          "reviewed_at": {
-            "type": "string",
-            "title": "Reviewed At"
+            "title": "Replacement Payload"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "outcome",
-          "conclusion",
           "reason",
-          "reviewer",
-          "reviewed_at"
+          "expected_version",
+          "reviewer_id"
         ],
-        "title": "ReviewDecisionDTO"
+        "title": "ReviewDecisionRequest"
       },
       "ReviewQueueItemDTO": {
         "properties": {
@@ -6600,22 +10804,53 @@
         "title": "ReviewQueueItemDTO",
         "description": "One pending link-level review: frozen source vs AI proposal."
       },
-      "ReviewQueueResponse": {
+      "ReviewTaskDTO": {
         "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ReviewQueueItemDTO"
-            },
-            "type": "array",
-            "title": "Items"
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type"
+          },
+          "ref_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type"
+          },
+          "ref_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Id"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "items"
+          "id",
+          "status",
+          "task_type",
+          "ref_type",
+          "ref_id"
         ],
-        "title": "ReviewQueueResponse"
+        "title": "ReviewTaskDTO"
       },
       "ReviewThroughputDTO": {
         "properties": {
@@ -6663,7 +10898,7 @@
           "pending_assessment_reviews"
         ],
         "title": "ReviewThroughputDTO",
-        "description": "\u5ba1\u6838\u541e\u5410: review output vs the pending machine-generated queue."
+        "description": "审核吞吐: review output vs the pending machine-generated queue."
       },
       "RoleReviewDTO": {
         "properties": {
@@ -6722,6 +10957,118 @@
           "outcome"
         ],
         "title": "RoleReviewDTO"
+      },
+      "RunListResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "RunListResponse"
+      },
+      "RunSummaryDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "title": "Max Rounds"
+          },
+          "budget": {
+            "type": "integer",
+            "title": "Budget"
+          },
+          "budget_used": {
+            "type": "integer",
+            "title": "Budget Used"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "scope_thesis_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Thesis Ids"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "stage",
+          "round",
+          "max_rounds",
+          "budget",
+          "budget_used",
+          "stop_reason",
+          "scope_thesis_ids",
+          "created_at",
+          "updated_at",
+          "next_action"
+        ],
+        "title": "RunSummaryDTO"
       },
       "SearchGroupDTO": {
         "properties": {
@@ -6854,6 +11201,81 @@
         ],
         "title": "SearchResponse"
       },
+      "SourceCitationDTO": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "supports",
+              "contradicts",
+              "contextualizes"
+            ],
+            "title": "Relation"
+          },
+          "document_title": {
+            "type": "string",
+            "title": "Document Title"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "citation": {
+            "type": "string",
+            "title": "Citation"
+          },
+          "locator": {
+            "type": "string",
+            "title": "Locator"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "relation",
+          "document_title",
+          "publisher",
+          "citation",
+          "locator"
+        ],
+        "title": "SourceCitationDTO",
+        "description": "「支持、反驳与缺口」下的一条支持/反驳引用."
+      },
+      "SourceGroupDTO": {
+        "properties": {
+          "section_label": {
+            "type": "string",
+            "title": "Section Label"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/SourceCitationDTO"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "section_label",
+          "relations"
+        ],
+        "title": "SourceGroupDTO",
+        "description": "「支持、反驳与缺口」分组."
+      },
       "SourceSpanDTO": {
         "properties": {
           "id": {
@@ -6880,6 +11302,29 @@
             },
             "type": "array",
             "title": "Citations"
+          },
+          "locator_v1": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator V1"
+          },
+          "text_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Sha256"
           }
         },
         "additionalProperties": false,
@@ -6892,6 +11337,41 @@
           "citations"
         ],
         "title": "SourceSpanDTO"
+      },
+      "SourceStatus": {
+        "type": "string",
+        "enum": [
+          "accessible",
+          "pasted_unverified",
+          "invalid"
+        ],
+        "title": "SourceStatus",
+        "description": "The admissibility of a source link for event evidence."
+      },
+      "StartResearchRunRequest": {
+        "properties": {
+          "max_rounds": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Max Rounds",
+            "default": 3
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Budget",
+            "default": 100
+          },
+          "auto_execute": {
+            "type": "boolean",
+            "title": "Auto Execute",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "StartResearchRunRequest"
       },
       "StockDTO": {
         "properties": {
@@ -6964,6 +11444,254 @@
           "market"
         ],
         "title": "StockViewDTO"
+      },
+      "TaskCreateRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type",
+            "default": "counter_research"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority",
+            "default": "normal"
+          },
+          "ref_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type"
+          },
+          "ref_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Id"
+          },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "TaskCreateRequest"
+      },
+      "TaskItemDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority"
+          },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type"
+          },
+          "ref_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type"
+          },
+          "ref_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Id"
+          },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "priority",
+          "task_type",
+          "created_at"
+        ],
+        "title": "TaskItemDTO"
+      },
+      "TaskUpdateRequest": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "done",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "TaskUpdateRequest"
+      },
+      "TasksResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "TasksResponse"
       },
       "ThemeCaseDTO": {
         "properties": {
@@ -7042,6 +11770,22 @@
                 "type": "null"
               }
             ]
+          },
+          "evidence_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Evidence Counts",
+            "default": {}
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeEvidenceSummaryDTO"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -7132,6 +11876,14 @@
               }
             ],
             "title": "Statement Id"
+          },
+          "valuations": {
+            "items": {
+              "$ref": "#/components/schemas/ValuationViewDTO"
+            },
+            "type": "array",
+            "title": "Valuations",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -7144,6 +11896,64 @@
           "scope"
         ],
         "title": "ThemeCompanyRoleDTO"
+      },
+      "ThemeEvidenceSummaryDTO": {
+        "properties": {
+          "link_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Link Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "supports",
+              "contradicts",
+              "contextualizes"
+            ],
+            "title": "Role"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator",
+            "default": {}
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "scope": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Scope",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "link_id",
+          "role",
+          "statement",
+          "review_state"
+        ],
+        "title": "ThemeEvidenceSummaryDTO"
       },
       "ThemeExposurePositionDTO": {
         "properties": {
@@ -7200,6 +12010,103 @@
           "source"
         ],
         "title": "ThemeExposurePositionDTO"
+      },
+      "ThemeExpressionCandidateDTO": {
+        "properties": {
+          "stock_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Stock Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "type": "string",
+            "title": "Stock Name"
+          },
+          "company_role": {
+            "type": "string",
+            "title": "Company Role"
+          },
+          "thesis_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Thesis Ids"
+          },
+          "support_status": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "insufficient_evidence",
+              "contradicted",
+              "unreviewed"
+            ],
+            "title": "Support Status"
+          },
+          "valuation": {
+            "items": {
+              "$ref": "#/components/schemas/ValuationViewDTO"
+            },
+            "type": "array",
+            "title": "Valuation",
+            "default": []
+          },
+          "holding_count": {
+            "type": "integer",
+            "title": "Holding Count",
+            "default": 0
+          },
+          "latest_report_period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Report Period"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "missing"
+            ],
+            "title": "Freshness",
+            "default": "missing"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Constraints",
+            "default": []
+          },
+          "match_explanation": {
+            "type": "string",
+            "title": "Match Explanation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stock_id",
+          "stock_code",
+          "stock_name",
+          "company_role",
+          "thesis_ids",
+          "support_status",
+          "match_explanation"
+        ],
+        "title": "ThemeExpressionCandidateDTO"
       },
       "ThemeHitDTO": {
         "properties": {
@@ -7585,6 +12492,14 @@
             "type": "array",
             "title": "Fund Exposure"
           },
+          "expression_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ThemeExpressionCandidateDTO"
+            },
+            "type": "array",
+            "title": "Expression Candidates",
+            "default": []
+          },
           "derived_from": {
             "$ref": "#/components/schemas/DerivedFromDTO"
           }
@@ -7796,7 +12711,146 @@
           "statement"
         ],
         "title": "ThesisInput",
-        "description": "One initial proposition in the \u65b0\u5efa\u7814\u7a76 flow (prototype step 2)."
+        "description": "One initial proposition in the 新建研究 flow (prototype step 2)."
+      },
+      "ThesisJudgementCardDTO": {
+        "properties": {
+          "thesis_id": {
+            "type": "string",
+            "title": "Thesis Id"
+          },
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "conclusion": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "contradicted",
+              "insufficient_evidence",
+              "unreviewed"
+            ],
+            "title": "Conclusion"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "provisional": {
+            "type": "boolean",
+            "title": "Provisional",
+            "default": true
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__schemas__v1__cases__ReviewDecisionDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "support_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Condition"
+          },
+          "falsification_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Falsification Condition"
+          },
+          "next_verification_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Verification Event"
+          },
+          "evidence_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Evidence Counts"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "blocking_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Reason"
+          },
+          "responsible": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsible"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thesis_id",
+          "statement",
+          "conclusion",
+          "evidence_counts",
+          "gaps"
+        ],
+        "title": "ThesisJudgementCardDTO",
+        "description": "Stable, auditable judgement card for the focused thesis."
       },
       "ThesisSummaryDTO": {
         "properties": {
@@ -7902,6 +12956,136 @@
           "created_at"
         ],
         "title": "ThesisSummaryDTO"
+      },
+      "UpdateCaseMonitorRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "frequency": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Frequency"
+          },
+          "factor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Factor Ids"
+          },
+          "allowed_source_types": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "licensed_provider",
+                "company_disclosure",
+                "uploaded_file",
+                "pasted_snapshot"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Allowed Source Types"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Next Verification Event"
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Budget"
+          },
+          "change_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Change Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor",
+          "frequency",
+          "factor_ids",
+          "allowed_source_types",
+          "next_verification_event",
+          "budget",
+          "change_reason"
+        ],
+        "title": "UpdateCaseMonitorRequest"
+      },
+      "UpdateEventResearchScopeRequest": {
+        "properties": {
+          "factors": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/EventResearchScopeFactorDTO"
+                }
+              ]
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 3,
+            "title": "Factors"
+          },
+          "changed_by": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Changed By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "factors",
+          "changed_by"
+        ],
+        "title": "UpdateEventResearchScopeRequest"
+      },
+      "UpdateEventResearchScopeResponse": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchScopeFactorDTO"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "reclassified_evidence_count": {
+            "type": "integer",
+            "title": "Reclassified Evidence Count"
+          },
+          "unmapped_evidence_count": {
+            "type": "integer",
+            "title": "Unmapped Evidence Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "factors",
+          "reclassified_evidence_count",
+          "unmapped_evidence_count"
+        ],
+        "title": "UpdateEventResearchScopeResponse"
       },
       "UpdateThemeTagsRequest": {
         "properties": {
@@ -8067,6 +13251,199 @@
           "definition"
         ],
         "title": "ValuationViewDTO"
+      },
+      "app__schemas__v1__cases__CausalStepDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "description"
+        ],
+        "title": "CausalStepDTO"
+      },
+      "app__schemas__v1__cases__ReviewDecisionDTO": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "conclusion",
+          "reason",
+          "reviewer",
+          "reviewed_at"
+        ],
+        "title": "ReviewDecisionDTO"
+      },
+      "app__schemas__v1__commands__ReviewQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewQueueItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ReviewQueueResponse"
+      },
+      "app__schemas__v1__conclusion__CausalStepDTO": {
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sequence",
+          "description"
+        ],
+        "title": "CausalStepDTO",
+        "description": "「结论形成路径」中的单步因果."
+      },
+      "app__schemas__v1__operational__ReviewDecisionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "proposal_id": {
+            "type": "string",
+            "title": "Proposal Id"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "title": "Reviewer Id"
+          },
+          "expected_proposal_version": {
+            "type": "integer",
+            "title": "Expected Proposal Version"
+          },
+          "decided_at": {
+            "type": "string",
+            "title": "Decided At"
+          },
+          "published_entity_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Entity Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "proposal_id",
+          "outcome",
+          "reason",
+          "reviewer_id",
+          "expected_proposal_version",
+          "decided_at"
+        ],
+        "title": "ReviewDecisionDTO"
+      },
+      "app__schemas__v1__operational__ReviewQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {},
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ReviewQueueResponse"
       },
       "ErrorEnvelope": {
         "additionalProperties": false,

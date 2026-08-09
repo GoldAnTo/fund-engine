@@ -3,6 +3,9 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.research_monitor import ResearchRunEvent
+from app.services.case_monitor import ResearchRunEventRepository
 from app.db import get_db
 from app.schemas.v1.auto_research import (
     CancelRunResponse,
@@ -75,19 +78,31 @@ def get_run_events(
     detail = service.detail(run_id)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"research run {run_id} not found")
-    run = service.repo.get_run(run_id)
+    rows = list(
+        db.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run_id)
+            .order_by(ResearchRunEvent.seq)
+            .limit(limit + 1)
+        )
+    )
+    page = rows[:limit]
     items = [
         ResearchRunEventsItemDTO(
-            seq=1,
-            status=run.status,
-            stage=run.stage,
-            round=run.round,
-            stop_reason=run.stop_reason,
-            message="run summary",
-            created_at=run.updated_at.isoformat(),
+            seq=event.seq,
+            status=event.status,
+            stage=event.stage,
+            message=event.message,
+            details=event.payload_json,
+            created_at=event.created_at.isoformat(),
         )
+        for event in page
     ]
-    return ResearchRunEventsResponse(run_id=str(run_id), items=items[:limit], has_more=False)
+    return ResearchRunEventsResponse(
+        run_id=str(run_id),
+        items=items,
+        has_more=len(rows) > limit,
+    )
 
 
 @router.get("/research-runs/{run_id}", response_model=ResearchRunResponse)
