@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.models.ledger import AtomicClaimCandidate, AtomicClaimReview, SourceSpan, ValidationError
+from app.models.ledger import AtomicClaimCandidate, AtomicClaimReview, SourceSpan, SourceStatement, ValidationError
 
 
 _CLAIM_TYPES = frozenset({"disclosed_fact", "reported_claim", "management_attribution", "forecast", "research_opinion"})
@@ -67,7 +67,22 @@ class AtomicClaimService:
         existing = self._session.scalar(select(AtomicClaimReview).where(AtomicClaimReview.atomic_claim_candidate_id == candidate_id, AtomicClaimReview.idempotency_key == idempotency_key))
         if existing is not None:
             return existing
-        review = AtomicClaimReview(atomic_claim_candidate_id=candidate_id, outcome=outcome, reviewer=reviewer.strip(), reason=reason.strip(), idempotency_key=idempotency_key.strip(), created_at=datetime.now(timezone.utc))
+        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
+        assert candidate is not None
+        statement = None
+        if outcome in {"confirmed", "modified"}:
+            observed_period = candidate.structured_fields.get("observed_period")
+            statement = SourceStatement(
+                source_span_id=candidate.source_span_id,
+                atomic_claim_candidate_id=candidate.id,
+                kind=candidate.claim_type,
+                normalized_text=candidate.normalized_text,
+                observed_period=date.fromisoformat(observed_period) if observed_period else None,
+                created_at=datetime.now(timezone.utc),
+            )
+            self._session.add(statement)
+            self._session.flush()
+        review = AtomicClaimReview(atomic_claim_candidate_id=candidate_id, outcome=outcome, reviewer=reviewer.strip(), reason=reason.strip(), idempotency_key=idempotency_key.strip(), published_source_statement_id=statement.id if statement else None, created_at=datetime.now(timezone.utc))
         self._session.add(review)
         self._session.flush()
         return review

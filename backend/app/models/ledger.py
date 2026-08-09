@@ -329,6 +329,9 @@ class SourceStatement(Base):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
     observed_period: Mapped[date | None] = mapped_column(Date, nullable=True)
+    atomic_claim_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -367,6 +370,9 @@ class AtomicClaimReview(Base):
     reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    published_source_statement_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("source_statements.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
