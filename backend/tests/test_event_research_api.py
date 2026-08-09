@@ -233,6 +233,24 @@ def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
     assert assignment.factor_statement == active_thesis.statement
 
 
+def test_event_review_queue_exposes_the_proposal_version_required_for_human_decision(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Versioned review source",
+    )
+
+    response = cmd_client.get(f"/api/v1/event-research/{case_id}/review-queue")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["proposal_version"] == proposal.version
+
+
 def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
     cmd_client, cmd_session
 ) -> None:

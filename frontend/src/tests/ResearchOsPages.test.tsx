@@ -7,6 +7,7 @@ import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { CaseReviewPage } from "../features/case/CasePages";
 
 describe("Research OS event entry", () => {
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
@@ -42,5 +43,21 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("研究问题")).toBeVisible();
     expect(screen.getAllByLabelText(/关键因素/)).toHaveLength(3);
     expect(screen.getByRole("button", { name: "创建事件 Case" })).toBeEnabled();
+  });
+
+  it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes><Route path="/events/:caseId/review" element={<CaseReviewPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    expect(screen.getByRole("button", { name: "确认采纳" })).toBeDisabled();
+    await user.type(screen.getByLabelText("审核理由"), "原文来自冻结的一手公司披露，支持当前因素。");
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+
+    expect(await screen.findByText("当前没有待审核候选。")) .toBeVisible();
   });
 });

@@ -2874,7 +2874,7 @@ export class HttpResearchAdapter implements ResearchClient {
     const dto = await this.get<{
       summary: { total: number; reviewed: number; pending: number; invalid_source: number; current_round: number; next_action?: string | null };
       items?: Array<{
-        proposal_id: string; status: string; proposed_at: string; link_id: string; case_id: string;
+        proposal_id: string; proposal_version: number; status: string; proposed_at: string; link_id: string; case_id: string;
         thesis_id?: string | null; thesis_statement?: string | null; ai_role?: string | null; ai_reason?: string | null; ai_scope?: Record<string, unknown> | null;
         statement_id?: string | null; statement_text?: string | null; statement_kind?: string | null; span_id?: string | null; verbatim_text?: string | null; locator?: Record<string, unknown> | null;
         document_version_id?: string | null; document_source_url?: string | null; document_published_at?: string | null; available_at?: string | null;
@@ -2892,6 +2892,7 @@ export class HttpResearchAdapter implements ResearchClient {
       },
       items: (dto.items ?? []).map((item): EventReviewQueueItem => ({
           proposalId: item.proposal_id,
+          proposalVersion: item.proposal_version,
           status: item.status,
           proposedAt: item.proposed_at,
           linkId: item.link_id,

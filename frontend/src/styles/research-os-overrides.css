@@ -10,12 +10,18 @@
 .ros-wiki-edge > b { font-size: .7rem; font-weight: 600; color: var(--ros-muted, #69716d); }
 .ros-wiki-edge > small { grid-column: 1 / -1; color: var(--ros-muted, #69716d); }
 .ros-wiki-edge.is-candidate { border-style: dashed; background: #fffaf0; }
+.ros-review-decision { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; padding: .85rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: var(--ros-deep, #f6f3ec); }
+.ros-review-decision label { display: grid; gap: .35rem; color: var(--ros-soft, #59615d); font-size: .75rem; }
+.ros-review-decision textarea { min-height: 4.2rem; width: 100%; resize: vertical; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; padding: .5rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); }
+.ros-review-decision > div { display: flex; gap: .5rem; flex-wrap: wrap; }
+.ros-review-decision .ros-error { grid-column: 1 / -1; margin: 0; }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }
   .ros-case-tabs::-webkit-scrollbar { display: none; }
   .ros-case-tabs a { flex: 0 0 auto; }
   .ros-header-actions { width: 100%; justify-content: flex-start; }
+  .ros-review-decision { grid-template-columns: 1fr; }
   .ros-wiki-edge { grid-template-columns: minmax(0, 1fr) 1rem minmax(0, 1fr); }
   .ros-wiki-edge > b { grid-column: 1 / -1; }
 }

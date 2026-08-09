@@ -116,6 +116,7 @@ class EventReviewQueueItemDTO(V1Model):
     """A pending event-evidence proposal, including source admission context."""
 
     proposal_id: str
+    proposal_version: int
     status: str
     proposed_at: datetime
     link_id: str

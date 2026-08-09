@@ -112,6 +112,7 @@ export type EventSourceStatus =
 /** A proposal and its frozen-source context for event evidence review. */
 export interface EventReviewQueueItem {
   proposalId: string;
+  proposalVersion: number;
   status: string;
   proposedAt: string;
   linkId: string;

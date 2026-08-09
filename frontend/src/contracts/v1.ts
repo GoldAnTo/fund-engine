@@ -2258,6 +2258,8 @@ export interface components {
         EventReviewQueueItemDTO: {
             /** Proposal Id */
             proposal_id: string;
+            /** Proposal Version */
+            proposal_version: number;
             /** Status */
             status: string;
             /**

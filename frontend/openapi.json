@@ -7159,6 +7159,10 @@
             "type": "string",
             "title": "Proposal Id"
           },
+          "proposal_version": {
+            "type": "integer",
+            "title": "Proposal Version"
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -7359,6 +7363,7 @@
         "type": "object",
         "required": [
           "proposal_id",
+          "proposal_version",
           "status",
           "proposed_at",
           "link_id",
