@@ -22,12 +22,14 @@ class AutoResearchRepository:
         max_rounds: int = 3,
         budget: int = 100,
         scope_thesis_ids: list[str] | None = None,
+        monitor_version_id: uuid.UUID | None = None,
     ) -> ResearchRun:
         run = ResearchRun(
             research_case_id=research_case_id,
             max_rounds=max_rounds,
             budget=budget,
             scope_thesis_ids=scope_thesis_ids,
+            monitor_version_id=monitor_version_id,
             created_at=_utcnow(),
             updated_at=_utcnow(),
         )

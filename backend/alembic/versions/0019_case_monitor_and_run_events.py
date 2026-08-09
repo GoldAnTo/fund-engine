@@ -55,6 +55,15 @@ def upgrade() -> None:
         sa.UniqueConstraint("research_case_id", "version", name="uq_case_monitor_versions_case_version"),
     )
     op.create_index("ix_case_monitor_versions_case", "case_monitor_versions", ["research_case_id"])
+    op.add_column(
+        "research_runs",
+        sa.Column(
+            "monitor_version_id",
+            sa.Uuid(),
+            sa.ForeignKey("case_monitor_versions.id"),
+            nullable=True,
+        ),
+    )
     op.create_table(
         "research_run_events",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -77,5 +86,6 @@ def downgrade() -> None:
         _drop_immutable_triggers(table)
     op.drop_index("ix_research_run_events_run", table_name="research_run_events")
     op.drop_table("research_run_events")
+    op.drop_column("research_runs", "monitor_version_id")
     op.drop_index("ix_case_monitor_versions_case", table_name="case_monitor_versions")
     op.drop_table("case_monitor_versions")

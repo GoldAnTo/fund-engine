@@ -34,6 +34,7 @@ class ResearchRunEventsItemDTO(V1Model):
     round: int | None = None
     stop_reason: str | None = None
     message: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 
 

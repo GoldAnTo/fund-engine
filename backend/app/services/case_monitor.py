@@ -12,6 +12,11 @@ from app.models.ledger import ResearchCase, Thesis
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 
 
+SUPPORTED_SOURCE_TYPES = frozenset(
+    {"licensed_provider", "company_disclosure", "uploaded_file", "pasted_snapshot"}
+)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -110,6 +115,9 @@ class CaseMonitorService:
             source.strip() for source in config.allowed_source_types
         ):
             raise ValueError("at least one allowed source is required")
+        unsupported = set(config.allowed_source_types).difference(SUPPORTED_SOURCE_TYPES)
+        if unsupported:
+            raise ValueError(f"unsupported allowed source type: {sorted(unsupported)[0]}")
         if not config.next_verification_event.strip():
             raise ValueError("next verification event is required")
         if not config.change_reason.strip():
