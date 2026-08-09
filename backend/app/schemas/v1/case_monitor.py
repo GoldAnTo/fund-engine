@@ -57,5 +57,6 @@ class ConfirmedFactorOptionDTO(V1Model):
 
 class CaseMonitorDetailResponse(V1Model):
     monitor: CaseMonitorDTO | None
+    history: list[CaseMonitorDTO]
     latest_run: LatestResearchRunDTO | None
     confirmed_factors: list[ConfirmedFactorOptionDTO]

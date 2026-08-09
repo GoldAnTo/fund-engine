@@ -23,6 +23,9 @@ class CaseMonitorQuery:
             .limit(1)
         )
 
+    def history(self, case_id: uuid.UUID) -> list[CaseMonitorVersion]:
+        return list(self._session.scalars(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc())))
+
     def latest_run(self, case_id: uuid.UUID) -> ResearchRun | None:
         return self._session.scalar(
             select(ResearchRun)

@@ -48,6 +48,7 @@ def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
     run = query.latest_run(case_id)
     return CaseMonitorDetailResponse(
         monitor=_dto(monitor) if monitor is not None else None,
+        history=[_dto(item) for item in query.history(case_id)],
         latest_run=(
             LatestResearchRunDTO(
                 id=str(run.id), status=run.status, stage=run.stage, updated_at=run.updated_at

@@ -72,7 +72,7 @@ export class MockResearchOsApi implements ResearchOsApi {
   async monitor(caseId: string): ReturnType<ResearchOsApi["monitor"]> {
     const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
     this.monitors.set(caseId, monitor);
-    return { monitor, latest_run: caseId === "event-tsm" ? { id: "run-demo-1", status: "awaiting_review", stage: "review", updated_at: now } : null, confirmed_factors: factors };
+    return { monitor, history: [monitor], latest_run: caseId === "event-tsm" ? { id: "run-demo-1", status: "awaiting_review", stage: "review", updated_at: now } : null, confirmed_factors: factors };
   }
 
   async saveMonitor(caseId: string, input: Parameters<ResearchOsApi["saveMonitor"]>[1]): ReturnType<ResearchOsApi["saveMonitor"]> {

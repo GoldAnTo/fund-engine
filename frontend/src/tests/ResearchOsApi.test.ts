@@ -9,7 +9,7 @@ describe("research OS API selection", () => {
   });
 
   it("uses the explicitly selected API instead of fetching the live ledger", async () => {
-    const monitor = { monitor: null, latest_run: null, confirmed_factors: [] } satisfies MonitorDetail;
+    const monitor = { monitor: null, history: [], latest_run: null, confirmed_factors: [] } satisfies MonitorDetail;
     const localApi = { monitor: vi.fn().mockResolvedValue(monitor) } as unknown as ResearchOsApi;
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

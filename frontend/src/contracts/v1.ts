@@ -1873,6 +1873,8 @@ export interface components {
         /** CaseMonitorDetailResponse */
         CaseMonitorDetailResponse: {
             monitor: components["schemas"]["CaseMonitorDTO"] | null;
+            /** History */
+            history: components["schemas"]["CaseMonitorDTO"][];
             latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
