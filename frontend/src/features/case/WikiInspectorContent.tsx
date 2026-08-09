@@ -106,12 +106,16 @@ function EdgeInspector({
 
 export function WikiInspectorContent({ caseId }: { caseId: string }) {
   const [graph, setGraph] = useState<Graph | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showCandidates, setShowCandidates] = useState(true);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setGraph(null);
+    setError(null);
     researchOsApi.graph(caseId)
       .then((value) => {
         if (!active) return;
@@ -119,10 +123,19 @@ export function WikiInspectorContent({ caseId }: { caseId: string }) {
         setSelectedId(value.nodes[0]?.id ?? null);
         setSelectedEdgeId(null);
       })
-      .catch(() => active && setGraph(null));
+      .catch(
+        () =>
+          active &&
+          setError(
+            "无法读取 Case Wiki 图谱；系统不会把读取失败表示为没有关系。",
+          ),
+      );
     return () => { active = false; };
-  }, [caseId]);
+  }, [caseId, reload]);
 
+  if (error) {
+    return <section className="ros-empty ros-page-gap" role="alert"><strong>Case Wiki 图谱暂不可读取</strong><p>{error}</p><button className="ros-button ros-button--secondary" type="button" onClick={() => setReload((value) => value + 1)}>重试读取 Case Wiki 图谱</button></section>;
+  }
   if (!graph) {
     return <div className="ros-empty ros-page-gap">Case Wiki 暂无可读取图谱。系统不会以示例节点替代真实证据。</div>;
   }

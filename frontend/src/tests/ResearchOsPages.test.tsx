@@ -17,6 +17,7 @@ import {
   CaseFundProfilePage,
   CaseMarketPage,
   CaseReviewPage,
+  CaseRelationsPage,
   CaseScopePage,
   CaseStockProfilePage,
   CaseWikiPage,
@@ -362,6 +363,51 @@ describe("Research OS event entry", () => {
     );
     expect(
       screen.getByRole("button", { name: "重试读取市场表达" }),
+    ).toBeEnabled();
+  });
+
+  it("lets a researcher retry an unavailable Case relation read", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "caseRelations").mockRejectedValue(
+      new Error("Case relations unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/relations"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/relations"
+            element={<CaseRelationsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取当前 Case 的关联记录",
+    );
+    expect(
+      screen.getByRole("button", { name: "重试读取关联记录" }),
+    ).toBeEnabled();
+  });
+
+  it("does not call an unavailable Case Wiki an empty graph", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "graph").mockRejectedValue(new Error("Wiki unavailable"));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/wiki"]}>
+        <Routes>
+          <Route path="/events/:caseId/wiki" element={<CaseWikiPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取 Case Wiki 图谱",
+    );
+    expect(
+      screen.getByRole("button", { name: "重试读取 Case Wiki 图谱" }),
     ).toBeEnabled();
   });
 
