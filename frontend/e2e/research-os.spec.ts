@@ -77,6 +77,52 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-tsm(?:\?client=mock)?$/);
   });
 
+  test("shows a visible keyboard focus ring for the global research search", async ({ page }) => {
+    await page.goto("/events?client=mock");
+
+    const search = page.getByLabel("搜索事件、公司、命题或证据");
+    await search.focus();
+
+    await expect(search).toHaveCSS("outline-style", "solid");
+  });
+
+  test("stops the active-run pulse when reduced motion is requested", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.route("**/api/v1/research-runs/active", async (route) =>
+      route.fulfill({
+        json: {
+          items: [
+            {
+              run_id: "run-reduced-motion",
+              case_id: "event-tsm",
+              case_title: "台积电上调 CoWoS 指引后下跌",
+              status: "running",
+              stage: "retrieve",
+              updated_at: "2026-08-09T00:00:00Z",
+              processed_count: 3,
+              next_action: "查看本次运行",
+              scope: {
+                trigger: "manual",
+                monitor_version_id: "monitor-1",
+                factor_ids: ["factor-1"],
+                allowed_source_types: ["licensed_provider"],
+                budget: 20,
+              },
+            },
+          ],
+          next_cursor: null,
+          has_more: false,
+        },
+      }),
+    );
+    await page.goto("/events?client=mock");
+
+    await expect(page.locator(".ros-run-strip__pulse")).toHaveCSS(
+      "animation-name",
+      "none",
+    );
+  });
+
   test("research dispatch keeps priority, human review and system activity visible", async ({ page }) => {
     await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
       items: [{ run_id: "run-alphabet", case_id: "event-alphabet", case_title: "Alphabet 财报超预期后股价下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["licensed_provider"], budget: 20 } }], next_cursor: null, has_more: false,
