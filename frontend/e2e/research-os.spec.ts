@@ -94,4 +94,17 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("link", { name: "台积电 Case" }).first().click();
     await expect(page).toHaveURL(/\/events\/event-tsm/);
   });
+
+  test("global monitoring shows the frozen scope behind every active run", async ({ page }) => {
+    await page.route("**/api/v1/research-runs/active", async (route) => route.fulfill({ json: {
+      items: [{ run_id: "run-tsm", case_id: "event-tsm", case_title: "台积电 Case", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "schedule", monitor_version_id: "monitor-v2", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false,
+    } }));
+    await page.goto("/monitoring?client=mock");
+
+    await expect(page.getByRole("heading", { name: "全局运行与监控" })).toBeVisible();
+    await expect(page.getByRole("main")).toContainText("company_disclosure");
+    await expect(page.getByRole("main")).toContainText("monitor-v2");
+    await page.getByRole("main").getByRole("link", { name: "查看本次运行", exact: true }).click();
+    await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
+  });
 });

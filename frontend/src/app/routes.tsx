@@ -4,6 +4,7 @@ import { AppShell } from "./AppShell";
 import { CaseConclusionPage, CaseDocumentsPage, CaseEvidencePage, CaseMarketPage, CaseMonitorPage, CaseReviewPage, CaseWikiPage, MonitorConfigPage } from "../features/case/CasePages";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
 import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 
 export function ResearchOsRoutes() {
@@ -11,7 +12,7 @@ export function ResearchOsRoutes() {
     <Route index element={<Navigate to="/events" replace />} />
     <Route path="events" element={<EventDeskPage />} />
     <Route path="network" element={<ResearchNetworkPage />} />
-    <Route path="monitoring" element={<EventDeskPage />} />
+    <Route path="monitoring" element={<GlobalMonitoringPage />} />
     <Route path="events/new" element={<EventCreatePage />} />
     <Route path="events/:caseId" element={<CaseConclusionPage />} />
     <Route path="events/:caseId/evidence" element={<CaseEvidencePage />} />
