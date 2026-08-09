@@ -252,17 +252,15 @@ export function CaseEvidencePage() {
                     {evidence.sourceTitle && (
                       <span>{evidence.sourceTitle}</span>
                     )}
-                    {evidence.sourceUrl ? (
-                      <a
+                    {evidence.sourceVisibleInCase && evidence.documentVersionId ? (
+                      <Link
                         className="ros-button ros-button--secondary"
-                        href={evidence.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        to={`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`}
                       >
-                        打开冻结来源
-                      </a>
+                        定位到冻结原文
+                      </Link>
                     ) : (
-                      <span>冻结来源地址未记录</span>
+                      <span>当前未获在此 Case 定位原文的许可</span>
                     )}
                   </div>
                 </article>

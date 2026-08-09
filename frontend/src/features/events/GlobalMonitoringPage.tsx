@@ -57,11 +57,21 @@ export function GlobalMonitoringPage() {
       <div className="ros-header-actions"><button className="ros-button ros-button--secondary" type="button" disabled={refreshing} onClick={() => void loadRuns()}>{refreshing ? "正在刷新运行档案…" : "刷新运行档案"}</button><Link className="ros-button ros-button--primary" to="/events/new">＋ 新增事件</Link></div>
     </header>
     {error && <p className="ros-error" role="alert">{error}</p>}
-    {!runs ? !error && <div className="ros-empty">正在读取统一运行记录…</div> : runs.length === 0 ? <div className="ros-empty">尚无 ResearchRun。创建事件或在 Case 内启动一次受控补证后，范围和每一步都会保留在这里。</div> : <section className="ros-global-run-list" aria-label="全局研究运行档案">
+    {!runs ? !error && <GlobalRunArchiveSkeleton /> : runs.length === 0 ? <div className="ros-empty">尚无 ResearchRun。创建事件或在 Case 内启动一次受控补证后，范围和每一步都会保留在这里。</div> : <section className="ros-global-run-list" aria-label="全局研究运行档案">
       {runs.map((run) => <RunCard key={run.run_id} run={run} onOpen={() => void openRun(run)} />)}
     </section>}
     {selectedRun && <RunArchiveDrawer run={selectedRun} events={runEvents} error={runEventsError} onClose={() => setSelectedRun(null)} />}
   </main>;
+}
+
+function GlobalRunArchiveSkeleton() {
+  return <section className="ros-global-run-list ros-global-run-list--loading" aria-label="全局运行档案加载中" aria-busy="true">
+    {[0, 1].map((item) => <article className="ros-global-run" data-testid="global-run-skeleton" key={item}>
+      <header><div><i /><b /></div><span /></header>
+      <div className="ros-global-run-skeleton__scope">{[0, 1, 2, 3, 4, 5].map((field) => <span key={field} />)}</div>
+      <footer><i /><b /></footer>
+    </article>)}
+  </section>;
 }
 
 function RunCard({ run, onOpen }: { run: ResearchRunArchive; onOpen: () => void }) {

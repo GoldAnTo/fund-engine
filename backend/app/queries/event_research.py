@@ -26,6 +26,7 @@ from app.models.ledger import (
 )
 from app.models.operational import EventResearchLifecycle
 from app.models.proposals import Proposal
+from app.models.source_governance import SourceContract
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
@@ -520,28 +521,36 @@ class EventResearchQueries:
 
     def _evidence(self, case_id: uuid.UUID) -> list[EventKeyEvidenceDTO]:
         rows = self._session.execute(
-            select(EvidenceLink, Thesis, SourceStatement, SourceSpan, DocumentVersion)
+            select(
+                EvidenceLink,
+                Thesis,
+                SourceStatement,
+                SourceSpan,
+                DocumentVersion,
+                SourceContract,
+            )
             .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
             .join(SourceStatement, SourceStatement.id == EvidenceLink.source_statement_id)
             .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
             .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+            .outerjoin(
+                SourceContract,
+                SourceContract.document_version_id == DocumentVersion.id,
+            )
             .where(Thesis.research_case_id == case_id)
             .order_by(EvidenceLink.available_at.desc())
             .limit(50)
         )
         return [
-            EventKeyEvidenceDTO(
-                case_id=str(case_id),
-                factor_statement=thesis.statement,
-                role=link.role,
-                review_state=link.review_state,
-                source_title=document.title,
-                source_url=document.source_url,
-                excerpt=span.verbatim_text,
-                locator=span.locator,
-                available_at=link.available_at,
+            self._key_evidence(
+                case_id,
+                link,
+                thesis,
+                span,
+                document,
+                contract,
             )
-            for link, thesis, statement, span, document in rows
+            for link, thesis, _statement, span, document, contract in rows
         ]
 
     def _progress(
@@ -569,29 +578,70 @@ class EventResearchQueries:
         if not mapped_evidence_ids:
             return []
         rows = self._session.execute(
-            select(EvidenceLink, Thesis, SourceStatement, SourceSpan, DocumentVersion)
+            select(
+                EvidenceLink,
+                Thesis,
+                SourceStatement,
+                SourceSpan,
+                DocumentVersion,
+                SourceContract,
+            )
             .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
             .join(SourceStatement, SourceStatement.id == EvidenceLink.source_statement_id)
             .join(SourceSpan, SourceSpan.id == SourceStatement.source_span_id)
             .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+            .outerjoin(
+                SourceContract,
+                SourceContract.document_version_id == DocumentVersion.id,
+            )
             .where(EvidenceLink.id.in_(mapped_evidence_ids))
             .where(EvidenceLink.review_state == "reviewed")
             .order_by(EvidenceLink.available_at.desc())
         )
         return [
-            EventKeyEvidenceDTO(
-                case_id=str(case_id),
-                factor_statement=thesis.statement,
-                role=link.role,
-                review_state=link.review_state,
-                source_title=document.title,
-                source_url=document.source_url,
-                excerpt=span.verbatim_text,
-                locator=span.locator,
-                available_at=link.available_at,
+            self._key_evidence(
+                case_id,
+                link,
+                thesis,
+                span,
+                document,
+                contract,
             )
-            for link, thesis, statement, span, document in rows
+            for link, thesis, _statement, span, document, contract in rows
         ]
+
+    def _key_evidence(
+        self,
+        case_id: uuid.UUID,
+        link: EvidenceLink,
+        thesis: Thesis,
+        span: SourceSpan,
+        document: DocumentVersion,
+        contract: SourceContract | None,
+    ) -> EventKeyEvidenceDTO:
+        linked_to_case = self._session.scalar(
+            select(CaseDocumentVersion.id)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(CaseDocumentVersion.document_version_id == document.id)
+            .limit(1)
+        )
+        return EventKeyEvidenceDTO(
+            case_id=str(case_id),
+            factor_statement=thesis.statement,
+            role=link.role,
+            review_state=link.review_state,
+            source_title=document.title,
+            source_url=document.source_url,
+            document_version_id=str(document.id),
+            source_visible_in_case=bool(
+                linked_to_case is not None
+                and contract is not None
+                and contract.allow_display
+            ),
+            excerpt=span.verbatim_text,
+            locator=span.locator,
+            available_at=link.available_at,
+        )
 
     @staticmethod
     def _next_action(lifecycle: EventResearchLifecycle) -> EventNextActionDTO:

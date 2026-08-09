@@ -2859,17 +2859,33 @@ export class HttpResearchAdapter implements ResearchClient {
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
       conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
       factors: Array<{ thesis_id: string; statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
-      evidence: unknown[];
+      evidence: Array<{
+        case_id: string; factor_statement: string; role: string; review_state: string;
+        source_title: string | null; source_url: string | null;
+        document_version_id: string | null; source_visible_in_case: boolean;
+        excerpt: string; locator: Record<string, unknown>; available_at: string;
+      }>;
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
       next_action: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number | null };
     }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
-    const evidence = dto.evidence as EventWorkbench["evidence"];
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
       conclusion: { ...dto.conclusion, confidence: dto.conclusion.confidence ?? "low", citations: dto.conclusion.citations as EventWorkbench["conclusion"]["citations"] },
       factors: dto.factors.map((factor) => ({ thesisId: factor.thesis_id, statement: factor.statement, description: factor.description, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, pendingProposalCount: factor.pending_proposal_count ?? 0, currentGap: factor.current_gap })),
-      evidence,
+      evidence: dto.evidence.map((item) => ({
+        caseId: item.case_id,
+        factorStatement: item.factor_statement,
+        role: item.role,
+        reviewState: item.review_state,
+        sourceTitle: item.source_title,
+        sourceUrl: item.source_url,
+        documentVersionId: item.document_version_id,
+        sourceVisibleInCase: item.source_visible_in_case,
+        excerpt: item.excerpt,
+        locator: item.locator,
+        availableAt: item.available_at,
+      })),
       progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },

@@ -3008,6 +3008,10 @@ export interface components {
             source_title: string | null;
             /** Source Url */
             source_url: string | null;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Source Visible In Case */
+            source_visible_in_case: boolean;
             /** Excerpt */
             excerpt: string;
             /** Locator */

@@ -9,6 +9,8 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
+import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
@@ -73,6 +75,38 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByTestId("research-dispatch-skeleton")).toHaveLength(4);
   });
 
+  it("keeps the global run archive structure visible while monitoring loads", () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "runs").mockReturnValue(new Promise(() => {}));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/monitoring"]}>
+        <Routes>
+          <Route path="/monitoring" element={<GlobalMonitoringPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("全局运行档案加载中")).toBeVisible();
+    expect(screen.getAllByTestId("global-run-skeleton")).toHaveLength(2);
+  });
+
+  it("keeps reviewed and candidate relation lanes visible while the network loads", () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "network").mockReturnValue(new Promise(() => {}));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/network"]}>
+        <Routes>
+          <Route path="/network" element={<ResearchNetworkPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("跨 Case 关联加载中")).toBeVisible();
+    expect(screen.getAllByTestId("network-relation-skeleton")).toHaveLength(2);
+  });
+
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
@@ -124,6 +158,26 @@ describe("Research OS event entry", () => {
     expect(navigation.textContent).not.toContain("研究范围");
     expect(navigation.textContent).not.toContain("结论版本");
     expect(navigation.textContent).not.toContain("研究协议");
+  });
+
+  it("opens Case evidence through its frozen Case document instead of a live source URL", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
+        <Routes>
+          <Route path="/events/:caseId/evidence" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "定位到冻结原文" }),
+    ).toHaveAttribute(
+      "href",
+      "/events/event-tsm/documents?document=doc-event-tsm-q2",
+    );
+    expect(
+      screen.queryByRole("link", { name: "打开冻结来源" }),
+    ).not.toBeInTheDocument();
   });
 
   it("turns a Case Wiki source and AI candidate into traceable researcher actions", async () => {

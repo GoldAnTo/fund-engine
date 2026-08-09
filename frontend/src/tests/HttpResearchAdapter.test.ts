@@ -1081,6 +1081,44 @@ describe("HttpResearchAdapter", () => {
     expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
   });
 
+  it("maps event evidence to a Case-owned frozen-document action", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        event: {
+          case_id: "event-1", event_title: "Event", company_name: null, ticker: null,
+          event_at: null, lifecycle_status: "awaiting_key_review", status_summary: "等待审核",
+          next_human_action: "审核证据", updated_at: "2026-08-08T00:00:00Z",
+        },
+        lifecycle: {
+          status: "awaiting_key_review", active_run_id: null, current_round: 1,
+          status_summary: "等待审核", current_gap: null, next_human_action: "审核证据",
+        },
+        conclusion: { state: "cannot_conclude", text: "尚不能下结论", confidence: "low", citations: [] },
+        factors: [],
+        evidence: [{
+          case_id: "event-1", factor_statement: "资本开支担忧", role: "supports",
+          review_state: "reviewed", source_title: "公司披露", source_url: "https://live.example/source",
+          document_version_id: "doc-1", source_visible_in_case: true,
+          excerpt: "冻结原文", locator: { page: 12 }, available_at: "2026-08-08T00:00:00Z",
+        }],
+        progress: { verified: 1, pending: 0, invalid_source: 0, current_gap: null },
+        scope: { version: 1, factors: [], unmapped_evidence_count: 0 },
+        next_action: { kind: "review_evidence", label: "审核证据", count: 1 },
+      })),
+    );
+
+    const view = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .getEventWorkbench("event-1");
+
+    expect(view.evidence[0]).toMatchObject({
+      caseId: "event-1",
+      factorStatement: "资本开支担忧",
+      documentVersionId: "doc-1",
+      sourceVisibleInCase: true,
+    });
+  });
+
   it("sends event scope updates as PUT and maps the current scope response", async () => {
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
