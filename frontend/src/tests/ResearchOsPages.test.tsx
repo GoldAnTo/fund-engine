@@ -184,6 +184,66 @@ describe("Research OS event entry", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("makes an unavailable conclusion history explicit instead of leaving a loading message", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventConclusionHistory").mockRejectedValue(
+      new Error("Conclusion history unavailable"),
+    );
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/history"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/history"
+            element={<CaseConclusionHistoryPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取不可变结论版本",
+    );
+  });
+
+  it("makes an unavailable review queue explicit instead of leaving a loading message", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventReviewQueue").mockRejectedValue(
+      new Error("Review queue unavailable"),
+    );
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取待审核证据",
+    );
+  });
+
+  it("makes an unavailable scope-history audit explicit instead of showing an empty history", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "scopeHistory").mockRejectedValue(
+      new Error("Scope history unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/scope"]}>
+        <Routes>
+          <Route path="/events/:caseId/scope" element={<CaseScopePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取范围版本历史",
+    );
+  });
+
   it("keeps all eight stable Case research workbenches discoverable", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>

@@ -1348,6 +1348,8 @@ function ScopeEditor({
   const [history, setHistory] = useState<
     Awaited<ReturnType<typeof researchOsApi.scopeHistory>>["items"]
   >([]);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyReload, setHistoryReload] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -1355,11 +1357,20 @@ function ScopeEditor({
     setNotice(null);
   }, [initialFactors]);
   useEffect(() => {
+    let active = true;
+    setHistoryError(false);
     researchOsApi
       .scopeHistory(caseId)
-      .then((value) => setHistory(value.items))
-      .catch(() => setHistory([]));
-  }, [caseId, notice]);
+      .then((value) => {
+        if (!active) return;
+        setHistory(value.items);
+        setHistoryError(false);
+      })
+      .catch(() => active && setHistoryError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, notice, historyReload]);
   const normalized = factors.map((factor) => factor.trim()).filter(Boolean);
   function edit(index: number, value: string) {
     setFactors((current) =>
@@ -1473,20 +1484,34 @@ function ScopeEditor({
       <section className="ros-rule-history">
         <p className="ros-eyebrow">范围版本历史</p>
         <h2>谁在何时因何调整了范围</h2>
-        <ol>
-          {history.map((item) => (
-            <li key={item.version}>
-              <strong>v{item.version}</strong>
-              <span>
-                {item.changed_by} · {item.created_at}
-              </span>
-              <p>{item.change_reason}</p>
-              <small>
-                {item.factors.map((factor) => factor.statement).join("；")}
-              </small>
-            </li>
-          ))}
-        </ol>
+        {historyError ? (
+          <div className="ros-empty ros-empty--compact" role="alert">
+            <strong>无法读取范围版本历史</strong>
+            <p>当前编辑内容仍未保存；系统不会把空列表写成没有历史。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setHistoryReload((value) => value + 1)}
+            >
+              重新读取范围版本历史
+            </button>
+          </div>
+        ) : (
+          <ol>
+            {history.map((item) => (
+              <li key={item.version}>
+                <strong>v{item.version}</strong>
+                <span>
+                  {item.changed_by} · {item.created_at}
+                </span>
+                <p>{item.change_reason}</p>
+                <small>
+                  {item.factors.map((factor) => factor.statement).join("；")}
+                </small>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
     </section>
   );
@@ -1495,20 +1520,42 @@ function ConclusionHistoryContent({ caseId }: { caseId: string }) {
   const [versions, setVersions] = useState<Awaited<
     ReturnType<EventResearchClient["getEventConclusionHistory"]>
   > | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let active = true;
+    setVersions(null);
+    setLoadError(false);
     researchClient
       .getEventConclusionHistory(caseId)
-      .then((value) => active && setVersions(value))
-      .catch(() => active && setVersions(null));
+      .then((value) => {
+        if (!active) return;
+        setVersions(value);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
     return () => {
       active = false;
     };
-  }, [caseId]);
+  }, [caseId, reload]);
   if (versions === null)
     return (
-      <section className="ros-empty ros-page-gap">
-        正在读取不可变结论版本；未返回记录时不会以当前结论替代历史。
+      <section className="ros-empty ros-page-gap" role={loadError ? "alert" : undefined}>
+        {loadError ? (
+          <>
+            <strong>无法读取不可变结论版本</strong>
+            <p>系统不会以当前结论替代历史记录。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setReload((value) => value + 1)}
+            >
+              重试读取结论版本
+            </button>
+          </>
+        ) : (
+          "正在读取不可变结论版本；未返回记录时不会以当前结论替代历史。"
+        )}
       </section>
     );
   return (
@@ -1584,17 +1631,42 @@ function ReviewContent({ caseId }: { caseId: string }) {
   const [queue, setQueue] = useState<Awaited<
     ReturnType<EventResearchClient["getEventReviewQueue"]>
   > | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
+    let active = true;
+    setQueue(null);
+    setLoadError(false);
     researchClient
       .getEventReviewQueue(caseId)
-      .then(setQueue)
-      .catch(() => setQueue(null));
+      .then((value) => {
+        if (!active) return;
+        setQueue(value);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
+    return () => {
+      active = false;
+    };
   }, [caseId, reload]);
   if (!queue)
     return (
-      <div className="ros-empty ros-page-gap">
-        正在读取待审核证据；不可访问的来源不会进入审核动作。
+      <div className="ros-empty ros-page-gap" role={loadError ? "alert" : undefined}>
+        {loadError ? (
+          <>
+            <strong>无法读取待审核证据</strong>
+            <p>不可访问的来源不会进入审核动作；系统也不会把它当作空队列。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setReload((value) => value + 1)}
+            >
+              重试读取待审核证据
+            </button>
+          </>
+        ) : (
+          "正在读取待审核证据；不可访问的来源不会进入审核动作。"
+        )}
       </div>
     );
   const actionable = queue.items.filter((item) => item.canAccept);
