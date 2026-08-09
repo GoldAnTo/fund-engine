@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Integer, JSON, LargeBinary, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -41,6 +41,7 @@ AIRunStatus = Literal["success", "failed"]
 IMMUTABLE_TABLES = frozenset(
     {
         "document_versions",
+        "document_upload_artifacts",
         "case_document_versions",
         "event_research_briefs",
         "event_research_factor_drafts",
@@ -198,6 +199,44 @@ class DocumentVersion(Base):
     )
     claimed_page_reference: Mapped[str | None] = mapped_column(
         String(256), nullable=True
+    )
+
+
+class DocumentUploadArtifact(Base):
+    """The immutable original bytes supplied through the upload intake path.
+
+    ``DocumentVersion`` is the research ledger's content record.  This table
+    preserves the user-supplied object independently of parsing so a failed
+    PDF can still be re-read, audited and recovered without rewriting it.
+    The initial storage backend is PostgreSQL/SQLite bytes; ``object_version``
+    deliberately gives callers a stable value that can later map to object
+    storage without changing the document identity.
+    """
+
+    __tablename__ = "document_upload_artifacts"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id", name="uq_document_upload_artifacts_document"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False, index=True
+    )
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_version: Mapped[str] = mapped_column(String(96), nullable=False)
+    storage_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="database_blob"
+    )
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    retention_policy: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
 
 
