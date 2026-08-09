@@ -195,3 +195,59 @@ class EventResearchService:
             verbatim_text=raw_input,
         )
         return document
+
+    def attach_material_to_existing_case(
+        self,
+        case_id,
+        *,
+        raw_input: str,
+        source_url: str | None,
+        source_type: str,
+        source_metadata: dict,
+        actor: str,
+    ):
+        """Freeze a new inbox item in an existing, non-published Case.
+
+        A published Case must use the explicit comparison/decision workflow;
+        intake alone never changes a lifecycle or creates a ResearchRun.
+        """
+        lifecycle = self._session.get(EventResearchLifecycle, case_id)
+        if lifecycle is None:
+            raise ValidationFailedError("event research case not found")
+        if lifecycle.status == "published":
+            raise ValidationFailedError(
+                "published case material must use the published-material decision workflow"
+            )
+        document_service = DocumentService(DocumentRepository(self._session))
+        document_url = source_url or {
+            "pasted_snapshot": "event://inbox-material-snapshot",
+            "uploaded_file": "upload://inbox-material-text-snapshot",
+            "licensed_provider": "provider://unresolved-record",
+        }[source_type]
+        document = document_service.freeze(
+            raw=raw_input.encode("utf-8"),
+            source_url=document_url,
+            parser_version={
+                "pasted_snapshot": "user-pasted-v1",
+                "uploaded_file": "uploaded-text-v1",
+                "licensed_provider": "provider-snapshot-v1",
+            }[source_type],
+            title=source_metadata.get("file_name", "收件箱新增材料"),
+            parse_state="partial",
+            source_authority=source_metadata.get("authority_level", "unknown"),
+        )
+        document_service.attach_to_case(
+            research_case_id=case_id, document_version_id=document.id
+        )
+        SourceGovernanceService(self._session).record_event_intake(
+            document=document,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            declared_by=actor,
+        )
+        document_service.add_span(
+            document_version_id=document.id,
+            locator={"kind": source_type, "source_metadata": source_metadata, "intake": "existing_case"},
+            verbatim_text=raw_input,
+        )
+        return document

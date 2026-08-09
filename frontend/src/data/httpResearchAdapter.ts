@@ -2843,6 +2843,20 @@ export class HttpResearchAdapter implements ResearchClient {
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
+  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
+    const dto = await this.post<{ document_version_id: string }>(
+      `/event-research/${encodeURIComponent(input.caseId)}/materials`,
+      {
+        raw_input: input.rawInput,
+        source_url: input.sourceUrl || null,
+        source_type: input.sourceType,
+        source_metadata: input.sourceMetadata,
+        actor: input.actor,
+      },
+    );
+    return { documentVersionId: dto.document_version_id };
+  }
+
   async listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
     const dto = await this.get<{ items: Array<{

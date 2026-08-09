@@ -3943,6 +3943,53 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
+  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
+    this.throwIfOffline();
+    const caseItem = this.eventResearchItems().find((item) => item.id === input.caseId);
+    if (!caseItem) throw new Error("event research case not found");
+    if (caseItem.status === "published") throw new Error("published Case requires an explicit material decision");
+    const sequence = this.createdDocuments.size + 1;
+    const documentVersionId = `document-attached-${sequence}`;
+    const userControlled = input.sourceType === "pasted_snapshot" || input.sourceType === "uploaded_file";
+    this.createdDocuments.set(documentVersionId, {
+      document: {
+        id: documentVersionId,
+        title: typeof input.sourceMetadata.file_name === "string" ? input.sourceMetadata.file_name : "收件箱新增材料",
+        publisher: input.actor,
+        document_type: input.sourceType,
+        publish_date: null,
+        available_at: "2026-08-09T12:00:00Z",
+        acquired_at: "2026-08-09T12:00:00Z",
+        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : "user-pasted-v1",
+        source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "unknown",
+        parse_quality: "partial",
+        linked_cases: [{ id: input.caseId, title: caseItem.eventTitle }],
+        span_count: 1,
+        statement_count: 0,
+        version_label: "v1 · 2026-08-09",
+        source_contract: {
+          source_type: input.sourceType,
+          provider_or_tenant: input.actor,
+          permissions: { ai_processing: userControlled, display: userControlled, export: false, api: false },
+          status: userControlled ? "admitted" : "restricted",
+          region: "not_recorded",
+          retention_policy: "case_retained",
+          deletion_policy: "not_recorded",
+          downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+          contract_version: null,
+        },
+      },
+      spans: [{
+        id: `span-attached-${sequence}`,
+        document_id: documentVersionId,
+        locator: { kind: input.sourceType, source_metadata: input.sourceMetadata, intake: "existing_case" },
+        verbatim_text: input.rawInput,
+        cited_by: [],
+      }],
+    });
+    return simulateLatency({ documentVersionId });
+  }
+
   async listEventResearch(_status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     this.throwIfOffline();
     const events = this.eventResearchItems().map((event) => {

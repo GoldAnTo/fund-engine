@@ -9,6 +9,12 @@
 .ros-material-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: 1rem 0; }
 .ros-material-comparison article { min-width: 0; padding: .7rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-surface, #fffdf8); }
 .ros-material-comparison blockquote { margin: .35rem 0 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; white-space: pre-wrap; }
+.ros-material-destination { display: grid; gap: .55rem; margin: 1rem 0; padding: .85rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: var(--ros-deep, #f6f3ec); }
+.ros-material-destination legend { padding: 0 .3rem; color: var(--ros-muted, #73766f); font-size: .76rem; font-weight: 700; }
+.ros-material-destination label { display: flex; align-items: center; gap: .45rem; margin: 0; color: var(--ros-ink, #30332f); }
+.ros-material-destination small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
+.ros-existing-case-intake { display: grid; gap: .75rem; padding: .85rem 0 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
+.ros-existing-case-intake p { margin: 0; color: var(--ros-soft, #59615d); font-size: .8rem; line-height: 1.55; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible
    across dense evidence workbenches without relying on color alone. */

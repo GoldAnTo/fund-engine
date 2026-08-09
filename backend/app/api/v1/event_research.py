@@ -11,6 +11,8 @@ from app.errors import ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
+    AttachEventMaterialRequest,
+    AttachEventMaterialResponse,
     CaseRelationReviewDTO,
     CaseRelationReviewRequest,
     EventResearchLifecycleDTO,
@@ -231,6 +233,41 @@ def continue_event_research(
             current_gap=lifecycle.current_gap,
             next_human_action=lifecycle.next_human_action,
         ),
+    )
+
+
+@router.post("/{case_id}/materials", response_model=AttachEventMaterialResponse, status_code=status.HTTP_201_CREATED)
+def attach_event_material(
+    case_id: uuid.UUID,
+    payload: AttachEventMaterialRequest,
+    db: Session = Depends(get_db),
+) -> AttachEventMaterialResponse:
+    try:
+        document = EventResearchService(db).attach_material_to_existing_case(
+            case_id,
+            raw_input=payload.raw_input,
+            source_url=payload.source_url,
+            source_type=payload.source_type,
+            source_metadata=payload.source_metadata,
+            actor=payload.actor,
+        )
+        emit_event(
+            db,
+            type="event_material_attached",
+            aggregate_type="document_version",
+            aggregate_id=document.id,
+            ref_type="research_case",
+            ref_id=case_id,
+            origin="operational",
+            actor=payload.actor,
+            payload={"source_type": payload.source_type, "case_id": str(case_id)},
+        )
+        db.commit()
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return AttachEventMaterialResponse(
+        document_version_id=str(document.id), source_type=payload.source_type
     )
 
 

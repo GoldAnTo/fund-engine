@@ -4194,6 +4194,59 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/materials": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Attach Event Material",
+        "operationId": "attach_event_material_api_v1_event_research__case_id__materials_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachEventMaterialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachEventMaterialResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/published-material-decisions": {
       "post": {
         "tags": [
@@ -6342,6 +6395,78 @@
           "idempotency_key"
         ],
         "title": "AtomicClaimReviewRequest"
+      },
+      "AttachEventMaterialRequest": {
+        "properties": {
+          "raw_input": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Input"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "pasted_snapshot",
+              "uploaded_file",
+              "licensed_provider"
+            ],
+            "title": "Source Type",
+            "default": "pasted_snapshot"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_input",
+          "actor"
+        ],
+        "title": "AttachEventMaterialRequest"
+      },
+      "AttachEventMaterialResponse": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "pasted_snapshot",
+              "uploaded_file",
+              "licensed_provider"
+            ],
+            "title": "Source Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "source_type"
+        ],
+        "title": "AttachEventMaterialResponse"
       },
       "CancelRunRequest": {
         "properties": {
