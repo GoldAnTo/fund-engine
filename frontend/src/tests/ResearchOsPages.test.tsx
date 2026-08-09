@@ -171,6 +171,33 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/系统不会把市场表现自动写成机制成立/)).toBeVisible();
   });
 
+  it("edits a rule from the current Case version and never posts to a global template edge", async () => {
+    const user = userEvent.setup();
+    const template = { id: "template-1", template_key: "overseas_ai_capex_to_china_hardware", version: 1, display_name: "海外 AI CapEx 到中国硬件", industry_scope: "ai_hardware", approved_by: "human", reason: "已审核路径", created_at: "2026-08-09T00:00:00Z", nodes: [{ id: "node-a", node_key: "customer_capex", display_name: "客户 CapEx", role: "required_for_attribution" }, { id: "node-b", node_key: "architecture", display_name: "目标架构", role: "required_for_outcome" }], edges: [{ id: "edge-1", edge_key: "capex_to_architecture", source_node_id: "node-a", target_node_id: "node-b" }] };
+    const rule = { id: "rule-1", research_case_id: "event-tsm", mechanism_edge_id: "edge-1", metric_definition_id: "metric-1", expected_direction: "increase", support_predicate: "原始支持条件", contradiction_predicate: "原始反证条件", allowed_source_roles: ["primary_disclosure"], observed_period_start: "2026-01-01", observed_period_end: "2026-03-31", available_at_deadline: "2026-05-31", next_verification_event: "一季报", supersedes_id: null, reviewer: "human:reviewer", reason: "原始登记原因", created_at: "2026-08-09T00:00:00Z" };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/researchability") ? { status: "blocked", reason_codes: ["missing_verification_rule"], effective_binding_id: null, next_action: "补齐机制边规则" }
+        : url.endsWith("/mechanism-templates") ? [template]
+        : url.includes("/mechanism-protocol") ? { selection: { id: "selection-1", research_case_id: "event-tsm", template_version_id: "template-1", supersedes_id: null, reviewer: "human", reason: "适用", created_at: "2026-08-09T00:00:00Z" }, template, rules: [rule] }
+        : url.endsWith("/metric-definitions") ? [{ id: "metric-1", metric_id: "capex", version: 1, display_name: "客户 CapEx", entity_scope: "company", unit: "yuan", role_eligibility: ["driver"], approved_by: "human", reason: "指标", created_at: "2026-08-09T00:00:00Z" }]
+        : rule;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/events/event-tsm/protocol"]}><Routes><Route path="/events/:caseId/protocol" element={<CaseProtocolPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText(/当前 Case 独有/)).toBeVisible();
+    expect(screen.getByLabelText("支持条件")).toHaveValue("原始支持条件");
+    await user.clear(screen.getByLabelText("支持条件"));
+    await user.type(screen.getByLabelText("支持条件"), "调整后的支持条件");
+    await user.click(screen.getByRole("button", { name: "保存为新的验证规则版本" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/research-cases/event-tsm/mechanism-edges/edge-1/verification-rules",
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
   it("opens a Case-scoped frozen source snapshot with its exact locator", async () => {
     const user = userEvent.setup();
     render(

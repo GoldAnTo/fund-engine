@@ -42,5 +42,5 @@ export const researchOsApi = {
   mechanismTemplates: () => request<MechanismTemplate[]>("/mechanism-templates"),
   caseMechanismProtocol: (caseId: string) => request<CaseMechanismProtocol>(`/research-cases/${caseId}/mechanism-protocol`),
   selectMechanismTemplate: (caseId: string, input: Schemas["SelectMechanismTemplateRequest"]) => request<Schemas["MechanismSelectionDTO"]>(`/research-cases/${caseId}/mechanism-selection`, { method: "POST", body: JSON.stringify(input) }),
-  createVerificationRule: (edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
+  createVerificationRule: (caseId: string, edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/research-cases/${caseId}/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
 };

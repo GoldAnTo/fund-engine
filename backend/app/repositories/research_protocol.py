@@ -148,6 +148,7 @@ class ResearchProtocolRepository:
     def add_verification_rule_version(
         self,
         *,
+        research_case_id: uuid.UUID,
         mechanism_edge_id: uuid.UUID,
         metric_definition_id: uuid.UUID,
         expected_direction: str,
@@ -162,8 +163,9 @@ class ResearchProtocolRepository:
         reason: str,
         created_at: datetime,
     ) -> VerificationRuleVersion:
-        prior = self.effective_rule(mechanism_edge_id)
+        prior = self.effective_rule(research_case_id, mechanism_edge_id)
         rule = VerificationRuleVersion(
+            research_case_id=research_case_id,
             mechanism_edge_id=mechanism_edge_id,
             metric_definition_id=metric_definition_id,
             expected_direction=expected_direction,
@@ -183,10 +185,15 @@ class ResearchProtocolRepository:
         self._session.flush()
         return rule
 
-    def effective_rule(self, mechanism_edge_id: uuid.UUID) -> VerificationRuleVersion | None:
+    def effective_rule(
+        self, research_case_id: uuid.UUID, mechanism_edge_id: uuid.UUID
+    ) -> VerificationRuleVersion | None:
         return self._session.scalar(
             select(VerificationRuleVersion)
-            .where(VerificationRuleVersion.mechanism_edge_id == mechanism_edge_id)
+            .where(
+                VerificationRuleVersion.research_case_id == research_case_id,
+                VerificationRuleVersion.mechanism_edge_id == mechanism_edge_id,
+            )
             .order_by(VerificationRuleVersion.created_at.desc(), VerificationRuleVersion.id.desc())
             .limit(1)
         )

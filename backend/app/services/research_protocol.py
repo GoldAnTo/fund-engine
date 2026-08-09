@@ -170,13 +170,21 @@ class ResearchProtocolService:
             created_at=_utcnow(),
         )
 
-    def add_verification_rule(self, mechanism_edge_id: uuid.UUID, value: VerificationRuleInput):
+    def add_verification_rule(
+        self, research_case_id: uuid.UUID, mechanism_edge_id: uuid.UUID, value: VerificationRuleInput
+    ):
+        research_case = self._session.get(ResearchCase, research_case_id)
         edge = self._session.get(MechanismEdgeVersion, mechanism_edge_id)
         metric = self._session.get(MetricDefinitionVersion, value.metric_definition_id)
+        if research_case is None:
+            raise ValidationError("research case not found")
         if edge is None:
             raise ValidationError("mechanism edge not found")
         if metric is None:
             raise ValidationError("verification metric not found")
+        selection = self._repo.effective_case_template(research_case_id)
+        if selection is None or selection.template_version_id != edge.template_version_id:
+            raise ValidationError("mechanism edge is not selected for this research case")
         if value.expected_direction not in _OUTCOME_DIRECTIONS:
             raise ValidationError("verification expected_direction is invalid")
         if not value.support_predicate.strip() or not value.contradiction_predicate.strip():
@@ -188,6 +196,7 @@ class ResearchProtocolService:
         if not value.next_verification_event.strip() or not value.reviewer.strip() or not value.reason.strip():
             raise ValidationError("verification event, reviewer and reason must not be empty")
         return self._repo.add_verification_rule_version(
+            research_case_id=research_case_id,
             mechanism_edge_id=mechanism_edge_id,
             metric_definition_id=metric.id,
             expected_direction=value.expected_direction,
@@ -268,7 +277,7 @@ class ResearchProtocolService:
             )
         }
         required_edges = [edge for edge in edges if node_roles.get(edge.target_node_id) in {"required_for_outcome", "required_for_attribution"}]
-        rules = {edge.id: self._repo.effective_rule(edge.id) for edge in edges}
+        rules = {edge.id: self._repo.effective_rule(thesis.research_case_id, edge.id) for edge in edges}
         reasons: list[str] = []
         if any(rules.get(edge.id) is None for edge in required_edges):
             reasons.append("missing_verification_rule")

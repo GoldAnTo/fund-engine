@@ -104,6 +104,9 @@ class VerificationRuleVersion(Base):
     __tablename__ = "verification_rule_versions"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    # Template edges are reusable; reviewers configure the rule within one Case.
+    # The column remains nullable only to preserve already-recorded pre-scope rows.
+    research_case_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=True, index=True)
     mechanism_edge_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("mechanism_edge_versions.id"), nullable=False, index=True)
     metric_definition_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("metric_definition_versions.id"), nullable=False)
     expected_direction: Mapped[str] = mapped_column(String(16), nullable=False)

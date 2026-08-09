@@ -13,7 +13,6 @@ from app.models.research_protocol import (
     MechanismNodeVersion,
     MechanismTemplateVersion,
     MetricDefinitionVersion,
-    VerificationRuleVersion,
 )
 from app.repositories.research_protocol import ResearchProtocolRepository
 from app.schemas.v1.research_protocol import (
@@ -52,7 +51,7 @@ def _selection_dto(value) -> MechanismSelectionDTO:
 
 
 def _rule_dto(value) -> VerificationRuleDTO:
-    return VerificationRuleDTO(id=str(value.id), mechanism_edge_id=str(value.mechanism_edge_id), metric_definition_id=str(value.metric_definition_id), expected_direction=value.expected_direction, support_predicate=value.support_predicate, contradiction_predicate=value.contradiction_predicate, allowed_source_roles=list(value.allowed_source_roles), observed_period_start=value.observed_period_start, observed_period_end=value.observed_period_end, available_at_deadline=value.available_at_deadline, next_verification_event=value.next_verification_event, supersedes_id=str(value.supersedes_id) if value.supersedes_id else None, reviewer=value.reviewer, reason=value.reason, created_at=value.created_at)
+    return VerificationRuleDTO(id=str(value.id), research_case_id=str(value.research_case_id) if value.research_case_id else None, mechanism_edge_id=str(value.mechanism_edge_id), metric_definition_id=str(value.metric_definition_id), expected_direction=value.expected_direction, support_predicate=value.support_predicate, contradiction_predicate=value.contradiction_predicate, allowed_source_roles=list(value.allowed_source_roles), observed_period_start=value.observed_period_start, observed_period_end=value.observed_period_end, available_at_deadline=value.available_at_deadline, next_verification_event=value.next_verification_event, supersedes_id=str(value.supersedes_id) if value.supersedes_id else None, reviewer=value.reviewer, reason=value.reason, created_at=value.created_at)
 
 
 @router.post("/metric-definitions", response_model=MetricDefinitionDTO, status_code=status.HTTP_201_CREATED)
@@ -111,12 +110,12 @@ def case_mechanism_protocol(case_id: uuid.UUID, db: Session = Depends(get_db)):
         return CaseMechanismProtocolDTO(selection=None, template=None, rules=[])
     template = repo.template(selection.template_version_id)
     edge_ids = [edge.id for edge in db.scalars(select(MechanismEdgeVersion).where(MechanismEdgeVersion.template_version_id == selection.template_version_id))]
-    rules = [_rule_dto(rule) for edge_id in edge_ids if (rule := repo.effective_rule(edge_id)) is not None]
+    rules = [_rule_dto(rule) for edge_id in edge_ids if (rule := repo.effective_rule(case_id, edge_id)) is not None]
     return CaseMechanismProtocolDTO(selection=_selection_dto(selection), template=_template_dto(db, template), rules=rules)
 
 
-@router.post("/mechanism-edges/{edge_id}/verification-rules", response_model=VerificationRuleDTO, status_code=status.HTTP_201_CREATED)
-def create_verification_rule(edge_id: uuid.UUID, payload: VerificationRuleRequest, db: Session = Depends(get_db)):
-    rule = translate_validation(ResearchProtocolService(db).add_verification_rule, edge_id, VerificationRuleInput(metric_definition_id=payload.metric_definition_id, expected_direction=payload.expected_direction, support_predicate=payload.support_predicate, contradiction_predicate=payload.contradiction_predicate, allowed_source_roles=list(payload.allowed_source_roles), observed_period_start=payload.observed_period_start, observed_period_end=payload.observed_period_end, available_at_deadline=payload.available_at_deadline, next_verification_event=payload.next_verification_event, reviewer=payload.reviewer, reason=payload.reason))
+@router.post("/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules", response_model=VerificationRuleDTO, status_code=status.HTTP_201_CREATED)
+def create_verification_rule(case_id: uuid.UUID, edge_id: uuid.UUID, payload: VerificationRuleRequest, db: Session = Depends(get_db)):
+    rule = translate_validation(ResearchProtocolService(db).add_verification_rule, case_id, edge_id, VerificationRuleInput(metric_definition_id=payload.metric_definition_id, expected_direction=payload.expected_direction, support_predicate=payload.support_predicate, contradiction_predicate=payload.contradiction_predicate, allowed_source_roles=list(payload.allowed_source_roles), observed_period_start=payload.observed_period_start, observed_period_end=payload.observed_period_end, available_at_deadline=payload.available_at_deadline, next_verification_event=payload.next_verification_event, reviewer=payload.reviewer, reason=payload.reason))
     commit_or_rollback(db)
     return _rule_dto(rule)

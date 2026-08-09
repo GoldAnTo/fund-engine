@@ -35,8 +35,9 @@ def test_case_protocol_api_lists_templates_and_appends_selection(cmd_client, cmd
     })
     assert metric.status_code == 201, metric.text
     rule = cmd_client.post(
-        f"/api/v1/mechanism-edges/{protocol.json()['template']['edges'][0]['id']}/verification-rules",
+        f"/api/v1/research-cases/{case.id}/mechanism-edges/{protocol.json()['template']['edges'][0]['id']}/verification-rules",
         json={"metric_definition_id": metric.json()["id"], "expected_direction": "increase", "support_predicate": "披露的 CapEx 同比增长", "contradiction_predicate": "CapEx 下调", "allowed_source_roles": ["primary_disclosure"], "observed_period_start": "2026-01-01", "observed_period_end": "2026-03-31", "available_at_deadline": "2026-05-31", "next_verification_event": "季度财报", "reviewer": "human:reviewer", "reason": "定义反证规则"},
     )
     assert rule.status_code == 201, rule.text
+    assert rule.json()["research_case_id"] == str(case.id)
     assert rule.json()["contradiction_predicate"] == "CapEx 下调"

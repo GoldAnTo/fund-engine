@@ -7,12 +7,13 @@ from sqlalchemy import select, update
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.models.ledger import EvidenceSnapshot, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
-from app.models.research_protocol import MechanismNodeVersion, MechanismTemplateVersion
+from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion, MechanismTemplateVersion
 from app.services.mechanism_templates import seed_ai_capex_template
 from app.services.research_protocol import (
     MetricDefinitionInput,
     OutcomeBindingInput,
     ResearchProtocolService,
+    VerificationRuleInput,
 )
 
 
@@ -89,6 +90,37 @@ def test_gate_requires_rules_and_independent_metrics_after_template_selection(se
     result = service.check_researchability(thesis.id)
 
     assert result.reason_codes == ["missing_verification_rule", "insufficient_primary_metrics", "missing_counter_hypothesis"]
+
+
+def test_verification_rules_are_scoped_to_the_case_that_selected_the_template(session) -> None:
+    now = datetime.now(timezone.utc)
+    first_case = ResearchCase(title="第一个事件", industry_topic="ai", created_by="human", created_at=now)
+    second_case = ResearchCase(title="第二个事件", industry_topic="ai", created_by="human", created_at=now)
+    session.add_all([first_case, second_case])
+    session.flush()
+    template = seed_ai_capex_template(session)
+    service = ResearchProtocolService(session)
+    service.select_template(first_case.id, template.id, reviewer="human", reason="第一个事件适用")
+    service.select_template(second_case.id, template.id, reviewer="human", reason="第二个事件适用")
+    metric = service.add_metric_version(MetricDefinitionInput(
+        metric_id="case_scoped_capex", display_name="Case 范围 CapEx", canonical_definition="Case 内客户 CapEx",
+        entity_scope="company", unit="yuan", frequency="quarterly", period_semantics="period_end",
+        allowed_source_roles=["primary_disclosure"], role_eligibility=["driver"],
+    ), approved_by="human", reason="用于隔离性测试")
+    edge = session.scalar(select(MechanismEdgeVersion).where(MechanismEdgeVersion.template_version_id == template.id))
+    assert edge is not None
+
+    first_rule = service.add_verification_rule(first_case.id, edge.id, VerificationRuleInput(
+        metric_definition_id=metric.id, expected_direction="increase", support_predicate="CapEx 增长",
+        contradiction_predicate="CapEx 下调", allowed_source_roles=["primary_disclosure"],
+        observed_period_start=date(2026, 1, 1), observed_period_end=date(2026, 3, 31),
+        available_at_deadline=date(2026, 5, 31), next_verification_event="一季报",
+        reviewer="human", reason="只用于第一个事件",
+    ))
+
+    assert first_rule.research_case_id == first_case.id
+    assert service._repo.effective_rule(first_case.id, edge.id).id == first_rule.id
+    assert service._repo.effective_rule(second_case.id, edge.id) is None
 
 
 def test_blocked_protocol_thesis_never_freezes_an_assessment_snapshot(session) -> None:

@@ -134,6 +134,7 @@ class VerificationRuleRequest(V1Model):
 
 class VerificationRuleDTO(V1Model):
     id: str
+    research_case_id: str | None
     mechanism_edge_id: str
     metric_definition_id: str
     expected_direction: str

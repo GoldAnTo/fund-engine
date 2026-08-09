@@ -6,6 +6,8 @@
 
 **Architecture:** Persist template versions, nodes, edges, Case selections and verification-rule versions as append-only ledger records. Seed only `overseas_ai_capex_to_china_hardware/v1`; human reviewers select it and append rules. The gate reads persisted effective versions only, and the AI assessment generator refuses blocked protocol theses before freezing a snapshot.
 
+**Case-scope correction (2026-08-09):** A template is reusable, but its verification rules are never global template defaults. Every rule version belongs to one `ResearchCase`, and its supersession chain is resolved by `(research_case_id, mechanism_edge_id)`. Selecting the same template in a second Case therefore starts with no rules and cannot inherit another Case's assumptions, reviewer, or timing window.
+
 **Tech Stack:** Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, SQLite/PostgreSQL, React, TypeScript, pytest, Vitest.
 
 ---
@@ -251,7 +253,7 @@ Expected: API returns 404 and UI text is absent.
 
 - [ ] **Step 3: Implement reviewer routes and visible audit controls**
 
-Add `GET /mechanism-templates`, `POST /research-cases/{case_id}/mechanism-selection`, `GET /research-cases/{case_id}/mechanism-protocol`, and `POST /mechanism-edges/{edge_id}/verification-rules`. The Case page displays selected template/version, every node role, each rule's permitted source roles, support/contradiction predicates, next event, reviewer, reason and timestamp. Each mutation appends a new record and refreshes the read model; failures leave the prior protocol intact.
+Add `GET /mechanism-templates`, `POST /research-cases/{case_id}/mechanism-selection`, `GET /research-cases/{case_id}/mechanism-protocol`, and `POST /research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules`. The Case page displays selected template/version, every node role, each Case-scoped rule's permitted source roles, support/contradiction predicates, next event, reviewer, reason and timestamp. Each mutation appends a new record and refreshes the read model; failures leave the prior protocol intact.
 
 - [ ] **Step 4: Regenerate contracts and verify**
 
@@ -275,4 +277,3 @@ git commit -m "feat: review case mechanism protocol"
 - Spec coverage: Tasks 1-2 deliver versioned mechanism objects and only the confirmed AI CapEx path; Task 3 enforces necessary nodes, independent metrics, alternatives and falsifiers before formal assessment; Task 4 provides traceable human configuration rather than hidden automation.
 - Explicit exclusions: no model can select a template, approve a rule or infer a threshold; no market observation/fund disclosure becomes causal proof; no trading, target-price or return forecast is introduced.
 - The API uses the same immutable IDs stored by the gate. Template upgrades append a new version and case selection; they do not rewrite conclusions.
-

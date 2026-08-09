@@ -4334,14 +4334,24 @@
         }
       }
     },
-    "/api/v1/mechanism-edges/{edge_id}/verification-rules": {
+    "/api/v1/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules": {
       "post": {
         "tags": [
           "research-protocol-v1"
         ],
         "summary": "Create Verification Rule",
-        "operationId": "create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post",
+        "operationId": "create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post",
         "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
           {
             "name": "edge_id",
             "in": "path",
@@ -15603,6 +15613,17 @@
             "type": "string",
             "title": "Id"
           },
+          "research_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Case Id"
+          },
           "mechanism_edge_id": {
             "type": "string",
             "title": "Mechanism Edge Id"
@@ -15678,6 +15699,7 @@
         "type": "object",
         "required": [
           "id",
+          "research_case_id",
           "mechanism_edge_id",
           "metric_definition_id",
           "expected_direction",

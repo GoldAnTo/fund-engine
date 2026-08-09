@@ -1259,7 +1259,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mechanism-edges/{edge_id}/verification-rules": {
+    "/api/v1/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules": {
         parameters: {
             query?: never;
             header?: never;
@@ -1269,7 +1269,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Create Verification Rule */
-        post: operations["create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post"];
+        post: operations["create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5265,6 +5265,8 @@ export interface components {
         VerificationRuleDTO: {
             /** Id */
             id: string;
+            /** Research Case Id */
+            research_case_id: string | null;
             /** Mechanism Edge Id */
             mechanism_edge_id: string;
             /** Metric Definition Id */
@@ -7983,11 +7985,12 @@ export interface operations {
             };
         };
     };
-    create_verification_rule_api_v1_mechanism_edges__edge_id__verification_rules_post: {
+    create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                case_id: string;
                 edge_id: string;
             };
             cookie?: never;
