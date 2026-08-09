@@ -9,6 +9,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
@@ -71,6 +72,22 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("研究调度加载中")).toBeVisible();
     expect(screen.getAllByTestId("research-dispatch-skeleton")).toHaveLength(4);
+  });
+
+  it("keeps the global run archive structure visible while monitoring loads", () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "runs").mockReturnValue(new Promise(() => {}));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/monitoring"]}>
+        <Routes>
+          <Route path="/monitoring" element={<GlobalMonitoringPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("全局运行档案加载中")).toBeVisible();
+    expect(screen.getAllByTestId("global-run-skeleton")).toHaveLength(2);
   });
 
   it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
