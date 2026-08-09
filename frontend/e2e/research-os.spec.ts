@@ -72,6 +72,24 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("blockquote").filter({ hasText: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
   });
 
+  test("mock recovery keeps the original and opens its frozen supplement in the same Case", async ({ page }) => {
+    await page.goto("/events/event-tsm/documents?client=mock");
+
+    await page.getByRole("button", { name: "从冻结资料提取候选" }).click();
+    await expect(page.getByRole("button", { name: "继续补充原 Case" })).toBeVisible();
+    await page.getByRole("button", { name: "继续补充原 Case" }).click();
+    await page.getByLabel("补充正文").fill("公司在第 3 页明确上调全年资本开支指引。");
+    await page.getByLabel("声称页码或位置").fill("第 3 页");
+    await page.getByRole("button", { name: "冻结补充正文" }).click();
+
+    await expect(page.getByRole("heading", { name: /补充正文/ })).toBeVisible();
+    await expect(page.getByRole("blockquote").filter({ hasText: "公司在第 3 页明确上调全年资本开支指引。" })).toBeVisible();
+    await page.getByRole("button", { name: "从冻结资料提取候选" }).click();
+    await expect(page.getByText(/创建 1 条待人工审核的原子陈述/)).toBeVisible();
+    await page.getByRole("link", { name: "进入证据审核 →" }).click();
+    await expect(page.getByText("公司在第 3 页明确上调全年资本开支指引。").last()).toBeVisible();
+  });
+
   test("Case Wiki renders reviewed and candidate relationships as inspectable paths", async ({ page }) => {
     await page.route("**/api/v1/research-cases/event-tsm/graph?research_mode=true", async (route) => route.fulfill({ json: {
       schema_version: "graph/v1", basis: { as_of: "2026-08-08T00:00:00Z", available_at: "2026-08-08T00:00:00Z" }, page: { items: 3, next_cursor: null }, paths: [],

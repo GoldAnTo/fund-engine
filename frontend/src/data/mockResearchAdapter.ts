@@ -27,6 +27,7 @@ import type {
   ValuationSnapshot,
   WorkspaceOverview,
 } from "../domain/types";
+import type { components } from "../contracts/v1";
 import { PageStateError } from "../domain/types";
 import type {
   CreateEventResearchInput,
@@ -2983,6 +2984,8 @@ export class MockResearchAdapter implements ResearchClient {
     spans: DocumentSpan[];
   }>();
   private createdEventCount = 0;
+  private createdSupplementCount = 0;
+  private extractedDocumentIds = new Set<string>();
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2997,6 +3000,8 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventStates.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
+    this.createdSupplementCount = 0;
+    this.extractedDocumentIds.clear();
   }
 
   getDecisions() {
@@ -3593,13 +3598,65 @@ export class MockResearchAdapter implements ResearchClient {
     documentVersionId: string,
   ): Promise<ExtractStatementsResult> {
     this.throwIfOffline();
-    // 离线原型无法运行 LLM 抽取；如实返回 0 条。
+    const created = this.createdDocuments.get(documentVersionId);
+    if (created && created.document.source_contract?.permissions.ai_processing !== false) {
+      this.extractedDocumentIds.add(documentVersionId);
+      return simulateLatency({ documentVersionId, mode: "mock", candidateCount: 1, reason: null });
+    }
+    // Seed documents deliberately model an extraction gap; they remain recoverable.
     return simulateLatency({
       documentVersionId,
       mode: "mock",
       candidateCount: 0,
       reason: "离线原型未运行 LLM 抽取",
     });
+  }
+
+  getAtomicClaimCandidates(caseId: string): components["schemas"]["AtomicClaimCandidateDTO"][] {
+    return [...this.extractedDocumentIds].flatMap((documentId) => {
+      const item = this.createdDocuments.get(documentId);
+      const span = item?.spans[0];
+      if (!item || !span || !item.document.linked_cases.some((linked) => linked.id === caseId)) return [];
+      return [{ id: `atomic-${documentId}`, source_span_id: span.id, document_version_id: documentId, document_source_url: "", locator: span.locator, quote: span.verbatim_text, quote_start: 0, quote_end: span.verbatim_text.length, quote_sha256: "b".repeat(64), normalized_text: span.verbatim_text, claim_type: "source_excerpt", assertion_actor: item.document.publisher, authority_level: item.document.source_authority ?? "unknown", structured_fields: { run_ref: `mock-extract:${documentId}` }, validation_result: { quote_continuous: true }, created_at: "2026-08-09T12:06:00Z", review_state: "awaiting_review", review_history: [], published_source_statement: null }];
+    });
+  }
+
+  /** Test-only mock equivalent of the append-only supplement endpoint. */
+  async createDocumentSupplement(input: {
+    caseId: string;
+    documentId: string;
+    rawText: string;
+    claimedPageReference: string;
+    createdBy: string;
+  }): Promise<{ documentVersionId: string; originalDocumentVersionId: string; extractionAllowed: boolean }> {
+    this.throwIfOffline();
+    const original = await this.getDocumentDetail(input.documentId);
+    if (!original.document.linked_cases.some((item) => item.id === input.caseId)) {
+      throw new PageStateError("stale", "资料不属于当前 Case");
+    }
+    const documentVersionId = `document-supplement-${++this.createdSupplementCount}`;
+    const contract = original.document.source_contract;
+    const extractionAllowed = original.document.parse_quality !== "failed" && contract?.permissions.ai_processing !== false;
+    const document: SourceDocumentView = {
+      ...original.document,
+      id: documentVersionId,
+      title: `${original.document.title || "未命名资料"} · 补充正文`,
+      publisher: input.createdBy,
+      document_type: "pasted_snapshot",
+      available_at: "2026-08-09T12:05:00Z",
+      acquired_at: "2026-08-09T12:05:00Z",
+      parser_version: "user-supplement-v1",
+      parse_quality: "partial",
+      span_count: 1,
+      statement_count: 0,
+      version_label: `${original.document.version_label || "v1"} · 补充 v${this.createdSupplementCount}`,
+      source_contract: contract ? { ...contract, provider_or_tenant: input.createdBy } : contract,
+    };
+    this.createdDocuments.set(documentVersionId, {
+      document,
+      spans: [{ id: `span-supplement-${this.createdSupplementCount}`, document_id: documentVersionId, locator: { claimed_page_reference: input.claimedPageReference }, verbatim_text: input.rawText, cited_by: [] }],
+    });
+    return simulateLatency({ documentVersionId, originalDocumentVersionId: input.documentId, extractionAllowed });
   }
 
   // ── 公司研究（/companies）───────────────────────────────────────────────

@@ -18,8 +18,9 @@ async function bootstrap() {
   ) {
     const { MockResearchAdapter } = await import("./data/mockResearchAdapter");
     const { MockResearchOsApi } = await import("./data/mockResearchOsApi");
-    setResearchClient(new MockResearchAdapter());
-    setResearchOsApi(new MockResearchOsApi());
+    const mockAdapter = new MockResearchAdapter();
+    setResearchClient(mockAdapter);
+    setResearchOsApi(new MockResearchOsApi(mockAdapter));
   }
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>

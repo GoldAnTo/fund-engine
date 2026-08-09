@@ -31,6 +31,17 @@ const metrics: Schemas["MetricDefinitionDTO"][] = [
   { id: "metric-fcf", metric_id: "free_cash_flow", version: 1, display_name: "自由现金流", entity_scope: "company", unit: "USD m", role_eligibility: ["outcome"], approved_by: "human:methodology", reason: "用于验证资金压力", created_at: now },
 ];
 
+export interface MockDocumentSupplementStore {
+  createDocumentSupplement(input: {
+    caseId: string;
+    documentId: string;
+    rawText: string;
+    claimedPageReference: string;
+    createdBy: string;
+  }): Promise<{ documentVersionId: string; originalDocumentVersionId: string; extractionAllowed: boolean }>;
+  getAtomicClaimCandidates(caseId: string): AtomicClaim[];
+}
+
 function monitorFor(caseId: string, version = 1, status = "active", reason = "建立可回放的演示监控范围"): Monitor {
   return { id: `monitor-${caseId}-v${version}`, version, status, frequency: "weekday_08_30", factor_ids: factors.map((factor) => factor.id), allowed_source_types: ["licensed_provider", "company_disclosure"], next_verification_event: "下一次公司季报披露", budget: 20, changed_by: "human:researcher", change_reason: reason, created_at: now };
 }
@@ -52,7 +63,10 @@ export class MockResearchOsApi implements ResearchOsApi {
   private monitors = new Map<string, Monitor>();
   private rules = new Map<string, Rule[]>();
   private claims = new Map<string, AtomicClaim[]>();
+  private reviewedClaimIds = new Set<string>();
   private bindings = new Map<string, Schemas["OutcomeBindingDTO"]>();
+
+  constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
   async monitor(caseId: string): ReturnType<ResearchOsApi["monitor"]> {
     const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
@@ -134,7 +148,11 @@ export class MockResearchOsApi implements ResearchOsApi {
   async selectMechanismTemplate(caseId: string, input: Parameters<ResearchOsApi["selectMechanismTemplate"]>[1]): ReturnType<ResearchOsApi["selectMechanismTemplate"]> { return { id: `selection-${caseId}`, research_case_id: caseId, template_version_id: input.template_version_id, supersedes_id: null, reviewer: input.reviewer, reason: input.reason, created_at: now }; }
   async createVerificationRule(caseId: string, edgeId: string, input: Parameters<ResearchOsApi["createVerificationRule"]>[2]): ReturnType<ResearchOsApi["createVerificationRule"]> { const previous = this.rules.get(caseId)?.find((rule) => rule.mechanism_edge_id === edgeId) ?? null; const rule: Rule = { id: `rule-${caseId}-${Date.now()}`, research_case_id: caseId, mechanism_edge_id: edgeId, metric_definition_id: input.metric_definition_id, expected_direction: input.expected_direction, support_predicate: input.support_predicate, contradiction_predicate: input.contradiction_predicate, allowed_source_roles: input.allowed_source_roles, observed_period_start: input.observed_period_start, observed_period_end: input.observed_period_end, available_at_deadline: input.available_at_deadline, next_verification_event: input.next_verification_event, supersedes_id: previous?.id ?? null, reviewer: input.reviewer, reason: input.reason, created_at: now }; this.rules.set(caseId, [...(this.rules.get(caseId) ?? []), rule]); return rule; }
 
-  async atomicClaims(caseId: string): ReturnType<ResearchOsApi["atomicClaims"]> { return { items: this.claims.get(caseId) ?? [atomicClaim(caseId)] }; }
-  async reviewAtomicClaim(candidateId: string, input: Parameters<ResearchOsApi["reviewAtomicClaim"]>[1]): ReturnType<ResearchOsApi["reviewAtomicClaim"]> { for (const [caseId, claims] of this.claims) this.claims.set(caseId, claims.filter((claim) => claim.id !== candidateId)); return { id: `review-${candidateId}`, outcome: input.outcome, reviewer: input.reviewer, reason: input.reason, published_source_statement: input.outcome === "rejected" ? null : { id: `statement-${candidateId}`, normalized_text: input.normalized_text ?? "已审核原子陈述", kind: "disclosed_fact", observed_period: null, created_at: now }, created_at: now }; }
-  async createDocumentSupplement(documentId: string, input: Parameters<ResearchOsApi["createDocumentSupplement"]>[1]): ReturnType<ResearchOsApi["createDocumentSupplement"]> { return { document_version_id: `supplement-${documentId}`, original_document_version_id: documentId, claimed_page_reference: input.claimed_page_reference, extraction_allowed: true }; }
+  async atomicClaims(caseId: string): ReturnType<ResearchOsApi["atomicClaims"]> { const stored = this.claims.get(caseId); const items = stored ?? this.documentStore?.getAtomicClaimCandidates(caseId) ?? [atomicClaim(caseId)]; return { items: items.filter((claim) => !this.reviewedClaimIds.has(claim.id)) }; }
+  async reviewAtomicClaim(candidateId: string, input: Parameters<ResearchOsApi["reviewAtomicClaim"]>[1]): ReturnType<ResearchOsApi["reviewAtomicClaim"]> { this.reviewedClaimIds.add(candidateId); for (const [caseId, claims] of this.claims) this.claims.set(caseId, claims.filter((claim) => claim.id !== candidateId)); return { id: `review-${candidateId}`, outcome: input.outcome, reviewer: input.reviewer, reason: input.reason, published_source_statement: input.outcome === "rejected" ? null : { id: `statement-${candidateId}`, normalized_text: input.normalized_text ?? "已审核原子陈述", kind: "disclosed_fact", observed_period: null, created_at: now }, created_at: now }; }
+  async createDocumentSupplement(documentId: string, input: Parameters<ResearchOsApi["createDocumentSupplement"]>[1]): ReturnType<ResearchOsApi["createDocumentSupplement"]> {
+    if (!this.documentStore) return { document_version_id: `supplement-${documentId}`, original_document_version_id: documentId, claimed_page_reference: input.claimed_page_reference, extraction_allowed: true };
+    const result = await this.documentStore.createDocumentSupplement({ caseId: input.case_id, documentId, rawText: input.raw_text, claimedPageReference: input.claimed_page_reference, createdBy: input.created_by });
+    return { document_version_id: result.documentVersionId, original_document_version_id: result.originalDocumentVersionId, claimed_page_reference: input.claimed_page_reference, extraction_allowed: result.extractionAllowed };
+  }
 }
