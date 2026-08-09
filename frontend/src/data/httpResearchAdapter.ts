@@ -2837,7 +2837,7 @@ export class HttpResearchAdapter implements ResearchClient {
       event_title: input.eventTitle, company_name: input.companyName, ticker: input.ticker,
       event_at: input.eventAt, market_reaction: input.marketReaction,
       research_question: input.researchQuestion, candidate_factors: input.candidateFactors,
-      research_protocol_required: input.researchProtocolRequired ?? false,
+      research_protocol_required: input.researchProtocolRequired ?? true,
       created_by: input.createdBy,
     });
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };

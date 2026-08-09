@@ -2304,7 +2304,7 @@ export interface components {
             candidate_factors: string[];
             /**
              * Research Protocol Required
-             * @default false
+             * @default true
              */
             research_protocol_required: boolean;
             /** Created By */

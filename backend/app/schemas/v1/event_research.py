@@ -45,7 +45,7 @@ class CreateEventResearchRequest(V1Model):
     market_reaction: str | None = None
     research_question: str = Field(min_length=1)
     candidate_factors: list[str] = Field(min_length=3, max_length=5)
-    research_protocol_required: bool = False
+    research_protocol_required: bool = True
     created_by: str = Field(min_length=1)
 
     @model_validator(mode="after")

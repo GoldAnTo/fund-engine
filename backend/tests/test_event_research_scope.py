@@ -66,6 +66,8 @@ def _create_event(client) -> dict:
             "market_reaction": "盘后下跌",
             "research_question": "资本开支上调是否是盘后下跌的主要因素？",
             "candidate_factors": INITIAL_FACTORS,
+            # Scope replacement coverage preserves the pre-protocol workflow.
+            "research_protocol_required": False,
             "created_by": "tester",
         },
     )
@@ -238,6 +240,7 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
                 event_title="Concurrent event",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -421,6 +424,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
                 event_title="In-flight replacement",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -587,6 +591,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
                 event_title="Draft snapshot concurrency",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -705,6 +710,7 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
                 event_title="Conclusion concurrency",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -1378,6 +1384,7 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
             event_title="Remove stale review",
             research_question="What explains the event?",
             candidate_factors=INITIAL_FACTORS,
+            research_protocol_required=False,
             created_by="tester",
         )
     )

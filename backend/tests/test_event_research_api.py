@@ -44,6 +44,9 @@ def _confirmed_event() -> dict:
             "盈利前景与市场预期可能存在分歧",
             "估值重定价可能放大盘后波动",
         ],
+        # Existing workflow tests deliberately exercise the legacy Case path.
+        # New intake must use the API default and is covered separately below.
+        "research_protocol_required": False,
         "created_by": "xiongjiali",
     }
 
@@ -198,6 +201,25 @@ def test_protocol_required_event_cannot_start_a_research_run_before_its_gate_is_
         json={"max_rounds": 1, "budget": 10},
     )
 
+    assert response.status_code == 422
+    assert "missing_outcome_binding" in response.json()["error"]["message"]
+
+
+def test_new_event_requires_the_research_protocol_by_default(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload.pop("research_protocol_required")
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 201
+    theses = list(cmd_session.scalars(
+        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
+    ))
+    assert theses and all(thesis.research_protocol_required for thesis in theses)
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created.json()['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 10},
+    )
     assert response.status_code == 422
     assert "missing_outcome_binding" in response.json()["error"]["message"]
 

@@ -7221,7 +7221,7 @@
           "research_protocol_required": {
             "type": "boolean",
             "title": "Research Protocol Required",
-            "default": false
+            "default": true
           },
           "created_by": {
             "type": "string",

@@ -12,6 +12,19 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe("HttpResearchAdapter", () => {
+  it("creates new event Cases with the strict research protocol by default", async () => {
+    let requestBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse({ case_id: "event-1", brief_id: "brief-1", lifecycle: { status: "awaiting_key_review", active_run_id: null, current_round: 0, status_summary: "等待核验", current_gap: null, next_human_action: "核验原文资料并完成研究协议" } });
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await adapter.createEventResearch({ rawInput: "公司更新资本开支指引。", eventTitle: "资本开支更新", companyName: null, ticker: null, eventAt: null, marketReaction: null, summary: null, researchQuestion: "影响是什么？", candidateFactors: ["因素一", "因素二", "因素三"], confirmationRequired: true, createdBy: "human:researcher" });
+
+    expect((requestBody as Record<string, unknown> | null)?.research_protocol_required).toBe(true);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
