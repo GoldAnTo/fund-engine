@@ -10240,7 +10240,14 @@
             "title": "Fund Name"
           },
           "disclosed_exposure": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Disclosed Exposure"
           },
           "positions": {

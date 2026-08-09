@@ -101,5 +101,14 @@ class MarketExpressionQueries:
                 if stock is None:
                     continue
                 positions.append(FundDisclosurePositionDTO(stock_id=str(stock.id), stock_code=stock.code, stock_name=stock.name, weight=float(disclosure.weight), report_period=disclosure.report_period, published_at=disclosure.published_at, acquired_at=disclosure.acquired_at, source=disclosure.source, coverage_status="not_recorded", freshness_status="unknown"))
-            result.append(FundDisclosureExposureDTO(fund_id=str(fund.id), fund_code=fund.code, fund_name=fund.name, disclosed_exposure=sum((position.weight for position in positions), 0.0), positions=positions))
-        return sorted(result, key=lambda value: value.disclosed_exposure, reverse=True)
+            coverage_complete = positions and all(
+                position.coverage_status == "complete" for position in positions
+            )
+            result.append(FundDisclosureExposureDTO(
+                fund_id=str(fund.id),
+                fund_code=fund.code,
+                fund_name=fund.name,
+                disclosed_exposure=(sum((position.weight for position in positions), 0.0) if coverage_complete else None),
+                positions=positions,
+            ))
+        return sorted(result, key=lambda value: value.disclosed_exposure or 0.0, reverse=True)

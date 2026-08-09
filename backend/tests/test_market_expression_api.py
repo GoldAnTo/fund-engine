@@ -178,6 +178,10 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert position["source"] == "licensed_provider"
     assert position["coverage_status"] == "not_recorded"
     assert position["freshness_status"] == "unknown"
+    # A position weight is observable, but the ledger does not yet record a
+    # complete fund portfolio coverage ratio. Do not promote this subset into
+    # a precise fund-level exposure total.
+    assert payload["fund_exposure"][0]["disclosed_exposure"] is None
 
 
 def test_market_expression_excludes_machine_candidates_from_every_expression_layer(

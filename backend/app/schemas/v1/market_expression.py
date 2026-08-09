@@ -104,7 +104,11 @@ class FundDisclosureExposureDTO(V1Model):
     fund_id: str
     fund_code: str
     fund_name: str
-    disclosed_exposure: float
+    # A sum across disclosed positions is meaningful only when the provider
+    # also recorded complete portfolio coverage. `null` is intentional: the
+    # individual historical holdings stay inspectable without becoming a
+    # fabricated fund-level exposure number.
+    disclosed_exposure: float | None
     positions: list[FundDisclosurePositionDTO]
 
 

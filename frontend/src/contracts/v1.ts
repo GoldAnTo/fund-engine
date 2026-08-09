@@ -3292,7 +3292,7 @@ export interface components {
             /** Fund Name */
             fund_name: string;
             /** Disclosed Exposure */
-            disclosed_exposure: number;
+            disclosed_exposure: number | null;
             /** Positions */
             positions: components["schemas"]["FundDisclosurePositionDTO"][];
         };
