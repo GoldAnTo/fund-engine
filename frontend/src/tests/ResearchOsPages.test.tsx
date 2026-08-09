@@ -82,10 +82,25 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    expect(
-      await screen.findByRole("link", { name: "返回研究调度" }),
-    ).toHaveAttribute("href", "/events");
+    await screen.findByLabelText("切换 ResearchCase");
+    expect(screen.getByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
     expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+  });
+
+  it("keeps Case navigation visible while the selected Case is loading", () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventWorkbench").mockReturnValue(new Promise(() => {}));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText("Case 工作台加载中")).toBeVisible();
+    expect(screen.getAllByTestId("case-workbench-skeleton")).toHaveLength(3);
   });
 
   it("keeps Case navigation focused on the six stable research workbenches", async () => {
