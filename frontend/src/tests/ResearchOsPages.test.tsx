@@ -82,6 +82,16 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("传导标的" )).toBeVisible();
   });
 
+  it("requires an approved stock binding before opening a market-observation record", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/market"]}><Routes><Route path="/events/:caseId/market" element={<CaseMarketPage />} /></Routes></MemoryRouter>);
+
+    await user.click(await screen.findByRole("button", { name: "登记市场观测" }));
+    expect(await screen.findByLabelText("观测标的")).toBeVisible();
+    expect(screen.getByText(/市场窗口只记录发生了什么/)).toBeVisible();
+  });
+
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-published"]}>

@@ -28,6 +28,12 @@ test.describe("Event-first Research OS", () => {
     await page.getByLabel("传导审核理由").fill("已核对来源、标的绑定和指标口径。");
     await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
     await expect(page.getByText(/已追加已审核基本面传导/)).toBeVisible();
+
+    await page.getByRole("button", { name: "登记市场观测" }).click();
+    await expect(page.getByText("市场窗口只记录发生了什么，不表示研报、事件或因素造成价格变化。")).toBeVisible();
+    await page.getByLabel("市场观测审核理由").fill("已核对事件时点、资料可得时点、窗口和价格来源。");
+    await page.getByRole("button", { name: "保存已审核市场观测" }).click();
+    await expect(page.getByText(/已追加已审核市场观测/)).toBeVisible();
   });
 
   test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {

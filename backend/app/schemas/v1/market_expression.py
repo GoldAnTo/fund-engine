@@ -91,6 +91,18 @@ class RegisterFundamentalImpactRequest(V1Model):
     review_reason: str = Field(min_length=1)
 
 
+class RegisterMarketObservationRequest(V1Model):
+    market_instrument_binding_id: uuid.UUID
+    event_at: datetime
+    available_at: datetime
+    window_label: str = Field(min_length=1)
+    benchmark: str = Field(min_length=1)
+    price_source: str = Field(min_length=1)
+    relative_return: float | None = None
+    reviewed_by: str = Field(min_length=1)
+    review_reason: str = Field(min_length=1)
+
+
 class MarketInstrumentBindingDTO(V1Model):
     id: str
     company_id: str

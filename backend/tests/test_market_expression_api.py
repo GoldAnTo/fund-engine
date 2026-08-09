@@ -543,3 +543,71 @@ def test_market_instrument_catalog_searches_only_explicit_ledger_instruments(cmd
     assert item["company_id"] == str(company.id)
     assert item["company_code"] == "688003"
     assert item["stocks"][0]["code"] == "688003.SH"
+
+
+def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_binding(
+    cmd_client, cmd_session
+) -> None:
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"market-observation-source").hexdigest(),
+        source_url="https://licensed.example/disclosure/market-observation",
+        title="事件与标的披露",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 9}, verbatim_text="公司披露订单变化。")
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(source_span_id=span.id, kind="disclosed_fact", normalized_text="公司披露订单变化", created_at=now)
+    factor = KeyFactor(
+        research_case_id=case_id, report_claim_id=None, thesis_id=None,
+        name="订单变化", expected_direction="positive", metric_name="订单同比增速",
+        allowed_source_types=["company_disclosure"], verification_window_start=None,
+        verification_window_end=None, support_condition="订单增长", refutation_condition="订单下降",
+        next_verification_event="下一次财报", review_state="reviewed",
+        reviewed_by="human:researcher", review_reason="口径已固定", reviewed_at=now, created_at=now,
+    )
+    company = Company(code="688004", name="观测公司", type="listed", created_at=now)
+    cmd_session.add_all([statement, factor, company])
+    cmd_session.flush()
+    stock = Stock(company_id=company.id, code="688004.SH", name="观测公司", market="SSE", created_at=now)
+    cmd_session.add(stock)
+    cmd_session.commit()
+    binding = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
+        "company_id": str(company.id), "stock_id": str(stock.id),
+        "source_statement_id": str(statement.id), "relationship_role": "directly_affected",
+        "reviewed_by": "human:researcher", "review_reason": "已审核该股票适用于本 Case。",
+    })
+    assert binding.status_code == 201
+
+    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations", json={
+        "market_instrument_binding_id": binding.json()["id"],
+        "event_at": "2026-08-08T20:00:00Z",
+        "available_at": "2026-08-09T00:00:00Z",
+        "window_label": "T0 至 T+5",
+        "benchmark": "中证全指",
+        "price_source": "licensed_provider",
+        "relative_return": 0.034,
+        "reviewed_by": "human:researcher",
+        "review_reason": "只核对窗口、基准和价格来源，不作因果归因。",
+    })
+
+    assert response.status_code == 201
+    observation = response.json()
+    assert observation["stock_id"] == str(stock.id)
+    assert observation["window_label"] == "T0 至 T+5"
+    assert observation["relative_return"] == 0.034
+    assert "causal_result" not in observation

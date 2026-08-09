@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import CaseDocumentVersion, Company, SourceSpan, SourceStatement, Stock, Thesis, ValidationError
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, ReportClaim
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.models.source_governance import SourceContract
 from app.repositories.research import ResearchRepository
 
@@ -72,6 +72,19 @@ class FundamentalImpactInput:
     metric_name: str
     expected_direction: str
     rationale: str
+    reviewed_by: str
+    review_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class MarketObservationInput:
+    market_instrument_binding_id: uuid.UUID
+    event_at: datetime
+    available_at: datetime
+    window_label: str
+    benchmark: str
+    price_source: str
+    relative_return: Decimal | None
     reviewed_by: str
     review_reason: str
 
@@ -220,6 +233,45 @@ class MarketExpressionService:
             expected_direction=value.expected_direction,
             rationale=value.rationale.strip(),
             source_statement_id=value.source_statement_id,
+            review_state="reviewed",
+            reviewed_by=value.reviewed_by.strip(),
+            review_reason=value.review_reason.strip(),
+            reviewed_at=_utcnow(),
+            created_at=_utcnow(),
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record
+
+    def register_market_observation(
+        self, case_id: uuid.UUID, factor_id: uuid.UUID, value: MarketObservationInput
+    ) -> MarketObservation:
+        self._require_case(case_id)
+        factor = self._session.get(KeyFactor, factor_id)
+        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed":
+            raise ValidationError("key factor must be a reviewed record in this research case")
+        binding = self._session.get(MarketInstrumentBinding, value.market_instrument_binding_id)
+        if binding is None or binding.research_case_id != case_id or binding.review_state != "reviewed" or binding.stock_id is None:
+            raise ValidationError("market observation requires a reviewed stock binding in this research case")
+        self._require_admitted_case_statement(case_id, binding.source_statement_id)
+        if value.event_at.tzinfo is None or value.available_at.tzinfo is None:
+            raise ValidationError("event_at and available_at must include a timezone")
+        if value.available_at < value.event_at:
+            raise ValidationError("available_at must not be before event_at")
+        for name in ("window_label", "benchmark", "price_source", "reviewed_by", "review_reason"):
+            self._require_text(getattr(value, name), name)
+        if value.relative_return is not None and not value.relative_return.is_finite():
+            raise ValidationError("relative_return must be finite when recorded")
+        record = MarketObservation(
+            research_case_id=case_id,
+            key_factor_id=factor.id,
+            stock_id=binding.stock_id,
+            event_at=value.event_at,
+            available_at=value.available_at,
+            window_label=value.window_label.strip(),
+            benchmark=value.benchmark.strip(),
+            price_source=value.price_source.strip(),
+            relative_return=value.relative_return,
             review_state="reviewed",
             reviewed_by=value.reviewed_by.strip(),
             review_reason=value.review_reason.strip(),

@@ -4767,6 +4767,69 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/market-observations": {
+      "post": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Register Market Observation",
+        "operationId": "register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "factor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Factor Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterMarketObservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketObservationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/report-claims": {
       "post": {
         "tags": [
@@ -14348,6 +14411,74 @@
           "review_reason"
         ],
         "title": "RegisterMarketInstrumentBindingRequest"
+      },
+      "RegisterMarketObservationRequest": {
+        "properties": {
+          "market_instrument_binding_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Market Instrument Binding Id"
+          },
+          "event_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Event At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "window_label": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Window Label"
+          },
+          "benchmark": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Benchmark"
+          },
+          "price_source": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Price Source"
+          },
+          "relative_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Return"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Review Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "market_instrument_binding_id",
+          "event_at",
+          "available_at",
+          "window_label",
+          "benchmark",
+          "price_source",
+          "reviewed_by",
+          "review_reason"
+        ],
+        "title": "RegisterMarketObservationRequest"
       },
       "RegisterReportClaimRequest": {
         "properties": {

@@ -1386,6 +1386,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/market-observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Market Observation */
+        post: operations["register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/report-claims": {
         parameters: {
             query?: never;
@@ -4766,6 +4783,36 @@ export interface components {
              * @enum {string}
              */
             relationship_role: "directly_affected" | "supply_chain" | "competitor" | "beneficiary" | "risk_exposure";
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterMarketObservationRequest */
+        RegisterMarketObservationRequest: {
+            /**
+             * Market Instrument Binding Id
+             * Format: uuid
+             */
+            market_instrument_binding_id: string;
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Window Label */
+            window_label: string;
+            /** Benchmark */
+            benchmark: string;
+            /** Price Source */
+            price_source: string;
+            /** Relative Return */
+            relative_return?: number | null;
             /** Reviewed By */
             reviewed_by: string;
             /** Review Reason */
@@ -9092,6 +9139,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FundamentalImpactDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMarketObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketObservationDTO"];
                 };
             };
             /** @description Validation Error */

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
@@ -18,15 +19,17 @@ from app.schemas.v1.market_expression import (
     MarketInstrumentBindingsResponse,
     MarketInstrumentCatalogResponse,
     MarketExpressionResponse,
+    MarketObservationDTO,
     RegisterKeyFactorRequest,
     RegisterClaimVerificationRequest,
     RegisterFundamentalImpactRequest,
+    RegisterMarketObservationRequest,
     RegisterMarketInstrumentBindingRequest,
     RegisterReportClaimRequest,
     ReportClaimDTO,
     SourceStatementOptionsResponse,
 )
-from app.services.market_expression import ClaimVerificationInput, FundamentalImpactInput, KeyFactorInput, MarketExpressionService, MarketInstrumentBindingInput, ReportClaimInput
+from app.services.market_expression import ClaimVerificationInput, FundamentalImpactInput, KeyFactorInput, MarketExpressionService, MarketInstrumentBindingInput, MarketObservationInput, ReportClaimInput
 
 
 router = APIRouter(tags=["market-expression-v1"])
@@ -88,6 +91,28 @@ def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
     )
     commit_or_rollback(db)
     return MarketExpressionQueries(db)._fundamental(record)
+
+
+@router.post("/research-cases/{case_id}/key-factors/{factor_id}/market-observations", response_model=MarketObservationDTO, status_code=status.HTTP_201_CREATED)
+def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterMarketObservationRequest, db: Session = Depends(get_db)) -> MarketObservationDTO:
+    record = translate_validation(
+        MarketExpressionService(db).register_market_observation,
+        case_id,
+        factor_id,
+        MarketObservationInput(
+            market_instrument_binding_id=payload.market_instrument_binding_id,
+            event_at=payload.event_at,
+            available_at=payload.available_at,
+            window_label=payload.window_label,
+            benchmark=payload.benchmark,
+            price_source=payload.price_source,
+            relative_return=Decimal(str(payload.relative_return)) if payload.relative_return is not None else None,
+            reviewed_by=payload.reviewed_by,
+            review_reason=payload.review_reason,
+        ),
+    )
+    commit_or_rollback(db)
+    return MarketExpressionQueries(db)._observation(record)
 
 
 @router.post("/research-cases/{case_id}/report-claims", response_model=ReportClaimDTO, status_code=status.HTTP_201_CREATED)
