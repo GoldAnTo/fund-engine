@@ -159,7 +159,7 @@ export interface EventWorkbench {
   evidence: EventEvidenceCitation[];
   progress: WorkbenchProgress;
   scope: EventResearchScope;
-  nextAction: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
+  nextAction: { kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
 }
 
 export interface EventResearchClient {

@@ -73,6 +73,21 @@ def _create_event(client) -> dict:
     return response.json()
 
 
+def _start_case_run(client, session, case_id: uuid.UUID) -> uuid.UUID:
+    """Scope-replacement tests need an explicitly authorized prior run."""
+    response = client.post(
+        f"/api/v1/research-cases/{case_id}/runs",
+        json={"max_rounds": 3, "budget": 100},
+    )
+    assert response.status_code == 201
+    run_id = uuid.UUID(response.json()["id"])
+    lifecycle = session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = run_id
+    session.commit()
+    return run_id
+
+
 def _scope_statements(session, version_id: uuid.UUID) -> list[str]:
     return list(
         session.scalars(
@@ -1203,7 +1218,7 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    initial_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    initial_run_id = _start_case_run(cmd_client, cmd_session, case_id)
     reviewed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = paused_status
@@ -1290,7 +1305,7 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    old_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    old_run_id = _start_case_run(cmd_client, cmd_session, case_id)
     old_run = cmd_session.get(ResearchRun, old_run_id)
     assert old_run is not None
     old_run.status = old_status

@@ -537,6 +537,14 @@ class EventResearchQueries:
     @staticmethod
     def _next_action(lifecycle: EventResearchLifecycle) -> EventNextActionDTO:
         if lifecycle.status == "awaiting_key_review":
+            if (
+                lifecycle.active_run_id is None
+                and lifecycle.next_human_action == "核验原文资料并完成研究协议"
+            ):
+                return EventNextActionDTO(
+                    kind="review_intake",
+                    label=lifecycle.next_human_action or "核验原文资料并完成研究协议",
+                )
             count = _leading_count(lifecycle.next_human_action)
             return EventNextActionDTO(
                 kind="review_evidence",

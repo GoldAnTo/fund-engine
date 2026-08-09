@@ -16,7 +16,6 @@ from app.models.operational import EventResearchLifecycle
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
-from app.services.auto_research import AutoResearchService
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
 from app.services.source_governance import SourceGovernanceService
@@ -130,20 +129,18 @@ class EventResearchService:
             )
         self._session.flush()
 
-        # This queues one durable worker job.  The request never waits for
-        # collection or model calls, but the workbench immediately tells the
-        # user that the system has started research.
-        run = AutoResearchService(self._session).start(
-            case.id, max_rounds=3, budget=100, commit=False
-        )
+        # Intake freezes a source snapshot and a researcher-proposed scope;
+        # it is deliberately not authorization to run collection or model
+        # work. The original material must be inspected and the Case protocol
+        # completed before a separately configured ResearchRun can exist.
         lifecycle = EventResearchLifecycle(
             research_case_id=case.id,
-            status="researching",
-            active_run_id=run.id,
-            current_round=1,
-            status_summary="正在建立第一轮证据检索",
-            current_gap=None,
-            next_human_action=None,
+            status="awaiting_key_review",
+            active_run_id=None,
+            current_round=0,
+            status_summary="资料已冻结，等待核验原文与研究协议；尚未启动后台研究",
+            current_gap="原文资料、来源许可与研究协议尚未完成核验",
+            next_human_action="核验原文资料并完成研究协议",
             updated_at=_utcnow(),
         )
         self._session.add(lifecycle)

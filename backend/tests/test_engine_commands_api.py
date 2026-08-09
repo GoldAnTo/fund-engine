@@ -6,6 +6,7 @@ These are WRITE endpoints (they commit), so they run against the private
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
@@ -65,6 +66,47 @@ def test_extract_creates_review_gated_candidates_and_airun(cmd_client, cmd_seede
 def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/documents/{ZERO_UUID}/extract")
     assert resp.status_code == 404
+
+
+def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd_client, cmd_seeded):
+    from app.models.ledger import AIRun
+    from app.models.source_governance import SourceContract
+
+    version = _new_pending_version(cmd_seeded)
+    cmd_seeded.add(
+        SourceContract(
+            document_version_id=version.id,
+            source_type="licensed_provider",
+            provider_or_tenant="restricted-provider",
+            allow_ai_processing=False,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=["no AI"],
+            contract_version="fixture-v1",
+            intake_metadata={},
+            declared_by="human:researcher",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
+
+    assert response.status_code == 422
+    assert "禁止 AI 处理" in response.json()["error"]["message"]
+    refused_run = cmd_seeded.scalar(
+        select(AIRun)
+        .where(AIRun.kind == "extract")
+        .where(AIRun.input_ref["document_version_id"].as_string() == str(version.id))
+    )
+    assert refused_run is not None
+    assert refused_run.status == "failed"
 
 
 # ---------------------------------------------------------------------------

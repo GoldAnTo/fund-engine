@@ -8,7 +8,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
-import { CaseEvidencePage, CaseProtocolPage } from "../features/case/CasePages";
+import { CaseDocumentsPage, CaseEvidencePage, CaseProtocolPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 
@@ -45,7 +45,7 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByLabelText("研究问题")).toBeVisible();
     expect(screen.getAllByLabelText(/关键因素/)).toHaveLength(3);
-    expect(screen.getByRole("button", { name: "创建事件 Case" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
   });
 
   it("reads an uploaded text snapshot without claiming that the original file was stored", async () => {
@@ -66,6 +66,21 @@ describe("Research OS event entry", () => {
     expect(screen.getByLabelText("来源权威性")).toHaveValue("unknown");
     expect(screen.getByRole("option", { name: "公司或发行人一手披露" })).toBeVisible();
     expect(screen.getByText(/不会直接把二手转述写成已披露事实/)).toBeVisible();
+  });
+
+  it("lets a researcher request review-gated extraction from a frozen Case document", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "原文资料" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "从冻结资料提取候选" })).toBeVisible();
+    expect(screen.getByText(/只会创建待人工审核的原子陈述/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "从冻结资料提取候选" }));
+    expect(await screen.findByText("离线原型未运行 LLM 抽取")).toBeVisible();
   });
 
   it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {

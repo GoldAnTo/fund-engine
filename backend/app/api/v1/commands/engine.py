@@ -14,16 +14,19 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
+from app.ai.runs import record_run
 from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import DocumentVersion, Thesis
+from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 from app.services.jobs import JobService
 from app.schemas.v1.commands import (
@@ -149,6 +152,26 @@ def extract_statements(
     version = db.get(DocumentVersion, document_version_id)
     if version is None:
         raise NotFoundError(f"document version {document_version_id} not found")
+    contract = db.scalar(
+        select(SourceContract).where(
+            SourceContract.document_version_id == document_version_id
+        )
+    )
+    if contract is not None and not contract.allow_ai_processing:
+        message = "来源合同禁止 AI 处理；没有创建候选或正式陈述。"
+        record_run(
+            db,
+            kind="extract",
+            model_version="not_run",
+            prompt_version="extract-v1",
+            input_ref={"document_version_id": str(document_version_id), "span_ids": []},
+            output_summary="refused: frozen source contract forbids AI processing",
+            status="failed",
+            error=message,
+            started_at=datetime.now(timezone.utc),
+        )
+        commit_or_rollback(db)
+        raise ValidationFailedError(message)
     client = LLMClient.from_env()
     candidates = StatementExtractor(client).extract(document_version_id, db)
     commit_or_rollback(db)

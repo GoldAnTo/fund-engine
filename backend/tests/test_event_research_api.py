@@ -151,7 +151,7 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_clie
     assert len(body["candidate_factors"]) in {3, 4, 5}
 
 
-def test_create_event_case_enqueues_research_without_manual_run_button(cmd_client, cmd_session) -> None:
+def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_run(cmd_client, cmd_session) -> None:
     payload = _confirmed_event()
     payload.update({"source_type": "uploaded_file", "source_metadata": {"file_name": "event-note.txt", "mime_type": "text/plain", "byte_size": 42}})
     response = cmd_client.post("/api/v1/event-research", json=payload)
@@ -159,19 +159,19 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
     assert response.status_code == 201
     body = response.json()
     case_id = body["case_id"]
-    assert body["lifecycle"]["status"] == "researching"
-    assert body["lifecycle"]["active_run_id"]
-    assert body["lifecycle"]["next_human_action"] is None
+    assert body["lifecycle"]["status"] == "awaiting_key_review"
+    assert body["lifecycle"]["active_run_id"] is None
+    assert body["lifecycle"]["next_human_action"] == "核验原文资料并完成研究协议"
 
     parsed_case_id = uuid.UUID(case_id)
     assert cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"])).research_case_id == parsed_case_id
     brief = cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"]))
     assert brief.source_type == "uploaded_file"
     assert brief.source_metadata["file_name"] == "event-note.txt"
-    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id
+    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id is None
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
-    assert cmd_session.get(ResearchRun, uuid.UUID(body["lifecycle"]["active_run_id"]))
+    assert cmd_session.query(ResearchRun).filter_by(research_case_id=parsed_case_id).count() == 0
     scope = cmd_session.scalar(
         select(EventResearchScopeVersion).where(
             EventResearchScopeVersion.research_case_id == parsed_case_id,
@@ -682,14 +682,14 @@ def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_ses
     second_lifecycle.updated_at = first_lifecycle.updated_at.replace(year=first_lifecycle.updated_at.year + 1)
     cmd_session.commit()
 
-    response = cmd_client.get("/api/v1/event-research", params={"status": "researching"})
+    response = cmd_client.get("/api/v1/event-research", params={"status": "awaiting_key_review"})
     assert response.status_code == 200
     body = response.json()
     assert [item["case_id"] for item in body["items"]] == [second["case_id"], first["case_id"]]
     assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
     assert body["items"][0]["ticker"] == "TSM"
-    assert body["items"][0]["lifecycle_status"] == "researching"
-    assert body["items"][0]["next_human_action"] is None
+    assert body["items"][0]["lifecycle_status"] == "awaiting_key_review"
+    assert body["items"][0]["next_human_action"] == "核验原文资料并完成研究协议"
 
 
 def test_event_workbench_never_surfaces_another_case_factors_or_lifecycle(cmd_client) -> None:
@@ -747,7 +747,7 @@ def test_event_workbench_uses_summary_without_loading_review_queue_items(
         "verified": 0,
         "pending": 0,
         "invalid_source": 0,
-        "current_gap": None,
+        "current_gap": "原文资料、来源许可与研究协议尚未完成核验",
     }
 
 
