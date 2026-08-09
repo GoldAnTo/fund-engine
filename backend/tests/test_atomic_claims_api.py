@@ -4,7 +4,13 @@ import uuid
 from datetime import datetime, timezone
 
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, SourceSpan
+from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    SourceSpan,
+)
 from app.services.atomic_claims import AtomicClaimService
 
 
@@ -29,6 +35,13 @@ def _candidate_for_case(session):
         research_case_id=case.id,
         document_version_id=document.id,
         linked_at=now,
+    ))
+    session.add(CaseTenantAdmission(
+        research_case_id=case.id,
+        tenant_id="test-team",
+        initial_document_version_id=document.id,
+        admitted_by="test-fixture",
+        admitted_at=now,
     ))
     source_text = "公司公告：2026年第一季度订单同比增长20%。"
     quote = "订单同比增长20%"

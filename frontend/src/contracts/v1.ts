@@ -8495,7 +8495,9 @@ export interface operations {
                 review_state?: string | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8526,7 +8528,9 @@ export interface operations {
     review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 candidate_id: string;
             };

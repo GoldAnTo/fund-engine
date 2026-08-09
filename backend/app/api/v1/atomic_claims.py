@@ -26,9 +26,46 @@ from app.schemas.v1.commands import (
 )
 from app.services.atomic_claims import AtomicClaimService
 from app.repositories.operational import TaskRepository
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
+from app.models.ledger import CaseTenantAdmission
 
 
-router = APIRouter(tags=["atomic-claim-review-v1"])
+router = APIRouter(
+    tags=["atomic-claim-review-v1"], dependencies=[Depends(require_research_tenant)]
+)
+
+
+def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
+
+
+def _require_candidate_tenant(db: Session, candidate_id: uuid.UUID, tenant_id: str) -> None:
+    """A global candidate can be reviewed only when every admitted Case using
+    its frozen document belongs to the caller's tenant.
+
+    This prevents one tenant's irreversible review from changing another
+    tenant's view of a deduplicated source document.
+    """
+    tenants = set(
+        db.scalars(
+            select(CaseTenantAdmission.tenant_id)
+            .join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.research_case_id
+                == CaseTenantAdmission.research_case_id,
+            )
+            .join(DocumentVersion, DocumentVersion.id == CaseDocumentVersion.document_version_id)
+            .join(SourceSpan, SourceSpan.document_version_id == DocumentVersion.id)
+            .join(AtomicClaimCandidate, AtomicClaimCandidate.source_span_id == SourceSpan.id)
+            .where(AtomicClaimCandidate.id == candidate_id)
+        )
+    )
+    if tenants != {tenant_id}:
+        # Hide both foreign candidates and shared cross-tenant candidates. The
+        # latter require a future Case-scoped review record, not a global one.
+        from app.errors import NotFoundError
+        raise NotFoundError("atomic claim candidate not found")
 
 
 def _statement_dto(value: SourceStatement | None) -> PublishedSourceStatementDTO | None:
@@ -67,7 +104,9 @@ def list_atomic_claims(
     review_state: str | None = Query(default=None, pattern="^(awaiting_review|confirmed|modified|rejected)$"),
     limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    _require_case(db, case_id, tenant_id)
     rows = db.execute(
         select(AtomicClaimCandidate, SourceSpan, DocumentVersion)
         .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
@@ -126,7 +165,9 @@ def review_atomic_claim(
     candidate_id: uuid.UUID,
     payload: AtomicClaimReviewRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    _require_candidate_tenant(db, candidate_id, tenant_id)
     review = translate_validation(
         AtomicClaimService(db).review,
         candidate_id,
