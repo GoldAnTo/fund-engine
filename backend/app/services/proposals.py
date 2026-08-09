@@ -113,7 +113,7 @@ class ProposalService:
         proposal = self._repo.get_proposal(proposal_id)
         if proposal is None:
             raise ConflictError(f"proposal {proposal_id} not found")
-        if outcome not in {"confirmed", "modified", "rejected"}:
+        if outcome not in {"confirmed", "modified", "rejected", "needs_more_evidence"}:
             raise ValidationError(f"invalid outcome: {outcome}")
         if not reason or not reason.strip():
             raise ValidationError("reason must not be empty")

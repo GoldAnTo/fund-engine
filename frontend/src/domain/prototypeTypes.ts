@@ -1079,7 +1079,7 @@ export interface StartResearchRunOptions {
 }
 
 export interface ProposalReviewPayload {
-  outcome: "confirmed" | "rejected" | "modified";
+  outcome: "confirmed" | "rejected" | "modified" | "needs_more_evidence";
   reason: string;
   expected_version: number;
   reviewer_id: string;

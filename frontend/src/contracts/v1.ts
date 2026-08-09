@@ -3603,7 +3603,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "confirmed" | "modified" | "rejected";
+            outcome: "confirmed" | "modified" | "rejected" | "needs_more_evidence";
             /** Reason */
             reason: string;
             /** Expected Version */

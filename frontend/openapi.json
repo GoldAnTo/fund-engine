@@ -10996,7 +10996,8 @@
             "enum": [
               "confirmed",
               "modified",
-              "rejected"
+              "rejected",
+              "needs_more_evidence"
             ],
             "title": "Outcome"
           },

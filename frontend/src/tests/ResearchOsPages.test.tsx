@@ -64,6 +64,22 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前没有待审核候选。")) .toBeVisible();
   });
 
+  it("lets a reviewer request more evidence without accepting the candidate", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes><Route path="/events/:caseId/review" element={<CaseReviewPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    expect(screen.getByRole("button", { name: "要求补充证据" })).toBeDisabled();
+    await user.type(screen.getByLabelText("审核理由"), "还需要同一期间的反证和实际经营数据。");
+    await user.click(screen.getByRole("button", { name: "要求补充证据" }));
+
+    expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
+  });
+
   it("keeps a frozen active-run scope visible above every workbench route", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电上调 CoWoS 指引后下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }],

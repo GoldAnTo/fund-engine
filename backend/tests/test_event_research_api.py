@@ -292,6 +292,34 @@ def test_event_review_queue_exposes_the_proposal_version_required_for_human_deci
     assert response.json()["items"][0]["proposal_version"] == proposal.version
 
 
+def test_event_reviewer_can_request_more_evidence_without_publishing_candidate(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Primary source still needs a counterexample",
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "needs_more_evidence",
+            "reason": "需要补充反证与下一期实际数据，不能先采纳该关系。",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["outcome"] == "needs_more_evidence"
+    assert response.json()["published_entity_id"] is None
+    assert cmd_session.get(Proposal, proposal.id).status == "decided"
+
+
 def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
     cmd_client, cmd_session
 ) -> None:
