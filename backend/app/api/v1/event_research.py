@@ -45,6 +45,8 @@ from app.services.event_research_scope import EventResearchScopeService
 from app.services.auto_research import AutoResearchService
 from app.services.case_relation_reviews import CaseRelationReviewService
 from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
+from app.models.event_research import CaseRelation
 from app.models.ledger import ValidationError
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.outbox import emit_event
@@ -57,23 +59,35 @@ router = APIRouter(
 )
 
 
+def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
+
+
 @router.get("", response_model=EventResearchListResponse)
 def list_event_research(
-    status: str | None = None, db: Session = Depends(get_db)
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> EventResearchListResponse:
-    return EventResearchQueries(db).list(status=status)
+    return EventResearchQueries(db).list(status=status, tenant_id=tenant_id)
 
 
 @router.get("/network", response_model=ResearchNetworkResponse)
-def event_research_network(db: Session = Depends(get_db)) -> ResearchNetworkResponse:
-    return EventResearchQueries(db).network()
+def event_research_network(
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> ResearchNetworkResponse:
+    return EventResearchQueries(db).network(tenant_id=tenant_id)
 
 
 @router.get("/{case_id}/relations", response_model=ResearchNetworkResponse)
 def event_research_relations(
-    case_id: uuid.UUID, db: Session = Depends(get_db)
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> ResearchNetworkResponse:
-    return EventResearchQueries(db).relations(case_id)
+    _require_case(db, case_id, tenant_id)
+    return EventResearchQueries(db).relations(case_id, tenant_id=tenant_id)
 
 
 @router.post(
@@ -85,8 +99,14 @@ def review_case_relation(
     candidate_id: uuid.UUID,
     payload: CaseRelationReviewRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> CaseRelationReviewDTO:
     try:
+        relation = db.get(CaseRelation, candidate_id)
+        if relation is None:
+            raise ValidationFailedError("case relation candidate not found")
+        _require_case(db, relation.source_case_id, tenant_id)
+        _require_case(db, relation.target_case_id, tenant_id)
         review = CaseRelationReviewService(db).review(
             candidate_id,
             outcome=payload.outcome,
@@ -114,7 +134,10 @@ def review_case_relation(
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
-def extract_event(payload: ExtractEventResearchRequest) -> ExtractEventResearchResponse:
+def extract_event(
+    payload: ExtractEventResearchRequest,
+    tenant_id: str = Depends(require_research_tenant),
+) -> ExtractEventResearchResponse:
     extracted = EventExtractionService().extract(
         raw_input=payload.raw_input, source_url=payload.source_url
     )
@@ -133,9 +156,11 @@ def extract_event(payload: ExtractEventResearchRequest) -> ExtractEventResearchR
 
 @router.post("", response_model=CreateEventResearchResponse, status_code=status.HTTP_201_CREATED)
 def create_event_research(
-    payload: CreateEventResearchRequest, db: Session = Depends(get_db)
+    payload: CreateEventResearchRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> CreateEventResearchResponse:
-    created = EventResearchService(db).create(payload)
+    created = EventResearchService(db).create(payload, tenant_id=tenant_id)
     lifecycle = created.lifecycle
     return CreateEventResearchResponse(
         case_id=created.case_id,
@@ -156,7 +181,9 @@ def update_event_research_scope(
     case_id: uuid.UUID,
     payload: UpdateEventResearchScopeRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> UpdateEventResearchScopeResponse:
+    _require_case(db, case_id, tenant_id)
     updated = EventResearchScopeService(db).update(
         case_id,
         factors=payload.factors,
@@ -177,34 +204,52 @@ def update_event_research_scope(
 
 @router.get("/{case_id}/workbench", response_model=EventWorkbenchDTO)
 def event_research_workbench(
-    case_id: uuid.UUID, db: Session = Depends(get_db)
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> EventWorkbenchDTO:
+    _require_case(db, case_id, tenant_id)
     return EventResearchQueries(db).workbench(case_id)
 
 
 @router.get("/{case_id}/conclusion-history", response_model=EventConclusionHistoryResponse)
 def event_conclusion_history(
-    case_id: uuid.UUID, db: Session = Depends(get_db)
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> EventConclusionHistoryResponse:
+    _require_case(db, case_id, tenant_id)
     return EventResearchQueries(db).conclusion_history(case_id)
 
 
 @router.get("/{case_id}/scope-history", response_model=EventResearchScopeHistoryResponse)
-def event_scope_history(case_id: uuid.UUID, db: Session = Depends(get_db)) -> EventResearchScopeHistoryResponse:
+def event_scope_history(
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> EventResearchScopeHistoryResponse:
+    _require_case(db, case_id, tenant_id)
     return EventResearchQueries(db).scope_history(case_id)
 
 
 @router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)
 def event_review_queue(
-    case_id: uuid.UUID, db: Session = Depends(get_db)
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> EventReviewQueueResponse:
+    _require_case(db, case_id, tenant_id)
     return EventReviewQueueService(db).review_queue(case_id)
 
 
 @router.post("/{case_id}/conclusion/publish", response_model=PublishEventConclusionResponse, status_code=status.HTTP_201_CREATED)
 def publish_event_conclusion(
-    case_id: uuid.UUID, payload: PublishEventConclusionRequest, db: Session = Depends(get_db)
+    case_id: uuid.UUID,
+    payload: PublishEventConclusionRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> PublishEventConclusionResponse:
+    _require_case(db, case_id, tenant_id)
     published = EventConclusionService(db).publish(
         case_id, text=payload.text, reviewer=payload.reviewer
     )
@@ -217,8 +262,10 @@ def continue_event_research(
     case_id: uuid.UUID,
     payload: ContinueEventResearchRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> ContinueEventResearchResponse:
     try:
+        _require_case(db, case_id, tenant_id)
         run = AutoResearchService(db).continue_published_event(
             case_id,
             document_version_id=uuid.UUID(payload.document_version_id),
@@ -249,8 +296,10 @@ def attach_event_material(
     case_id: uuid.UUID,
     payload: AttachEventMaterialRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> AttachEventMaterialResponse:
     try:
+        _require_case(db, case_id, tenant_id)
         document = EventResearchService(db).attach_material_to_existing_case(
             case_id,
             raw_input=payload.raw_input,
@@ -290,8 +339,10 @@ async def upload_event_material(
     actor: str = Form(...),
     source_metadata: str = Form("{}"),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> UploadEventMaterialResponse:
     try:
+        _require_case(db, case_id, tenant_id)
         metadata = json.loads(source_metadata)
         if not isinstance(metadata, dict):
             raise ValidationFailedError("source_metadata must be a JSON object")
@@ -345,8 +396,10 @@ def decide_published_material(
     case_id: uuid.UUID,
     payload: PublishedMaterialDecisionRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ) -> PublishedMaterialDecisionResponse:
     try:
+        _require_case(db, case_id, tenant_id)
         document = EventResearchService(db).freeze_published_material(
             case_id,
             raw_input=payload.raw_input,

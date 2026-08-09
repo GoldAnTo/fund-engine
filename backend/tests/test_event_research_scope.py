@@ -244,7 +244,8 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
                 created_by="tester",
-            )
+            ),
+            tenant_id="test-team",
         )
         case_id = uuid.UUID(created.case_id)
         thesis = bootstrap.scalar(
@@ -428,7 +429,8 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
                 created_by="tester",
-            )
+            ),
+            tenant_id="test-team",
         )
         case_id = uuid.UUID(created.case_id)
         old_run_id = uuid.UUID(created.lifecycle.active_run_id)
@@ -595,7 +597,8 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
                 created_by="tester",
-            )
+            ),
+            tenant_id="test-team",
         )
         case_id = uuid.UUID(created.case_id)
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
@@ -714,7 +717,8 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
                 created_by="tester",
-            )
+            ),
+            tenant_id="test-team",
         )
         case_id = uuid.UUID(created.case_id)
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
@@ -1388,7 +1392,8 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
             candidate_factors=INITIAL_FACTORS,
             research_protocol_required=False,
             created_by="tester",
-        )
+        ),
+        tenant_id="test-team",
     )
     case_id = uuid.UUID(created.case_id)
     removed_thesis = session.scalar(

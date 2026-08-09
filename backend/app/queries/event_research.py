@@ -19,6 +19,7 @@ from app.models.event_research import (
 )
 from app.models.ledger import (
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
     SourceSpan,
@@ -58,13 +59,21 @@ class EventResearchQueries:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def list(self, *, status: str | None = None) -> EventResearchListResponse:
+    def list(
+        self, *, status: str | None = None, tenant_id: str
+    ) -> EventResearchListResponse:
         stmt = (
             select(EventResearchBrief, EventResearchLifecycle)
             .join(
                 EventResearchLifecycle,
                 EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
             )
+            .join(
+                CaseTenantAdmission,
+                CaseTenantAdmission.research_case_id
+                == EventResearchBrief.research_case_id,
+            )
+            .where(CaseTenantAdmission.tenant_id == tenant_id)
             .order_by(EventResearchLifecycle.updated_at.desc())
         )
         if status is not None:
@@ -73,7 +82,7 @@ class EventResearchQueries:
             items=[self._list_item(brief, lifecycle) for brief, lifecycle in self._session.execute(stmt)]
         )
 
-    def network(self) -> ResearchNetworkResponse:
+    def network(self, *, tenant_id: str) -> ResearchNetworkResponse:
         cases = {
             brief.research_case_id: CaseRelationCaseDTO(
                 case_id=str(brief.research_case_id),
@@ -85,6 +94,12 @@ class EventResearchQueries:
                     EventResearchLifecycle,
                     EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
                 )
+                .join(
+                    CaseTenantAdmission,
+                    CaseTenantAdmission.research_case_id
+                    == EventResearchBrief.research_case_id,
+                )
+                .where(CaseTenantAdmission.tenant_id == tenant_id)
             )
         }
         relations = list(
@@ -169,14 +184,14 @@ class EventResearchQueries:
             resolved_candidates=resolved_candidates,
         )
 
-    def relations(self, case_id: uuid.UUID) -> ResearchNetworkResponse:
+    def relations(self, case_id: uuid.UUID, *, tenant_id: str) -> ResearchNetworkResponse:
         if self._session.scalar(
             select(EventResearchBrief.id)
             .where(EventResearchBrief.research_case_id == case_id)
             .limit(1)
         ) is None:
             raise NotFoundError("event research case not found")
-        network = self.network()
+        network = self.network(tenant_id=tenant_id)
         involves_case = lambda relation: (
             relation.source_case.case_id == str(case_id)
             or relation.target_case.case_id == str(case_id)
