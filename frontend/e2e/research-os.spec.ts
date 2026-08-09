@@ -240,6 +240,17 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText(/此前发布结论未被改写/)).toBeVisible();
   });
 
+  test("published Case records a no-change decision for newly frozen material without a hidden run", async ({ page }) => {
+    await page.goto("/events/event-published/documents?client=mock");
+
+    await page.getByLabel("新增材料正文").fill("新增研报重复既有订单判断，未给出新指标。");
+    await page.getByRole("radio", { name: /记录为不改变当前判断/ }).check();
+    await page.getByLabel("新材料决定理由").fill("没有新增可核验指标或反证条件。");
+    await page.getByRole("button", { name: "冻结材料并记录不改变判断" }).click();
+    await expect(page.getByText(/记录“不改变当前判断”的人工决定/)).toBeVisible();
+    await expect(page.getByText(/已创建后继运行/)).toHaveCount(0);
+  });
+
   test("a Case keeps its own reviewed associations separate from AI candidates", async ({ page }) => {
     await page.route("**/api/v1/event-research/event-tsm/relations", async (route) => route.fulfill({ json: {
       reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],

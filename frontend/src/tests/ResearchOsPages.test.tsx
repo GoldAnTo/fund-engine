@@ -94,6 +94,19 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/此前发布结论未被改写/)).toBeVisible();
   });
 
+  it("freezes new published-Case material and records a no-change decision without starting a run", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/events/event-published/documents"]}><Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "新材料是否需要改变复核范围？" })).toBeVisible();
+    await user.type(screen.getByLabelText("新增材料正文"), "这份新材料只重复既有判断。 ");
+    await user.click(screen.getByRole("radio", { name: /记录为不改变当前判断/ }));
+    await user.type(screen.getByLabelText("新材料决定理由"), "没有新增可核验指标或反证。 ");
+    await user.click(screen.getByRole("button", { name: "冻结材料并记录不改变判断" }));
+    expect(await screen.findByText(/记录“不改变当前判断”的人工决定/)).toBeVisible();
+    expect(screen.queryByText(/已创建后继运行/)).not.toBeInTheDocument();
+  });
+
   it("keeps the research question and three factors editable before a Case is created", async () => {
     const user = userEvent.setup();
     render(

@@ -4141,6 +4141,59 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/published-material-decisions": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Decide Published Material",
+        "operationId": "decide_published_material_api_v1_event_research__case_id__published_material_decisions_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedMaterialDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedMaterialDecisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/monitor": {
       "get": {
         "tags": [
@@ -13275,6 +13328,113 @@
           "state"
         ],
         "title": "PublishEventConclusionResponse"
+      },
+      "PublishedMaterialDecisionRequest": {
+        "properties": {
+          "raw_input": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Input"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "pasted_snapshot",
+              "uploaded_file",
+              "licensed_provider"
+            ],
+            "title": "Source Type",
+            "default": "pasted_snapshot"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "reopen",
+              "no_change"
+            ],
+            "title": "Decision"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_input",
+          "decision",
+          "reason",
+          "actor"
+        ],
+        "title": "PublishedMaterialDecisionRequest"
+      },
+      "PublishedMaterialDecisionResponse": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "reopen",
+              "no_change"
+            ],
+            "title": "Decision"
+          },
+          "decision_event_id": {
+            "type": "string",
+            "title": "Decision Event Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/EventResearchLifecycleDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "decision",
+          "decision_event_id",
+          "lifecycle"
+        ],
+        "title": "PublishedMaterialDecisionResponse"
       },
       "PublishedSourceStatementDTO": {
         "properties": {

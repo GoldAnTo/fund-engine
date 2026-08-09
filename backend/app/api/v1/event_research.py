@@ -24,6 +24,8 @@ from app.schemas.v1.event_research import (
     PublishEventConclusionResponse,
     ContinueEventResearchRequest,
     ContinueEventResearchResponse,
+    PublishedMaterialDecisionRequest,
+    PublishedMaterialDecisionResponse,
     UpdateEventResearchScopeRequest,
     UpdateEventResearchScopeResponse,
 )
@@ -35,6 +37,7 @@ from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.auto_research import AutoResearchService
 from app.repositories.event_research import EventResearchLifecycleRepository
+from app.repositories.outbox import emit_event
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -187,4 +190,52 @@ def continue_event_research(
             current_gap=lifecycle.current_gap,
             next_human_action=lifecycle.next_human_action,
         ),
+    )
+
+
+@router.post("/{case_id}/published-material-decisions", response_model=PublishedMaterialDecisionResponse, status_code=status.HTTP_201_CREATED)
+def decide_published_material(
+    case_id: uuid.UUID,
+    payload: PublishedMaterialDecisionRequest,
+    db: Session = Depends(get_db),
+) -> PublishedMaterialDecisionResponse:
+    try:
+        document = EventResearchService(db).freeze_published_material(
+            case_id,
+            raw_input=payload.raw_input,
+            source_url=payload.source_url,
+            source_type=payload.source_type,
+            source_metadata=payload.source_metadata,
+            actor=payload.actor,
+        )
+        run_id = None
+        if payload.decision == "reopen":
+            run = AutoResearchService(db).continue_published_event(
+                case_id,
+                document_version_id=document.id,
+                reason=payload.reason,
+                triggered_by=payload.actor,
+            )
+            run_id = str(run.id)
+        event = emit_event(
+            db,
+            type="review_decision_recorded",
+            aggregate_type="published_material_decision",
+            aggregate_id=document.id,
+            ref_type="research_case",
+            ref_id=case_id,
+            origin="operational",
+            actor=payload.actor,
+            payload={"decision": payload.decision, "reason": payload.reason, "document_version_id": str(document.id), "case_id": str(case_id), "run_id": run_id},
+        )
+        db.commit()
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = EventResearchLifecycleRepository(db).get(case_id)
+    assert lifecycle is not None
+    return PublishedMaterialDecisionResponse(
+        document_version_id=str(document.id), decision=payload.decision,
+        decision_event_id=str(event.id), run_id=run_id,
+        lifecycle=EventResearchLifecycleDTO(status=lifecycle.status, active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None, current_round=lifecycle.current_round, status_summary=lifecycle.status_summary, current_gap=lifecycle.current_gap, next_human_action=lifecycle.next_human_action),
     )

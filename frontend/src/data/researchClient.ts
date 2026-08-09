@@ -30,6 +30,7 @@ export const researchClient: ResearchClient = {
   getEventWorkbench: (caseId) => _client.getEventWorkbench(caseId),
   getEventConclusionHistory: (caseId) => _client.getEventConclusionHistory(caseId),
   continueEventResearch: (input) => _client.continueEventResearch(input),
+  decidePublishedMaterial: (input) => _client.decidePublishedMaterial(input),
   updateEventResearchScope: (input) => _client.updateEventResearchScope(input),
   getEventReviewQueue: (caseId) => _client.getEventReviewQueue(caseId),
   publishEventConclusion: (input) => _client.publishEventConclusion(input),

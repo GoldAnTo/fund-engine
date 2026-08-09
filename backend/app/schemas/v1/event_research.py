@@ -271,6 +271,24 @@ class ContinueEventResearchResponse(V1Model):
     lifecycle: EventResearchLifecycleDTO
 
 
+class PublishedMaterialDecisionRequest(V1Model):
+    raw_input: str = Field(min_length=1)
+    source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+    decision: Literal["reopen", "no_change"]
+    reason: str = Field(min_length=1, max_length=2000)
+    actor: str = Field(min_length=1, max_length=128)
+
+
+class PublishedMaterialDecisionResponse(V1Model):
+    document_version_id: str
+    decision: Literal["reopen", "no_change"]
+    decision_event_id: str
+    run_id: str | None = None
+    lifecycle: EventResearchLifecycleDTO
+
+
 class EventNextActionDTO(V1Model):
     kind: str
     label: str

@@ -1881,6 +1881,22 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
     )
     cmd_session.add(prior)
     cmd_session.flush()
+    unchanged = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-material-decisions",
+        json={
+            "raw_input": "新增研报仅重复既有订单判断，未提供新的可核验指标。",
+            "source_type": "pasted_snapshot",
+            "source_metadata": {"authority_level": "secondary_source"},
+            "decision": "no_change",
+            "reason": "材料没有改变已发布结论的证据边界。",
+            "actor": "human:lin",
+        },
+    )
+    assert unchanged.status_code == 201, unchanged.text
+    assert unchanged.json()["decision"] == "no_change"
+    assert unchanged.json()["run_id"] is None
+    assert unchanged.json()["lifecycle"]["status"] == "published"
+    assert unchanged.json()["decision_event_id"]
     CaseMonitorService(cmd_session).save(
         case_id,
         actor="human:lin",
@@ -1896,11 +1912,14 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
     cmd_session.commit()
 
     response = cmd_client.post(
-        f"/api/v1/event-research/{case_id}/continuations",
+        f"/api/v1/event-research/{case_id}/published-material-decisions",
         json={
-            "document_version_id": str(document_id),
+            "raw_input": "公司新增业绩说明，需核验是否影响原判断。",
+            "source_type": "uploaded_file",
+            "source_metadata": {"authority_level": "primary_disclosure"},
+            "decision": "reopen",
             "reason": "公司新增业绩说明，需核验是否影响原判断",
-            "triggered_by": "human:lin",
+            "actor": "human:lin",
         },
     )
 
@@ -1913,7 +1932,7 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
     )
     assert scope is not None
     assert scope.payload_json["trigger"] == "material_continuation"
-    assert scope.payload_json["source_document_version_id"] == str(document_id)
+    assert scope.payload_json["source_document_version_id"] == response.json()["document_version_id"]
     assert scope.payload_json["previous_conclusion_id"] == str(prior.id)
     assert scope.payload_json["continuation_reason"] == "公司新增业绩说明，需核验是否影响原判断"
     assert cmd_session.get(EventResearchConclusion, prior.id).text == "原发布结论"

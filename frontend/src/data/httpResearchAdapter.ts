@@ -2909,6 +2909,11 @@ export class HttpResearchAdapter implements ResearchClient {
     return { runId: dto.run_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    const dto = await this.post<{ document_version_id: string; decision: "reopen" | "no_change"; decision_event_id: string; run_id?: string | null; lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null; } }>(`/event-research/${encodeURIComponent(input.caseId)}/published-material-decisions`, { raw_input: input.rawInput, source_url: input.sourceUrl, source_type: input.sourceType, source_metadata: input.sourceMetadata, decision: input.decision, reason: input.reason, actor: input.actor });
+    return { documentVersionId: dto.document_version_id, decision: dto.decision, decisionEventId: dto.decision_event_id, runId: dto.run_id ?? null, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
   async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
     const dto = await this.requestJson<{
       version: number; factors: Array<string | { statement: string; description?: string | null }>; reclassified_evidence_count: number; unmapped_evidence_count: number;

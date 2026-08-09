@@ -19,6 +19,7 @@ from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
 from app.services.source_governance import SourceGovernanceService
+from app.errors import ValidationFailedError
 
 
 def _utcnow() -> datetime:
@@ -148,3 +149,49 @@ class EventResearchService:
         return CreatedEventResearch(
             case_id=str(case.id), brief_id=str(brief.id), lifecycle=lifecycle
         )
+
+    def freeze_published_material(
+        self,
+        case_id,
+        *,
+        raw_input: str,
+        source_url: str | None,
+        source_type: str,
+        source_metadata: dict,
+        actor: str,
+    ):
+        """Attach a newly submitted, immutable material snapshot to a published Case.
+
+        The caller must still make an explicit post-intake decision.  Freezing
+        and attaching material is deliberately not a lifecycle transition.
+        """
+        lifecycle = self._session.get(EventResearchLifecycle, case_id)
+        if lifecycle is None or lifecycle.status != "published":
+            raise ValidationFailedError("only a published event research case can accept new material")
+        document_service = DocumentService(DocumentRepository(self._session))
+        document_url = source_url or {
+            "pasted_snapshot": "event://published-material-snapshot",
+            "uploaded_file": "upload://published-material-text-snapshot",
+            "licensed_provider": "provider://unresolved-record",
+        }[source_type]
+        document = document_service.freeze(
+            raw=raw_input.encode("utf-8"),
+            source_url=document_url,
+            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1"}[source_type],
+            title="已发布 Case 的新增材料",
+            parse_state="partial",
+            source_authority=source_metadata.get("authority_level", "unknown"),
+        )
+        document_service.attach_to_case(research_case_id=case_id, document_version_id=document.id)
+        SourceGovernanceService(self._session).record_event_intake(
+            document=document,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            declared_by=actor,
+        )
+        document_service.add_span(
+            document_version_id=document.id,
+            locator={"kind": source_type, "source_metadata": source_metadata, "intake": "published_material"},
+            verbatim_text=raw_input,
+        )
+        return document

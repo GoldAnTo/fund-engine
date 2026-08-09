@@ -4007,6 +4007,19 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ runId, lifecycle });
   }
 
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    this.throwIfOffline();
+    if (!input.rawInput.trim() || !input.reason.trim()) throw new Error("material and decision reason are required");
+    const documentVersionId = `document-published-material-${input.caseId}`;
+    if (input.decision === "reopen") {
+      const next = await this.continueEventResearch({ caseId: input.caseId, documentVersionId, reason: input.reason, triggeredBy: input.actor });
+      return { documentVersionId, decision: "reopen", decisionEventId: `decision-${input.caseId}`, runId: next.runId, lifecycle: next.lifecycle };
+    }
+    const current = (await this.getEventWorkbench(input.caseId)).lifecycle;
+    void input.sourceUrl; void input.sourceType; void input.sourceMetadata;
+    return simulateLatency({ documentVersionId, decision: "no_change", decisionEventId: `decision-${input.caseId}`, runId: null, lifecycle: current });
+  }
+
   async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
     const event = this.eventResearchItems().find((item) => item.id === input.caseId)
