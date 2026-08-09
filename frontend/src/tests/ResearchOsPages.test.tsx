@@ -265,10 +265,10 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/不继承证据、结论或审核状态/)).toBeVisible();
   });
 
-  it("shows every active run and its frozen scope from the global monitoring page", async () => {
+  it("keeps terminal runs globally visible with their frozen scope and stop reason", async () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
-      String(input).endsWith("/research-runs/active")
-        ? { items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电 Case", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "schedule", monitor_version_id: "monitor-v2", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false }
+      String(input).endsWith("/research-runs")
+        ? { items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电 Case", status: "failed", stage: "failed", created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:04:00Z", processed_count: 3, stop_reason: "task_failed", next_action: "查看失败原因", scope: { trigger: "schedule", monitor_version_id: "monitor-v2", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false }
         : { items: [], next_cursor: null, has_more: false },
     ), { status: 200, headers: { "content-type": "application/json" } }))));
     render(
@@ -280,7 +280,8 @@ describe("Research OS event entry", () => {
     expect(await screen.findByRole("heading", { name: "全局运行与监控" })).toBeVisible();
     expect(screen.getByText("台积电 Case")).toBeVisible();
     expect(screen.getByText("company_disclosure")).toBeVisible();
-    expect(screen.getByRole("link", { name: "查看本次运行" })).toHaveAttribute("href", "/events/event-tsm/monitor");
+    expect(screen.getByText("task_failed")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看失败原因" })).toHaveAttribute("href", "/events/event-tsm/monitor");
   });
 
   it("keeps reviewed claims, market observations and disclosed fund holdings in separate layers", async () => {

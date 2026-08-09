@@ -914,6 +914,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Run Archive
+         * @description List current and terminal runs without reconstructing their scope.
+         */
+        get: operations["list_run_archive_api_v1_research_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/runs": {
         parameters: {
             query?: never;
@@ -4298,6 +4318,45 @@ export interface components {
             agreement: components["schemas"]["HumanAiAgreementDTO"];
             latency: components["schemas"]["JudgmentLatencyDTO"];
         };
+        /**
+         * ResearchRunArchiveDTO
+         * @description A global, replayable run record, including terminal runs.
+         */
+        ResearchRunArchiveDTO: {
+            /** Run Id */
+            run_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Updated At */
+            updated_at: string;
+            /** Processed Count */
+            processed_count: number;
+            /** Next Action */
+            next_action: string;
+            scope: components["schemas"]["FrozenRunScopeDTO"];
+            /** Created At */
+            created_at: string;
+            /** Stop Reason */
+            stop_reason?: string | null;
+        };
+        /** ResearchRunArchiveResponse */
+        ResearchRunArchiveResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ResearchRunArchiveDTO"][];
+        };
         /** ResearchRunEventsItemDTO */
         ResearchRunEventsItemDTO: {
             /** Seq */
@@ -7374,6 +7433,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActiveResearchRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_archive_api_v1_research_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunArchiveResponse"];
                 };
             };
             /** @description Validation Error */

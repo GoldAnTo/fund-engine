@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.models.ledger import ResearchCase, Thesis
+from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent  # noqa: F401
 
 
@@ -112,5 +113,34 @@ def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current
     item = response.json()["items"][0]
     assert item["run_id"] == started.json()["id"]
     assert item["case_id"] == str(case.id)
+    assert item["scope"]["monitor_version_id"] == saved.json()["id"]
+    assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
+
+
+def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(factor.id, allowed_source_types=["company_disclosure"]),
+    )
+    started = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/runs",
+        json={"max_rounds": 1, "budget": 20},
+    )
+    run = cmd_session.get(ResearchRun, uuid.UUID(started.json()["id"]))
+    run.status = "failed"
+    run.stage = "failed"
+    run.stop_reason = "task_failed"
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/research-runs")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["run_id"] == started.json()["id"]
+    assert item["status"] == "failed"
+    assert item["stop_reason"] == "task_failed"
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]

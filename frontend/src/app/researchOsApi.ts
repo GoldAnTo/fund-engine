@@ -13,6 +13,7 @@ export type Monitor = Schemas["CaseMonitorDTO"];
 export type MonitorDetail = Schemas["CaseMonitorDetailResponse"];
 export type RunEvent = Schemas["ResearchRunEventsItemDTO"];
 export type ActiveResearchRun = Schemas["ActiveResearchRunDTO"];
+export type ResearchRunArchive = Schemas["ResearchRunArchiveDTO"];
 export type Graph = Schemas["GraphResponse"];
 export type FundExposure = Schemas["FundExposureResponse"];
 export type MarketExpression = Schemas["MarketExpressionResponse"];
@@ -31,6 +32,7 @@ export const researchOsApi = {
   setMonitorStatus: (caseId: string, status: "active" | "paused", changeReason: string) => request<Monitor>(`/research-cases/${caseId}/monitor/${status}`, { method: "POST", body: JSON.stringify({ actor: "human:researcher", change_reason: changeReason }) }),
   runEvents: (runId: string) => request<Schemas["ResearchRunEventsResponse"]>(`/research-runs/${runId}/events`),
   activeRuns: () => request<Schemas["ActiveResearchRunsResponse"]>("/research-runs/active"),
+  runs: () => request<Schemas["ResearchRunArchiveResponse"]>("/research-runs"),
   network: () => request<ResearchNetwork>("/event-research/network"),
   caseRelations: (caseId: string) => request<ResearchNetwork>(`/event-research/${caseId}/relations`),
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),

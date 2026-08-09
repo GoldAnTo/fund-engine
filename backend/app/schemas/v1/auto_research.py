@@ -49,6 +49,17 @@ class ActiveResearchRunsResponse(CursorPage):
     items: list[ActiveResearchRunDTO]
 
 
+class ResearchRunArchiveDTO(ActiveResearchRunDTO):
+    """A global, replayable run record, including terminal runs."""
+
+    created_at: str
+    stop_reason: str | None = None
+
+
+class ResearchRunArchiveResponse(CursorPage):
+    items: list[ResearchRunArchiveDTO]
+
+
 class CancelRunResponse(RunSummaryDTO):
     pass
 

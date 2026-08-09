@@ -3226,6 +3226,52 @@
         }
       }
     },
+    "/api/v1/research-runs": {
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "List Run Archive",
+        "description": "List current and terminal runs without reconstructing their scope.",
+        "operationId": "list_run_archive_api_v1_research_runs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunArchiveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/runs": {
       "post": {
         "tags": [
@@ -12894,6 +12940,109 @@
         ],
         "title": "ResearchOpsResponse",
         "description": "研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。"
+      },
+      "ResearchRunArchiveDTO": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "processed_count": {
+            "type": "integer",
+            "title": "Processed Count"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/FrozenRunScopeDTO"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "case_id",
+          "case_title",
+          "status",
+          "stage",
+          "updated_at",
+          "processed_count",
+          "next_action",
+          "scope",
+          "created_at"
+        ],
+        "title": "ResearchRunArchiveDTO",
+        "description": "A global, replayable run record, including terminal runs."
+      },
+      "ResearchRunArchiveResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRunArchiveDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResearchRunArchiveResponse"
       },
       "ResearchRunEventsItemDTO": {
         "properties": {

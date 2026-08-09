@@ -16,6 +16,8 @@ from app.schemas.v1.auto_research import (
     ActiveResearchRunDTO,
     ActiveResearchRunsResponse,
     FrozenRunScopeDTO,
+    ResearchRunArchiveDTO,
+    ResearchRunArchiveResponse,
     RunListResponse,
     RunSummaryDTO,
     StartResearchRunRequest,
@@ -24,6 +26,49 @@ from app.schemas.v1.auto_research import (
 from app.services.auto_research import AutoResearchService
 
 router = APIRouter(tags=["auto-research-v1"])
+
+
+def _frozen_scope(db: Session, run: ResearchRun) -> FrozenRunScopeDTO:
+    scope_event = db.scalar(
+        select(ResearchRunEvent)
+        .where(ResearchRunEvent.run_id == run.id)
+        .where(ResearchRunEvent.stage == "scope")
+        .order_by(ResearchRunEvent.seq.desc())
+        .limit(1)
+    )
+    payload = scope_event.payload_json if scope_event is not None else {}
+    return FrozenRunScopeDTO(
+        trigger=payload.get("trigger"),
+        monitor_version_id=payload.get("monitor_version_id"),
+        factor_ids=list(payload.get("factor_ids") or []),
+        allowed_source_types=list(payload.get("allowed_source_types") or []),
+        budget=payload.get("budget"),
+    )
+
+
+def _next_action(run: ResearchRun) -> str:
+    if run.status == "waiting_for_review":
+        return "审核待审候选"
+    if run.status == "failed":
+        return "查看失败原因"
+    if run.status == "cancelled":
+        return "查看取消记录"
+    return "查看本次运行"
+
+
+def _run_item(db: Session, run: ResearchRun) -> ActiveResearchRunDTO:
+    case = db.get(ResearchCase, run.research_case_id)
+    return ActiveResearchRunDTO(
+        run_id=str(run.id),
+        case_id=str(run.research_case_id),
+        case_title=case.title if case is not None else "已删除 Case",
+        status=run.status,
+        stage=run.stage,
+        updated_at=run.updated_at.isoformat(),
+        processed_count=run.budget_used,
+        next_action=_next_action(run),
+        scope=_frozen_scope(db, run),
+    )
 
 
 @router.get("/research-runs/active", response_model=ActiveResearchRunsResponse)
@@ -41,42 +86,37 @@ def list_active_runs(
         )
     )
     page = runs[:limit]
-    items = []
-    for run in page:
-        scope_event = db.scalar(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "scope")
-            .order_by(ResearchRunEvent.seq.desc())
-            .limit(1)
-        )
-        payload = scope_event.payload_json if scope_event is not None else {}
-        case = db.get(ResearchCase, run.research_case_id)
-        next_action = (
-            "审核待审候选"
-            if run.status == "waiting_for_review"
-            else "查看本次运行"
-        )
-        items.append(
-            ActiveResearchRunDTO(
-                run_id=str(run.id),
-                case_id=str(run.research_case_id),
-                case_title=case.title if case is not None else "已删除 Case",
-                status=run.status,
-                stage=run.stage,
-                updated_at=run.updated_at.isoformat(),
-                processed_count=run.budget_used,
-                next_action=next_action,
-                scope=FrozenRunScopeDTO(
-                    trigger=payload.get("trigger"),
-                    monitor_version_id=payload.get("monitor_version_id"),
-                    factor_ids=list(payload.get("factor_ids") or []),
-                    allowed_source_types=list(payload.get("allowed_source_types") or []),
-                    budget=payload.get("budget"),
-                ),
-            )
-        )
+    items = [_run_item(db, run) for run in page]
     return ActiveResearchRunsResponse(
+        items=items,
+        has_more=len(runs) > limit,
+        next_cursor=None,
+    )
+
+
+@router.get("/research-runs", response_model=ResearchRunArchiveResponse)
+def list_run_archive(
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """List current and terminal runs without reconstructing their scope."""
+    runs = list(
+        db.scalars(
+            select(ResearchRun)
+            .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
+            .limit(limit + 1)
+        )
+    )
+    page = runs[:limit]
+    items = [
+        ResearchRunArchiveDTO(
+            **_run_item(db, run).model_dump(),
+            created_at=run.created_at.isoformat(),
+            stop_reason=run.stop_reason,
+        )
+        for run in page
+    ]
+    return ResearchRunArchiveResponse(
         items=items,
         has_more=len(runs) > limit,
         next_cursor=None,
