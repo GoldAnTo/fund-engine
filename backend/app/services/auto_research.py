@@ -32,6 +32,7 @@ from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_protocol import ResearchProtocolService
 from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
@@ -81,6 +82,21 @@ class AutoResearchService:
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
+        # A protocol-required thesis may not create a run merely because a
+        # caller reached the run endpoint. The same immutable protocol gate
+        # used by assessment generation is enforced at orchestration time.
+        protocol = ResearchProtocolService(self.session)
+        blocked_reasons: list[str] = []
+        for thesis in theses:
+            if not thesis.research_protocol_required:
+                continue
+            result = protocol.check_researchability(thesis.id)
+            if result.status == "blocked":
+                blocked_reasons.extend(result.reason_codes)
+        if blocked_reasons:
+            raise ValidationFailedError(
+                "researchability gate blocked: " + ", ".join(sorted(set(blocked_reasons)))
+            )
         run = self.repo.create_run(
             research_case_id=case_id,
             max_rounds=max(1, min(max_rounds, 3)),

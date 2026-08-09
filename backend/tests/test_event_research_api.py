@@ -188,6 +188,20 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
     ) == _confirmed_event()["candidate_factors"]
 
 
+def test_protocol_required_event_cannot_start_a_research_run_before_its_gate_is_ready(cmd_client) -> None:
+    payload = _confirmed_event()
+    payload["research_protocol_required"] = True
+    created = cmd_client.post("/api/v1/event-research", json=payload).json()
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 10},
+    )
+
+    assert response.status_code == 422
+    assert "missing_outcome_binding" in response.json()["error"]["message"]
+
+
 def test_research_network_keeps_reviewed_relations_separate_from_ai_candidates(
     cmd_client, cmd_session
 ) -> None:
