@@ -33,6 +33,7 @@ from app.api.v1.event_research import router as event_research_router
 from app.api.v1.case_monitor import router as case_monitor_router
 from app.api.v1.market_expression import router as market_expression_router
 from app.api.v1.research_protocol import router as research_protocol_router
+from app.api.v1.research_session import router as research_session_router
 from app.schemas.v1.common import HealthResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -79,3 +80,4 @@ router.include_router(case_monitor_router)
 router.include_router(market_expression_router)
 router.include_router(research_protocol_router)
 router.include_router(review_proposals_router)
+router.include_router(research_session_router)

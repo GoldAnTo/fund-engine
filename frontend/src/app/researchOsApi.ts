@@ -38,8 +38,13 @@ export type CaseMechanismProtocol = Schemas["CaseMechanismProtocolDTO"];
 export type AtomicClaimCandidate = Schemas["AtomicClaimCandidateDTO"];
 export type AtomicClaimReview = Schemas["AtomicClaimReviewDTO"];
 export type CaseRelationReview = Schemas["CaseRelationReviewDTO"];
+export type ResearchSession = Schemas["ResearchSessionDTO"];
+export type LegacyCaseAdmissionCandidate = Schemas["LegacyCaseAdmissionCandidateDTO"];
 
 const httpResearchOsApi = {
+  session: () => request<ResearchSession>("/research-session"),
+  legacyAdmissionQueue: () => request<Schemas["LegacyCaseAdmissionQueueResponse"]>("/event-research/legacy-admission-queue"),
+  admitLegacyCase: (caseId: string, input: Schemas["LegacyCaseAdmissionRequest"]) => request<Schemas["LegacyCaseAdmissionResponse"]>(`/event-research/${caseId}/tenant-admission`, { method: "POST", body: JSON.stringify(input) }),
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
   saveMonitor: (caseId: string, input: Schemas["UpdateCaseMonitorRequest"]) => request<Monitor>(`/research-cases/${caseId}/monitor`, { method: "PUT", body: JSON.stringify(input) }),
   setMonitorStatus: (caseId: string, status: "active" | "paused", changeReason: string) => request<Monitor>(`/research-cases/${caseId}/monitor/${status}`, { method: "POST", body: JSON.stringify({ actor: "human:researcher", change_reason: changeReason }) }),
@@ -97,6 +102,13 @@ export function resetResearchOsApi(): void {
 }
 
 export const researchOsApi: ResearchOsApi = {
+  // Older local fixtures predate role-aware navigation.  They must be
+  // treated as a non-administrator session, never allowed to impersonate one.
+  session: () => typeof selectedResearchOsApi.session === "function"
+    ? selectedResearchOsApi.session()
+    : Promise.resolve({ tenant_id: "", roles: [] }),
+  legacyAdmissionQueue: () => selectedResearchOsApi.legacyAdmissionQueue(),
+  admitLegacyCase: (caseId, input) => selectedResearchOsApi.admitLegacyCase(caseId, input),
   monitor: (caseId) => selectedResearchOsApi.monitor(caseId),
   saveMonitor: (caseId, input) => selectedResearchOsApi.saveMonitor(caseId, input),
   setMonitorStatus: (caseId, status, changeReason) => selectedResearchOsApi.setMonitorStatus(caseId, status, changeReason),

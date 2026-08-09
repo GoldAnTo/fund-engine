@@ -5,6 +5,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -28,6 +29,9 @@ from app.schemas.v1.event_research import (
     EventWorkbenchDTO,
     LegacyCaseAdmissionRequest,
     LegacyCaseAdmissionResponse,
+    LegacyCaseAdmissionCandidateDTO,
+    LegacyCaseAdmissionDocumentDTO,
+    LegacyCaseAdmissionQueueResponse,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
     ContinueEventResearchRequest,
@@ -53,11 +57,17 @@ from app.api.v1.tenant_context import (
     require_research_tenant,
 )
 from app.services.case_tenant_access import CaseTenantAccess
-from app.models.event_research import CaseRelation
+from app.models.event_research import CaseRelation, EventResearchBrief
 from app.queries.documents import DocumentReadQueries
 from app.queries.basis import HistoricalBasis
 from app.schemas.v1.documents import DocumentDetailResponse, DocumentListResponse
-from app.models.ledger import ValidationError
+from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    ValidationError,
+)
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.outbox import emit_event
 
@@ -80,6 +90,57 @@ def list_event_research(
     tenant_id: str = Depends(require_research_tenant),
 ) -> EventResearchListResponse:
     return EventResearchQueries(db).list(status=status, tenant_id=tenant_id)
+
+
+@router.get(
+    "/legacy-admission-queue", response_model=LegacyCaseAdmissionQueueResponse
+)
+def legacy_case_admission_queue(
+    db: Session = Depends(get_db),
+    _actor: ResearchActor = Depends(require_case_administrator),
+) -> LegacyCaseAdmissionQueueResponse:
+    """List only explicit-admin migration candidates and their attached sources."""
+    rows = db.execute(
+        select(ResearchCase, EventResearchBrief, DocumentVersion)
+        .join(
+            EventResearchBrief,
+            EventResearchBrief.research_case_id == ResearchCase.id,
+        )
+        .join(
+            CaseDocumentVersion,
+            CaseDocumentVersion.research_case_id == ResearchCase.id,
+        )
+        .join(
+            DocumentVersion,
+            DocumentVersion.id == CaseDocumentVersion.document_version_id,
+        )
+        .outerjoin(
+            CaseTenantAdmission,
+            CaseTenantAdmission.research_case_id == ResearchCase.id,
+        )
+        .where(CaseTenantAdmission.id.is_(None))
+        .order_by(ResearchCase.created_at.asc(), DocumentVersion.available_at.asc())
+    ).all()
+    candidates: dict[uuid.UUID, LegacyCaseAdmissionCandidateDTO] = {}
+    for case, brief, document in rows:
+        candidate = candidates.setdefault(
+            case.id,
+            LegacyCaseAdmissionCandidateDTO(
+                case_id=str(case.id),
+                event_title=brief.event_title,
+                created_at=case.created_at,
+                documents=[],
+            ),
+        )
+        candidate.documents.append(
+            LegacyCaseAdmissionDocumentDTO(
+                document_version_id=str(document.id),
+                title=document.title,
+                source_url=document.source_url,
+                available_at=document.available_at,
+            )
+        )
+    return LegacyCaseAdmissionQueueResponse(items=list(candidates.values()))
 
 
 @router.get("/network", response_model=ResearchNetworkResponse)
