@@ -3,7 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, Thesis
+from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    Thesis,
+)
 from app.models.research_protocol import MetricDefinitionVersion
 from app.models.source_governance import SourceContract
 
@@ -28,6 +34,29 @@ def _protocol_thesis(session) -> Thesis:
     case = ResearchCase(title="协议 API Case", industry_topic="ai", created_by="human", created_at=now)
     session.add(case)
     session.flush()
+    initial_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="https://disclosure.example.org/protocol-admission",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+    )
+    session.add(initial_document)
+    session.flush()
+    session.add_all([
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=initial_document.id,
+            linked_at=now,
+        ),
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=initial_document.id,
+            admitted_by="test-fixture",
+            admitted_at=now,
+        ),
+    ])
     thesis = Thesis(research_case_id=case.id, statement="相关业务收入将增长", research_protocol_required=True, created_by="human", created_at=now)
     session.add(thesis)
     session.commit()
