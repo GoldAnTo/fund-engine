@@ -90,16 +90,27 @@ def create_document_supplement(
     if supplement.supplements_document_version_id not in {None, original.id}:
         raise ValidationFailedError("identical supplement content is already frozen for another original document")
     docs.attach_to_case(research_case_id=case_id, document_version_id=supplement.id)
-    docs.add_span(
-        document_version_id=supplement.id,
-        locator={
-            "kind": "supplement_text",
-            "supplements_document_version_id": str(original.id),
-            "claimed_page_reference": payload.claimed_page_reference.strip(),
-            "source_metadata": payload.source_metadata,
-        },
-        verbatim_text=payload.raw_text,
+    existing_span = next(
+        (
+            span
+            for span in DocumentRepository(db).spans_for_version(supplement.id)
+            if span.verbatim_text == payload.raw_text
+            and span.locator.get("kind") == "supplement_text"
+            and span.locator.get("supplements_document_version_id") == str(original.id)
+        ),
+        None,
     )
+    if existing_span is None:
+        docs.add_span(
+            document_version_id=supplement.id,
+            locator={
+                "kind": "supplement_text",
+                "supplements_document_version_id": str(original.id),
+                "claimed_page_reference": payload.claimed_page_reference.strip(),
+                "source_metadata": payload.source_metadata,
+            },
+            verbatim_text=payload.raw_text,
+        )
     contract = SourceGovernanceService(db).record_supplement_intake(
         document=supplement,
         original_contract=original_contract,

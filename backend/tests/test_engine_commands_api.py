@@ -190,6 +190,20 @@ def test_supplement_text_creates_a_separate_case_document_with_intersected_permi
     assert contract.allow_ai_processing is False
     assert contract.allow_display is True
 
+    retried = cmd_client.post(
+        f"/api/v1/documents/{original.id}/supplements",
+        json={
+            "case_id": str(case.id),
+            "raw_text": "用户补充的报告正文，声称来自第 3 页。",
+            "claimed_page_reference": "第 3 页",
+            "created_by": "human:researcher",
+            "source_metadata": {"permissions": {"ai_processing": True, "display": True}},
+        },
+    )
+    assert retried.status_code == 201
+    assert retried.json()["document_version_id"] == str(supplement.id)
+    assert len(DocumentRepository(cmd_seeded).spans_for_version(supplement.id)) == 1
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/theses/{thesis_id}/propose
