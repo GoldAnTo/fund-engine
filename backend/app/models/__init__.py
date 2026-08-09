@@ -10,6 +10,7 @@ from app.models import operational  # noqa: F401
 from app.models import proposals  # noqa: F401
 from app.models import research_monitor  # noqa: F401
 from app.models import research_expression  # noqa: F401
+from app.models import source_governance  # noqa: F401
 from app.models import versions  # noqa: F401
 from app.models.ledger import Base  # noqa: F401
 
@@ -21,6 +22,7 @@ __all__ = [
     "proposals",
     "research_monitor",
     "research_expression",
+    "source_governance",
     "versions",
     "ledger",
 ]

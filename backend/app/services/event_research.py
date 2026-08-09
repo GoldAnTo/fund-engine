@@ -19,6 +19,7 @@ from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.auto_research import AutoResearchService
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
+from app.services.source_governance import SourceGovernanceService
 
 
 def _utcnow() -> datetime:
@@ -61,6 +62,12 @@ class EventResearchService:
         )
         document_service.attach_to_case(
             research_case_id=case.id, document_version_id=document.id
+        )
+        SourceGovernanceService(self._session).record_event_intake(
+            document=document,
+            source_type=payload.source_type,
+            source_metadata=payload.source_metadata,
+            declared_by=payload.created_by,
         )
         document_service.add_span(
             document_version_id=document.id,

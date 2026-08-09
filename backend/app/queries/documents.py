@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import AIRun, CaseDocumentVersion, DocumentVersion, Stock
+from app.models.source_governance import SourceContract
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
@@ -25,6 +26,7 @@ from app.schemas.v1.documents import (
     DocumentListResponse,
     DocumentSummaryDTO,
     SourceSpanDTO,
+    SourceContractDTO,
 )
 
 _REVIEWED_STATES = frozenset({"reviewed"})
@@ -90,6 +92,12 @@ class DocumentReadQueries:
             next_cursor = _encode_cursor(last.available_at, last.id)
         # One batched lookup for the extraction watermark (no N+1).
         run_map = latest_extract_runs(self._session, [v.id for v in page_items])
+        contracts = {
+            contract.document_version_id: contract
+            for contract in self._session.scalars(
+                select(SourceContract).where(SourceContract.document_version_id.in_([v.id for v in page_items]))
+            )
+        } if page_items else {}
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
             spans = self._docs.spans_for_version(version.id)
@@ -103,6 +111,7 @@ class DocumentReadQueries:
                     len(statements),
                     spans=spans,
                     latest_run=run_map.get(version.id),
+                    source_contract=contracts.get(version.id),
                 )
             )
         return DocumentListResponse(
@@ -179,6 +188,7 @@ class DocumentReadQueries:
                 latest_run=latest_extract_runs(self._session, [version_id]).get(
                     version_id
                 ),
+                source_contract=self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == version_id)),
             ),
             spans=span_dtos,
         )
@@ -264,6 +274,7 @@ class DocumentReadQueries:
         *,
         spans: list | None = None,
         latest_run: AIRun | None = None,
+        source_contract: SourceContract | None = None,
     ) -> DocumentSummaryDTO:
         meta = self._locator_metadata(spans or [])
         quality, quality_reasons = assess_span_texts(
@@ -301,4 +312,29 @@ class DocumentReadQueries:
             entity=self._resolve_entity(
                 meta["sec_code"], meta["title"], meta["sec_name"]
             ),
+            source_contract=self._source_contract_dto(source_contract),
+        )
+
+    @staticmethod
+    def _source_contract_dto(contract: SourceContract | None) -> SourceContractDTO | None:
+        if contract is None:
+            return None
+        permissions = {
+            "ai_processing": contract.allow_ai_processing,
+            "display": contract.allow_display,
+            "export": contract.allow_export,
+            "api": contract.allow_api,
+        }
+        return SourceContractDTO(
+            source_type=contract.source_type,
+            provider_or_tenant=contract.provider_or_tenant,
+            permissions=permissions,
+            status="admitted" if contract.allow_ai_processing and contract.allow_display else "restricted",
+            region=contract.region,
+            effective_from=contract.effective_from,
+            effective_until=contract.effective_until,
+            retention_policy=contract.retention_policy,
+            deletion_policy=contract.deletion_policy,
+            downstream_restrictions=list(contract.downstream_restrictions or []),
+            contract_version=contract.contract_version,
         )

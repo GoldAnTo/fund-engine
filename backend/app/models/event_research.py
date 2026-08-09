@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
+from app.models import source_governance  # noqa: F401
 
 
 class EventResearchBrief(Base):

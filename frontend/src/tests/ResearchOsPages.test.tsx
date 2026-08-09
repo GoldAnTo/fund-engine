@@ -149,6 +149,9 @@ describe("Research OS event entry", () => {
     expect(await screen.findByRole("heading", { name: "原文资料" })).toBeVisible();
     await user.click(await screen.findByRole("button", { name: /台积电 2026 年第二季度法说会摘要/ }));
     expect(await screen.findByText("内容快照（当前 V1 未提供原件文件）")).toBeVisible();
+    expect(screen.getByText("来源已准入")).toBeVisible();
+    expect(screen.getByText("AI 允许 · 展示 允许 · 导出 禁止 · API 禁止")).toBeVisible();
+    expect(screen.getByText("仅限当前 Case 研究与人工审核")).toBeVisible();
     expect(screen.getByText(/资本开支指引/)).toBeVisible();
     expect(screen.getByText('{"page":12,"section":"资本开支"}')).toBeVisible();
   });

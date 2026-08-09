@@ -893,6 +893,17 @@ const DOCUMENTS: SourceDocumentView[] = [
     span_count: 2,
     statement_count: 1,
     version_label: "v1 · 2026-08-07",
+    source_contract: {
+      source_type: "company_disclosure",
+      provider_or_tenant: "台积电",
+      permissions: { ai_processing: true, display: true, export: false, api: false },
+      status: "admitted",
+      region: "not_recorded",
+      retention_policy: "case_retained",
+      deletion_policy: "not_recorded",
+      downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+      contract_version: null,
+    },
   },
   {
     id: "doc-1",

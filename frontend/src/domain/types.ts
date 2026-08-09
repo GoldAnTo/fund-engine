@@ -346,6 +346,22 @@ export interface SourceDocumentView {
   span_count: number;
   statement_count: number;
   version_label: string | null; // e.g. v3 · 2024-05-12
+  source_contract?: {
+    source_type: string;
+    provider_or_tenant: string;
+    permissions: {
+      ai_processing: boolean;
+      display: boolean;
+      export: boolean;
+      api: boolean;
+    };
+    status: "admitted" | "restricted";
+    region: string;
+    retention_policy: string;
+    deletion_policy: string;
+    downstream_restrictions: string[];
+    contract_version: string | null;
+  } | null;
 }
 
 export interface DocumentSpan {

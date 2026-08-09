@@ -2237,6 +2237,7 @@ export interface components {
             doc_kind?: string | null;
             /** Entity */
             entity?: string | null;
+            source_contract?: components["schemas"]["SourceContractDTO"] | null;
         };
         /** DocumentVersionAddedDTO */
         DocumentVersionAddedDTO: {
@@ -4119,6 +4120,36 @@ export interface components {
             citation: string;
             /** Locator */
             locator: string;
+        };
+        /** SourceContractDTO */
+        SourceContractDTO: {
+            /** Source Type */
+            source_type: string;
+            /** Provider Or Tenant */
+            provider_or_tenant: string;
+            /** Permissions */
+            permissions: {
+                [key: string]: boolean;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "admitted" | "restricted";
+            /** Region */
+            region: string;
+            /** Effective From */
+            effective_from: string | null;
+            /** Effective Until */
+            effective_until: string | null;
+            /** Retention Policy */
+            retention_policy: string;
+            /** Deletion Policy */
+            deletion_policy: string;
+            /** Downstream Restrictions */
+            downstream_restrictions: string[];
+            /** Contract Version */
+            contract_version: string | null;
         };
         /**
          * SourceGroupDTO

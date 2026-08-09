@@ -46,7 +46,7 @@ test.describe("Event-first Research OS", () => {
     await page.route("**/api/v1/research-cases/event-tsm/graph?research_mode=true", async (route) => route.fulfill({ json: {
       schema_version: "graph/v1", basis: { as_of: "2026-08-08T00:00:00Z", available_at: "2026-08-08T00:00:00Z" }, page: { items: 3, next_cursor: null }, paths: [],
       nodes: [
-        { id: "source", kind: "source", label: "冻结公告", properties: { review_state: "reviewed" } },
+        { id: "source", kind: "source", label: "冻结公告", properties: { review_state: "reviewed", verbatim_text: "冻结原文：资本开支指引已上调。" } },
         { id: "factor", kind: "factor", label: "资本开支", properties: { review_state: "reviewed" } },
         { id: "proposal", kind: "proposal", label: "AI 候选", properties: { review_state: "machine_generated" } },
       ],
@@ -62,6 +62,7 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("button", { name: "source 冻结公告 已进入 Case 图谱" }).click();
     await expect(page.getByText("可追溯检查器")).toBeVisible();
     await expect(page.getByText("已审核对象")).toBeVisible();
+    await expect(page.getByText("冻结原文：资本开支指引已上调。")).toBeVisible();
   });
 
   test("immediate replenishment starts from a visible frozen monitor scope", async ({ page }) => {
