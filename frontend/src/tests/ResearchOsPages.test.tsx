@@ -83,6 +83,17 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("离线原型未运行 LLM 抽取")).toBeVisible();
   });
 
+  it("opens the requested frozen document and marks the span used for review", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents?document=doc-event-tsm-q2&span=sp-tsm-capex"]}>
+        <Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/已定位到审核候选对应的冻结原文片段/)).toBeVisible();
+    expect(screen.getByText("公司上调全年资本开支指引，同时市场关注自由现金流承压。").closest("article")).toHaveClass("is-focused");
+  });
+
   it("keeps a parse-failed source in the Case and offers an explicit supplemental-text recovery", async () => {
     setResearchClient(new MockResearchAdapter({ scenario: "parse_failed" }));
     render(
