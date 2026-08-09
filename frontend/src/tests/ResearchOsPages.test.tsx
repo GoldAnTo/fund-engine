@@ -109,6 +109,22 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("expands the immutable active-run event chain without leaving the current page", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).endsWith("/research-runs/active")
+        ? { items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电 Case", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false }
+        : { run_id: "run-1", items: [{ seq: 1, stage: "scope", status: "recorded", message: "冻结本次范围", details: { allowed_source_types: ["company_disclosure"] }, created_at: "2026-08-09T00:00:00Z" }], next_cursor: null, has_more: false },
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(<MemoryRouter initialEntries={["/events"]}><Routes><Route element={<AppShell />}><Route path="/events" element={<p>工作台内容</p>} /></Route></Routes></MemoryRouter>);
+
+    await user.click(await screen.findByRole("button", { name: "展开运行详情" }));
+    const drawer = await screen.findByRole("complementary", { name: "全局运行详情" });
+    expect(drawer).toHaveTextContent("company_disclosure");
+    expect(drawer).toHaveTextContent("冻结本次范围");
+    expect(screen.getByText("工作台内容")).toBeVisible();
+  });
+
   it("keeps Case evidence separate from the current conclusion and exposes its frozen locator", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
