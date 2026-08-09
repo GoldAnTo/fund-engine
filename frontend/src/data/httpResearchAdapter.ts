@@ -336,13 +336,21 @@ function buildRevisionComparison(
 }
 
 export class HttpResearchAdapter implements ResearchClient {
-  constructor(private readonly options: { baseUrl: string }) {}
+  constructor(
+    private readonly options: { baseUrl: string; bearerToken?: string },
+  ) {}
+
+  private authHeaders(): HeadersInit {
+    const token = this.options.bearerToken?.trim();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
 
   private async get<T>(path: string): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
-        headers: { Accept: "application/json" },
+        credentials: "include",
+        headers: { Accept: "application/json", ...this.authHeaders() },
       });
     } catch {
       throw new PageStateError("backend_unavailable");
@@ -365,9 +373,11 @@ export class HttpResearchAdapter implements ResearchClient {
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
         method: "POST",
+        credentials: "include",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          ...this.authHeaders(),
         },
         body: JSON.stringify(body),
       });
@@ -392,7 +402,8 @@ export class HttpResearchAdapter implements ResearchClient {
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        credentials: "include",
+        headers: { Accept: "application/json", ...this.authHeaders() },
         body,
       });
     } catch {
@@ -418,9 +429,11 @@ export class HttpResearchAdapter implements ResearchClient {
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
         ...init,
+        credentials: "include",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          ...this.authHeaders(),
           ...(init.headers ?? {}),
         },
       });
@@ -1011,6 +1024,12 @@ export class HttpResearchAdapter implements ResearchClient {
   }
 
   async getDocuments(query?: DocumentsQuery): Promise<SourceDocumentView[]> {
+    if (query?.caseId) {
+      const dto = await this.get<Schemas["DocumentListResponse"]>(
+        `/event-research/${encodeURIComponent(query.caseId)}/documents`,
+      );
+      return dto.items.map((d) => this.mapDocument(d));
+    }
     const dto = await this.get<Schemas["DocumentListResponse"]>(
       `/documents${this.buildQuery({
         q: query?.query,
@@ -1021,12 +1040,14 @@ export class HttpResearchAdapter implements ResearchClient {
     return dto.items.map((d) => this.mapDocument(d));
   }
 
-  async getDocumentDetail(documentId: string): Promise<{
+  async getDocumentDetail(documentId: string, caseId?: string): Promise<{
     document: SourceDocumentView;
     spans: DocumentSpan[];
   }> {
     const dto = await this.get<Schemas["DocumentDetailResponse"]>(
-      `/documents/${encodeURIComponent(documentId)}`,
+      caseId
+        ? `/event-research/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}`
+        : `/documents/${encodeURIComponent(documentId)}`,
     );
     return {
       document: this.mapDocument(dto.document),

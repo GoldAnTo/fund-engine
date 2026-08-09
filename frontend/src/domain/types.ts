@@ -484,7 +484,7 @@ export interface ResearchClient {
     query?: RelationshipQuery
   ): Promise<RelationshipGraph>;
   getDocuments(query?: DocumentsQuery): Promise<SourceDocumentView[]>;
-  getDocumentDetail(documentId: string): Promise<{
+  getDocumentDetail(documentId: string, caseId?: string): Promise<{
     document: SourceDocumentView;
     spans: DocumentSpan[];
   }>;

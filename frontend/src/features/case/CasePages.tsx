@@ -398,13 +398,13 @@ function CaseDocumentsContent({
     if (!selectedId) return;
     setDetail(null);
     researchClient
-      .getDocumentDetail(selectedId)
+      .getDocumentDetail(selectedId, caseId)
       .then((value) => active && setDetail(value))
       .catch(() => active && setError("无法读取所选资料的冻结内容。"));
     return () => {
       active = false;
     };
-  }, [selectedId]);
+  }, [caseId, selectedId]);
   async function extractCandidates(document: SourceDocumentView) {
     setExtractingId(document.id);
     setError(null);
@@ -1710,7 +1710,7 @@ function AtomicClaimItem({
     setSourceError(null);
     try {
       setSourceDetail(
-        await researchClient.getDocumentDetail(claim.document_version_id),
+        await researchClient.getDocumentDetail(claim.document_version_id, caseId),
       );
     } catch {
       setSourceError(

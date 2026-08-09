@@ -219,12 +219,20 @@ describe("HttpResearchAdapter", () => {
         },
       ],
     };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(detail)),
+    const fetchMock = vi.fn(async () => jsonResponse(detail));
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new HttpResearchAdapter({
+      baseUrl: "http://api.test/api/v1",
+      bearerToken: "team-token",
+    });
+    const out = await adapter.getDocumentDetail("doc-1", "case-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://api.test/api/v1/event-research/case-1/documents/doc-1",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer team-token" }),
+      }),
     );
-    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
-    const out = await adapter.getDocumentDetail("doc-1");
     expect(out.spans[0].cited_by).toEqual([
       { evidence_id: "l-1", thesis_id: "t-1", role: "supports" },
     ]);

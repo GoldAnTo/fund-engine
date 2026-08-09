@@ -68,3 +68,39 @@ def test_foreign_tenant_cannot_read_or_attach_to_an_event_case(
 
     assert foreign_read.status_code == 404
     assert foreign_write.status_code == 404
+
+
+def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    case_id = created.json()["case_id"]
+    legacy_list = cmd_client.get(f"/api/v1/documents?case_id={case_id}")
+    document_id = legacy_list.json()["items"][0]["id"]
+
+    owner_list = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/documents", headers=_auth("token-a")
+    )
+    foreign_list = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/documents", headers=_auth("token-b")
+    )
+    owner_detail = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/documents/{document_id}",
+        headers=_auth("token-a"),
+    )
+    foreign_detail = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/documents/{document_id}",
+        headers=_auth("token-b"),
+    )
+
+    assert owner_list.status_code == 200
+    assert [item["id"] for item in owner_list.json()["items"]] == [document_id]
+    assert foreign_list.status_code == 404
+    assert owner_detail.status_code == 200
+    assert owner_detail.json()["document"]["id"] == document_id
+    assert foreign_detail.status_code == 404

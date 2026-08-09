@@ -106,10 +106,10 @@ git add backend/app/api/v1/event_research.py backend/app/services/event_research
 git commit -m "feat: authorize event case operations by tenant"
 ```
 
-### Task 3: Authorize document read surfaces and prove original-file isolation
+### Task 3: Authorize event Case document surfaces and prove original-file isolation
 
 **Files:**
-- Modify: `backend/app/api/v1/documents.py`
+- Modify: `backend/app/api/v1/event_research.py`
 - Modify: `backend/app/queries/documents.py`
 - Modify: `backend/app/services/case_tenant_access.py`
 - Test: `backend/tests/test_event_case_tenant_access.py`
@@ -119,8 +119,8 @@ git commit -m "feat: authorize event case operations by tenant"
 - [ ] **Step 1: Write a failing foreign-tenant document list/detail test**
 
 ```python
-assert cmd_client.get(f"/api/v1/documents?case_id={case_id}", headers=auth("token-b")).status_code == 404
-assert cmd_client.get(f"/api/v1/documents/{document_id}", headers=auth("token-b")).status_code == 404
+assert cmd_client.get(f"/api/v1/event-research/{case_id}/documents", headers=auth("token-b")).status_code == 404
+assert cmd_client.get(f"/api/v1/event-research/{case_id}/documents/{document_id}", headers=auth("token-b")).status_code == 404
 ```
 
 - [ ] **Step 2: Run the document-isolation test and verify it fails**
@@ -131,7 +131,7 @@ Expected: FAIL because document detail is presently global by version ID.
 
 - [ ] **Step 3: Scope document list/detail to an admitted Case**
 
-Require a `case_id` for tenant-aware document access. Validate the Case admission before returning document summaries or byte-adjacent provenance; detail must require a Case association that belongs to the same tenant. Update the HTTP adapter so every document read in the Research OS carries its Case ID and bearer token from the configured session identity; no token is hard-coded in browser code.
+Add Case-scoped document routes below `/event-research/{case_id}`. Validate the Case admission before returning document summaries or byte-adjacent provenance; detail must require a document association that belongs to that Case. Update the HTTP adapter so every document read in the active Research OS carries its Case ID; no token is hard-coded in browser code. The pre-existing global `/documents` library remains explicitly outside this event-slice boundary until its callers have migrated to the same admission model.
 
 - [ ] **Step 4: Regenerate contract and run focused frontend/backend tests**
 
@@ -142,7 +142,7 @@ Expected: PASS with generated contracts committed.
 - [ ] **Step 5: Commit document boundary**
 
 ```bash
-git add backend/app/api/v1/documents.py backend/app/queries/documents.py backend/app/services/case_tenant_access.py frontend/src/data/httpResearchAdapter.ts frontend/src/tests/HttpResearchAdapter.test.ts frontend/openapi.json frontend/src/contracts/v1.ts backend/tests/test_event_case_tenant_access.py
+git add backend/app/api/v1/event_research.py backend/app/queries/documents.py backend/app/services/case_tenant_access.py frontend/src/data/httpResearchAdapter.ts frontend/src/domain/types.ts frontend/src/features/case/CasePages.tsx frontend/src/tests/HttpResearchAdapter.test.ts frontend/openapi.json frontend/src/contracts/v1.ts backend/tests/test_event_case_tenant_access.py
 git commit -m "feat: scope event documents to case tenant admissions"
 ```
 

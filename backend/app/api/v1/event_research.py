@@ -47,6 +47,9 @@ from app.services.case_relation_reviews import CaseRelationReviewService
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.models.event_research import CaseRelation
+from app.queries.documents import DocumentReadQueries
+from app.queries.basis import HistoricalBasis
+from app.schemas.v1.documents import DocumentDetailResponse, DocumentListResponse
 from app.models.ledger import ValidationError
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.outbox import emit_event
@@ -78,6 +81,38 @@ def event_research_network(
     tenant_id: str = Depends(require_research_tenant),
 ) -> ResearchNetworkResponse:
     return EventResearchQueries(db).network(tenant_id=tenant_id)
+
+
+@router.get("/{case_id}/documents", response_model=DocumentListResponse)
+def event_case_documents(
+    case_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> DocumentListResponse:
+    _require_case(db, case_id, tenant_id)
+    return DocumentReadQueries(db).list_documents(
+        query=None,
+        case_id=case_id,
+        basis=HistoricalBasis.from_cutoff(None),
+        limit=100,
+        cursor=None,
+    )
+
+
+@router.get("/{case_id}/documents/{version_id}", response_model=DocumentDetailResponse)
+def event_case_document_detail(
+    case_id: uuid.UUID,
+    version_id: uuid.UUID,
+    research_mode: bool = False,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> DocumentDetailResponse:
+    _require_case(db, case_id, tenant_id)
+    return DocumentReadQueries(db).detail_for_case(
+        case_id=case_id,
+        version_id=version_id,
+        research_mode=research_mode,
+    )
 
 
 @router.get("/{case_id}/relations", response_model=ResearchNetworkResponse)
