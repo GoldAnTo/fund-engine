@@ -6,6 +6,7 @@ describe("research OS API selection", () => {
   afterEach(() => {
     resetResearchOsApi();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("uses the explicitly selected API instead of fetching the live ledger", async () => {
@@ -19,5 +20,23 @@ describe("research OS API selection", () => {
 
     expect(localApi.monitor).toHaveBeenCalledWith("event-tsm");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps live Research OS calls in the same authenticated browser session", async () => {
+    vi.stubEnv("VITE_RESEARCH_BEARER_TOKEN", "team-token");
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      reviewed_relations: [], candidate_relations: [], resolved_candidates: [],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await researchOsApi.network();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v1/event-research/network",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ Authorization: "Bearer team-token" }),
+      }),
+    );
   });
 });

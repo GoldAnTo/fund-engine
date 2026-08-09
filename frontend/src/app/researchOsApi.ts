@@ -4,7 +4,16 @@ type Schemas = components["schemas"];
 const baseUrl = (import.meta.env.VITE_RESEARCH_API_URL || "/api/v1").replace(/\/$/, "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, { headers: { "content-type": "application/json", ...(init?.headers ?? {}) }, ...init });
+  const bearerToken = import.meta.env.VITE_RESEARCH_BEARER_TOKEN?.trim();
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+  });
   if (!response.ok) throw new Error(`Research OS request failed (${response.status})`);
   return response.json() as Promise<T>;
 }
