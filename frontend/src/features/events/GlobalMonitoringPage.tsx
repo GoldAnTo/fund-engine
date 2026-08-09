@@ -25,12 +25,19 @@ export function GlobalMonitoringPage() {
   const [selectedRun, setSelectedRun] = useState<ResearchRunArchive | null>(null);
   const [runEvents, setRunEvents] = useState<RunEvent[] | null>(null);
   const [runEventsError, setRunEventsError] = useState<string | null>(null);
+  const [lastReadAt, setLastReadAt] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    researchOsApi.runs().then((response) => setRuns(response.items)).catch(() => {
+  async function loadRuns() {
+    setRefreshing(true);
+    try {
+      const response = await researchOsApi.runs();
+      setRuns(response.items); setError(null); setLastReadAt(new Date());
+    } catch {
       setError("无法读取实际运行记录；系统不会以推测的运行状态替代真实记录。");
-    });
-  }, []);
+    } finally { setRefreshing(false); }
+  }
+  useEffect(() => { void loadRuns(); const refresh = window.setInterval(() => void loadRuns(), 15_000); return () => window.clearInterval(refresh); }, []);
 
   async function openRun(run: ResearchRunArchive) {
     setSelectedRun(run);
@@ -46,8 +53,8 @@ export function GlobalMonitoringPage() {
 
   return <main className="ros-page ros-global-monitoring">
     <header className="ros-page-head">
-      <div><p className="ros-eyebrow">研究资产 · Global Monitoring</p><h1>全局运行与监控</h1><p>进行中、等待审核、失败和完成的运行均保留在同一档案中；范围只读取本次运行冻结记录，绝不由当前配置回填。</p></div>
-      <Link className="ros-button ros-button--primary" to="/events/new">＋ 新增事件</Link>
+      <div><p className="ros-eyebrow">研究资产 · Global Monitoring</p><h1>全局运行与监控</h1><p>进行中、等待审核、失败和完成的运行均保留在同一档案中；范围只读取本次运行冻结记录，绝不由当前配置回填。</p><p className="ros-muted" aria-live="polite">每 15 秒自动刷新{lastReadAt ? ` · 最近读取 ${lastReadAt.toLocaleTimeString("zh-CN")}` : " · 正在读取实际运行档案"}</p></div>
+      <div className="ros-header-actions"><button className="ros-button ros-button--secondary" type="button" disabled={refreshing} onClick={() => void loadRuns()}>{refreshing ? "正在刷新运行档案…" : "刷新运行档案"}</button><Link className="ros-button ros-button--primary" to="/events/new">＋ 新增事件</Link></div>
     </header>
     {error && <p className="ros-error" role="alert">{error}</p>}
     {!runs ? !error && <div className="ros-empty">正在读取统一运行记录…</div> : runs.length === 0 ? <div className="ros-empty">尚无 ResearchRun。创建事件或在 Case 内启动一次受控补证后，范围和每一步都会保留在这里。</div> : <section className="ros-global-run-list" aria-label="全局研究运行档案">

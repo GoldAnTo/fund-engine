@@ -105,6 +105,8 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/monitoring?client=mock");
 
     await expect(page.getByRole("heading", { name: "全局运行与监控" })).toBeVisible();
+    await expect(page.getByText(/每 15 秒自动刷新/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "刷新运行档案" })).toBeVisible();
     await expect(page.getByRole("main")).toContainText("company_disclosure");
     await expect(page.getByRole("main")).toContainText("monitor-v2");
     await expect(page.getByRole("main")).toContainText("task_failed");
