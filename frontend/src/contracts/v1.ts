@@ -7238,7 +7238,9 @@ export interface operations {
             query?: {
                 as_of?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -7271,7 +7273,9 @@ export interface operations {
             query?: {
                 as_of?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 fund_id: string;
             };
