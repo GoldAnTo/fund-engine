@@ -12,11 +12,21 @@ import "./styles/research-os.css";
 import "./styles/research-os-overrides.css";
 
 async function bootstrap() {
-  if (
+  const mockRequested =
     new URLSearchParams(window.location.search).get("client") === "mock" ||
-    import.meta.env.VITE_RESEARCH_CLIENT === "mock"
-  ) {
-    const { MockResearchAdapter } = await import("./data/mockResearchAdapter");
+    import.meta.env.VITE_RESEARCH_CLIENT === "mock";
+  if (mockRequested && !import.meta.env.DEV) {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <main className="ros-page"><div className="ros-empty"><strong>离线演示仅在开发环境可用</strong><p>生产环境不会打包或加载旧原型 fixture，也不会将 mock 请求回退到真实研究账本。</p></div></main>,
+    );
+    return;
+  }
+  if (mockRequested) {
+    // Keep the retired prototype adapter available to the local Vite server
+    // only. A variable + vite-ignore import deliberately prevents it (and its
+    // historical fixture) from becoming a production build chunk.
+    const localMockAdapterModule = "./data/" + "mockResearchAdapter";
+    const { MockResearchAdapter } = await import(/* @vite-ignore */ localMockAdapterModule);
     const { MockResearchOsApi } = await import("./data/mockResearchOsApi");
     const mockAdapter = new MockResearchAdapter();
     setResearchClient(mockAdapter);

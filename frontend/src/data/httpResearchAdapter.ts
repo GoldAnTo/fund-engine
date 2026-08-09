@@ -94,6 +94,12 @@ import type {
 
 type Schemas = components["schemas"];
 
+// These compatibility-only screen builders are never part of the Research OS
+// production surface. Keep their fixture out of the Vite production graph
+// while allowing legacy adapter tests to exercise it in the local runtime.
+const retiredPrototypeFixtureModule = "./" + "prototypeFixture";
+const loadRetiredPrototypeFixture = () => import(/* @vite-ignore */ retiredPrototypeFixtureModule);
+
 type TaskItemWire = {
   id: string;
   title: string;
@@ -1051,7 +1057,7 @@ export class HttpResearchAdapter implements ResearchClient {
   //    to a live endpoint is a one-line change once the backend ships it.)
 
   async getWorkspaceOverviewView() {
-    return (await import("./prototypeFixture")).buildWorkspaceOverview();
+    return (await loadRetiredPrototypeFixture()).buildWorkspaceOverview();
   }
 
   async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
@@ -1065,9 +1071,7 @@ export class HttpResearchAdapter implements ResearchClient {
     );
     // 任务队列 / 证据变化 / 活动流: explicitly out of target scope (binding
     // doc 缺口清单 "明确不建"); the screen labels these blocks as 示例.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildWorkspaceOverviewScreen();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildWorkspaceOverviewScreen();
 
     const assessment = overview.assessment;
     const CONCLUSION_LABEL: Record<string, string> = {
@@ -1387,9 +1391,7 @@ export class HttpResearchAdapter implements ResearchClient {
     ]);
     // Provider 查询计划 / 证据检索计划: no backend entity (binding doc 缺口
     // 清单 "明确不建"); keep the fixture plan block labeled 非目标范围.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildNewResearchView();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildNewResearchView();
     return {
       caseId: "",
       caseTitle: "新建研究",
@@ -1492,9 +1494,7 @@ export class HttpResearchAdapter implements ResearchClient {
     ]);
     // Provider 查询计划 / 采集编排 / 计划指标: no backend entity (binding
     // doc "明确不建"); keep the fixture blocks labeled 非目标范围.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildResearchPlanView();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildResearchPlanView();
 
     const assets: PlanAsset[] = documents.items.map((d) => ({
       id: d.id,
