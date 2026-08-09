@@ -67,6 +67,33 @@ def test_case_template_selection_is_append_only(session) -> None:
     assert selection.template_version_id == template.id
 
 
+def test_template_upgrade_requires_a_new_case_selection_version(session) -> None:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="模板升级 Case", industry_topic="ai", created_by="human", created_at=now)
+    session.add(case)
+    session.flush()
+    first_template = seed_ai_capex_template(session)
+    second_template = MechanismTemplateVersion(
+        template_key=first_template.template_key,
+        version=2,
+        display_name="海外 AI CapEx 到中国硬件（范围澄清）",
+        industry_scope=first_template.industry_scope,
+        supersedes_id=first_template.id,
+        approved_by="human:industry-owner",
+        reason="新增范围保护，已有 Case 必须重新复核后才能采用。",
+        created_at=now,
+    )
+    session.add(second_template)
+    session.flush()
+
+    service = ResearchProtocolService(session)
+    first_selection = service.select_template(case.id, first_template.id, reviewer="human", reason="首次适用")
+    upgraded_selection = service.select_template(case.id, second_template.id, reviewer="human", reason="复核模板范围变化")
+
+    assert upgraded_selection.supersedes_id == first_selection.id
+    assert service._repo.effective_case_template(case.id).template_version_id == second_template.id
+
+
 def test_gate_requires_rules_and_independent_metrics_after_template_selection(session) -> None:
     now = datetime.now(timezone.utc)
     case = ResearchCase(title="门槛 Case", industry_topic="ai", created_by="human", created_at=now)
