@@ -47,7 +47,7 @@
 - Modify: `frontend/src/styles/research-os.css`
 
 - [x] Rebuild conclusion, review and market pages with the approved case header, tab strip, current-judgment emphasis, factor rows, explicit evidence boundaries, and right-side next-action/monitor panels.
-- [x] Rebuild Case Wiki as a graph workbench with canvas columns, visible reviewed versus AI-candidate distinction, and selectable node inspector.
+- [x] Rebuild Case Wiki as a graph workbench with visible reviewed versus AI-candidate relationship paths, candidate filtering, and selectable node inspector.
 - [x] Render market expression as claim/factor/impact/fund panels using only API-provided records; preserve the disclosed-holdings and non-causality notices.
 
 ### Task 4: Restore transparent runs and versioned monitoring
@@ -58,7 +58,7 @@
 - Test: `frontend/src/tests/ResearchOsPages.test.tsx`
 
 - [x] Render the monitor overview as a current-run stage timeline plus versioned configuration rail; configuration edits keep their existing API request and explicit change reason.
-- [x] Add an accessible run-detail drawer that shows the selected run's scope, config version, ordered events and stage outputs without inventing progress.
+- [x] Add the real immediate-replenishment action and an accessible run-detail drawer that replays the selected run's frozen scope, ordered events and stage outputs without substituting current configuration for history.
 - [x] Re-run focused tests.
 
 ### Task 5: Verify visual and production quality
@@ -69,4 +69,5 @@
 - [x] Run `npm test -- --run` and `npm run build` in `frontend/`.
 - [x] Run the Vite app and inspect the event desk, intake and conclusion at desktop width against the approved prototypes; data-dependent Wiki, market and monitor retain their truthful unavailable states when no live API is present.
 - [x] Record any intentionally unavailable API data as truthful empty states; do not add display fixtures to production routes.
-- [ ] Commit the frontend restoration and this plan.
+- [x] Remove obsolete frontend pages, components, styles and E2E coverage so only the event-first workbench remains reachable.
+- [x] Commit the frontend restoration and this plan.

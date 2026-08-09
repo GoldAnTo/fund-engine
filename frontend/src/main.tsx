@@ -14,8 +14,8 @@ if (
 ) {
   setResearchClient(new MockResearchAdapter());
 }
-import "./styles.css";
 import "./styles/research-os.css";
+import "./styles/research-os-overrides.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
