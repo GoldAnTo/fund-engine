@@ -165,6 +165,7 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert response.status_code == 200
     payload = response.json()
     assert payload["claims"][0]["claim_kind"] == "research_opinion"
+    assert payload["claims"][0]["source"]["document_version_id"] == str(document.id)
     assert payload["claims"][0]["source"]["locator"] == {"page": 12, "paragraph": 3}
     assert payload["factors"][0]["verification"]["outcome"] == "supported"
     assert payload["factors"][0]["allowed_source_types"] == ["company_disclosure", "licensed_provider"]

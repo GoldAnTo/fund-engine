@@ -48,11 +48,11 @@ class MarketExpressionQueries:
 
     def _source(self, statement_id: uuid.UUID | None) -> ExpressionSourceDTO:
         if statement_id is None:
-            return ExpressionSourceDTO(source_statement_id=None, document_title=None, source_url=None, locator=None, available_at=None, permission_status="not_recorded")
+            return ExpressionSourceDTO(source_statement_id=None, document_version_id=None, document_title=None, source_url=None, locator=None, available_at=None, permission_status="not_recorded")
         statement = self._db.get(SourceStatement, statement_id)
         span = self._db.get(SourceSpan, statement.source_span_id) if statement else None
         document = self._db.get(DocumentVersion, span.document_version_id) if span else None
-        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status="not_recorded")
+        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status="not_recorded")
 
     def _case_has_source(self, case_id: uuid.UUID, statement_id: uuid.UUID | None) -> bool:
         if statement_id is None:

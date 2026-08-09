@@ -9,7 +9,7 @@ type Protocol = Schemas["CaseMechanismProtocolDTO"];
 type Rule = Schemas["VerificationRuleDTO"];
 
 const now = "2026-08-09T09:30:00Z";
-const source = { source_statement_id: "statement-demo-capex", document_title: "公司季度业绩说明", source_url: "https://disclosure.example/mock-capex", locator: { page: 2, paragraph: 3 }, available_at: "2026-08-08T20:00:00Z", permission_status: "admitted" };
+const source = { source_statement_id: "statement-demo-capex", document_version_id: "doc-demo-capex", document_title: "公司季度业绩说明", source_url: "https://disclosure.example/mock-capex", locator: { page: 2, paragraph: 3 }, available_at: "2026-08-08T20:00:00Z", permission_status: "admitted" };
 const factors = [
   { id: "factor-capex", statement: "资本开支增速是否高于此前指引" },
   { id: "factor-margin", statement: "自由现金流压力是否由订单和毛利改善抵消" },

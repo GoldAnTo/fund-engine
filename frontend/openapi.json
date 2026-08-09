@@ -9858,6 +9858,17 @@
             ],
             "title": "Source Statement Id"
           },
+          "document_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Version Id"
+          },
           "document_title": {
             "anyOf": [
               {
@@ -9913,6 +9924,7 @@
         "type": "object",
         "required": [
           "source_statement_id",
+          "document_version_id",
           "document_title",
           "source_url",
           "locator",

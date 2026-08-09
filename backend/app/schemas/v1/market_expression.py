@@ -8,6 +8,7 @@ from app.schemas.v1.common import V1Model
 
 class ExpressionSourceDTO(V1Model):
     source_statement_id: str | None
+    document_version_id: str | None
     document_title: str | None
     source_url: str | None
     locator: dict | None

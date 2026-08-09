@@ -3154,6 +3154,8 @@ export interface components {
         ExpressionSourceDTO: {
             /** Source Statement Id */
             source_statement_id: string | null;
+            /** Document Version Id */
+            document_version_id: string | null;
             /** Document Title */
             document_title: string | null;
             /** Source Url */
