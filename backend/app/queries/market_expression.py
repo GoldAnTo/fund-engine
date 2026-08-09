@@ -51,7 +51,7 @@ class MarketExpressionQueries:
             factors=[self._factor(item, cutoff) for item in factors],
             fundamentals=[self._fundamental(item) for item in fundamentals],
             market_observations=[self._observation(item) for item in observations],
-            fund_exposure=self._fund_exposure(fundamentals, as_of, cutoff),
+            fund_exposure=self._fund_exposure(case_id, fundamentals, as_of, cutoff),
         )
 
     def admitted_source_statements(self, case_id: uuid.UUID) -> SourceStatementOptionsResponse:
@@ -175,7 +175,7 @@ class MarketExpressionQueries:
         stock = self._db.get(Stock, item.stock_id)
         return MarketObservationDTO(id=str(item.id), key_factor_id=str(item.key_factor_id) if item.key_factor_id else None, stock_id=str(item.stock_id), stock_code=stock.code if stock else "已删除股票", stock_name=stock.name if stock else "已删除股票", event_at=item.event_at, available_at=item.available_at, window_label=item.window_label, benchmark=item.benchmark, price_source=item.price_source, after_hours_treatment=item.after_hours_treatment, relative_return=float(item.relative_return) if item.relative_return is not None else None, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at)
 
-    def _fund_exposure(self, fundamentals: list[FundamentalImpact], as_of: date, cutoff: datetime) -> list[FundDisclosureExposureDTO]:
+    def _fund_exposure(self, case_id: uuid.UUID, fundamentals: list[FundamentalImpact], as_of: date, cutoff: datetime) -> list[FundDisclosureExposureDTO]:
         stock_ids = [item.stock_id for item in fundamentals if item.stock_id is not None]
         if not stock_ids:
             return []
@@ -199,6 +199,16 @@ class MarketExpressionQueries:
                 contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
                 span = self._db.get(SourceSpan, disclosure.source_span_id) if disclosure.source_span_id else None
                 source_visible = bool(contract and contract.allow_display)
+                source_visible_in_case = bool(
+                    source_visible
+                    and document
+                    and self._db.scalar(
+                        select(CaseDocumentVersion.id)
+                        .where(CaseDocumentVersion.research_case_id == case_id)
+                        .where(CaseDocumentVersion.document_version_id == document.id)
+                        .limit(1)
+                    )
+                )
                 disclosure_is_stale = (as_of - disclosure.report_period).days > 180
                 freshness_status = (
                     "coverage_incomplete"
@@ -215,6 +225,7 @@ class MarketExpressionQueries:
                     published_at=disclosure.published_at, acquired_at=disclosure.acquired_at,
                     source=disclosure.source,
                     source_document_version_id=str(document.id) if document and source_visible else None,
+                    source_visible_in_case=source_visible_in_case,
                     source_locator=span.locator if span and source_visible else None,
                     provider_record_id=str(disclosure.provider_record_id) if disclosure.provider_record_id and source_visible else None,
                     source_permission_status="admitted" if source_visible else "not_recorded" if document is None else "restricted",

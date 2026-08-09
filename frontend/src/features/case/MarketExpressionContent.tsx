@@ -508,15 +508,29 @@ export function MarketExpressionContent({
                       )}
                       <br />
                       来源 {position.source} · 覆盖：
-                      {fundCoverageLabels[position.coverage_status] ?? "未记录"} ·
-                      时效：
-                      {fundFreshnessLabels[position.freshness_status] ?? "状态未记录"}
+                      {fundCoverageLabels[position.coverage_status] ??
+                        "未记录"}{" "}
+                      · 时效：
+                      {fundFreshnessLabels[position.freshness_status] ??
+                        "状态未记录"}
                       <br />
-                      {position.source_document_version_id
-                        ? `来源版本 ${position.source_document_version_id}`
-                        : "来源版本未记录"}{" "}
+                      {position.source_visible_in_case &&
+                      position.source_document_version_id ? (
+                        <Link
+                          className="ros-source-link"
+                          to={`/events/${caseId}/documents?document=${position.source_document_version_id}`}
+                        >
+                          定位到冻结持仓来源（版本{" "}
+                          {position.source_document_version_id}）
+                        </Link>
+                      ) : position.source_document_version_id ? (
+                        `来源版本 ${position.source_document_version_id}（未关联当前 Case）`
+                      ) : (
+                        "来源版本未记录"
+                      )}{" "}
                       · 许可：
-                      {permissionLabels[position.source_permission_status] ?? "未记录"}
+                      {permissionLabels[position.source_permission_status] ??
+                        "未记录"}
                       {position.source_locator
                         ? ` · 定位 ${JSON.stringify(position.source_locator)}`
                         : ""}
@@ -657,7 +671,9 @@ function MarketInstrumentWorkspace({
                   : " · 未上市/未映射"}
               </strong>
               <small>
-                {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role} · 审核 {binding.reviewed_by}
+                {instrumentRoleLabels[binding.relationship_role] ??
+                  binding.relationship_role}{" "}
+                · 审核 {binding.reviewed_by}
               </small>
               <small>
                 定位{" "}
@@ -894,7 +910,8 @@ function FundamentalImpactRegistration({
                 <option key={binding.id} value={binding.id}>
                   {binding.company_name}
                   {binding.stock_code ? ` · ${binding.stock_code}` : ""} ·{" "}
-                  {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role}
+                  {instrumentRoleLabels[binding.relationship_role] ??
+                    binding.relationship_role}
                 </option>
               ))}
             </select>
@@ -1085,7 +1102,8 @@ function MarketObservationRegistration({
               {stockBindings.map((binding) => (
                 <option key={binding.id} value={binding.id}>
                   {binding.company_name} · {binding.stock_code} ·{" "}
-                  {instrumentRoleLabels[binding.relationship_role] ?? binding.relationship_role}
+                  {instrumentRoleLabels[binding.relationship_role] ??
+                    binding.relationship_role}
                 </option>
               ))}
             </select>

@@ -226,6 +226,9 @@ class FundDisclosurePositionDTO(V1Model):
     acquired_at: datetime
     source: str
     source_document_version_id: str | None
+    # A source may be display-admitted but belong to another Case.  Only
+    # Case-owned sources can be opened through this Case's frozen-material UI.
+    source_visible_in_case: bool = False
     source_locator: dict | None
     provider_record_id: str | None
     source_permission_status: str

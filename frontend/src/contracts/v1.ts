@@ -3522,6 +3522,11 @@ export interface components {
             source: string;
             /** Source Document Version Id */
             source_document_version_id: string | null;
+            /**
+             * Source Visible In Case
+             * @default false
+             */
+            source_visible_in_case: boolean;
             /** Source Locator */
             source_locator: {
                 [key: string]: unknown;

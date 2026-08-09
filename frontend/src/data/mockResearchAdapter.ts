@@ -907,6 +907,32 @@ const DOCUMENTS: SourceDocumentView[] = [
     },
   },
   {
+    id: "doc-fund-holdings-2026q2",
+    title: "演示成长基金 2026 年第二季度持仓披露",
+    publisher: "授权基金数据源",
+    document_type: "基金持仓披露",
+    publish_date: "2026-07-20",
+    available_at: "2026-07-20T00:00:00Z",
+    acquired_at: "2026-07-21T00:00:00Z",
+    parser_version: "provider-v1",
+    parse_quality: "ok",
+    linked_cases: [{ id: "event-tsm", title: "台积电上调 CoWoS 指引后下跌" }],
+    span_count: 1,
+    statement_count: 0,
+    version_label: "v1 · 2026-07-20",
+    source_contract: {
+      source_type: "licensed_provider",
+      provider_or_tenant: "授权基金数据源",
+      permissions: { ai_processing: true, display: true, export: false, api: false },
+      status: "admitted",
+      region: "not_recorded",
+      retention_policy: "case_retained",
+      deletion_policy: "not_recorded",
+      downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+      contract_version: null,
+    },
+  },
+  {
     id: "doc-1",
     title: "中汽协：2024 年 4 月新能源汽车产销数据 PDF",
     publisher: "中汽协",
@@ -3151,6 +3177,16 @@ export class MockResearchAdapter implements ResearchClient {
                 document_id: document.id,
                 locator: { page: 4, section: "先进封装" },
                 verbatim_text: "管理层说明 CoWoS 产能扩充仍在按既定节奏推进。",
+                cited_by: [],
+              },
+            ]
+        : document.id === "doc-fund-holdings-2026q2"
+          ? [
+              {
+                id: "sp-fund-holdings-tsm",
+                document_id: document.id,
+                locator: { table: "前十大持仓", row: 3 },
+                verbatim_text: "截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。",
                 cited_by: [],
               },
             ]

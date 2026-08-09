@@ -11002,6 +11002,11 @@
             ],
             "title": "Source Document Version Id"
           },
+          "source_visible_in_case": {
+            "type": "boolean",
+            "title": "Source Visible In Case",
+            "default": false
+          },
           "source_locator": {
             "anyOf": [
               {

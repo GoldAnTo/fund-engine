@@ -13,6 +13,19 @@ test.describe("Event-first Research OS", () => {
     expect(liveRequests).toEqual([]);
   });
 
+  test("fund disclosure opens its Case-owned frozen source instead of a generic holding page", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await page
+      .getByRole("link", { name: "定位到冻结持仓来源（版本 doc-fund-holdings-2026q2）" })
+      .click();
+
+    await expect(page).toHaveURL(/\/events\/event-tsm\/documents\?document=doc-fund-holdings-2026q2/);
+    await expect(page.getByRole("heading", { name: "原文资料" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "演示成长基金 2026 年第二季度持仓披露" })).toBeVisible();
+    await expect(page.getByText("截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。")).toBeVisible();
+  });
+
   test("market expression records an explicit instrument link before a fundamental impact", async ({ page }) => {
     await page.goto("/events/event-tsm/market?client=mock");
 

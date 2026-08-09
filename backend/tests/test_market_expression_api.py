@@ -166,6 +166,38 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         coverage_status="complete",
         created_at=now,
     ))
+    unlinked_document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"other-case-fund-disclosure").hexdigest(),
+        source_url="https://licensed.example/funds/other-case",
+        title="其他 Case 的基金披露",
+        available_at=now,
+        acquired_at=now,
+        parser_version="provider-v1",
+        parse_state="success",
+    )
+    cmd_session.add(unlinked_document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=unlinked_document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    other_fund = Fund(code="000002", name="其他 Case 基金", fund_type="equity", created_at=now)
+    cmd_session.add(other_fund)
+    cmd_session.flush()
+    cmd_session.add(HoldingDisclosure(
+        fund_id=other_fund.id,
+        stock_id=stock.id,
+        weight=Decimal("0.032"),
+        report_period=date(2025, 12, 31),
+        published_at=datetime(2026, 1, 20, tzinfo=timezone.utc),
+        acquired_at=now,
+        source="licensed_provider",
+        source_document_version_id=unlinked_document.id,
+        coverage_status="complete",
+        created_at=now,
+    ))
     cmd_session.commit()
 
     response = cmd_client.get(
@@ -183,17 +215,21 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert payload["fundamentals"][0]["metric_name"] == "订单金额"
     assert payload["market_observations"][0]["benchmark"] == "中证全指"
     assert "causal_result" not in payload["market_observations"][0]
-    position = payload["fund_exposure"][0]["positions"][0]
+    position = next(item for item in payload["fund_exposure"] if item["fund_code"] == "000001")["positions"][0]
     assert position["report_period"] == "2025-12-31"
     assert position["published_at"].startswith("2026-01-20")
     assert position["acquired_at"].startswith("2026-08-09")
     assert position["source"] == "licensed_provider"
     assert position["coverage_status"] == "complete"
     assert position["source_document_version_id"] == str(document.id)
+    assert position["source_visible_in_case"] is True
     assert position["freshness_status"] == "stale_disclosure"
     # Complete coverage does not rescue an expired disclosure.  Do not promote
     # it into a precise current fund exposure.
-    assert payload["fund_exposure"][0]["disclosed_exposure"] is None
+    assert next(item for item in payload["fund_exposure"] if item["fund_code"] == "000001")["disclosed_exposure"] is None
+    unlinked_position = next(item for item in payload["fund_exposure"] if item["fund_code"] == "000002")["positions"][0]
+    assert unlinked_position["source_document_version_id"] == str(unlinked_document.id)
+    assert unlinked_position["source_visible_in_case"] is False
 
 
 def test_market_expression_excludes_machine_candidates_from_every_expression_layer(
