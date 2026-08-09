@@ -711,7 +711,7 @@ export class HttpResearchAdapter implements ResearchClient {
       acquired_at: dto.acquired_at,
       parser_version: dto.parser_version,
       source_authority: dto.source_authority,
-      parse_quality: dto.parse_state === "parsed" ? "ok" : "partial",
+      parse_quality: dto.parse_state === "failed" ? "failed" : dto.parse_state === "parsed" ? "ok" : "partial",
       linked_cases: [],
       span_count: dto.span_count,
       statement_count: dto.statement_count,
@@ -732,6 +732,8 @@ export class HttpResearchAdapter implements ResearchClient {
         downstream_restrictions: dto.source_contract.downstream_restrictions,
         contract_version: dto.source_contract.contract_version,
       } : null,
+      supplements_document_id: dto.supplements_document_version_id ?? null,
+      claimed_page_reference: dto.claimed_page_reference ?? null,
     };
   }
 

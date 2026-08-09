@@ -25,10 +25,13 @@ from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import DocumentVersion, Thesis
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, Thesis
 from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 from app.services.jobs import JobService
+from app.services.ingest import DocumentService
+from app.repositories.documents import DocumentRepository
+from app.services.source_governance import SourceGovernanceService
 from app.schemas.v1.commands import (
     ExtractResponse,
     ExtractCandidateDTO,
@@ -36,10 +39,80 @@ from app.schemas.v1.commands import (
     ProposeResponse,
     RerunAssessmentDTO,
     RerunResponse,
+    CreateDocumentSupplementRequest,
+    CreateDocumentSupplementResponse,
 )
 
 router = APIRouter(prefix="/theses", tags=["engine-commands-v1"])
 documents_router = APIRouter(prefix="/documents", tags=["engine-commands-v1"])
+
+
+@documents_router.post(
+    "/{document_version_id}/supplements",
+    response_model=CreateDocumentSupplementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_document_supplement(
+    document_version_id: uuid.UUID,
+    payload: CreateDocumentSupplementRequest,
+    db: Session = Depends(get_db),
+):
+    """Freeze user-supplied recovery text without changing the original file."""
+    original = db.get(DocumentVersion, document_version_id)
+    if original is None:
+        raise NotFoundError("document version not found")
+    try:
+        case_id = uuid.UUID(payload.case_id)
+    except ValueError as exc:
+        raise ValidationFailedError("case_id must be a UUID") from exc
+    attached = db.scalar(
+        select(CaseDocumentVersion.id).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == document_version_id,
+        )
+    )
+    if attached is None:
+        raise ValidationFailedError("original document is not attached to this Case")
+    original_contract = db.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document_version_id)
+    )
+    docs = DocumentService(DocumentRepository(db))
+    supplement = docs.freeze(
+        raw=payload.raw_text.encode("utf-8"),
+        source_url=f"supplement://{document_version_id}/{uuid.uuid4()}",
+        parser_version="user-supplement-v1",
+        title=f"补充正文 · {original.title or str(document_version_id)}",
+        parse_state="partial",
+        source_authority=payload.source_metadata.get("authority_level", "user_supplied"),
+        supplements_document_version_id=original.id,
+        claimed_page_reference=payload.claimed_page_reference.strip(),
+    )
+    if supplement.supplements_document_version_id not in {None, original.id}:
+        raise ValidationFailedError("identical supplement content is already frozen for another original document")
+    docs.attach_to_case(research_case_id=case_id, document_version_id=supplement.id)
+    docs.add_span(
+        document_version_id=supplement.id,
+        locator={
+            "kind": "supplement_text",
+            "supplements_document_version_id": str(original.id),
+            "claimed_page_reference": payload.claimed_page_reference.strip(),
+            "source_metadata": payload.source_metadata,
+        },
+        verbatim_text=payload.raw_text,
+    )
+    contract = SourceGovernanceService(db).record_supplement_intake(
+        document=supplement,
+        original_contract=original_contract,
+        source_metadata=payload.source_metadata,
+        declared_by=payload.created_by,
+    )
+    commit_or_rollback(db)
+    return CreateDocumentSupplementResponse(
+        document_version_id=str(supplement.id),
+        original_document_version_id=str(original.id),
+        claimed_page_reference=payload.claimed_page_reference.strip(),
+        extraction_allowed=contract.allow_ai_processing and contract.allow_display,
+    )
 
 
 @router.post(

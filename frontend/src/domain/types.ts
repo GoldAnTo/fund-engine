@@ -363,6 +363,8 @@ export interface SourceDocumentView {
     downstream_restrictions: string[];
     contract_version: string | null;
   } | null;
+  supplements_document_id?: string | null;
+  claimed_page_reference?: string | null;
 }
 
 export interface DocumentSpan {

@@ -547,6 +547,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_version_id}/supplements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Document Supplement
+         * @description Freeze user-supplied recovery text without changing the original file.
+         */
+        post: operations["create_document_supplement_api_v1_documents__document_version_id__supplements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_version_id}/extract": {
         parameters: {
             query?: never;
@@ -2226,6 +2246,32 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** CreateDocumentSupplementRequest */
+        CreateDocumentSupplementRequest: {
+            /** Case Id */
+            case_id: string;
+            /** Raw Text */
+            raw_text: string;
+            /** Claimed Page Reference */
+            claimed_page_reference: string;
+            /** Created By */
+            created_by: string;
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** CreateDocumentSupplementResponse */
+        CreateDocumentSupplementResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Original Document Version Id */
+            original_document_version_id: string;
+            /** Claimed Page Reference */
+            claimed_page_reference: string;
+            /** Extraction Allowed */
+            extraction_allowed: boolean;
+        };
         /** CreateEventResearchRequest */
         CreateEventResearchRequest: {
             /** Raw Input */
@@ -2521,7 +2567,11 @@ export interface components {
              * Parse State
              * @enum {string}
              */
-            parse_state: "parsed" | "unparsed";
+            parse_state: "parsed" | "partial" | "failed" | "unparsed";
+            /** Supplements Document Version Id */
+            supplements_document_version_id?: string | null;
+            /** Claimed Page Reference */
+            claimed_page_reference?: string | null;
             /**
              * Extraction State
              * @enum {string}
@@ -6694,6 +6744,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProposeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_document_supplement_api_v1_documents__document_version_id__supplements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDocumentSupplementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateDocumentSupplementResponse"];
                 };
             };
             /** @description Validation Error */

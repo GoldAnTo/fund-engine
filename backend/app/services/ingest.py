@@ -85,6 +85,8 @@ class DocumentService:
         language: str | None = None,
         parse_state: str = "success",
         source_authority: str = "unknown",
+        supplements_document_version_id: uuid.UUID | None = None,
+        claimed_page_reference: str | None = None,
     ) -> DocumentVersion:
         """Freeze bytes into a DocumentVersion, deduping on two levels:
 
@@ -115,6 +117,8 @@ class DocumentService:
             language=language,
             parse_state=parse_state,
             source_authority=source_authority,
+            supplements_document_version_id=supplements_document_version_id,
+            claimed_page_reference=claimed_page_reference,
         )
         return version
 
@@ -131,6 +135,8 @@ class DocumentService:
         language: str | None = None,
         parse_state: str = "success",
         source_authority: str = "unknown",
+        supplements_document_version_id: uuid.UUID | None = None,
+        claimed_page_reference: str | None = None,
     ) -> tuple[DocumentVersion, bool]:
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
@@ -168,6 +174,8 @@ class DocumentService:
             language=language,
             parse_state=parse_state,
             source_authority=normalize_source_authority(source_authority),
+            supplements_document_version_id=supplements_document_version_id,
+            claimed_page_reference=claimed_page_reference,
         )
         return version, True
 

@@ -49,4 +49,5 @@ export const researchOsApi = {
   createVerificationRule: (caseId: string, edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/research-cases/${caseId}/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
   atomicClaims: (caseId: string) => request<Schemas["AtomicClaimQueueResponse"]>(`/research-cases/${caseId}/atomic-claims`),
   reviewAtomicClaim: (candidateId: string, input: Schemas["AtomicClaimReviewRequest"]) => request<AtomicClaimReview>(`/atomic-claims/${candidateId}/reviews`, { method: "POST", body: JSON.stringify(input) }),
+  createDocumentSupplement: (documentId: string, input: Schemas["CreateDocumentSupplementRequest"]) => request<Schemas["CreateDocumentSupplementResponse"]>(`/documents/${documentId}/supplements`, { method: "POST", body: JSON.stringify(input) }),
 };

@@ -294,7 +294,16 @@ class DocumentReadQueries:
             ),
             span_count=span_count,
             statement_count=statement_count,
-            parse_state="parsed" if span_count >= 1 else "unparsed",
+            parse_state=(
+                "failed" if version.parse_state == "failed"
+                else "partial" if version.parse_state in {"partial", "pending"}
+                else "parsed" if span_count >= 1 else "unparsed"
+            ),
+            supplements_document_version_id=(
+                str(version.supplements_document_version_id)
+                if version.supplements_document_version_id else None
+            ),
+            claimed_page_reference=version.claimed_page_reference,
             extraction_state=extraction_state(
                 statement_count=statement_count, latest_run=latest_run
             ),

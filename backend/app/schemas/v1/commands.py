@@ -69,6 +69,21 @@ class CreateThesisResponse(V1Model):
     thesis: CreatedThesisDTO
 
 
+class CreateDocumentSupplementRequest(V1Model):
+    case_id: str = Field(min_length=1)
+    raw_text: str = Field(min_length=1)
+    claimed_page_reference: str = Field(min_length=1, max_length=256)
+    created_by: str = Field(min_length=1, max_length=128)
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateDocumentSupplementResponse(V1Model):
+    document_version_id: str
+    original_document_version_id: str
+    claimed_page_reference: str
+    extraction_allowed: bool
+
+
 # ---------------------------------------------------------------------------
 # 审核工作区 (review commands)
 # ---------------------------------------------------------------------------

@@ -40,7 +40,9 @@ class DocumentSummaryDTO(V1Model):
     supersedes_id: str | None
     span_count: int
     statement_count: int
-    parse_state: Literal["parsed", "unparsed"]
+    parse_state: Literal["parsed", "partial", "failed", "unparsed"]
+    supplements_document_version_id: str | None = None
+    claimed_page_reference: str | None = None
     # Extraction watermark derived from AIRun audit records (defect-3 fix):
     # "extracted_empty" distinguishes a successful zero-output run from a
     # never-attempted version so batch extraction stops re-running it.

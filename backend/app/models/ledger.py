@@ -187,6 +187,15 @@ class DocumentVersion(Base):
     source_authority: Mapped[str] = mapped_column(
         String(32), nullable=False, default="unknown"
     )
+    # A recovery text is a separate frozen version. It may point to the
+    # unreadable original, but never mutates it or pretends its claimed page
+    # reference is a parser-generated locator.
+    supplements_document_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=True
+    )
+    claimed_page_reference: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
 
 
 class CaseDocumentVersion(Base):

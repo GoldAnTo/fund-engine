@@ -83,6 +83,19 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("离线原型未运行 LLM 抽取")).toBeVisible();
   });
 
+  it("keeps a parse-failed source in the Case and offers an explicit supplemental-text recovery", async () => {
+    setResearchClient(new MockResearchAdapter({ scenario: "parse_failed" }));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/解析失败；保留资料记录/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "补充正文并标注页码" })).toBeVisible();
+    expect(screen.getByText(/不会改写原件，也不会自动启动研究/)).toBeVisible();
+  });
+
   it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
     const user = userEvent.setup();
     render(

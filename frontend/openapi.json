@@ -1967,6 +1967,60 @@
         }
       }
     },
+    "/api/v1/documents/{document_version_id}/supplements": {
+      "post": {
+        "tags": [
+          "engine-commands-v1"
+        ],
+        "summary": "Create Document Supplement",
+        "description": "Freeze user-supplied recovery text without changing the original file.",
+        "operationId": "create_document_supplement_api_v1_documents__document_version_id__supplements_post",
+        "parameters": [
+          {
+            "name": "document_version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDocumentSupplementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDocumentSupplementResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/documents/{document_version_id}/extract": {
       "post": {
         "tags": [
@@ -6998,6 +7052,75 @@
         ],
         "title": "CreateCompanyRequest"
       },
+      "CreateDocumentSupplementRequest": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Case Id"
+          },
+          "raw_text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Raw Text"
+          },
+          "claimed_page_reference": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Claimed Page Reference"
+          },
+          "created_by": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Created By"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "raw_text",
+          "claimed_page_reference",
+          "created_by"
+        ],
+        "title": "CreateDocumentSupplementRequest"
+      },
+      "CreateDocumentSupplementResponse": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "original_document_version_id": {
+            "type": "string",
+            "title": "Original Document Version Id"
+          },
+          "claimed_page_reference": {
+            "type": "string",
+            "title": "Claimed Page Reference"
+          },
+          "extraction_allowed": {
+            "type": "boolean",
+            "title": "Extraction Allowed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "original_document_version_id",
+          "claimed_page_reference",
+          "extraction_allowed"
+        ],
+        "title": "CreateDocumentSupplementResponse"
+      },
       "CreateEventResearchRequest": {
         "properties": {
           "raw_input": {
@@ -7817,9 +7940,33 @@
             "type": "string",
             "enum": [
               "parsed",
+              "partial",
+              "failed",
               "unparsed"
             ],
             "title": "Parse State"
+          },
+          "supplements_document_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplements Document Version Id"
+          },
+          "claimed_page_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed Page Reference"
           },
           "extraction_state": {
             "type": "string",

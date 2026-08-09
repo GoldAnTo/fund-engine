@@ -59,6 +59,8 @@ class DocumentRepository:
         language: str | None = None,
         parse_state: str = "success",
         source_authority: str = "unknown",
+        supplements_document_version_id: uuid.UUID | None = None,
+        claimed_page_reference: str | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
@@ -74,6 +76,8 @@ class DocumentRepository:
             language=language,
             parse_state=parse_state,
             source_authority=source_authority,
+            supplements_document_version_id=supplements_document_version_id,
+            claimed_page_reference=claimed_page_reference,
         )
         self._session.add(version)
         self._session.flush()
