@@ -72,7 +72,9 @@ class CaseReadQueries:
 
     # --------------------------------------------------------------- list
 
-    def list_cases(self, *, cursor: str | None, limit: int) -> CaseListResponse:
+    def list_cases(
+        self, *, cursor: str | None, limit: int, tenant_id: str | None = None
+    ) -> CaseListResponse:
         after_created_at, after_id = (None, None)
         if cursor is not None:
             after_created_at, after_id = self._decode_cursor(cursor)
@@ -81,6 +83,7 @@ class CaseReadQueries:
             limit=limit,
             after_created_at=after_created_at,
             after_id=after_id,
+            tenant_id=tenant_id,
         )
         has_more = len(cases) > limit
         page_items = cases[:limit]

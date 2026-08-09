@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import (
     AIAssessment,
+    CaseTenantAdmission,
     CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
@@ -538,11 +539,17 @@ class ResearchRepository:
         limit: int,
         after_created_at: datetime | None = None,
         after_id: uuid.UUID | None = None,
+        tenant_id: str | None = None,
     ) -> list[ResearchCase]:
         """Return up to ``limit + 1`` cases newest-first for cursor pagination."""
         query = select(ResearchCase).order_by(
             ResearchCase.created_at.desc(), ResearchCase.id.desc()
         )
+        if tenant_id is not None:
+            query = query.join(
+                CaseTenantAdmission,
+                CaseTenantAdmission.research_case_id == ResearchCase.id,
+            ).where(CaseTenantAdmission.tenant_id == tenant_id)
         if after_created_at is not None and after_id is not None:
             query = query.where(
                 tuple_(ResearchCase.created_at, ResearchCase.id)

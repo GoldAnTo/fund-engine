@@ -27,6 +27,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from tests.tenant_admission import admit_case
 
 
 def _seed_minimal_case(session, sha256_suffix):
@@ -142,6 +143,7 @@ def _seed_minimal_case(session, sha256_suffix):
         )
     )
     session.flush()
+    admit_case(session, case_id, document_version_id=doc.id)
     return case_id
 
 

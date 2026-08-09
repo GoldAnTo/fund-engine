@@ -89,6 +89,61 @@ def test_foreign_tenant_cannot_read_or_attach_to_an_event_case(
     assert foreign_write.status_code == 404
 
 
+def test_legacy_case_dossier_route_cannot_bypass_case_tenant_admission(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+
+    foreign_dossier = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/dossier", headers=_auth("token-b")
+    )
+    owner_dossier = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/dossier", headers=_auth("token-a")
+    )
+
+    assert foreign_dossier.status_code == 404
+    assert owner_dossier.status_code == 200
+
+
+def test_case_read_models_only_list_and_open_the_callers_admitted_cases(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+
+    owner_list = cmd_client.get("/api/v1/research-cases", headers=_auth("token-a"))
+    foreign_list = cmd_client.get("/api/v1/research-cases", headers=_auth("token-b"))
+    foreign_case_pages = [
+        cmd_client.get(
+            f"/api/v1/research-cases/{case_id}{suffix}", headers=_auth("token-b")
+        )
+        for suffix in ("/dossier", "/gaps", "/conclusion", "/graph", "/snapshots")
+    ]
+    foreign_overview = cmd_client.get(
+        "/api/v1/overview",
+        params={"case_id": case_id},
+        headers=_auth("token-b"),
+    )
+
+    assert [item["id"] for item in owner_list.json()["items"]] == [case_id]
+    assert foreign_list.json()["items"] == []
+    assert all(response.status_code == 404 for response in foreign_case_pages)
+    assert foreign_overview.status_code == 404
+
+
 def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
     cmd_client, monkeypatch
 ) -> None:

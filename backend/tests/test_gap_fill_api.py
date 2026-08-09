@@ -1,7 +1,10 @@
 """Gap-fill read API tests (对接清单 G1–G4)."""
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
+from tests.tenant_admission import admit_case
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +142,7 @@ def test_dossier_exposes_falsifiable_thesis_fields(cmd_client, cmd_session):
     )
     assert created.status_code == 201
     case_id = created.json()["case_id"]
+    admit_case(cmd_session, uuid.UUID(case_id))
 
     dossier = cmd_client.get(f"/api/v1/research-cases/{case_id}/dossier")
     assert dossier.status_code == 200, dossier.text

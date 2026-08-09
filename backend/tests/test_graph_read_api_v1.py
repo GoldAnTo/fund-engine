@@ -6,7 +6,6 @@ from decimal import Decimal
 from app.models.ledger import (
     CausalEdge,
     CausalStep,
-    CaseDocumentVersion,
     Company,
     DocumentVersion,
     EvidenceReview,
@@ -23,6 +22,7 @@ from app.models.ledger import (
 )
 from app.models.event_research import CaseRelation
 from app.models.source_governance import SourceContract
+from tests.tenant_admission import admit_case
 
 
 def edge_pairs(payload):
@@ -120,6 +120,7 @@ def test_graph_excludes_future_disclosure(api_client, session):
         )
     )
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -205,6 +206,7 @@ def test_graph_loads_real_causal_edges_and_connects_to_thesis(
     )
     session.add(edge)
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -253,6 +255,7 @@ def test_graph_does_not_fabricate_causal_edge_without_ledger_edge(
     )
     session.flush()
     # No CausalEdge rows in the ledger.
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -301,6 +304,7 @@ def test_graph_hides_machine_generated_causal_edge_by_default(
     session.flush()
 
     base = {"thesis_id": str(thesis.id), "cutoff": cutoff.isoformat()}
+    admit_case(session, case.id)
     default = api_client.get(f"/api/v1/research-cases/{case.id}/graph", params=base)
     assert default.status_code == 200
     assert not any(
@@ -343,6 +347,7 @@ def test_graph_excludes_theme_role_created_after_cutoff(api_client, session):
         )
     )
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -397,6 +402,7 @@ def test_graph_excludes_valuation_created_after_cutoff(api_client, session):
         )
     )
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -439,6 +445,7 @@ def test_graph_dedups_edges_by_id(api_client, session):
     )
     session.add(stock)
     session.flush()
+    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -518,13 +525,6 @@ def test_graph_marks_only_case_admitted_sources_as_locatable(
     assert span is not None
     document = session.get(DocumentVersion, span.document_version_id)
     assert document is not None
-    session.add(
-        CaseDocumentVersion(
-            research_case_id=workbench_case.case.id,
-            document_version_id=document.id,
-            linked_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-    )
     session.add(
         SourceContract(
             document_version_id=document.id,
@@ -717,6 +717,7 @@ def test_graph_excludes_post_cutoff_document_layer(api_client, session):
     )
     session.add(new_link)
     session.flush()
+    admit_case(session, case.id, document_version_id=old_version.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",

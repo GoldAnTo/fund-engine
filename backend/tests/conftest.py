@@ -346,6 +346,7 @@ def api_client(session, monkeypatch):
 
 @pytest.fixture
 def workbench_case(
+    session,
     document_service,
     research_service,
     assessment_service,
@@ -376,6 +377,9 @@ def workbench_case(
     case = research_service.add_case(
         title="AI compute demand", industry_topic="ai_compute", created_by="tester"
     )
+    from tests.tenant_admission import admit_case
+
+    admit_case(session, case.id, document_version_id=version.id)
     thesis = research_service.add_thesis(
         case.id, statement="GPU demand will grow", created_by="tester"
     )
@@ -688,7 +692,7 @@ def cmd_session():
 
 
 @pytest.fixture
-def cmd_client(cmd_session, monkeypatch):
+def cmd_client(cmd_session):
     from app.db import get_db
     from app.main import app
 
@@ -696,11 +700,16 @@ def cmd_client(cmd_session, monkeypatch):
         yield cmd_session
 
     app.dependency_overrides[get_db] = _override_get_db
-    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"test-tenant-token":"test-team"}')
+    previous_tokens = os.environ.get("RESEARCH_TENANT_TOKENS")
+    os.environ["RESEARCH_TENANT_TOKENS"] = '{"test-tenant-token":"test-team"}'
     try:
         yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
     finally:
         app.dependency_overrides.pop(get_db, None)
+        if previous_tokens is None:
+            os.environ.pop("RESEARCH_TENANT_TOKENS", None)
+        else:
+            os.environ["RESEARCH_TENANT_TOKENS"] = previous_tokens
 
 
 @pytest.fixture
