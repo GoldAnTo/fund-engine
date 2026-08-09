@@ -176,4 +176,18 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
     expect(screen.getByText(/报告期 2026-06-30/)).toBeVisible();
   });
+
+  it("shows only this Case's reviewed relations separately from AI candidates", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(
+      String(input).endsWith("/event-research/event-tsm/relations")
+        ? { reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }], candidate_relations: [{ id: "relation-2", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-other", title: "候选 Case", lifecycle_status: "researching" }, relation_type: "potential_conflict", reason: "等待人工核对", created_by: "ai:relation-proposal", review_state: "machine_generated", created_at: "2026-08-09T00:00:00Z" }] }
+        : { items: [], next_cursor: null, has_more: false },
+    ), { status: 200, headers: { "content-type": "application/json" } }))));
+    render(<MemoryRouter initialEntries={["/events/event-tsm/relations"]}><ResearchOsRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
+    expect(screen.getByText("共同验证资本开支")).toBeVisible();
+    expect(screen.getByText("等待人工核对")).toBeVisible();
+    expect(screen.getByText("不得自动进入本 Case")).toBeVisible();
+  });
 });

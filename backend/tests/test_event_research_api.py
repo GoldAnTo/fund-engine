@@ -223,6 +223,31 @@ def test_research_network_keeps_reviewed_relations_separate_from_ai_candidates(
     assert payload["candidate_relations"][0]["target_case"]["title"] == "Alphabet 财报后股价下跌"
 
 
+def test_case_relations_only_returns_associations_for_the_current_case(
+    cmd_client, cmd_session
+) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    second_payload = _confirmed_event()
+    second_payload["event_title"] = "Alphabet 后续验证事件"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
+    third_payload = _confirmed_event()
+    third_payload["event_title"] = "无关的第三个事件"
+    third = cmd_client.post("/api/v1/event-research", json=third_payload).json()
+    now = datetime.now(timezone.utc)
+    cmd_session.add_all([
+        CaseRelation(source_case_id=uuid.UUID(first["case_id"]), target_case_id=uuid.UUID(second["case_id"]), relation_type="shared_driver", reason="共同验证资本开支。", created_by="human:researcher", review_state="reviewed", created_at=now),
+        CaseRelation(source_case_id=uuid.UUID(second["case_id"]), target_case_id=uuid.UUID(third["case_id"]), relation_type="potential_conflict", reason="与当前 Case 无关。", created_by="ai:relation-proposal", review_state="machine_generated", created_at=now),
+    ])
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{first['case_id']}/relations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [relation["target_case"]["case_id"] for relation in payload["reviewed_relations"]] == [second["case_id"]]
+    assert payload["candidate_relations"] == []
+
+
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:
     payload = _confirmed_event()
     payload["candidate_factors"] = ["factor a", " factor a ", "factor c"]

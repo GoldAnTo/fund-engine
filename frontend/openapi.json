@@ -3491,6 +3491,49 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/relations": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Research Relations",
+        "operationId": "event_research_relations_api_v1_event_research__case_id__relations_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchNetworkResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/extract": {
       "post": {
         "tags": [

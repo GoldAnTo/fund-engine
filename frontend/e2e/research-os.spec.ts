@@ -123,4 +123,17 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
     await expect(page.getByText(/报告期 2026-06-30/)).toBeVisible();
   });
+
+  test("a Case keeps its own reviewed associations separate from AI candidates", async ({ page }) => {
+    await page.route("**/api/v1/event-research/event-tsm/relations", async (route) => route.fulfill({ json: {
+      reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],
+      candidate_relations: [{ id: "relation-2", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-other", title: "候选 Case", lifecycle_status: "researching" }, relation_type: "potential_conflict", reason: "等待人工核对", created_by: "ai:relation-proposal", review_state: "machine_generated", created_at: "2026-08-09T00:00:00Z" }],
+    } }));
+    await page.goto("/events/event-tsm/relations?client=mock");
+
+    await expect(page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
+    await expect(page.getByText("不得自动进入本 Case")).toBeVisible();
+    await page.getByRole("link", { name: "Alphabet Case" }).click();
+    await expect(page).toHaveURL(/\/events\/event-alphabet/);
+  });
 });

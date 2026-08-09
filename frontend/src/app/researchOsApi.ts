@@ -24,6 +24,7 @@ export const researchOsApi = {
   runEvents: (runId: string) => request<Schemas["ResearchRunEventsResponse"]>(`/research-runs/${runId}/events`),
   activeRuns: () => request<Schemas["ActiveResearchRunsResponse"]>("/research-runs/active"),
   network: () => request<ResearchNetwork>("/event-research/network"),
+  caseRelations: (caseId: string) => request<ResearchNetwork>(`/event-research/${caseId}/relations`),
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
   marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),

@@ -100,6 +100,23 @@ class EventResearchQueries:
             candidate_relations=[item for item in visible if item.review_state == "machine_generated"],
         )
 
+    def relations(self, case_id: uuid.UUID) -> ResearchNetworkResponse:
+        if self._session.scalar(
+            select(EventResearchBrief.id)
+            .where(EventResearchBrief.research_case_id == case_id)
+            .limit(1)
+        ) is None:
+            raise NotFoundError("event research case not found")
+        network = self.network()
+        involves_case = lambda relation: (
+            relation.source_case.case_id == str(case_id)
+            or relation.target_case.case_id == str(case_id)
+        )
+        return ResearchNetworkResponse(
+            reviewed_relations=[item for item in network.reviewed_relations if involves_case(item)],
+            candidate_relations=[item for item in network.candidate_relations if involves_case(item)],
+        )
+
     def workbench(self, case_id: uuid.UUID) -> EventWorkbenchDTO:
         brief = self._session.scalar(
             select(EventResearchBrief)

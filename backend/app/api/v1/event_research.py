@@ -45,6 +45,13 @@ def event_research_network(db: Session = Depends(get_db)) -> ResearchNetworkResp
     return EventResearchQueries(db).network()
 
 
+@router.get("/{case_id}/relations", response_model=ResearchNetworkResponse)
+def event_research_relations(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> ResearchNetworkResponse:
+    return EventResearchQueries(db).relations(case_id)
+
+
 @router.post("/extract", response_model=ExtractEventResearchResponse)
 def extract_event(payload: ExtractEventResearchRequest) -> ExtractEventResearchResponse:
     extracted = EventExtractionService().extract(

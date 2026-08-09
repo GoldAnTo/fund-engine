@@ -6,8 +6,9 @@ import { researchClient } from "../../data/researchClient";
 import type { EventResearchClient, EventWorkbench } from "../../domain/eventResearch";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
+import { CaseRelationsContent } from "./CaseRelationsContent";
 
-const tabs = [["", "研究结论"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["wiki", "Case Wiki"], ["market", "市场与表达"], ["monitor", "监测与运行"]] as const;
+const tabs = [["", "研究结论"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["wiki", "Case Wiki"], ["market", "市场与表达"], ["monitor", "监测与运行"], ["relations", "关联研究"]] as const;
 
 function CaseFrame({ children }: { children: (workbench: EventWorkbench, caseId: string) => ReactNode }) {
   const { caseId = "" } = useParams();
@@ -67,6 +68,7 @@ function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearc
 }
 
 export function CaseWikiPage() { return <CaseFrame>{(_data, caseId) => <WikiContent caseId={caseId} />}</CaseFrame>; }
+export function CaseRelationsPage() { return <CaseFrame>{(_data, caseId) => <CaseRelationsContent caseId={caseId} />}</CaseFrame>; }
 function WikiContent({ caseId }: { caseId: string }) {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
