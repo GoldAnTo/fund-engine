@@ -89,6 +89,10 @@ export class MockResearchOsApi implements ResearchOsApi {
     return next;
   }
 
+  async scopeHistory(caseId: string): ReturnType<ResearchOsApi["scopeHistory"]> {
+    return { case_id: caseId, items: [{ version: 1, factors: factors.map((factor) => ({ statement: factor.statement, description: null })), changed_by: "human:researcher", change_reason: "建立初始研究范围", created_at: now }] };
+  }
+
   async startMonitorRun(caseId: string): ReturnType<ResearchOsApi["startMonitorRun"]> {
     const monitor = this.monitors.get(caseId) ?? monitorFor(caseId);
     this.monitors.set(caseId, monitor);

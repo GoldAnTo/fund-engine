@@ -16,6 +16,7 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchResponse,
     EventResearchListResponse,
     EventConclusionHistoryResponse,
+    EventResearchScopeHistoryResponse,
     ResearchNetworkResponse,
     EventReviewQueueResponse,
     EventWorkbenchDTO,
@@ -132,6 +133,11 @@ def event_conclusion_history(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> EventConclusionHistoryResponse:
     return EventResearchQueries(db).conclusion_history(case_id)
+
+
+@router.get("/{case_id}/scope-history", response_model=EventResearchScopeHistoryResponse)
+def event_scope_history(case_id: uuid.UUID, db: Session = Depends(get_db)) -> EventResearchScopeHistoryResponse:
+    return EventResearchQueries(db).scope_history(case_id)
 
 
 @router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)

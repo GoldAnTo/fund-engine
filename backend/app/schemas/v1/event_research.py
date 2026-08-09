@@ -105,6 +105,19 @@ class UpdateEventResearchScopeResponse(V1Model):
     unmapped_evidence_count: int
 
 
+class EventResearchScopeHistoryItemDTO(V1Model):
+    version: int
+    factors: list[EventResearchScopeFactorDTO]
+    changed_by: str
+    change_reason: str
+    created_at: datetime
+
+
+class EventResearchScopeHistoryResponse(V1Model):
+    case_id: str
+    items: list[EventResearchScopeHistoryItemDTO]
+
+
 class EventResearchListItemDTO(V1Model):
     case_id: str
     event_title: str

@@ -3939,6 +3939,49 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/scope-history": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Scope History",
+        "operationId": "event_scope_history_api_v1_event_research__case_id__scope_history_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventResearchScopeHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/review-queue": {
       "get": {
         "tags": [
@@ -9000,6 +9043,66 @@
           "statement"
         ],
         "title": "EventResearchScopeFactorDTO"
+      },
+      "EventResearchScopeHistoryItemDTO": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchScopeFactorDTO"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "change_reason": {
+            "type": "string",
+            "title": "Change Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "factors",
+          "changed_by",
+          "change_reason",
+          "created_at"
+        ],
+        "title": "EventResearchScopeHistoryItemDTO"
+      },
+      "EventResearchScopeHistoryResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventResearchScopeHistoryItemDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "items"
+        ],
+        "title": "EventResearchScopeHistoryResponse"
       },
       "EventReviewQueueItemDTO": {
         "properties": {

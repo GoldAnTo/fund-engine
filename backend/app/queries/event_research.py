@@ -41,6 +41,8 @@ from app.schemas.v1.event_research import (
     EventResearchListItemDTO,
     EventResearchListResponse,
     EventResearchScopeDTO,
+    EventResearchScopeHistoryItemDTO,
+    EventResearchScopeHistoryResponse,
     EventWorkbenchProgressDTO,
     EventWorkbenchDTO,
     ResearchNetworkResponse,
@@ -195,6 +197,12 @@ class EventResearchQueries:
                 for index, record in enumerate(records, start=1)
             ],
         )
+
+    def scope_history(self, case_id: uuid.UUID) -> EventResearchScopeHistoryResponse:
+        if self._session.scalar(select(EventResearchBrief.id).where(EventResearchBrief.research_case_id == case_id).limit(1)) is None:
+            raise NotFoundError("event research case not found")
+        scopes = list(self._session.scalars(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case_id).order_by(EventResearchScopeVersion.version.desc())))
+        return EventResearchScopeHistoryResponse(case_id=str(case_id), items=[EventResearchScopeHistoryItemDTO(version=scope.version, factors=[{"statement": factor.statement, "description": factor.description} for factor in self._session.scalars(select(EventResearchScopeFactor).where(EventResearchScopeFactor.scope_version_id == scope.id).order_by(EventResearchScopeFactor.position))], changed_by=scope.changed_by, change_reason=scope.change_summary, created_at=scope.created_at) for scope in scopes])
 
     def _conclusion(
         self,

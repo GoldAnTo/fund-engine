@@ -1143,6 +1143,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/scope-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Scope History */
+        get: operations["event_scope_history_api_v1_event_research__case_id__scope_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/review-queue": {
         parameters: {
             query?: never;
@@ -2893,6 +2910,29 @@ export interface components {
             statement: string;
             /** Description */
             description?: string | null;
+        };
+        /** EventResearchScopeHistoryItemDTO */
+        EventResearchScopeHistoryItemDTO: {
+            /** Version */
+            version: number;
+            /** Factors */
+            factors: components["schemas"]["EventResearchScopeFactorDTO"][];
+            /** Changed By */
+            changed_by: string;
+            /** Change Reason */
+            change_reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** EventResearchScopeHistoryResponse */
+        EventResearchScopeHistoryResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Items */
+            items: components["schemas"]["EventResearchScopeHistoryItemDTO"][];
         };
         /**
          * EventReviewQueueItemDTO
@@ -8070,6 +8110,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventConclusionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_scope_history_api_v1_event_research__case_id__scope_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventResearchScopeHistoryResponse"];
                 };
             };
             /** @description Validation Error */
