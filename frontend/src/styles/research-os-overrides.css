@@ -15,6 +15,11 @@
 .ros-material-destination small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
 .ros-existing-case-intake { display: grid; gap: .75rem; padding: .85rem 0 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
 .ros-existing-case-intake p { margin: 0; color: var(--ros-soft, #59615d); font-size: .8rem; line-height: 1.55; }
+.ros-source-governance { display: grid; gap: .55rem; margin: .7rem 0; padding: .75rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: color-mix(in srgb, var(--ros-surface, #fffdf8) 76%, var(--ros-deep, #f6f3ec)); }
+.ros-source-governance legend { padding: 0 .3rem; color: var(--ros-muted, #73766f); font-size: .76rem; font-weight: 700; }
+.ros-source-governance label { display: grid; gap: .3rem; margin: 0; color: var(--ros-ink, #30332f); font-size: .8rem; }
+.ros-source-governance label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: .45rem; }
+.ros-source-governance small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible
    across dense evidence workbenches without relying on color alone. */

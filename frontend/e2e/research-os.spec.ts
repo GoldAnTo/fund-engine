@@ -126,12 +126,30 @@ test.describe("Event-first Research OS", () => {
   test("event intake keeps the scope confirmation unavailable until the source is read", async ({ page }) => {
     await page.goto("/events/new?client=mock");
 
-    await expect(page.getByRole("heading", { name: "先固定研究范围，再让系统开始工作" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "先冻结材料，再决定它属于哪个研究" })).toBeVisible();
     await expect(page.getByText("先识别事件，才能决定它应创建新研究还是归入已有 Case。")).toBeVisible();
 
     await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
     await page.getByRole("button", { name: "识别事件与研究问题" }).click();
     await expect(page.getByLabel("研究问题")).toBeVisible();
+    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
+  });
+
+  test("licensed-provider intake requires a reproducible record and makes use permissions explicit", async ({ page }) => {
+    await page.goto("/events/new?client=mock");
+
+    await page.getByLabel("事件原始输入").fill("供应商研报指出资本开支计划调整。 ");
+    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
+    await page.getByLabel("来源接入方式").selectOption("licensed_provider");
+
+    await expect(page.getByLabel("供应商名称")).toBeVisible();
+    await expect(page.getByLabel("供应商记录 ID")).toBeVisible();
+    await expect(page.getByLabel("允许 AI 处理")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeDisabled();
+
+    await page.getByLabel("供应商名称").fill("聚源");
+    await page.getByLabel("供应商记录 ID").fill("report-2026-001");
+    await page.getByLabel("允许 AI 处理").check();
     await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
   });
 
