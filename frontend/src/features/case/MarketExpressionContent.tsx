@@ -80,9 +80,17 @@ export function MarketExpressionContent({
 
   if (error)
     return (
-      <p className="ros-error ros-page-gap" role="alert">
-        {error}
-      </p>
+      <section className="ros-empty ros-page-gap" role="alert">
+        <strong>市场表达暂不可读取</strong>
+        <p>{error}</p>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          onClick={() => void reloadExpression()}
+        >
+          重试读取市场表达
+        </button>
+      </section>
     );
   if (!expression)
     return (

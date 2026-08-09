@@ -291,6 +291,28 @@ describe("Research OS event entry", () => {
     ).toBeEnabled();
   });
 
+  it("lets a researcher retry the market-expression workbench after a live read error", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "marketExpression").mockRejectedValue(
+      new Error("Market expression unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取已审核的市场表达",
+    );
+    expect(
+      screen.getByRole("button", { name: "重试读取市场表达" }),
+    ).toBeEnabled();
+  });
+
   it("keeps all eight stable Case research workbenches discoverable", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
