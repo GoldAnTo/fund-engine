@@ -12,8 +12,12 @@ from app.schemas.v1.penetration import (
     FundCompositionResponse,
     FundExposureResponse,
 )
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
 
-router = APIRouter(tags=["penetration-v1"])
+router = APIRouter(
+    tags=["penetration-v1"], dependencies=[Depends(require_research_tenant)]
+)
 
 
 @router.get(
@@ -24,7 +28,9 @@ def case_fund_exposure(
     case_id: uuid.UUID,
     as_of: date | None = None,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
     return PenetrationQueries(db).case_fund_exposure(
         case_id=case_id, as_of=as_of or date.today()
     )

@@ -73,8 +73,29 @@ def session(engine) -> Session:
 def seeded_session(session) -> Session:
     """A session pre-seeded with the frozen AI-compute evidence slice."""
     from app.scripts.seed_ai_compute_case import seed
+    from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, ResearchCase
+    from sqlalchemy import select
 
     seed(session)
+    # Event-slice protected Case reads need an explicit tenant admission even
+    # for the legacy frozen fixture.  Do not teach route tests to rely on an
+    # implicit "test" tenant.
+    case = session.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    document_id = session.scalar(
+        select(CaseDocumentVersion.document_version_id)
+        .where(CaseDocumentVersion.research_case_id == case.id)
+        .order_by(CaseDocumentVersion.linked_at)
+    )
+    assert document_id is not None
+    session.add(CaseTenantAdmission(
+        research_case_id=case.id,
+        tenant_id="test-team",
+        initial_document_version_id=document_id,
+        admitted_by="test-fixture",
+        admitted_at=case.created_at,
+    ))
+    session.flush()
     return session
 
 
@@ -307,7 +328,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
-def api_client(session):
+def api_client(session, monkeypatch):
     """A TestClient wired to the in-memory test session via get_db override."""
     from app.db import get_db
     from app.main import app
@@ -316,8 +337,9 @@ def api_client(session):
         yield session
 
     app.dependency_overrides[get_db] = _override_get_db
+    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"test-tenant-token":"test-team"}')
     try:
-        yield TestClient(app)
+        yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
     finally:
         app.dependency_overrides.pop(get_db, None)
 
@@ -684,7 +706,24 @@ def cmd_client(cmd_session, monkeypatch):
 @pytest.fixture
 def cmd_seeded(cmd_session):
     from app.scripts.seed_ai_compute_case import seed
+    from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, ResearchCase
+    from sqlalchemy import select
 
     seed(cmd_session)
+    case = cmd_session.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id)
+        .where(CaseDocumentVersion.research_case_id == case.id)
+        .order_by(CaseDocumentVersion.linked_at)
+    )
+    assert document_id is not None
+    cmd_session.add(CaseTenantAdmission(
+        research_case_id=case.id,
+        tenant_id="test-team",
+        initial_document_version_id=document_id,
+        admitted_by="test-fixture",
+        admitted_at=case.created_at,
+    ))
     cmd_session.commit()
     return cmd_session

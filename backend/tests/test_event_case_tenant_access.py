@@ -200,6 +200,29 @@ def test_market_expression_side_pages_cannot_bypass_case_tenant_admission(
     assert owner_expression.status_code == 200
 
 
+def test_case_fund_exposure_cannot_bypass_case_tenant_admission(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+
+    foreign_exposure = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/fund-exposure", headers=_auth("token-b")
+    )
+    owner_exposure = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/fund-exposure", headers=_auth("token-a")
+    )
+
+    assert foreign_exposure.status_code == 404
+    assert owner_exposure.status_code == 200
+
+
 def test_research_protocol_side_page_cannot_bypass_case_tenant_admission(
     cmd_client, monkeypatch
 ) -> None:
