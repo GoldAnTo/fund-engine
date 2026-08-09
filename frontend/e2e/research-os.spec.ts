@@ -52,7 +52,12 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-created-1$/);
     await expect(page.getByRole("heading", { name: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
     await expect(page.getByText("无后台运行")).toBeVisible();
-    await expect(page.getByRole("link", { name: "核验冻结原文" })).toHaveAttribute("href", "/events/event-created-1/documents");
+    const inspectSource = page.getByRole("link", { name: "核验冻结原文" });
+    await expect(inspectSource).toHaveAttribute("href", "/events/event-created-1/documents");
+    await inspectSource.click();
+    await expect(page).toHaveURL(/\/events\/event-created-1\/documents$/);
+    await expect(page.getByRole("heading", { name: "事件原始材料快照" })).toBeVisible();
+    await expect(page.getByRole("blockquote").filter({ hasText: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
   });
 
   test("Case Wiki renders reviewed and candidate relationships as inspectable paths", async ({ page }) => {

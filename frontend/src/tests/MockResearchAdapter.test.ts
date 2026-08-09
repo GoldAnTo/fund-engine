@@ -95,6 +95,20 @@ describe("MockResearchAdapter scenarios", () => {
       kind: "review_intake",
       label: "核验原文资料并完成研究协议",
     });
+
+    const documents = await adapter.getDocuments({ caseId: created.caseId });
+    expect(documents).toHaveLength(1);
+    expect(documents[0]).toMatchObject({
+      linked_cases: [{ id: created.caseId, title: "资本开支指引更新" }],
+      source_authority: "unknown",
+      parse_quality: "partial",
+    });
+
+    const detail = await adapter.getDocumentDetail(documents[0].id);
+    expect(detail.spans).toEqual([expect.objectContaining({
+      document_id: documents[0].id,
+      verbatim_text: "公司上调资本开支指引，盘后股价下跌。",
+    })]);
   });
 
   it("returns review queue items with AI provenance and dated scope", async () => {

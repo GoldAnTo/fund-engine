@@ -2978,6 +2978,10 @@ export class MockResearchAdapter implements ResearchClient {
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
   }>();
+  private createdDocuments = new Map<string, {
+    document: SourceDocumentView;
+    spans: DocumentSpan[];
+  }>();
   private createdEventCount = 0;
 
   constructor(opts: { scenario?: MockScenario } = {}) {
@@ -2991,6 +2995,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.decisions = [];
     this.eventTsmProposalPending = true;
     this.eventStates.clear();
+    this.createdDocuments.clear();
     this.createdEventCount = 0;
   }
 
@@ -3094,7 +3099,10 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getDocuments(query?: DocumentsQuery): Promise<SourceDocumentView[]> {
     this.throwIfOffline();
-    const docs = this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS;
+    const docs = [
+      ...(this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS),
+      ...[...this.createdDocuments.values()].map(({ document }) => document),
+    ];
     const q = (query?.query ?? "").toLowerCase();
     const filtered = q
       ? docs.filter(
@@ -3115,6 +3123,8 @@ export class MockResearchAdapter implements ResearchClient {
     spans: DocumentSpan[];
   }> {
     this.throwIfOffline();
+    const created = this.createdDocuments.get(documentId);
+    if (created) return simulateLatency(created);
     const docs = this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS;
     const document = docs.find((d) => d.id === documentId) ?? docs[0];
     const spans: DocumentSpan[] =
@@ -3759,6 +3769,52 @@ export class MockResearchAdapter implements ResearchClient {
   async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
     this.throwIfOffline();
     const caseId = `event-created-${++this.createdEventCount}`;
+    const sourceType = input.sourceType ?? "pasted_snapshot";
+    const sourceMetadata = input.sourceMetadata ?? {};
+    const permissions = sourceMetadata.permissions && typeof sourceMetadata.permissions === "object"
+      ? sourceMetadata.permissions as Record<string, unknown>
+      : {};
+    const userControlled = sourceType === "pasted_snapshot" || sourceType === "uploaded_file";
+    const aiProcessing = typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled;
+    const display = typeof permissions.display === "boolean" ? permissions.display : userControlled;
+    const documentId = `document-created-${this.createdEventCount}`;
+    const document: SourceDocumentView = {
+      id: documentId,
+      title: typeof sourceMetadata.file_name === "string" ? sourceMetadata.file_name : "事件原始材料快照",
+      publisher: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
+      document_type: sourceType,
+      publish_date: input.eventAt?.slice(0, 10) ?? null,
+      available_at: "2026-08-09T12:00:00Z",
+      acquired_at: "2026-08-09T12:00:00Z",
+      parser_version: sourceType === "pasted_snapshot" ? "user-pasted-v1" : sourceType === "uploaded_file" ? "uploaded-text-v1" : "provider-snapshot-v1",
+      source_authority: typeof sourceMetadata.authority_level === "string" ? sourceMetadata.authority_level : "unknown",
+      parse_quality: "partial",
+      linked_cases: [{ id: caseId, title: input.eventTitle }],
+      span_count: 1,
+      statement_count: 0,
+      version_label: "v1 · 2026-08-09",
+      source_contract: {
+        source_type: sourceType,
+        provider_or_tenant: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
+        permissions: { ai_processing: aiProcessing, display, export: typeof permissions.export === "boolean" ? permissions.export : false, api: typeof permissions.api === "boolean" ? permissions.api : false },
+        status: display ? "admitted" : "restricted",
+        region: typeof sourceMetadata.region === "string" ? sourceMetadata.region : "not_recorded",
+        retention_policy: typeof sourceMetadata.retention_policy === "string" ? sourceMetadata.retention_policy : "case_retained",
+        deletion_policy: typeof sourceMetadata.deletion_policy === "string" ? sourceMetadata.deletion_policy : "not_recorded",
+        downstream_restrictions: Array.isArray(sourceMetadata.downstream_restrictions) ? sourceMetadata.downstream_restrictions.filter((value): value is string => typeof value === "string") : userControlled ? ["仅限当前 Case 研究与人工审核"] : ["权限未完整记录；不得作为正式证据"],
+        contract_version: typeof sourceMetadata.contract_version === "string" ? sourceMetadata.contract_version : null,
+      },
+    };
+    this.createdDocuments.set(documentId, {
+      document,
+      spans: [{
+        id: `span-created-${this.createdEventCount}`,
+        document_id: documentId,
+        locator: { kind: sourceType, source_metadata: sourceMetadata },
+        verbatim_text: input.rawInput,
+        cited_by: [],
+      }],
+    });
     const lifecycle: EventLifecycle = {
       status: "awaiting_key_review",
       activeRunId: null,
