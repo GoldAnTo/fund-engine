@@ -594,12 +594,16 @@ function PublishedMaterialDecisionForm({
     "pasted_snapshot" | "uploaded_file" | "licensed_provider"
   >("pasted_snapshot");
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
+  const [sourcePermissions, setSourcePermissions] = useState({ ai_processing: true, display: true, export: false, api: false });
+  const [providerName, setProviderName] = useState("");
+  const [providerRecordId, setProviderRecordId] = useState("");
   const [decision, setDecision] = useState<"reopen" | "no_change">("reopen");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const sourceReady = sourceType !== "licensed_provider" || Boolean(providerName.trim() && providerRecordId.trim());
   async function submit() {
-    if (!rawInput.trim() || !reason.trim()) return;
+    if (!rawInput.trim() || !reason.trim() || !sourceReady) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -610,6 +614,8 @@ function PublishedMaterialDecisionForm({
         sourceType,
         sourceMetadata: {
           ...sourceMetadata,
+          permissions: sourcePermissions,
+          ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), retrieval_reference: sourceUrl.trim() || undefined } : {}),
           authority_level:
             sourceType === "licensed_provider"
               ? "licensed_research"
@@ -656,6 +662,12 @@ function PublishedMaterialDecisionForm({
       );
     }
   }
+  function changeSourceType(next: "pasted_snapshot" | "uploaded_file" | "licensed_provider") {
+    setSourceType(next);
+    setSourcePermissions(next === "licensed_provider"
+      ? { ai_processing: false, display: false, export: false, api: false }
+      : { ai_processing: true, display: true, export: false, api: false });
+  }
   return (
     <section className="ros-material-continuation">
       <p className="ros-eyebrow">已发布结论 · 新材料决定</p>
@@ -689,7 +701,7 @@ function PublishedMaterialDecisionForm({
           aria-label="新增材料来源接入方式"
           value={sourceType}
           onChange={(event) =>
-            setSourceType(event.target.value as typeof sourceType)
+            changeSourceType(event.target.value as typeof sourceType)
           }
         >
           <option value="pasted_snapshot">粘贴快照</option>
@@ -697,6 +709,26 @@ function PublishedMaterialDecisionForm({
           <option value="licensed_provider">授权数据源快照</option>
         </select>
       </label>
+      {sourceType === "licensed_provider" && (
+        <section className="ros-source-governance">
+          <label>
+            新增材料供应商名称
+            <input aria-label="新增材料供应商名称" value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="例如：聚源" />
+          </label>
+          <label>
+            新增材料供应商记录 ID
+            <input aria-label="新增材料供应商记录 ID" value={providerRecordId} onChange={(event) => setProviderRecordId(event.target.value)} placeholder="可重取的报告或公告记录 ID" />
+          </label>
+          <small>授权来源必须固定供应商和具体记录；否则不能作为此决定的已冻结材料。</small>
+        </section>
+      )}
+      <fieldset className="ros-source-governance">
+        <legend>新增材料使用许可声明</legend>
+        <small>这些权限会随冻结版本保存；勾选并不代表材料已审核或足以改变已发布结论。</small>
+        {([['ai_processing', '新增材料允许 AI 处理'], ['display', '新增材料允许团队展示'], ['export', '新增材料允许导出'], ['api', '新增材料允许 API 使用']] as const).map(([key, label]) => (
+          <label key={key}><input aria-label={label} type="checkbox" checked={sourcePermissions[key]} onChange={(event) => setSourcePermissions((current) => ({ ...current, [key]: event.target.checked }))} /> {label}</label>
+        ))}
+      </fieldset>
       {sourceType === "uploaded_file" && (
         <label>
           上传新增材料正文文件
@@ -750,7 +782,7 @@ function PublishedMaterialDecisionForm({
       <button
         className="ros-button ros-button--primary"
         type="button"
-        disabled={!rawInput.trim() || !reason.trim() || busy}
+        disabled={!rawInput.trim() || !reason.trim() || !sourceReady || busy}
         onClick={() => void submit()}
       >
         {busy
