@@ -1792,6 +1792,10 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByText("AI 候选，未经人工复核").length).toBeGreaterThan(
       0,
     );
+    expect(screen.getByRole("link", { name: "审核此关联候选" })).toHaveAttribute(
+      "href",
+      "/events/event-alphabet/relations",
+    );
     expect(screen.getByText(/不继承证据、结论或审核状态/)).toBeVisible();
   });
 
