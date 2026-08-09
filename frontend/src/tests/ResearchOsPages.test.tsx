@@ -7,7 +7,7 @@ import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
-import { CaseConclusionHistoryPage, CaseConclusionPage, CaseReviewPage } from "../features/case/CasePages";
+import { CaseConclusionHistoryPage, CaseConclusionPage, CaseReviewPage, CaseScopePage } from "../features/case/CasePages";
 import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage, MonitorConfigPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
@@ -48,6 +48,19 @@ describe("Research OS event entry", () => {
     );
 
     expect(await screen.findByRole("link", { name: "查看结论版本" })).toHaveAttribute("href", "/events/event-published/history");
+  });
+
+  it("routes a scope-blocked Case to a versioned factor editor", async () => {
+    render(<MemoryRouter initialEntries={["/events/event-exhausted"]}><Routes><Route path="/events/:caseId" element={<CaseConclusionPage />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole("link", { name: "调整研究范围" })).toHaveAttribute("href", "/events/event-exhausted/scope");
+  });
+
+  it("saves a new immutable research-scope version with three to five factors", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/events/event-exhausted/scope"]}><Routes><Route path="/events/:caseId/scope" element={<CaseScopePage />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "调整关键因素，创建新的研究范围" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "保存新的研究范围" }));
+    expect(await screen.findByText(/已创建范围版本 v2/)).toBeVisible();
   });
 
   it("shows drafts and human-published conclusions as a replayable version chain", async () => {

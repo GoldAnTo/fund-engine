@@ -216,6 +216,11 @@
 .ros-material-continuation > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft); font-size: 12px; line-height: 1.5; }
 .ros-material-continuation label { display: grid; gap: 5px; color: var(--ros-soft); font-size: 11px; }
 .ros-material-continuation textarea { min-height: 64px; padding: 8px; border: 1px solid var(--ros-strong); border-radius: 6px; background: var(--ros-surface); color: var(--ros-ink); font: inherit; resize: vertical; }
+.ros-scope-editor { max-width: 900px; padding-top: 24px; }
+.ros-scope-editor__form { display: grid; gap: 10px; margin: 20px 0; }
+.ros-scope-editor__form label { display: grid; gap: 5px; color: var(--ros-soft); font-size: 12px; }
+.ros-scope-editor__form textarea { min-height: 60px; padding: 9px; border: 1px solid var(--ros-strong); border-radius: 7px; background: var(--ros-surface); color: var(--ros-ink); font: inherit; resize: vertical; }
+.ros-scope-editor__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 @media (max-width: 640px) {
   .ros-conclusion-history__list > li { grid-template-columns: 1fr; }
