@@ -933,6 +933,32 @@ const DOCUMENTS: SourceDocumentView[] = [
     },
   },
   {
+    id: "doc-event-published-baseline",
+    title: "经营数据披露后的基准材料",
+    publisher: "公司披露",
+    document_type: "公司披露",
+    publish_date: "2026-08-02",
+    available_at: "2026-08-02T09:00:00Z",
+    acquired_at: "2026-08-02T09:05:00Z",
+    parser_version: "docling-v1.2.3",
+    parse_quality: "ok",
+    linked_cases: [{ id: "event-published", title: "经营数据披露后的变动" }],
+    span_count: 1,
+    statement_count: 1,
+    version_label: "v1 · 2026-08-02",
+    source_contract: {
+      source_type: "company_disclosure",
+      provider_or_tenant: "公司披露",
+      permissions: { ai_processing: true, display: true, export: false, api: false },
+      status: "admitted",
+      region: "not_recorded",
+      retention_policy: "case_retained",
+      deletion_policy: "not_recorded",
+      downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+      contract_version: null,
+    },
+  },
+  {
     id: "doc-1",
     title: "中汽协：2024 年 4 月新能源汽车产销数据 PDF",
     publisher: "中汽协",
@@ -3143,9 +3169,7 @@ export class MockResearchAdapter implements ResearchClient {
             d.linked_cases.some((c) => c.title.toLowerCase().includes(q))
         )
       : docs;
-    const caseScoped = query?.caseId === "event-published"
-      ? filtered.slice(0, 1)
-      : query?.caseId
+    const caseScoped = query?.caseId
       ? filtered.filter((document) => document.linked_cases.some((item) => item.id === query.caseId))
       : filtered;
     return simulateLatency(caseScoped);
@@ -3187,6 +3211,16 @@ export class MockResearchAdapter implements ResearchClient {
                 document_id: document.id,
                 locator: { table: "前十大持仓", row: 3 },
                 verbatim_text: "截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。",
+                cited_by: [],
+              },
+            ]
+        : document.id === "doc-event-published-baseline"
+          ? [
+              {
+                id: "sp-published-baseline",
+                document_id: document.id,
+                locator: { page: 1, section: "经营数据" },
+                verbatim_text: "基准披露已按当时可得资料审核，发布结论不自动随新材料改写。",
                 cited_by: [],
               },
             ]
@@ -4099,13 +4133,59 @@ export class MockResearchAdapter implements ResearchClient {
   async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
     this.throwIfOffline();
     if (!input.rawInput.trim() || !input.reason.trim()) throw new Error("material and decision reason are required");
-    const documentVersionId = `document-published-material-${input.caseId}`;
+    const sequence = this.createdDocuments.size + 1;
+    const documentVersionId = `document-published-material-${input.caseId}-${sequence}`;
+    const userControlled = input.sourceType === "pasted_snapshot" || input.sourceType === "uploaded_file";
+    const permissions = input.sourceMetadata.permissions && typeof input.sourceMetadata.permissions === "object"
+      ? input.sourceMetadata.permissions as Record<string, unknown>
+      : {};
+    this.createdDocuments.set(documentVersionId, {
+      document: {
+        id: documentVersionId,
+        title: typeof input.sourceMetadata.file_name === "string" ? input.sourceMetadata.file_name : "新增待比较材料",
+        publisher: typeof input.sourceMetadata.provider_name === "string" ? input.sourceMetadata.provider_name : input.actor,
+        document_type: input.sourceType,
+        publish_date: null,
+        available_at: "2026-08-09T12:00:00Z",
+        acquired_at: "2026-08-09T12:00:00Z",
+        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : "user-pasted-v1",
+        source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "unknown",
+        parse_quality: "partial",
+        linked_cases: [{ id: input.caseId, title: (await this.getEventWorkbench(input.caseId)).eventTitle }],
+        span_count: 1,
+        statement_count: 0,
+        version_label: "v1 · 2026-08-09",
+        source_contract: {
+          source_type: input.sourceType,
+          provider_or_tenant: typeof input.sourceMetadata.provider_name === "string" ? input.sourceMetadata.provider_name : input.actor,
+          permissions: {
+            ai_processing: typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled,
+            display: typeof permissions.display === "boolean" ? permissions.display : userControlled,
+            export: typeof permissions.export === "boolean" ? permissions.export : false,
+            api: typeof permissions.api === "boolean" ? permissions.api : false,
+          },
+          status: (typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled) && (typeof permissions.display === "boolean" ? permissions.display : userControlled) ? "admitted" : "restricted",
+          region: typeof input.sourceMetadata.region === "string" ? input.sourceMetadata.region : "not_recorded",
+          retention_policy: typeof input.sourceMetadata.retention_policy === "string" ? input.sourceMetadata.retention_policy : "case_retained",
+          deletion_policy: typeof input.sourceMetadata.deletion_policy === "string" ? input.sourceMetadata.deletion_policy : "not_recorded",
+          downstream_restrictions: userControlled ? ["仅限当前 Case 研究与人工审核"] : ["权限未完整记录；不得作为正式证据"],
+          contract_version: typeof input.sourceMetadata.contract_version === "string" ? input.sourceMetadata.contract_version : null,
+          provider_record: input.sourceType === "licensed_provider" && typeof input.sourceMetadata.provider_name === "string" && typeof input.sourceMetadata.provider_record_id === "string" ? {
+            provider_name: input.sourceMetadata.provider_name,
+            provider_record_id: input.sourceMetadata.provider_record_id,
+            request_scope: input.sourceMetadata.request_scope && typeof input.sourceMetadata.request_scope === "object" ? input.sourceMetadata.request_scope as Record<string, unknown> : {},
+            retrieval_reference: typeof input.sourceMetadata.retrieval_reference === "string" ? input.sourceMetadata.retrieval_reference : null,
+          } : null,
+        },
+      },
+      spans: [{ id: `span-published-material-${sequence}`, document_id: documentVersionId, locator: { kind: input.sourceType, source_metadata: input.sourceMetadata, intake: "published_material" }, verbatim_text: input.rawInput, cited_by: [] }],
+    });
     if (input.decision === "reopen") {
       const next = await this.continueEventResearch({ caseId: input.caseId, documentVersionId, reason: input.reason, triggeredBy: input.actor });
       return { documentVersionId, decision: "reopen", decisionEventId: `decision-${input.caseId}`, runId: next.runId, lifecycle: next.lifecycle };
     }
     const current = (await this.getEventWorkbench(input.caseId)).lifecycle;
-    void input.sourceUrl; void input.sourceType; void input.sourceMetadata;
+    void input.sourceUrl;
     return simulateLatency({ documentVersionId, decision: "no_change", decisionEventId: `decision-${input.caseId}`, runId: null, lifecycle: current });
   }
 
