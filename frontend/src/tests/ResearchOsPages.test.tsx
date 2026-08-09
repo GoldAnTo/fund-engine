@@ -42,6 +42,25 @@ describe("Research OS event entry", () => {
     expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
   });
 
+  it("keeps Case navigation focused on the six stable research workbenches", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes><Route path="/events/:caseId" element={<CaseEvidencePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const navigation = await screen.findByRole("navigation", { name: "Case 页面" });
+    expect(navigation.textContent).toContain("研究结论");
+    expect(navigation.textContent).toContain("命题与证据");
+    expect(navigation.textContent).toContain("原文资料");
+    expect(navigation.textContent).toContain("证据审核");
+    expect(navigation.textContent).toContain("市场与表达");
+    expect(navigation.textContent).toContain("监测与运行");
+    expect(navigation.textContent).not.toContain("研究范围");
+    expect(navigation.textContent).not.toContain("结论版本");
+    expect(navigation.textContent).not.toContain("研究协议");
+  });
+
   it("lets a researcher begin registering a reviewed claim from an admitted frozen source", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));

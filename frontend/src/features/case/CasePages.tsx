@@ -10,7 +10,7 @@ import { MarketExpressionContent } from "./MarketExpressionContent";
 import { CaseRelationsContent } from "./CaseRelationsContent";
 import { WikiInspectorContent } from "./WikiInspectorContent";
 
-const tabs = [["", "研究结论"], ["scope", "研究范围"], ["history", "结论版本"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["wiki", "Case Wiki"], ["protocol", "研究协议"], ["market", "市场与表达"], ["monitor", "监测与运行"], ["relations", "关联研究"]] as const;
+const tabs = [["", "研究结论"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["market", "市场与表达"], ["monitor", "监测与运行"]] as const;
 
 function CaseFrame({ children }: { children: (workbench: EventWorkbench, caseId: string) => ReactNode }) {
   const { caseId = "" } = useParams(); const navigate = useNavigate(); const location = useLocation();
