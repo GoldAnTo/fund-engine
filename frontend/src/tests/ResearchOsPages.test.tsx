@@ -154,6 +154,7 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("原子陈述审核")).toBeVisible();
     expect(screen.getByText("订单同比增长20%")).toBeVisible();
     expect(screen.getByText(/extract:run-1/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=document-1&span=span-1");
     await user.type(screen.getByLabelText("原子陈述审核理由"), "原文和定位已复核");
     await user.click(screen.getByRole("button", { name: "确认并发布" }));
     expect(await screen.findByText(/已发布为正式陈述/)).toBeVisible();
