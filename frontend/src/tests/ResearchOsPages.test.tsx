@@ -94,8 +94,9 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("公司上调全年资本开支指引，同时市场关注自由现金流承压。").closest("article")).toHaveClass("is-focused");
   });
 
-  it("keeps a parse-failed source in the Case and offers an explicit supplemental-text recovery", async () => {
+  it("keeps a parse-failed source in the Case and makes recovery target explicit before accepting text", async () => {
     setResearchClient(new MockResearchAdapter({ scenario: "parse_failed" }));
+    const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
         <Routes><Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} /></Routes>
@@ -103,8 +104,12 @@ describe("Research OS event entry", () => {
     );
 
     expect(await screen.findByText(/解析失败；保留资料记录/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "补充正文并标注页码" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续补充原 Case" })).toBeVisible();
     expect(screen.getByText(/不会改写原件，也不会自动启动研究/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "继续补充原 Case" }));
+    expect(await screen.findByLabelText("补充正文")).toBeVisible();
+    expect(screen.getByRole("button", { name: "取消恢复" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "放弃恢复并新建资料" })).toBeVisible();
   });
 
   it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
