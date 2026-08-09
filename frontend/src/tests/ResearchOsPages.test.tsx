@@ -173,7 +173,7 @@ describe("Research OS event entry", () => {
     );
 
     expect(await screen.findByText("已审核关联")).toBeVisible();
-    expect(screen.getByRole("link", { name: "AI 服务器订单验证" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "AI 服务器订单验证" })).toHaveAttribute(
       "href",
       "/events/event-ai-server",
     );
@@ -573,6 +573,41 @@ describe("Research OS event entry", () => {
       await screen.findByText(/记录“不改变当前判断”的人工决定/),
     ).toBeVisible();
     expect(screen.queryByText(/已创建后继运行/)).not.toBeInTheDocument();
+  });
+
+  it("reads a published-Case text upload as a snapshot without calling it the original file", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-published/documents"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/documents"
+            element={<CaseDocumentsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", {
+      name: "新材料是否需要改变复核范围？",
+    });
+    await user.selectOptions(
+      screen.getByLabelText("新增材料来源接入方式"),
+      "uploaded_file",
+    );
+    await user.upload(
+      screen.getByLabelText("上传新增材料正文文件"),
+      new File(["公司补充披露订单交付节奏。"], "published-note.txt", {
+        type: "text/plain",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("新增材料正文")).toHaveValue(
+        "公司补充披露订单交付节奏。",
+      ),
+    );
+    expect(screen.getByText(/只读取并冻结文本正文快照/)).toBeVisible();
   });
 
   it("keeps the research question and three factors editable before a Case is created", async () => {

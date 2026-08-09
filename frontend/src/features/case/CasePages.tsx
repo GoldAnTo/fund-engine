@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   Link,
   NavLink,
@@ -593,6 +593,7 @@ function PublishedMaterialDecisionForm({
   const [sourceType, setSourceType] = useState<
     "pasted_snapshot" | "uploaded_file" | "licensed_provider"
   >("pasted_snapshot");
+  const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [decision, setDecision] = useState<"reopen" | "no_change">("reopen");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -608,6 +609,7 @@ function PublishedMaterialDecisionForm({
         sourceUrl: sourceUrl.trim() || undefined,
         sourceType,
         sourceMetadata: {
+          ...sourceMetadata,
           authority_level:
             sourceType === "licensed_provider"
               ? "licensed_research"
@@ -630,6 +632,28 @@ function PublishedMaterialDecisionForm({
       );
     } finally {
       setBusy(false);
+    }
+  }
+  async function loadTextFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text =
+        typeof file.text === "function"
+          ? await file.text()
+          : await readTextSnapshot(file);
+      setRawInput(text);
+      setSourceMetadata((current) => ({
+        ...current,
+        file_name: file.name,
+        mime_type: file.type || "text/plain",
+        byte_size: file.size,
+      }));
+      setMessage(null);
+    } catch {
+      setMessage(
+        "无法读取该文件。当前入口仅支持可直接读取正文的文本文件，原件未被伪装为已解析资料。",
+      );
     }
   }
   return (
@@ -673,6 +697,20 @@ function PublishedMaterialDecisionForm({
           <option value="licensed_provider">授权数据源快照</option>
         </select>
       </label>
+      {sourceType === "uploaded_file" && (
+        <label>
+          上传新增材料正文文件
+          <input
+            aria-label="上传新增材料正文文件"
+            type="file"
+            accept="text/plain,text/markdown,.txt,.md,.csv"
+            onChange={loadTextFile}
+          />
+          <small>
+            当前 V1 只读取并冻结文本正文快照；不保存或冒充原件 PDF/Office 文件。
+          </small>
+        </label>
+      )}
       <label>
         来源链接（可选）
         <input
@@ -730,6 +768,15 @@ function PublishedMaterialDecisionForm({
       )}
     </section>
   );
+}
+
+function readTextSnapshot(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsText(file);
+  });
 }
 function DocumentReader({
   caseId,
