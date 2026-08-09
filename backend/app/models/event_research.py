@@ -76,6 +76,37 @@ class CaseRelation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CaseRelationReview(Base):
+    """Append-only human review of a machine-generated Case relation."""
+
+    __tablename__ = "case_relation_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('confirmed', 'modified', 'rejected', 'needs_more_evidence')",
+            name="ck_case_relation_reviews_outcome",
+        ),
+        UniqueConstraint(
+            "case_relation_id",
+            "idempotency_key",
+            name="uq_case_relation_reviews_idempotency",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    case_relation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("case_relations.id"), nullable=False, index=True
+    )
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    reviewed_relation_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("case_relations.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class EventResearchFactorDraft(Base):
     """Immutable candidate factor selected at event-research creation time."""
 

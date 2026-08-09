@@ -1075,6 +1075,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/case-relations/{candidate_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Case Relation */
+        post: operations["review_case_relation_api_v1_event_research_case_relations__candidate_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/extract": {
         parameters: {
             query?: never;
@@ -2062,6 +2079,23 @@ export interface components {
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };
+        /** CaseRelationCandidateOriginDTO */
+        CaseRelationCandidateOriginDTO: {
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
+            /** Reason */
+            reason: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** CaseRelationCaseDTO */
         CaseRelationCaseDTO: {
             /** Case Id */
@@ -2096,6 +2130,56 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Review History */
+            review_history?: components["schemas"]["CaseRelationReviewDTO"][];
+            candidate_origin?: components["schemas"]["CaseRelationCandidateOriginDTO"] | null;
+        };
+        /** CaseRelationReviewDTO */
+        CaseRelationReviewDTO: {
+            /** Id */
+            id: string;
+            /** Case Relation Id */
+            case_relation_id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected" | "needs_more_evidence";
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /** Reviewed Relation Id */
+            reviewed_relation_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** CaseRelationReviewRequest */
+        CaseRelationReviewRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected" | "needs_more_evidence";
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /**
          * CaseSnapshotDTO
@@ -4993,6 +5077,8 @@ export interface components {
             reviewed_relations: components["schemas"]["CaseRelationDTO"][];
             /** Candidate Relations */
             candidate_relations: components["schemas"]["CaseRelationDTO"][];
+            /** Resolved Candidates */
+            resolved_candidates?: components["schemas"]["CaseRelationDTO"][];
         };
         /**
          * ResearchOpsResponse
@@ -8519,6 +8605,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchNetworkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_case_relation_api_v1_event_research_case_relations__candidate_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CaseRelationReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseRelationReviewDTO"];
                 };
             };
             /** @description Validation Error */

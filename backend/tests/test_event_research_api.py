@@ -290,6 +290,56 @@ def test_case_relations_only_returns_associations_for_the_current_case(
     assert payload["candidate_relations"] == []
 
 
+def test_reviewing_a_case_relation_candidate_appends_a_reviewed_relation_without_rewriting_the_candidate(
+    cmd_client, cmd_session
+) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    second_payload = _confirmed_event()
+    second_payload["event_title"] = "关联验证事件"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
+    candidate = CaseRelation(
+        source_case_id=uuid.UUID(first["case_id"]),
+        target_case_id=uuid.UUID(second["case_id"]),
+        relation_type="potential_conflict",
+        reason="AI 发现两项解释存在冲突。",
+        created_by="ai:relation-proposal",
+        review_state="machine_generated",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(candidate)
+    cmd_session.commit()
+
+    reviewed = cmd_client.post(
+        f"/api/v1/event-research/case-relations/{candidate.id}/reviews",
+        json={
+            "outcome": "modified",
+            "relation_type": "follow_up_validation",
+            "reviewer": "human:reviewer",
+            "reason": "改为后续验证关系，需在两个 Case 中分别核对。",
+            "idempotency_key": "review-candidate-1",
+        },
+    )
+
+    assert reviewed.status_code == 201
+    payload = reviewed.json()
+    assert payload["outcome"] == "modified"
+    assert payload["reviewed_relation_id"]
+    assert cmd_session.get(CaseRelation, candidate.id).review_state == "machine_generated"
+    network = cmd_client.get("/api/v1/event-research/network").json()
+    assert network["candidate_relations"] == []
+    assert network["reviewed_relations"][0]["relation_type"] == "follow_up_validation"
+    assert network["reviewed_relations"][0]["created_by"] == "human:reviewer"
+    assert network["reviewed_relations"][0]["reason"] == "改为后续验证关系，需在两个 Case 中分别核对。"
+    graph = cmd_client.get(
+        f"/api/v1/research-cases/{first['case_id']}/graph?research_mode=true"
+    )
+    assert graph.status_code == 200
+    relation_edges = [
+        edge for edge in graph.json()["edges"] if edge["semantic_kind"] == "case_relation"
+    ]
+    assert [edge["id"] for edge in relation_edges] == [payload["reviewed_relation_id"]]
+
+
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:
     payload = _confirmed_event()
     payload["candidate_factors"] = ["factor a", " factor a ", "factor c"]

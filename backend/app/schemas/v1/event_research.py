@@ -140,6 +140,13 @@ class CaseRelationCaseDTO(V1Model):
     lifecycle_status: str
 
 
+class CaseRelationCandidateOriginDTO(V1Model):
+    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
+    reason: str
+    created_by: str
+    created_at: datetime
+
+
 class CaseRelationDTO(V1Model):
     id: str
     source_case: CaseRelationCaseDTO
@@ -149,11 +156,33 @@ class CaseRelationDTO(V1Model):
     created_by: str
     review_state: Literal["machine_generated", "reviewed", "rejected"]
     created_at: datetime
+    review_history: list["CaseRelationReviewDTO"] = Field(default_factory=list)
+    candidate_origin: CaseRelationCandidateOriginDTO | None = None
+
+
+class CaseRelationReviewRequest(V1Model):
+    outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
+    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
+    reviewer: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2000)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class CaseRelationReviewDTO(V1Model):
+    id: str
+    case_relation_id: str
+    outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
+    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
+    reviewer: str
+    reason: str
+    reviewed_relation_id: str | None
+    created_at: datetime
 
 
 class ResearchNetworkResponse(V1Model):
     reviewed_relations: list[CaseRelationDTO]
     candidate_relations: list[CaseRelationDTO]
+    resolved_candidates: list[CaseRelationDTO] = Field(default_factory=list)
 
 
 class EventReviewQueueItemDTO(V1Model):

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.event_research import (
     CaseRelation,
+    CaseRelationReview,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -31,7 +32,9 @@ from app.services.event_research_scope_evidence import current_mapped_evidence_i
 from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
     CaseRelationCaseDTO,
+    CaseRelationCandidateOriginDTO,
     CaseRelationDTO,
+    CaseRelationReviewDTO,
     EventConclusionDraftDTO,
     EventConclusionHistoryResponse,
     EventConclusionVersionDTO,
@@ -84,6 +87,50 @@ class EventResearchQueries:
                 )
             )
         }
+        relations = list(
+            self._session.scalars(
+                select(CaseRelation).order_by(CaseRelation.created_at.desc(), CaseRelation.id.desc())
+            )
+        )
+        relations_by_id = {relation.id: relation for relation in relations}
+        candidate_ids = [relation.id for relation in relations if relation.review_state == "machine_generated"]
+        reviews_by_candidate: dict[uuid.UUID, list[CaseRelationReviewDTO]] = {}
+        reviews_by_reviewed_relation: dict[uuid.UUID, list[CaseRelationReviewDTO]] = {}
+        candidate_origins_by_reviewed_relation: dict[uuid.UUID, CaseRelationCandidateOriginDTO] = {}
+        if candidate_ids:
+            for review in self._session.scalars(
+                select(CaseRelationReview)
+                .where(CaseRelationReview.case_relation_id.in_(candidate_ids))
+                .order_by(CaseRelationReview.created_at.asc(), CaseRelationReview.id.asc())
+            ):
+                review_dto = CaseRelationReviewDTO(
+                        id=str(review.id),
+                        case_relation_id=str(review.case_relation_id),
+                        outcome=review.outcome,
+                        relation_type=review.relation_type,
+                        reviewer=review.reviewer,
+                        reason=review.reason,
+                        reviewed_relation_id=str(review.reviewed_relation_id)
+                        if review.reviewed_relation_id
+                        else None,
+                        created_at=review.created_at,
+                    )
+                reviews_by_candidate.setdefault(review.case_relation_id, []).append(review_dto)
+                if review.reviewed_relation_id is not None:
+                    reviews_by_reviewed_relation.setdefault(
+                        review.reviewed_relation_id, []
+                    ).append(review_dto)
+                candidate = relations_by_id[review.case_relation_id]
+                if review.reviewed_relation_id is not None:
+                    candidate_origins_by_reviewed_relation[review.reviewed_relation_id] = (
+                        CaseRelationCandidateOriginDTO(
+                            relation_type=candidate.relation_type,
+                            reason=candidate.reason,
+                            created_by=candidate.created_by,
+                            created_at=candidate.created_at,
+                        )
+                    )
+
         visible = [
             CaseRelationDTO(
                 id=str(relation.id),
@@ -94,15 +141,32 @@ class EventResearchQueries:
                 created_by=relation.created_by,
                 review_state=relation.review_state,
                 created_at=relation.created_at,
+                review_history=(
+                    reviews_by_candidate.get(relation.id, [])
+                    if relation.review_state == "machine_generated"
+                    else reviews_by_reviewed_relation.get(relation.id, [])
+                ),
+                candidate_origin=candidate_origins_by_reviewed_relation.get(relation.id),
             )
-            for relation in self._session.scalars(
-                select(CaseRelation).order_by(CaseRelation.created_at.desc(), CaseRelation.id.desc())
-            )
+            for relation in relations
             if relation.source_case_id in cases and relation.target_case_id in cases
+        ]
+        resolved_candidates = [
+            item
+            for item in visible
+            if item.review_state == "machine_generated"
+            and item.review_history
+            and item.review_history[-1].outcome == "rejected"
         ]
         return ResearchNetworkResponse(
             reviewed_relations=[item for item in visible if item.review_state == "reviewed"],
-            candidate_relations=[item for item in visible if item.review_state == "machine_generated"],
+            candidate_relations=[
+                item
+                for item in visible
+                if item.review_state == "machine_generated"
+                and (not item.review_history or item.review_history[-1].outcome == "needs_more_evidence")
+            ],
+            resolved_candidates=resolved_candidates,
         )
 
     def relations(self, case_id: uuid.UUID) -> ResearchNetworkResponse:
@@ -120,6 +184,7 @@ class EventResearchQueries:
         return ResearchNetworkResponse(
             reviewed_relations=[item for item in network.reviewed_relations if involves_case(item)],
             candidate_relations=[item for item in network.candidate_relations if involves_case(item)],
+            resolved_candidates=[item for item in network.resolved_candidates if involves_case(item)],
         )
 
     def workbench(self, case_id: uuid.UUID) -> EventWorkbenchDTO:

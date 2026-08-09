@@ -11,6 +11,8 @@ from app.errors import ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
+    CaseRelationReviewDTO,
+    CaseRelationReviewRequest,
     EventResearchLifecycleDTO,
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
@@ -36,6 +38,8 @@ from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.auto_research import AutoResearchService
+from app.services.case_relation_reviews import CaseRelationReviewService
+from app.models.ledger import ValidationError
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.outbox import emit_event
 
@@ -60,6 +64,43 @@ def event_research_relations(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> ResearchNetworkResponse:
     return EventResearchQueries(db).relations(case_id)
+
+
+@router.post(
+    "/case-relations/{candidate_id}/reviews",
+    response_model=CaseRelationReviewDTO,
+    status_code=status.HTTP_201_CREATED,
+)
+def review_case_relation(
+    candidate_id: uuid.UUID,
+    payload: CaseRelationReviewRequest,
+    db: Session = Depends(get_db),
+) -> CaseRelationReviewDTO:
+    try:
+        review = CaseRelationReviewService(db).review(
+            candidate_id,
+            outcome=payload.outcome,
+            relation_type=payload.relation_type,
+            reviewer=payload.reviewer,
+            reason=payload.reason,
+            idempotency_key=payload.idempotency_key,
+        )
+        db.commit()
+    except (ValueError, ValidationError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return CaseRelationReviewDTO(
+        id=str(review.id),
+        case_relation_id=str(review.case_relation_id),
+        outcome=review.outcome,
+        relation_type=review.relation_type,
+        reviewer=review.reviewer,
+        reason=review.reason,
+        reviewed_relation_id=str(review.reviewed_relation_id)
+        if review.reviewed_relation_id
+        else None,
+        created_at=review.created_at,
+    )
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
