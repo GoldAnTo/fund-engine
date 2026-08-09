@@ -17,6 +17,7 @@ import {
   type Monitor,
   type MonitorDetail,
   type Researchability,
+  type ResearchNetwork,
 } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
 import type {
@@ -46,6 +47,16 @@ const tabs = [
   ["monitor", "监测与运行"],
   ["relations", "关联研究"],
 ] as const;
+
+const relationLabels: Record<
+  ResearchNetwork["reviewed_relations"][number]["relation_type"],
+  string
+> = {
+  shared_driver: "共享驱动",
+  follow_up_validation: "后续验证",
+  potential_conflict: "可能冲突",
+  shared_material: "共享资料",
+};
 
 function CaseFrame({
   children,
@@ -195,6 +206,36 @@ function FactorList({ data }: { data: EventWorkbench }) {
   );
 }
 
+function CaseRelationRail({ caseId }: { caseId: string }) {
+  const [relations, setRelations] = useState<ResearchNetwork | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setRelations(null);
+    setUnavailable(false);
+    researchOsApi.caseRelations(caseId)
+      .then((value) => active && setRelations(value))
+      .catch(() => active && setUnavailable(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId]);
+
+  const reviewed = relations?.reviewed_relations.slice(0, 3) ?? [];
+  const candidateCount = relations?.candidate_relations.length ?? 0;
+  return <section className="ros-rail-section ros-case-relation-rail">
+    <p className="ros-eyebrow">关联研究</p>
+    <h2>已审核关联</h2>
+    {unavailable ? <p>关联状态暂不可读取；不会显示其他 Case 的替代内容。</p> : !relations ? <p>正在读取当前 Case 的关联上下文…</p> : reviewed.length ? <ul>{reviewed.map((relation) => {
+      const other = relation.source_case.case_id === caseId ? relation.target_case : relation.source_case;
+      return <li key={relation.id}><Link to={`/events/${other.case_id}`}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
+    })}</ul> : <p>当前没有已审核关联。</p>}
+    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={`/events/${caseId}/relations`}>审核关联候选 →</Link></p>}
+    <Link to={`/events/${caseId}/relations`}>查看全部关联 →</Link>
+  </section>;
+}
+
 export function CaseEvidencePage() {
   return (
     <CaseFrame>
@@ -290,6 +331,9 @@ export function CaseDocumentsPage() {
         <CaseDocumentsContent
           caseId={caseId}
           isPublished={data.lifecycle.status === "published"}
+          publishedConclusion={
+            data.conclusion.state === "published" ? data.conclusion.text : null
+          }
         />
       )}
     </CaseFrame>
@@ -298,9 +342,11 @@ export function CaseDocumentsPage() {
 function CaseDocumentsContent({
   caseId,
   isPublished,
+  publishedConclusion,
 }: {
   caseId: string;
   isPublished: boolean;
+  publishedConclusion: string | null;
 }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -440,6 +486,7 @@ function CaseDocumentsContent({
       {isPublished && (
         <PublishedMaterialDecisionForm
           caseId={caseId}
+          publishedConclusion={publishedConclusion}
           onFrozen={(id) => {
             setPreferredDocumentId(id);
             setDocumentReload((value) => value + 1);
@@ -533,9 +580,11 @@ function CaseDocumentsContent({
 
 function PublishedMaterialDecisionForm({
   caseId,
+  publishedConclusion,
   onFrozen,
 }: {
   caseId: string;
+  publishedConclusion: string | null;
   onFrozen: (documentId: string) => void;
 }) {
   const navigate = useNavigate();
@@ -590,6 +639,17 @@ function PublishedMaterialDecisionForm({
       <p>
         先冻结这份材料，再由研究员决定纳入重新复核或记录为不改变当前判断。两种决定都会保留原因；系统不会静默改写发布结论。
       </p>
+      <section className="ros-material-comparison" aria-label="已发布结论与新材料对照">
+        <article>
+          <p className="ros-eyebrow">当前已发布结论</p>
+          <blockquote>{publishedConclusion || "当前发布结论文本不可读取；不能据此推定内容。"}</blockquote>
+        </article>
+        <article>
+          <p className="ros-eyebrow">待冻结的新材料</p>
+          <blockquote>{rawInput.trim() || "输入新材料后在此逐字对照；系统不会自动判断差异或改写结论。"}</blockquote>
+        </article>
+      </section>
+      <p className="ros-note">请在决定理由中说明它影响的判断、关键因素或反证条件；并列对照只帮助人工复核，不构成自动差异结论。</p>
       <label>
         新材料正文
         <textarea
@@ -1113,6 +1173,7 @@ export function CaseConclusionPage() {
                 条可回溯引用；每条都保留原文定位、可用时点与审核状态。
               </p>
             </section>
+            <CaseRelationRail caseId={caseId} />
           </aside>
         </section>
       )}

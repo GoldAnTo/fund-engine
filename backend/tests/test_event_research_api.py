@@ -338,6 +338,9 @@ def test_reviewing_a_case_relation_candidate_appends_a_reviewed_relation_without
         edge for edge in graph.json()["edges"] if edge["semantic_kind"] == "case_relation"
     ]
     assert [edge["id"] for edge in relation_edges] == [payload["reviewed_relation_id"]]
+    assert relation_edges[0]["properties"]["reviewer"] == "human:reviewer"
+    assert relation_edges[0]["properties"]["review_reason"] == "改为后续验证关系，需在两个 Case 中分别核对。"
+    assert relation_edges[0]["properties"]["reviewed_at"]
 
 
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:

@@ -162,6 +162,24 @@ describe("Research OS event entry", () => {
     expect(navigation.textContent).not.toContain("研究协议");
   });
 
+  it("keeps a small reviewed Case-relation context beside the current conclusion", async () => {
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("已审核关联")).toBeVisible();
+    expect(screen.getByRole("link", { name: "AI 服务器订单验证" })).toHaveAttribute(
+      "href",
+      "/events/event-ai-server",
+    );
+    expect(screen.getByText(/另有 1 条 AI 候选/)).toBeVisible();
+  });
+
   it("opens Case evidence through its frozen Case document instead of a live source URL", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
@@ -242,6 +260,18 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("定位")).toBeVisible();
     expect(screen.getByText("第 12 页 · 资本开支")).toBeVisible();
     expect(screen.getByText(/审核人 human:reviewer/)).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: /冻结公司披露.*quoted_by/ }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "关系：冻结公司披露 → 资本开支指引上调",
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("审核理由")).toBeVisible();
+    expect(screen.getByText("已逐字核对冻结原文与定位。")).toBeVisible();
+    expect(screen.getByText("可用时点")).toBeVisible();
 
     await user.click(
       screen.getByRole("button", {
@@ -523,6 +553,8 @@ describe("Research OS event entry", () => {
         name: "新材料是否需要改变复核范围？",
       }),
     ).toBeVisible();
+    expect(screen.getByText("当前已发布结论")).toBeVisible();
+    expect(screen.getByText("待冻结的新材料")).toBeVisible();
     await user.type(
       screen.getByLabelText("新增材料正文"),
       "这份新材料只重复既有判断。 ",

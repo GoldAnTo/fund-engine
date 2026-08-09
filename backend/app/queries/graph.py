@@ -146,7 +146,10 @@ class RelationshipGraphQueries:
         if candidate_ids:
             review_rows = self._session.execute(
                 select(CaseRelationReview.case_relation_id, CaseRelationReview.outcome)
-                .where(CaseRelationReview.case_relation_id.in_(candidate_ids))
+                .where(
+                    CaseRelationReview.case_relation_id.in_(candidate_ids),
+                    CaseRelationReview.created_at <= basis.cutoff,
+                )
                 .order_by(
                     CaseRelationReview.case_relation_id,
                     CaseRelationReview.created_at.desc(),
@@ -160,6 +163,20 @@ class RelationshipGraphQueries:
                 seen_candidates.add(candidate_id)
                 if outcome in {"confirmed", "modified", "rejected"}:
                     terminal_candidates.add(candidate_id)
+        reviewed_relation_ids = [
+            relation.id for relation in relations if relation.review_state == "reviewed"
+        ]
+        review_by_reviewed_relation: dict[uuid.UUID, CaseRelationReview] = {}
+        if reviewed_relation_ids:
+            for review in self._session.scalars(
+                select(CaseRelationReview)
+                .where(
+                    CaseRelationReview.reviewed_relation_id.in_(reviewed_relation_ids),
+                    CaseRelationReview.created_at <= basis.cutoff,
+                )
+                .order_by(CaseRelationReview.created_at.desc(), CaseRelationReview.id.desc())
+            ):
+                review_by_reviewed_relation.setdefault(review.reviewed_relation_id, review)
         for relation in relations:
             if relation.id in terminal_candidates:
                 continue
@@ -182,6 +199,20 @@ class RelationshipGraphQueries:
                 topic=related_case.industry_topic,
                 inherited=False,
             )
+            review = review_by_reviewed_relation.get(relation.id)
+            properties = {
+                "relation_type": relation.relation_type,
+                "reason": relation.reason,
+                "created_by": relation.created_by,
+            }
+            if review is not None:
+                properties.update(
+                    {
+                        "reviewer": review.reviewer,
+                        "review_reason": review.reason,
+                        "reviewed_at": _iso(review.created_at),
+                    }
+                )
             add_edge(
                 relation.id,
                 "case_relation",
@@ -189,11 +220,7 @@ class RelationshipGraphQueries:
                 related_case.id,
                 review_state=relation.review_state,
                 available_at=_iso(relation.created_at),
-                properties={
-                    "relation_type": relation.relation_type,
-                    "reason": relation.reason,
-                    "created_by": relation.created_by,
-                },
+                properties=properties,
             )
 
         # 2-3. evidence links (research_mode-gated) and causal steps

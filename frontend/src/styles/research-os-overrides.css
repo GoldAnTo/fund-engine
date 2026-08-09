@@ -1,6 +1,14 @@
 /* Safeguards for the compact event-first workbench. */
 .ros-run-strip__left > div { min-width: 0; }
 .ros-case-tabs { min-width: 0; max-width: 100%; }
+.ros-case-relation-rail ul { display: grid; gap: .55rem; margin: .7rem 0; padding: 0; list-style: none; }
+.ros-case-relation-rail li { display: grid; gap: .14rem; }
+.ros-case-relation-rail li a { margin-top: 0; }
+.ros-case-relation-rail li small { color: var(--ros-muted, #73766f); font-size: .7rem; line-height: 1.45; }
+.ros-case-relation-rail .ros-note a { display: inline; margin-left: .25rem; }
+.ros-material-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: 1rem 0; }
+.ros-material-comparison article { min-width: 0; padding: .7rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-surface, #fffdf8); }
+.ros-material-comparison blockquote { margin: .35rem 0 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; white-space: pre-wrap; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible
    across dense evidence workbenches without relying on color alone. */
@@ -18,6 +26,7 @@
 .ros-wiki-edge > b { font-size: .7rem; font-weight: 600; color: var(--ros-muted, #69716d); }
 .ros-wiki-edge > small { grid-column: 1 / -1; color: var(--ros-muted, #69716d); }
 .ros-wiki-edge.is-candidate { border-style: dashed; background: #fffaf0; }
+.ros-wiki-edge.is-selected { border-color: var(--ros-ink, #30332f); box-shadow: 0 7px 15px oklch(.25 .02 65/.12); }
 .ros-review-decision { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; padding: .85rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: var(--ros-deep, #f6f3ec); }
 .ros-review-decision label { display: grid; gap: .35rem; color: var(--ros-soft, #59615d); font-size: .75rem; }
 .ros-review-decision textarea { min-height: 4.2rem; width: 100%; resize: vertical; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; padding: .5rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); }
@@ -218,6 +227,7 @@
 .ros-rule-history li > p, .ros-rule-history li > small { grid-column: 1 / -1; margin: 0; line-height: 1.45; }
 
 @media (max-width: 640px) {
+  .ros-material-comparison { grid-template-columns: 1fr; }
   .ros-case-header__controls { align-items: flex-start; flex-direction: column; }
   .ros-case-header__controls label, .ros-case-header__controls select { width: 100%; max-width: none; }
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }
