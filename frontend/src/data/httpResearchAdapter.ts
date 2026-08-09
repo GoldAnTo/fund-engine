@@ -218,25 +218,25 @@ function mapEventSourceAdmission(
 }
 
 // Backend search deep_link paths are prefixed with /research-cases/... but
-// the React routes are /cases/... and /relationships/...; rewrite to the
+// the React routes are /events/... and /network; rewrite to the
 // real frontend routes so clicks do not hit the wildcard redirect.
 // Exact-match patterns only: case-level, dossier, graph.
 function rewriteDeepLink(deepLink: string): string {
   if (deepLink.startsWith("/research-cases/")) {
     if (deepLink.endsWith("/dossier")) {
-      // /research-cases/{id}/dossier -> /cases/{id}
+      // /research-cases/{id}/dossier -> /events/{id}
       return deepLink
-        .replace(/^\/research-cases\//, "/cases/")
+        .replace(/^\/research-cases\//, "/events/")
         .replace(/\/dossier$/, "");
     }
     if (deepLink.endsWith("/graph")) {
-      // /research-cases/{id}/graph -> /relationships/{id}
+      // /research-cases/{id}/graph -> /events/{id}/wiki
       return deepLink
-        .replace(/^\/research-cases\//, "/relationships/")
-        .replace(/\/graph$/, "");
+        .replace(/^\/research-cases\//, "/events/")
+        .replace(/\/graph$/, "/wiki");
     }
-    // /research-cases/{id} -> /cases/{id}
-    return deepLink.replace(/^\/research-cases\//, "/cases/");
+    // /research-cases/{id} -> /events/{id}
+    return deepLink.replace(/^\/research-cases\//, "/events/");
   }
   return deepLink;
 }

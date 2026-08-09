@@ -371,6 +371,24 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("Case 详情")).toBeVisible();
   });
 
+  it("surfaces a reviewed global thesis result instead of limiting the topbar to the current Case registry", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "search").mockResolvedValue([{ group: "命题", id: "thesis-capex", title: "客户资本开支转化为订单", hint: "已审核命题 · 可回到当前 Case", navigate_to: "/events/event-tsm/evidence" }]);
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route element={<AppShell />}><Route path="/events" element={<p>工作台内容</p>} /><Route path="/events/:caseId/evidence" element={<p>命题与证据详情</p>} /></Route></Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText("搜索事件、公司、命题或证据"), "资本开支");
+    const result = await screen.findByRole("link", { name: /客户资本开支转化为订单/ });
+    expect(result).toHaveAttribute("href", "/events/event-tsm/evidence");
+    await user.click(result);
+    expect(await screen.findByText("命题与证据详情")).toBeVisible();
+  });
+
   it("expands the immutable active-run event chain without leaving the current page", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(new Response(JSON.stringify(

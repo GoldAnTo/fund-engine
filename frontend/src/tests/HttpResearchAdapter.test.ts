@@ -216,7 +216,7 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/cases/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1");
   });
 
   it("throws on unknown graph semantic_kind instead of silently rewriting", async () => {
@@ -471,7 +471,7 @@ describe("HttpResearchAdapter", () => {
     expect(overview.key_changes[1].review_state).toBe("reviewed");
   });
 
-  it("search maps case deep links to the React /cases/ route (not graph)", async () => {
+  it("search maps case deep links to the active React /events/ route", async () => {
     const search = {
       schema_version: "v1",
       basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
@@ -500,10 +500,10 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/cases/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1");
   });
 
-  it("search maps graph deep links to the React /relationships/ route", async () => {
+  it("search maps graph deep links to the active Case Wiki route", async () => {
     const search = {
       schema_version: "v1",
       basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
@@ -532,7 +532,7 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/relationships/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1/wiki");
   });
 
   it("rejects unknown review outcome (does not silently coerce to human_confirmed)", async () => {
