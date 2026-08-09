@@ -92,6 +92,18 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
   });
 
+  it("keeps non-admissible source candidates visible with their blocking reason", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes><Route path="/events/:caseId/review" element={<CaseReviewPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("资料受限，不能采纳")).toBeVisible();
+    expect(screen.getByText("来源由用户粘贴解析，尚未完成内容验证")).toBeVisible();
+    expect(screen.getByText("测试域名不能作为正式证据来源")).toBeVisible();
+  });
+
   it("keeps a frozen active-run scope visible above every workbench route", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       items: [{ run_id: "run-1", case_id: "event-tsm", case_title: "台积电上调 CoWoS 指引后下跌", status: "running", stage: "retrieve", updated_at: "2026-08-09T00:00:00Z", processed_count: 3, next_action: "查看本次运行", scope: { trigger: "manual", monitor_version_id: "monitor-1", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }],

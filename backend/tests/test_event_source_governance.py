@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError, SourceSpan, SourceStatement, Thesis
+from app.models.proposals import Proposal
 from app.models.source_governance import ProviderRecord, SourceContract
 
 
@@ -148,3 +150,62 @@ def test_reusing_the_same_frozen_snapshot_reuses_its_original_contract(
     assert len(contracts) == 1
     assert contracts[0].provider_or_tenant == "team-a"
     assert contracts[0].allow_export is False
+
+
+def test_contract_that_forbids_ai_processing_blocks_formal_evidence_acceptance(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"permissions": {"ai_processing": False, "display": True}},
+        ),
+    ).json()
+    case_id = uuid.UUID(created["case_id"])
+    thesis = cmd_session.scalar(select(Thesis).where(Thesis.research_case_id == case_id))
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    now = datetime.now(timezone.utc)
+    span = SourceSpan(
+        document_version_id=document_id,
+        locator={"kind": "pasted_snapshot"},
+        verbatim_text="冻结原文片段",
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="research_opinion",
+        normalized_text="待审核候选",
+        created_at=now,
+    )
+    cmd_session.add(statement)
+    cmd_session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={"source_statement_id": str(statement.id), "role": "supports", "reason": "候选关系", "scope": {}},
+        target_context={"thesis_id": str(thesis.id), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="test",
+        proposed_at=now,
+        research_case_id=case_id,
+        status="pending",
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+
+    queue = cmd_client.get(f"/api/v1/event-research/{case_id}/review-queue")
+    item = next(row for row in queue.json()["items"] if row["proposal_id"] == str(proposal.id))
+    decision = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={"outcome": "confirmed", "reason": "尝试采纳", "reviewer_id": "human:reviewer", "expected_version": proposal.version},
+    )
+
+    assert item["source_status"] == "restricted"
+    assert item["can_accept"] is False
+    assert "禁止 AI 处理" in item["source_status_reason"]
+    assert decision.status_code == 422

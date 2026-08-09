@@ -57,7 +57,8 @@ function ReviewContent({ caseId }: { caseId: string }) {
   useEffect(() => { researchClient.getEventReviewQueue(caseId).then(setQueue).catch(() => setQueue(null)); }, [caseId, reload]);
   if (!queue) return <div className="ros-empty ros-page-gap">正在读取待审核证据；不可访问的来源不会进入审核动作。</div>;
   const actionable = queue.items.filter((item) => item.canAccept);
-  return <section className="ros-review-workbench"><header className="ros-section-heading"><div><p className="ros-eyebrow">人工审核</p><h2>{queue.summary.pending} 条待审核关系</h2></div><span className="ros-muted">候选仅供核对；不会自动采纳</span></header>{actionable.length === 0 ? <div className="ros-empty">当前没有待审核候选。</div> : actionable.map((item) => <ReviewItem item={item} onDecided={() => setReload((value) => value + 1)} key={item.proposalId} />)}{queue.summary.invalidSource > 0 && <p className="ros-rulebox">另有 {queue.summary.invalidSource} 条来源因许可或可验证性不足被排除，不能在此采纳为正式证据。</p>}</section>;
+  const blocked = queue.items.filter((item) => !item.canAccept);
+  return <section className="ros-review-workbench"><header className="ros-section-heading"><div><p className="ros-eyebrow">人工审核</p><h2>{queue.summary.pending} 条待审核关系</h2></div><span className="ros-muted">候选仅供核对；不会自动采纳</span></header>{actionable.length === 0 ? <div className="ros-empty">当前没有待审核候选。</div> : actionable.map((item) => <ReviewItem item={item} onDecided={() => setReload((value) => value + 1)} key={item.proposalId} />)}{blocked.length > 0 && <section className="ros-rulebox"><p className="ros-eyebrow">资料受限，不能采纳</p><p>以下候选保留审计记录，但不会进入结论或审核动作。</p>{blocked.map((item) => <article key={item.proposalId}><strong>{item.sourceTitle || "来源未记录"}</strong><p>{item.sourceStatusReason}</p></article>)}</section>}</section>;
 }
 
 function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearchClient["getEventReviewQueue"]>>["items"][number]; onDecided: () => void }) {

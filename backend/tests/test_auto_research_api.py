@@ -16,6 +16,7 @@ from app.models.ledger import (
 )
 from app.models.operational import ResearchRun, ResearchTask
 from app.models.proposals import Proposal
+from app.models.source_governance import SourceContract
 from app.services.auto_research import AutoResearchService
 from app.repositories.auto_research import AutoResearchRepository
 from app.scripts.run_ai_engine import _pending_versions
@@ -60,6 +61,24 @@ def test_pending_documents_are_isolated_to_the_research_case(session):
     session.commit()
 
     assert [item.id for item in _pending_versions(session, first_case.id)] == [first_document.id]
+
+
+def test_pending_documents_exclude_a_frozen_contract_that_forbids_ai_processing(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="restricted", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    document = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://provider.example.com/restricted", available_at=now, acquired_at=now, parser_version="provider-v1")
+    session.add(document)
+    session.flush()
+    session.add_all([
+        SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="Source text with enough detail that content quality would otherwise allow extraction."),
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
+        SourceContract(document_version_id=document.id, source_type="licensed_provider", provider_or_tenant="provider", allow_ai_processing=False, allow_display=True, allow_export=False, allow_api=False, region="not_recorded", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=["no AI"], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+    ])
+    session.commit()
+
+    assert _pending_versions(session, case.id) == []
 
 
 def test_start_and_get_run(session):

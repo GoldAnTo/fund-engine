@@ -4189,7 +4189,7 @@ export interface components {
          * @description The admissibility of a source link for event evidence.
          * @enum {string}
          */
-        SourceStatus: "accessible" | "pasted_unverified" | "invalid";
+        SourceStatus: "accessible" | "pasted_unverified" | "restricted" | "invalid";
         /** StartResearchRunRequest */
         StartResearchRunRequest: {
             /**

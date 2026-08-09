@@ -12673,6 +12673,7 @@
         "enum": [
           "accessible",
           "pasted_unverified",
+          "restricted",
           "invalid"
         ],
         "title": "SourceStatus",

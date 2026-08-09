@@ -29,7 +29,8 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.proposals import Proposal
-from app.services.source_admission import SourceAdmission, SourceStatus, classify_source
+from app.models.source_governance import SourceContract
+from app.services.source_admission import SourceAdmission, SourceStatus, apply_source_contract, classify_source
 from app.schemas.v1.commands import ReviewQueueItemDTO, ReviewQueueResponse
 
 
@@ -91,11 +92,20 @@ def proposal_evidence_context(
             proposal,
             "来源文档未绑定到当前研究事件，不能作为有效证据来源。",
         )
-    admission = classify_source(
+    source_contract = (
+        session.scalar(
+            select(SourceContract).where(
+                SourceContract.document_version_id == document.id
+            )
+        )
+        if document is not None
+        else None
+    )
+    admission = apply_source_contract(classify_source(
         document.source_url if document else None,
         document.parser_version if document else "",
         bool(document and document.parse_state in {"success", "parsed"}),
-    )
+    ), source_contract)
     return ProposalEvidenceContext(
         proposal=proposal,
         thesis=thesis,
