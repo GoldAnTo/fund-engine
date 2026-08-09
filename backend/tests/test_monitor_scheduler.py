@@ -9,7 +9,7 @@ from .test_case_monitor import _case_with_confirmed_factor
 def test_scheduler_queues_only_active_due_monitor_once_per_day(session) -> None:
     case, factor = _case_with_confirmed_factor(session)
     monitor = CaseMonitorService(session).save(case.id, actor="human", config=CaseMonitorConfig(frequency="daily_20_00", factor_ids=[factor.id], allowed_source_types=["company_disclosure"], next_verification_event="财报", budget=7, change_reason="启用"))
-    now = datetime.now(timezone.utc).replace(hour=20, minute=1)
+    now = datetime.now(timezone.utc).replace(hour=12, minute=1)
     created = MonitorScheduler(session).dispatch_due(now=now)
     assert len(created) == 1
     assert created[0].monitor_version_id == monitor.id
@@ -17,3 +17,12 @@ def test_scheduler_queues_only_active_due_monitor_once_per_day(session) -> None:
     assert MonitorScheduler(session).dispatch_due(now=now) == []
     CaseMonitorService(session).set_status(case.id, actor="human", status="paused", reason="暂停")
     assert MonitorScheduler(session).dispatch_due(now=now) == []
+
+
+def test_next_due_time_is_calculated_in_shanghai_time() -> None:
+    # Friday 08:31 in Shanghai: the next weekday 08:30 is Monday, not Saturday.
+    now = datetime(2026, 8, 7, 0, 31, tzinfo=timezone.utc)
+
+    assert MonitorScheduler.next_due_at("weekday_08_30", now=now) == datetime(
+        2026, 8, 10, 0, 30, tzinfo=timezone.utc
+    )

@@ -19,6 +19,7 @@ from app.schemas.v1.case_monitor import (
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
+from app.services.monitor_scheduler import MonitorScheduler
 from app.schemas.v1.auto_research import ResearchRunResponse
 
 
@@ -56,6 +57,7 @@ def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
             if run is not None
             else None
         ),
+        next_scheduled_at=(MonitorScheduler.next_due_at(monitor.frequency) if monitor is not None and monitor.status == "active" else None),
         confirmed_factors=[
             ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
             for factor in query.confirmed_factors(case_id)

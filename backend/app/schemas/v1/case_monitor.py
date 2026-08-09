@@ -59,4 +59,5 @@ class CaseMonitorDetailResponse(V1Model):
     monitor: CaseMonitorDTO | None
     history: list[CaseMonitorDTO]
     latest_run: LatestResearchRunDTO | None
+    next_scheduled_at: datetime | None = None
     confirmed_factors: list[ConfirmedFactorOptionDTO]

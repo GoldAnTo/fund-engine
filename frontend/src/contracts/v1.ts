@@ -1886,6 +1886,8 @@ export interface components {
             /** History */
             history: components["schemas"]["CaseMonitorDTO"][];
             latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
+            /** Next Scheduled At */
+            next_scheduled_at?: string | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };

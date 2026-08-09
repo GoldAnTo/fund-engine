@@ -339,6 +339,7 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByText("研究协议尚未通过，不能启动补证。")).toBeVisible();
     expect(screen.getByText(/尚未固定结果指标/)).toBeVisible();
+    expect(screen.getByText("下次定时检查")).toBeVisible();
     expect(screen.getByRole("button", { name: "立即补证一次" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "补齐研究协议" })).toHaveAttribute("href", "/events/event-tsm/protocol");
   });

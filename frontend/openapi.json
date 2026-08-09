@@ -6096,6 +6096,18 @@
               }
             ]
           },
+          "next_scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled At"
+          },
           "confirmed_factors": {
             "items": {
               "$ref": "#/components/schemas/ConfirmedFactorOptionDTO"
