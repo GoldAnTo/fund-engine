@@ -7189,7 +7189,9 @@ export interface operations {
                 limit?: number;
                 research_mode?: boolean;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
