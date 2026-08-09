@@ -222,6 +222,15 @@
 .ros-scope-editor__form textarea { min-height: 60px; padding: 9px; border: 1px solid var(--ros-strong); border-radius: 7px; background: var(--ros-surface); color: var(--ros-ink); font: inherit; resize: vertical; }
 .ros-scope-editor__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+.ros-market-factor { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.ros-market-factor:hover, .ros-market-factor.is-selected { margin-inline: -7px; width: calc(100% + 14px); padding-inline: 7px; border-radius: 7px; background: var(--ros-blue-soft); }
+.ros-market-factor.is-selected { box-shadow: inset 2px 0 var(--ros-blue); }
+.ros-market-status { margin: 0 0 14px; color: var(--ros-blue); font-size: 12px; font-weight: 700; }
+.ros-market-checks { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px 0; border-top: 1px solid var(--ros-rule); border-bottom: 1px solid var(--ros-rule); }
+.ros-market-checks div { display: grid; gap: 3px; }
+.ros-market-checks dt { color: var(--ros-muted); font-size: 10px; }
+.ros-market-checks dd { margin: 0; font-size: 11px; line-height: 1.45; }
+
 @media (max-width: 640px) {
   .ros-conclusion-history__list > li { grid-template-columns: 1fr; }
   .ros-conclusion-history__list > li::before { display: none; }

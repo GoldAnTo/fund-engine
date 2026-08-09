@@ -500,7 +500,7 @@ describe("Research OS event entry", () => {
     expect(await screen.findByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" })).toBeVisible();
     expect(screen.getByText("研究意见")).toBeVisible();
     expect(screen.getByText("得到支持")).toBeVisible();
-    expect(screen.getByText("事件窗口观测")).toBeVisible();
+    expect(screen.getByText(/事件窗口观测/)).toBeVisible();
     expect(screen.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
     expect(screen.getByText(/报告期 2026-06-30/)).toBeVisible();
   });

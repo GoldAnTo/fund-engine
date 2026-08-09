@@ -200,7 +200,7 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/event-tsm/market?client=mock");
 
     await expect(page.getByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" })).toBeVisible();
-    await expect(page.getByText("尚未到验证时点")).toBeVisible();
+    await expect(page.getByRole("button", { name: /尚未到验证时点/ })).toBeVisible();
     await expect(page.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
     await expect(page.getByText(/报告期 2026-06-30/)).toBeVisible();
   });
