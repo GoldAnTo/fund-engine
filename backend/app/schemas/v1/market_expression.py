@@ -98,6 +98,7 @@ class RegisterMarketObservationRequest(V1Model):
     window_label: str = Field(min_length=1)
     benchmark: str = Field(min_length=1)
     price_source: str = Field(min_length=1)
+    after_hours_treatment: str = Field(min_length=1)
     relative_return: float | None = None
     reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
@@ -208,6 +209,7 @@ class MarketObservationDTO(V1Model):
     window_label: str
     benchmark: str
     price_source: str
+    after_hours_treatment: str
     relative_return: float | None
     reviewed_by: str
     review_reason: str

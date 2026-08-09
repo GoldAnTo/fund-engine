@@ -106,6 +106,7 @@ def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
             window_label=payload.window_label,
             benchmark=payload.benchmark,
             price_source=payload.price_source,
+            after_hours_treatment=payload.after_hours_treatment,
             relative_return=Decimal(str(payload.relative_return)) if payload.relative_return is not None else None,
             reviewed_by=payload.reviewed_by,
             review_reason=payload.review_reason,

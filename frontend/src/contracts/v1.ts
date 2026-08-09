@@ -4223,6 +4223,8 @@ export interface components {
             benchmark: string;
             /** Price Source */
             price_source: string;
+            /** After Hours Treatment */
+            after_hours_treatment: string;
             /** Relative Return */
             relative_return: number | null;
             /** Reviewed By */
@@ -4811,6 +4813,8 @@ export interface components {
             benchmark: string;
             /** Price Source */
             price_source: string;
+            /** After Hours Treatment */
+            after_hours_treatment: string;
             /** Relative Return */
             relative_return?: number | null;
             /** Reviewed By */

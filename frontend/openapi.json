@@ -12957,6 +12957,10 @@
             "type": "string",
             "title": "Price Source"
           },
+          "after_hours_treatment": {
+            "type": "string",
+            "title": "After Hours Treatment"
+          },
           "relative_return": {
             "anyOf": [
               {
@@ -12995,6 +12999,7 @@
           "window_label",
           "benchmark",
           "price_source",
+          "after_hours_treatment",
           "relative_return",
           "reviewed_by",
           "review_reason",
@@ -14444,6 +14449,11 @@
             "minLength": 1,
             "title": "Price Source"
           },
+          "after_hours_treatment": {
+            "type": "string",
+            "minLength": 1,
+            "title": "After Hours Treatment"
+          },
           "relative_return": {
             "anyOf": [
               {
@@ -14475,6 +14485,7 @@
           "window_label",
           "benchmark",
           "price_source",
+          "after_hours_treatment",
           "reviewed_by",
           "review_reason"
         ],

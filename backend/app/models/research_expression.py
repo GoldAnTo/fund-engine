@@ -147,6 +147,7 @@ class MarketObservation(Base):
     window_label: Mapped[str] = mapped_column(String(64), nullable=False)
     benchmark: Mapped[str] = mapped_column(Text, nullable=False)
     price_source: Mapped[str] = mapped_column(String(128), nullable=False)
+    after_hours_treatment: Mapped[str] = mapped_column(Text, nullable=False, default="not_recorded")
     relative_return: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     review_state: Mapped[str] = mapped_column(String(32), nullable=False)
     reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)

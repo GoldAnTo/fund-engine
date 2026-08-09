@@ -84,6 +84,7 @@ class MarketObservationInput:
     window_label: str
     benchmark: str
     price_source: str
+    after_hours_treatment: str
     relative_return: Decimal | None
     reviewed_by: str
     review_reason: str
@@ -258,7 +259,7 @@ class MarketExpressionService:
             raise ValidationError("event_at and available_at must include a timezone")
         if value.available_at < value.event_at:
             raise ValidationError("available_at must not be before event_at")
-        for name in ("window_label", "benchmark", "price_source", "reviewed_by", "review_reason"):
+        for name in ("window_label", "benchmark", "price_source", "after_hours_treatment", "reviewed_by", "review_reason"):
             self._require_text(getattr(value, name), name)
         if value.relative_return is not None and not value.relative_return.is_finite():
             raise ValidationError("relative_return must be finite when recorded")
@@ -271,6 +272,7 @@ class MarketExpressionService:
             window_label=value.window_label.strip(),
             benchmark=value.benchmark.strip(),
             price_source=value.price_source.strip(),
+            after_hours_treatment=value.after_hours_treatment.strip(),
             relative_return=value.relative_return,
             review_state="reviewed",
             reviewed_by=value.reviewed_by.strip(),

@@ -89,6 +89,7 @@ describe("Research OS event entry", () => {
 
     await user.click(await screen.findByRole("button", { name: "登记市场观测" }));
     expect(await screen.findByLabelText("观测标的")).toBeVisible();
+    expect(screen.getByLabelText("盘后处理")).toBeVisible();
     expect(screen.getByText(/市场窗口只记录发生了什么/)).toBeVisible();
   });
 

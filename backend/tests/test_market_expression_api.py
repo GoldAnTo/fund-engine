@@ -146,6 +146,7 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         window_label="T0 至 T+5",
         benchmark="中证全指",
         price_source="licensed_provider",
+        after_hours_treatment="未记录盘后处理",
         relative_return=Decimal("0.034"),
         review_state="reviewed",
         reviewed_by="human:researcher",
@@ -600,6 +601,7 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
         "window_label": "T0 至 T+5",
         "benchmark": "中证全指",
         "price_source": "licensed_provider",
+        "after_hours_treatment": "事件发生在盘后，窗口从下一交易日开盘开始",
         "relative_return": 0.034,
         "reviewed_by": "human:researcher",
         "review_reason": "只核对窗口、基准和价格来源，不作因果归因。",
@@ -610,4 +612,5 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     assert observation["stock_id"] == str(stock.id)
     assert observation["window_label"] == "T0 至 T+5"
     assert observation["relative_return"] == 0.034
+    assert observation["after_hours_treatment"] == "事件发生在盘后，窗口从下一交易日开盘开始"
     assert "causal_result" not in observation
