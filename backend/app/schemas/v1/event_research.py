@@ -216,6 +216,24 @@ class EventConclusionDraftDTO(V1Model):
     citations: list[EventKeyEvidenceDTO]
 
 
+class EventConclusionVersionDTO(V1Model):
+    id: str
+    sequence: int
+    state: str
+    text: str
+    primary_factor: str | None
+    scope_version: int | None
+    based_on_conclusion_id: str | None
+    reviewer: str | None
+    evidence_count: int
+    created_at: datetime
+
+
+class EventConclusionHistoryResponse(V1Model):
+    case_id: str
+    versions: list[EventConclusionVersionDTO]
+
+
 class PublishEventConclusionRequest(V1Model):
     text: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)

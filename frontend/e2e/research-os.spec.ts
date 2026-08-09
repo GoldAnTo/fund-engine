@@ -198,6 +198,15 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText(/报告期 2026-06-30/)).toBeVisible();
   });
 
+  test("published Case exposes immutable conclusion versions instead of implying an automatic rewrite", async ({ page }) => {
+    await page.goto("/events/event-published/history?client=mock");
+
+    await expect(page.getByRole("heading", { name: "结论版本与人工发布边界" })).toBeVisible();
+    await expect(page.getByText("AI 草案，未发布")).toBeVisible();
+    await expect(page.getByText("人工发布", { exact: true })).toBeVisible();
+    await expect(page.getByRole("main")).toContainText("新的材料只能进入待审流程，不能自动改写这里的任何结论。");
+  });
+
   test("a Case keeps its own reviewed associations separate from AI candidates", async ({ page }) => {
     await page.route("**/api/v1/event-research/event-tsm/relations", async (route) => route.fulfill({ json: {
       reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],

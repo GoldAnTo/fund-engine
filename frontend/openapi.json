@@ -3896,6 +3896,49 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/conclusion-history": {
+      "get": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Event Conclusion History",
+        "operationId": "event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventConclusionHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/review-queue": {
       "get": {
         "tags": [
@@ -8371,6 +8414,116 @@
           "citations"
         ],
         "title": "EventConclusionDraftDTO"
+      },
+      "EventConclusionHistoryResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/EventConclusionVersionDTO"
+            },
+            "type": "array",
+            "title": "Versions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "versions"
+        ],
+        "title": "EventConclusionHistoryResponse"
+      },
+      "EventConclusionVersionDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "primary_factor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Factor"
+          },
+          "scope_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Version"
+          },
+          "based_on_conclusion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Based On Conclusion Id"
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "title": "Evidence Count"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "state",
+          "text",
+          "primary_factor",
+          "scope_version",
+          "based_on_conclusion_id",
+          "reviewer",
+          "evidence_count",
+          "created_at"
+        ],
+        "title": "EventConclusionVersionDTO"
       },
       "EventKeyEvidenceDTO": {
         "properties": {

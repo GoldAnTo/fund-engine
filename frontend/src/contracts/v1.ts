@@ -1126,6 +1126,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/conclusion-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Conclusion History */
+        get: operations["event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/review-queue": {
         parameters: {
             query?: never;
@@ -2697,6 +2714,39 @@ export interface components {
             confidence: string;
             /** Citations */
             citations: components["schemas"]["EventKeyEvidenceDTO"][];
+        };
+        /** EventConclusionHistoryResponse */
+        EventConclusionHistoryResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Versions */
+            versions: components["schemas"]["EventConclusionVersionDTO"][];
+        };
+        /** EventConclusionVersionDTO */
+        EventConclusionVersionDTO: {
+            /** Id */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** State */
+            state: string;
+            /** Text */
+            text: string;
+            /** Primary Factor */
+            primary_factor: string | null;
+            /** Scope Version */
+            scope_version: number | null;
+            /** Based On Conclusion Id */
+            based_on_conclusion_id: string | null;
+            /** Reviewer */
+            reviewer: string | null;
+            /** Evidence Count */
+            evidence_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** EventKeyEvidenceDTO */
         EventKeyEvidenceDTO: {
@@ -7952,6 +8002,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventWorkbenchDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventConclusionHistoryResponse"];
                 };
             };
             /** @description Validation Error */

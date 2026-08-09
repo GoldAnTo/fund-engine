@@ -162,11 +162,25 @@ export interface EventWorkbench {
   nextAction: { kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
 }
 
+export interface EventConclusionVersion {
+  id: string;
+  sequence: number;
+  state: "ai_draft" | "published";
+  text: string;
+  primaryFactor: string | null;
+  scopeVersion: number | null;
+  basedOnConclusionId: string | null;
+  reviewer: string | null;
+  evidenceCount: number;
+  createdAt: string;
+}
+
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
+  getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;

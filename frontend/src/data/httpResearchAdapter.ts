@@ -2876,6 +2876,27 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
+  async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
+    const dto = await this.get<{ versions: Array<{
+      id: string; sequence: number; state: "ai_draft" | "published"; text: string;
+      primary_factor: string | null; scope_version: number | null;
+      based_on_conclusion_id: string | null; reviewer: string | null;
+      evidence_count: number; created_at: string;
+    }> }>(`/event-research/${encodeURIComponent(caseId)}/conclusion-history`);
+    return dto.versions.map((version) => ({
+      id: version.id,
+      sequence: version.sequence,
+      state: version.state,
+      text: version.text,
+      primaryFactor: version.primary_factor,
+      scopeVersion: version.scope_version,
+      basedOnConclusionId: version.based_on_conclusion_id,
+      reviewer: version.reviewer,
+      evidenceCount: version.evidence_count,
+      createdAt: version.created_at,
+    }));
+  }
+
   async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
     const dto = await this.requestJson<{
       version: number; factors: Array<string | { statement: string; description?: string | null }>; reclassified_evidence_count: number; unmapped_evidence_count: number;

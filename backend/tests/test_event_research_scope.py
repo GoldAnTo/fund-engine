@@ -1794,6 +1794,60 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     assert published.scope_version_id == v2_draft.scope_version_id
 
 
+def test_conclusion_history_keeps_drafts_and_published_versions_in_order(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    first = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="ai_draft",
+        text="第一版草案",
+        primary_factor=INITIAL_FACTORS[0],
+        evidence_link_ids=["evidence-1"],
+        based_on_conclusion_id=None,
+        reviewer=None,
+        created_at=datetime(2026, 8, 9, 8, 0, tzinfo=timezone.utc),
+    )
+    cmd_session.add(first)
+    cmd_session.flush()
+    published = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="published",
+        text="人工发布的第一版结论",
+        primary_factor=INITIAL_FACTORS[0],
+        evidence_link_ids=["evidence-1", "evidence-2"],
+        based_on_conclusion_id=first.id,
+        reviewer="human:lin",
+        created_at=datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc),
+    )
+    cmd_session.add(published)
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{case_id}/conclusion-history")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["case_id"] == str(case_id)
+    assert response.json()["versions"] == [
+        {
+            "id": str(first.id), "sequence": 1, "state": "ai_draft",
+            "text": "第一版草案", "primary_factor": INITIAL_FACTORS[0],
+            "scope_version": None, "based_on_conclusion_id": None,
+            "reviewer": None, "evidence_count": 1,
+            "created_at": "2026-08-09T08:00:00",
+        },
+        {
+            "id": str(published.id), "sequence": 2, "state": "published",
+            "text": "人工发布的第一版结论", "primary_factor": INITIAL_FACTORS[0],
+            "scope_version": None, "based_on_conclusion_id": str(first.id),
+            "reviewer": "human:lin", "evidence_count": 2,
+            "created_at": "2026-08-09T09:00:00",
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     "factors",
     [

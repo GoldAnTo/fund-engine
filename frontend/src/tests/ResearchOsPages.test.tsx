@@ -7,7 +7,7 @@ import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
-import { CaseReviewPage } from "../features/case/CasePages";
+import { CaseConclusionHistoryPage, CaseConclusionPage, CaseReviewPage } from "../features/case/CasePages";
 import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage, MonitorConfigPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
@@ -38,6 +38,30 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
     expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+  });
+
+  it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-published"]}>
+        <Routes><Route path="/events/:caseId" element={<CaseConclusionPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("link", { name: "查看结论版本" })).toHaveAttribute("href", "/events/event-published/history");
+  });
+
+  it("shows drafts and human-published conclusions as a replayable version chain", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-published/history"]}>
+        <Routes><Route path="/events/:caseId/history" element={<CaseConclusionHistoryPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "结论版本与人工发布边界" })).toBeVisible();
+    expect(screen.getByText("AI 草案，未发布")).toBeVisible();
+    expect(screen.getByText("人工发布")).toBeVisible();
+    expect(screen.getByText("人工确认：当前材料不足以断定唯一原因。")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看补证运行" })).toHaveAttribute("href", "/events/event-published/monitor");
   });
 
   it("keeps the research question and three factors editable before a Case is created", async () => {

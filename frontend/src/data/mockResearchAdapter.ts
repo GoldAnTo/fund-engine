@@ -3985,6 +3985,15 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
+  async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
+    this.throwIfOffline();
+    const isPublished = (await this.getEventWorkbench(caseId)).conclusion.state === "published";
+    return simulateLatency(isPublished ? [
+      { id: `draft-${caseId}-v1`, sequence: 1, state: "ai_draft" as const, text: "当前结论草案等待人工复核。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: null, reviewer: null, evidenceCount: 3, createdAt: "2026-08-07T07:00:00Z" },
+      { id: `published-${caseId}-v1`, sequence: 2, state: "published" as const, text: "人工确认：当前材料不足以断定唯一原因。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: `draft-${caseId}-v1`, reviewer: "human:researcher", evidenceCount: 3, createdAt: "2026-08-07T08:00:00Z" },
+    ] : []);
+  }
+
   async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
     const event = this.eventResearchItems().find((item) => item.id === input.caseId)

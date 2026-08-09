@@ -14,6 +14,7 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
     EventResearchListResponse,
+    EventConclusionHistoryResponse,
     ResearchNetworkResponse,
     EventReviewQueueResponse,
     EventWorkbenchDTO,
@@ -116,6 +117,13 @@ def event_research_workbench(
     case_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> EventWorkbenchDTO:
     return EventResearchQueries(db).workbench(case_id)
+
+
+@router.get("/{case_id}/conclusion-history", response_model=EventConclusionHistoryResponse)
+def event_conclusion_history(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> EventConclusionHistoryResponse:
+    return EventResearchQueries(db).conclusion_history(case_id)
 
 
 @router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)

@@ -32,6 +32,8 @@ from app.schemas.v1.event_research import (
     CaseRelationCaseDTO,
     CaseRelationDTO,
     EventConclusionDraftDTO,
+    EventConclusionHistoryResponse,
+    EventConclusionVersionDTO,
     EventKeyEvidenceDTO,
     EventNextActionDTO,
     EventResearchFactorDTO,
@@ -143,6 +145,55 @@ class EventResearchQueries:
             progress=progress,
             scope=self._scope(scope, case_id),
             next_action=self._next_action(lifecycle),
+        )
+
+    def conclusion_history(self, case_id: uuid.UUID) -> EventConclusionHistoryResponse:
+        if self._session.scalar(
+            select(EventResearchBrief.id)
+            .where(EventResearchBrief.research_case_id == case_id)
+            .limit(1)
+        ) is None:
+            raise NotFoundError("event research case not found")
+        records = list(
+            self._session.scalars(
+                select(EventResearchConclusion)
+                .where(EventResearchConclusion.research_case_id == case_id)
+                .order_by(EventResearchConclusion.created_at, EventResearchConclusion.id)
+            )
+        )
+        scope_versions = {
+            scope.id: scope.version
+            for scope in self._session.scalars(
+                select(EventResearchScopeVersion).where(
+                    EventResearchScopeVersion.research_case_id == case_id
+                )
+            )
+        }
+        return EventConclusionHistoryResponse(
+            case_id=str(case_id),
+            versions=[
+                EventConclusionVersionDTO(
+                    id=str(record.id),
+                    sequence=index,
+                    state=record.state,
+                    text=record.text,
+                    primary_factor=record.primary_factor,
+                    scope_version=(
+                        scope_versions.get(record.scope_version_id)
+                        if record.scope_version_id is not None
+                        else None
+                    ),
+                    based_on_conclusion_id=(
+                        str(record.based_on_conclusion_id)
+                        if record.based_on_conclusion_id is not None
+                        else None
+                    ),
+                    reviewer=record.reviewer,
+                    evidence_count=len(record.evidence_link_ids),
+                    created_at=record.created_at,
+                )
+                for index, record in enumerate(records, start=1)
+            ],
         )
 
     def _conclusion(
