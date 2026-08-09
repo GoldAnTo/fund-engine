@@ -26,6 +26,8 @@ from app.schemas.v1.event_research import (
     ResearchNetworkResponse,
     EventReviewQueueResponse,
     EventWorkbenchDTO,
+    LegacyCaseAdmissionRequest,
+    LegacyCaseAdmissionResponse,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
     ContinueEventResearchRequest,
@@ -44,7 +46,12 @@ from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.auto_research import AutoResearchService
 from app.services.case_relation_reviews import CaseRelationReviewService
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import (
+    ResearchActor,
+    configured_tenant_ids,
+    require_case_administrator,
+    require_research_tenant,
+)
 from app.services.case_tenant_access import CaseTenantAccess
 from app.models.event_research import CaseRelation
 from app.queries.documents import DocumentReadQueries
@@ -208,6 +215,42 @@ def create_event_research(
             current_gap=lifecycle.current_gap,
             next_human_action=lifecycle.next_human_action,
         ),
+    )
+
+
+@router.post(
+    "/{case_id}/tenant-admission",
+    response_model=LegacyCaseAdmissionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def admit_legacy_event_case(
+    case_id: uuid.UUID,
+    payload: LegacyCaseAdmissionRequest,
+    db: Session = Depends(get_db),
+    _actor: ResearchActor = Depends(require_case_administrator),
+) -> LegacyCaseAdmissionResponse:
+    """Explicitly admit one legacy Case; never infer its tenant ownership."""
+    if payload.tenant_id not in configured_tenant_ids():
+        raise ValidationFailedError("tenant_id is not configured by the host")
+    try:
+        admission = CaseTenantAccess(db).admit_legacy_case(
+            case_id=case_id,
+            tenant_id=payload.tenant_id,
+            initial_document_version_id=uuid.UUID(payload.initial_document_version_id),
+            admitted_by=payload.admitted_by,
+            admission_reason=payload.reason,
+        )
+        db.commit()
+    except (ValueError, ValidationError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return LegacyCaseAdmissionResponse(
+        case_id=str(admission.research_case_id),
+        tenant_id=admission.tenant_id,
+        initial_document_version_id=str(admission.initial_document_version_id),
+        admitted_by=admission.admitted_by,
+        reason=admission.admission_reason or "",
+        admitted_at=admission.admitted_at,
     )
 
 

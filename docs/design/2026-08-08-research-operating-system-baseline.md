@@ -313,4 +313,5 @@ ReportClaim → KeyFactor → ClaimVerification
 | 2026-08-08 | 用版本化 MetricRegistry、MechanismTemplate 与 ResearchabilityGate 固定结果变量、必要节点、替代解释和反证；首个模板限于海外 AI CapEx 到中国硬件公司 | 已确认 |
 | 2026-08-09 | 活动 ResearchRun 在全局常驻可见；运行输入、范围、来源、排除、阶段、输出、失败和配置版本可展开回放；用户调整配置只追加新版本 | 已确认 |
 | 2026-08-10 | 事件 Case 创建由服务器解析的租户身份绑定初始冻结资料；事件清单、网络、工作台、审核、运行触发、材料上传及 Case 范围资料读取均按该不可变准入记录授权。异租户统一返回未找到，不泄露存在性。全局历史资料库及非事件 Case 路由将在调用方迁移到同一准入模型后再收口，不能据此宣称全局 RBAC 已完成。 | 已实现（事件切片） |
+| 2026-08-10 | `ResearchRun` 的全局列表、详情、事件、取消和 CaseMonitor 的读取/配置/运行均复用 Case 准入；未准入的历史 Case 不再出现在租户运行视图。历史 Case 只能由主机配置了 `case_administrator` 角色的管理员，选择该 Case 已关联的冻结资料、填写原因并显式准入；不得依据创建人、内容哈希或来源推断归属。令牌配置兼容旧的 `{"token":"tenant"}` 形式，也可使用 `{"token":{"tenant_id":"tenant","roles":["case_administrator"]}}`。 | 已实现（事件运行切片） |
 | 后续 | 所有新需求以本表追加决策、影响范围和替代/废弃规则 | 待执行 |

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
+
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase
+from app.models.event_research import EventResearchBrief
+from app.models.operational import EventResearchLifecycle, ResearchRun
+
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
@@ -104,3 +111,141 @@ def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
     assert owner_detail.status_code == 200
     assert owner_detail.json()["document"]["id"] == document_id
     assert foreign_detail.status_code == 404
+
+
+def test_research_runs_and_monitoring_never_cross_the_case_tenant_boundary(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}'
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(
+        research_case_id=uuid.UUID(case_id),
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=1,
+        budget=1,
+        budget_used=0,
+        scope_thesis_ids=[],
+        monitor_version_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_session.add(run)
+    cmd_session.commit()
+    run_id = str(run.id)
+
+    owner_active = cmd_client.get("/api/v1/research-runs/active", headers=_auth("token-a"))
+    foreign_active = cmd_client.get("/api/v1/research-runs/active", headers=_auth("token-b"))
+    foreign_detail = cmd_client.get(
+        f"/api/v1/research-runs/{run_id}", headers=_auth("token-b")
+    )
+    foreign_events = cmd_client.get(
+        f"/api/v1/research-runs/{run_id}/events", headers=_auth("token-b")
+    )
+    foreign_monitor = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/monitor", headers=_auth("token-b")
+    )
+
+    assert [item["run_id"] for item in owner_active.json()["items"]] == [run_id]
+    assert foreign_active.json()["items"] == []
+    assert foreign_detail.status_code == 404
+    assert foreign_events.status_code == 404
+    assert foreign_monitor.status_code == 404
+
+
+def test_legacy_case_requires_explicit_admin_admission_before_it_is_visible(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    legacy_case = ResearchCase(
+        title="迁移前的事件研究",
+        industry_topic="事件研究",
+        created_by="legacy-import",
+        created_at=now,
+    )
+    legacy_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/legacy-source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="legacy",
+    )
+    cmd_session.add_all([legacy_case, legacy_document])
+    cmd_session.flush()
+    cmd_session.add(
+        CaseDocumentVersion(
+            research_case_id=legacy_case.id,
+            document_version_id=legacy_document.id,
+            linked_at=now,
+        )
+    )
+    cmd_session.add_all(
+        [
+            EventResearchBrief(
+                research_case_id=legacy_case.id,
+                raw_input="迁移前的事件原始材料",
+                source_url=legacy_document.source_url,
+                source_type="pasted_snapshot",
+                source_metadata={},
+                event_title=legacy_case.title,
+                company_name=None,
+                ticker=None,
+                event_at=None,
+                market_reaction=None,
+                research_question="历史事件仍需由证据验证",
+                extraction_state="confirmed",
+                created_at=now,
+            ),
+            EventResearchLifecycle(
+                research_case_id=legacy_case.id,
+                status="awaiting_scope",
+                active_run_id=None,
+                current_round=0,
+                status_summary="历史 Case 等待继续研究",
+                current_gap=None,
+                next_human_action="补充证据",
+                updated_at=now,
+            ),
+        ]
+    )
+    cmd_session.commit()
+
+    invisible = cmd_client.get("/api/v1/event-research")
+    no_role = cmd_client.post(
+        f"/api/v1/event-research/{legacy_case.id}/tenant-admission",
+        json={
+            "tenant_id": "test-team",
+            "initial_document_version_id": str(legacy_document.id),
+            "admitted_by": "human:ops",
+            "reason": "迁移清单与原始材料归属已人工核验",
+        },
+    )
+    assert invisible.json()["items"] == []
+    assert no_role.status_code == 403
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"test-tenant-token":{"tenant_id":"test-team","roles":["case_administrator"]}}',
+    )
+    admitted = cmd_client.post(
+        f"/api/v1/event-research/{legacy_case.id}/tenant-admission",
+        json={
+            "tenant_id": "test-team",
+            "initial_document_version_id": str(legacy_document.id),
+            "admitted_by": "human:ops",
+            "reason": "迁移清单与原始材料归属已人工核验",
+        },
+    )
+    assert admitted.status_code == 201, admitted.text
+    assert admitted.json()["reason"] == "迁移清单与原始材料归属已人工核验"
+
+    visible = cmd_client.get("/api/v1/event-research")
+    assert [item["case_id"] for item in visible.json()["items"]] == [str(legacy_case.id)]

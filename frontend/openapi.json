@@ -3254,6 +3254,22 @@
               "default": 20,
               "title": "Limit"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -3300,6 +3316,22 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -3342,6 +3374,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -3440,6 +3488,22 @@
               ],
               "title": "After Id"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -3482,6 +3546,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Run Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -3548,6 +3628,22 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -3590,6 +3686,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Run Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -4096,6 +4208,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ExtractEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/tenant-admission": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Admit Legacy Event Case",
+        "description": "Explicitly admit one legacy Case; never infer its tenant ownership.",
+        "operationId": "admit_legacy_event_case_api_v1_event_research__case_id__tenant_admission_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyCaseAdmissionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyCaseAdmissionResponse"
                 }
               }
             }
@@ -4780,6 +4962,22 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -4820,6 +5018,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -4875,6 +5089,22 @@
               "format": "uuid",
               "title": "Case Id"
             }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -4917,6 +5147,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -4979,6 +5225,22 @@
             "schema": {
               "type": "string",
               "title": "Target Status"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -13571,6 +13833,82 @@
           "updated_at"
         ],
         "title": "LatestResearchRunDTO"
+      },
+      "LegacyCaseAdmissionRequest": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Tenant Id"
+          },
+          "initial_document_version_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Initial Document Version Id"
+          },
+          "admitted_by": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Admitted By"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "initial_document_version_id",
+          "admitted_by",
+          "reason"
+        ],
+        "title": "LegacyCaseAdmissionRequest"
+      },
+      "LegacyCaseAdmissionResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "initial_document_version_id": {
+            "type": "string",
+            "title": "Initial Document Version Id"
+          },
+          "admitted_by": {
+            "type": "string",
+            "title": "Admitted By"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "admitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Admitted At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "tenant_id",
+          "initial_document_version_id",
+          "admitted_by",
+          "reason",
+          "admitted_at"
+        ],
+        "title": "LegacyCaseAdmissionResponse"
       },
       "LinkReviewRequest": {
         "properties": {

@@ -13,6 +13,7 @@ from app.models.ledger import (
     SourceStatement,
     SourceSpan,
     DocumentVersion,
+    CaseTenantAdmission,
     AtomicClaimCandidate,
     AIAssessment,
 )
@@ -25,6 +26,37 @@ from app.scripts.run_ai_engine import _pending_versions
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
 from app.models.research_monitor import ResearchRunEvent
+
+
+def _admit_case(cmd_session, case: ResearchCase) -> None:
+    """HTTP run routes operate only on an explicitly tenant-admitted Case."""
+    now = datetime.now(timezone.utc)
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url=f"https://example.test/admission/{case.id}",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    cmd_session.add_all(
+        [
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=document.id,
+                linked_at=now,
+            ),
+            CaseTenantAdmission(
+                research_case_id=case.id,
+                tenant_id="test-team",
+                initial_document_version_id=document.id,
+                admitted_by="test-fixture",
+                admitted_at=now,
+            ),
+        ]
+    )
+    cmd_session.flush()
 
 
 @pytest.fixture
@@ -289,6 +321,7 @@ def test_task_result_includes_task_type_and_proposal_ids(session):
 def test_list_runs_returns_recent_runs(cmd_client, cmd_session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(case); cmd_session.flush()
+    _admit_case(cmd_session, case)
     thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(thesis); cmd_session.commit()
     repo = AutoResearchRepository(cmd_session)
@@ -311,6 +344,7 @@ def test_list_runs_returns_recent_runs(cmd_client, cmd_session):
 def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(case); cmd_session.flush()
+    _admit_case(cmd_session, case)
     thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(thesis); cmd_session.commit()
     run = AutoResearchRepository(cmd_session).create_run(research_case_id=case.id, max_rounds=1, budget=10)
@@ -333,6 +367,7 @@ def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
 def test_cancel_run_terminal_conflict(cmd_client, cmd_session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(case); cmd_session.flush()
+    _admit_case(cmd_session, case)
     thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(thesis); cmd_session.commit()
     run = AutoResearchRepository(cmd_session).create_run(research_case_id=case.id, max_rounds=1, budget=10)
@@ -348,6 +383,7 @@ def test_real_api_human_loop_from_queued_run_to_published_proposal(cmd_client, c
     now = datetime.now(timezone.utc)
     case = ResearchCase(title="API loop", industry_topic="semis", created_by="e2e", created_at=now)
     cmd_session.add(case); cmd_session.flush()
+    _admit_case(cmd_session, case)
     thesis = Thesis(research_case_id=case.id, statement="订单增长将改善收入", created_by="e2e", created_at=now)
     document = DocumentVersion(
         content_sha256=uuid.uuid4().hex,
