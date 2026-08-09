@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import uuid
 
 import pytest
 from sqlalchemy import select, update
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.models.ledger import EvidenceSnapshot, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, EvidenceSnapshot, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion, MechanismTemplateVersion, VerificationRuleVersion
+from app.models.source_governance import SourceContract
 from app.services.mechanism_templates import seed_ai_capex_template
 from app.services.research_protocol import (
     MetricDefinitionInput,
@@ -73,6 +75,15 @@ def test_gate_requires_rules_and_independent_metrics_after_template_selection(se
     thesis = Thesis(research_case_id=case.id, statement="业务线收入增长", research_protocol_required=True, created_by="human", created_at=now)
     session.add(thesis)
     session.flush()
+    baseline_available_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    baseline_document = DocumentVersion(content_sha256=uuid.uuid4().hex + uuid.uuid4().hex, source_url="https://disclosure.example.org/baseline", available_at=baseline_available_at, acquired_at=baseline_available_at, parser_version="fixture-v1")
+    session.add(baseline_document)
+    session.flush()
+    session.add_all([
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=baseline_document.id, linked_at=baseline_available_at),
+        SourceContract(document_version_id=baseline_document.id, source_type="uploaded_file", provider_or_tenant="research-team", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="fixture-v1", intake_metadata={}, declared_by="human", created_at=baseline_available_at),
+    ])
+    session.flush()
     service = ResearchProtocolService(session)
     metric = service.add_metric_version(MetricDefinitionInput(
         metric_id="business_line_revenue", display_name="业务线收入", canonical_definition="指定业务线季度收入",
@@ -81,7 +92,7 @@ def test_gate_requires_rules_and_independent_metrics_after_template_selection(se
     ), approved_by="human:owner", reason="结果指标")
     binding = service.create_outcome_binding(thesis.id, OutcomeBindingInput(
         metric_definition_id=metric.id, entity_scope={"company_id": "company-a", "business_line": "光模块"},
-        direction="increase", baseline={"source_ref": "doc:baseline", "value": "1", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
+        direction="increase", baseline={"source_ref": f"document:{baseline_document.id}", "value": "1", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
         horizon_start=date(2026, 4, 1), horizon_end=date(2026, 12, 31), reviewer="human", reason="固定结果",
     ))
     service.approve_outcome_binding(binding.id, reviewer="human", reason="审核基线")

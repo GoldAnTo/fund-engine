@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime, timezone
+import uuid
 
 import pytest
 from sqlalchemy import update
 
-from app.models.ledger import ImmutableLedgerError, ResearchCase, Thesis, ValidationError
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
+from app.models.source_governance import SourceContract
 from app.services.research_protocol import MetricDefinitionInput, OutcomeBindingInput, ResearchProtocolService
 
 
@@ -138,6 +140,25 @@ def _protocol_thesis(session) -> Thesis:
     return thesis
 
 
+def _attach_frozen_baseline(session, thesis: Thesis, *, available_at: datetime | None = None) -> DocumentVersion:
+    available_at = available_at or datetime(2026, 3, 1, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="https://disclosure.example.org/baseline",
+        available_at=available_at,
+        acquired_at=available_at,
+        parser_version="fixture-v1",
+    )
+    session.add(document)
+    session.flush()
+    session.add_all([
+        CaseDocumentVersion(research_case_id=thesis.research_case_id, document_version_id=document.id, linked_at=available_at),
+        SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="research-team", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="fixture-v1", intake_metadata={}, declared_by="human", created_at=available_at),
+    ])
+    session.flush()
+    return document
+
+
 def test_researchability_is_not_applicable_to_legacy_thesis(session, thesis) -> None:
     result = ResearchProtocolService(session).check_researchability(thesis.id)
 
@@ -157,10 +178,32 @@ def test_approved_outcome_binding_exposes_remaining_protocol_blockers(session) -
     thesis = _protocol_thesis(session)
     service = ResearchProtocolService(session)
     metric = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="结果指标")
-    draft = service.create_outcome_binding(thesis.id, _binding_input(metric.id))
+    document = _attach_frozen_baseline(session, thesis)
+    binding_input = _binding_input(metric.id)
+    binding_input = replace(binding_input, baseline={**binding_input.baseline, "source_ref": f"document:{document.id}"})
+    draft = service.create_outcome_binding(thesis.id, binding_input)
     service.approve_outcome_binding(draft.id, reviewer="human:reviewer", reason="范围和基线已核对")
 
     result = service.check_researchability(thesis.id)
 
     assert result.status == "blocked"
     assert result.reason_codes == ["missing_mechanism_template"]
+
+
+def test_strict_protocol_baseline_must_reference_current_case_authorized_frozen_document(session) -> None:
+    thesis = _protocol_thesis(session)
+    service = ResearchProtocolService(session)
+    metric = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="结果指标")
+
+    with pytest.raises(ValidationError, match="valid UUID"):
+        service.create_outcome_binding(thesis.id, _binding_input(metric.id))
+
+    document = _attach_frozen_baseline(session, thesis)
+    binding_input = _binding_input(metric.id)
+    valid = replace(binding_input, baseline={**binding_input.baseline, "source_ref": f"document:{document.id}"})
+    binding = service.create_outcome_binding(thesis.id, valid)
+
+    assert binding.baseline["source_ref"] == f"document:{document.id}"
+    stale_time = replace(valid, baseline={**valid.baseline, "available_at": "2026-03-02T00:00:00Z"})
+    with pytest.raises(ValidationError, match="frozen source availability"):
+        service.create_outcome_binding(thesis.id, stale_time)

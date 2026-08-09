@@ -3,8 +3,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from app.models.ledger import ResearchCase, Thesis
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, Thesis
 from app.models.research_protocol import MetricDefinitionVersion
+from app.models.source_governance import SourceContract
 
 
 METRIC_BODY = {
@@ -33,8 +34,28 @@ def _protocol_thesis(session) -> Thesis:
     return thesis
 
 
+def _attach_frozen_baseline(session, thesis: Thesis) -> DocumentVersion:
+    available_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="https://disclosure.example.org/api-baseline",
+        available_at=available_at,
+        acquired_at=available_at,
+        parser_version="fixture-v1",
+    )
+    session.add(document)
+    session.flush()
+    session.add_all([
+        CaseDocumentVersion(research_case_id=thesis.research_case_id, document_version_id=document.id, linked_at=available_at),
+        SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="research-team", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="fixture-v1", intake_metadata={}, declared_by="human", created_at=available_at),
+    ])
+    session.commit()
+    return document
+
+
 def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_session) -> None:
     thesis = _protocol_thesis(cmd_session)
+    baseline_document = _attach_frozen_baseline(cmd_session, thesis)
     metric = cmd_client.post("/api/v1/metric-definitions", json=METRIC_BODY)
     assert metric.status_code == 201, metric.text
     metric_id = metric.json()["id"]
@@ -44,7 +65,7 @@ def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_ses
             "metric_definition_id": metric_id,
             "entity_scope": {"company_id": "company-a", "business_line": "800G optics"},
             "direction": "increase",
-            "baseline": {"source_ref": "doc:baseline-1", "value": "10", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
+            "baseline": {"source_ref": f"document:{baseline_document.id}", "value": "10", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
             "horizon_start": "2026-04-01",
             "horizon_end": "2026-12-31",
             "reviewer": "human:researcher",

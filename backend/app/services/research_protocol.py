@@ -8,13 +8,14 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import ResearchCase, Thesis, ValidationError
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import (
     MechanismEdgeVersion,
     MechanismNodeVersion,
     MetricDefinitionVersion,
     OutcomeBindingVersion,
 )
+from app.models.source_governance import ProviderRecord, SourceContract
 from app.repositories.research_protocol import ResearchProtocolRepository
 
 
@@ -139,11 +140,86 @@ class ResearchProtocolService:
         if metric is None:
             raise ValidationError("metric definition not found")
         validate_outcome_binding(metric, value)
+        if thesis.research_protocol_required:
+            self._validate_frozen_baseline_source(thesis, value.baseline)
         return self._repo.add_outcome_binding_version(
             thesis_id=thesis_id, metric_definition_id=metric.id, entity_scope=dict(value.entity_scope), direction=value.direction,
             baseline=dict(value.baseline), horizon_start=value.horizon_start, horizon_end=value.horizon_end, state="draft",
             reviewer=value.reviewer.strip(), reason=value.reason.strip(), created_at=_utcnow(),
         )
+
+    def _validate_frozen_baseline_source(self, thesis: Thesis, baseline: dict[str, str]) -> None:
+        """Require strict protocol baselines to resolve to case-owned source facts.
+
+        A free-form locator can be useful in a legacy note, but it cannot prove
+        what was knowable when a protocol outcome was frozen.  Strict research
+        cases therefore name a frozen document (or its provider retrieval
+        record), keep that document attached to the same case, and use its
+        recorded availability timestamp verbatim.
+        """
+        document = self._resolve_baseline_document(baseline["source_ref"])
+        case_link = self._session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == thesis.research_case_id,
+                CaseDocumentVersion.document_version_id == document.id,
+            )
+        )
+        if case_link is None:
+            raise ValidationError("baseline source document is not attached to this research case")
+
+        contract = self._session.scalar(
+            select(SourceContract).where(SourceContract.document_version_id == document.id)
+        )
+        if contract is None or not contract.allow_display:
+            raise ValidationError("baseline source is not authorized for case review")
+        if contract.source_type == "licensed_provider":
+            provider_record = self._session.scalar(
+                select(ProviderRecord).where(ProviderRecord.document_version_id == document.id)
+            )
+            if provider_record is None or provider_record.content_sha256 != document.content_sha256:
+                raise ValidationError("licensed baseline source lacks a reproducible provider record")
+
+        baseline_available_at = self._parse_available_at(baseline["available_at"])
+        document_available_at = self._as_utc(document.available_at)
+        if baseline_available_at != document_available_at:
+            raise ValidationError("baseline.available_at must equal the frozen source availability timestamp")
+        if contract.effective_from and document_available_at < self._as_utc(contract.effective_from):
+            raise ValidationError("baseline source was not authorized at its availability timestamp")
+        if contract.effective_until and document_available_at > self._as_utc(contract.effective_until):
+            raise ValidationError("baseline source authorization had expired at its availability timestamp")
+
+    def _resolve_baseline_document(self, source_ref: str) -> DocumentVersion:
+        prefix, separator, raw_id = source_ref.partition(":")
+        if not separator or not raw_id:
+            raise ValidationError("baseline.source_ref must be document:<frozen-document-id> or provider_record:<record-id>")
+        try:
+            reference_id = uuid.UUID(raw_id)
+        except ValueError as exc:
+            raise ValidationError("baseline.source_ref must contain a valid UUID") from exc
+        if prefix == "document":
+            document = self._session.get(DocumentVersion, reference_id)
+        elif prefix == "provider_record":
+            record = self._session.get(ProviderRecord, reference_id)
+            document = self._session.get(DocumentVersion, record.document_version_id) if record else None
+        else:
+            raise ValidationError("baseline.source_ref must be document:<frozen-document-id> or provider_record:<record-id>")
+        if document is None:
+            raise ValidationError("baseline source does not resolve to a frozen document")
+        return document
+
+    @staticmethod
+    def _parse_available_at(value: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValidationError("baseline.available_at must be an ISO-8601 timestamp with timezone") from exc
+        if parsed.tzinfo is None:
+            raise ValidationError("baseline.available_at must be an ISO-8601 timestamp with timezone")
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
     def effective_metric(self, metric_id: str) -> MetricDefinitionVersion | None:
         return self._repo.effective_metric(metric_id)
