@@ -2499,7 +2499,7 @@ export class HttpResearchAdapter implements ResearchClient {
     return {
       documentVersionId: dto.document_version_id,
       mode: dto.mode,
-      statementCount: dto.statement_count,
+      candidateCount: dto.candidate_count,
       reason: dto.reason ?? null,
     };
   }

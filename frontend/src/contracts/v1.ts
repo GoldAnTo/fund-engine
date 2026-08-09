@@ -558,11 +558,10 @@ export interface paths {
         put?: never;
         /**
          * Extract Statements
-         * @description Run the extract step over one document version.
+         * @description Run the extract step without publishing formal statements.
          *
-         *     Append-only: statements are added, never replaced.  The engine script
-         *     feeds only pending versions (spans present, no statements yet); calling
-         *     this on an already-extracted version will append duplicates.
+         *     Returned candidates retain an exact original quote and await an explicit
+         *     human decision in the Case review workbench.
          */
         post: operations["extract_statements_api_v1_documents__document_version_id__extract_post"];
         delete?: never;
@@ -859,6 +858,40 @@ export interface paths {
         head?: never;
         /** Update Task */
         patch: operations["update_task_api_v1_tasks__task_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/atomic-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Atomic Claims */
+        get: operations["list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/atomic-claims/{candidate_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Atomic Claim */
+        post: operations["review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/research-runs/active": {
@@ -1510,6 +1543,101 @@ export interface components {
             provisional: boolean;
             /** Assessed At */
             assessed_at?: string | null;
+        };
+        /** AtomicClaimCandidateDTO */
+        AtomicClaimCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Source Span Id */
+            source_span_id: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Document Source Url */
+            document_source_url: string;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Quote */
+            quote: string;
+            /** Quote Start */
+            quote_start: number;
+            /** Quote End */
+            quote_end: number;
+            /** Quote Sha256 */
+            quote_sha256: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Claim Type */
+            claim_type: string;
+            /** Assertion Actor */
+            assertion_actor: string | null;
+            /** Authority Level */
+            authority_level: string;
+            /** Structured Fields */
+            structured_fields: {
+                [key: string]: unknown;
+            };
+            /** Validation Result */
+            validation_result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "awaiting_review" | "confirmed" | "modified" | "rejected";
+            /** Review History */
+            review_history: components["schemas"]["AtomicClaimReviewDTO"][];
+            published_source_statement: components["schemas"]["PublishedSourceStatementDTO"] | null;
+        };
+        /** AtomicClaimQueueResponse */
+        AtomicClaimQueueResponse: {
+            /** Items */
+            items: components["schemas"]["AtomicClaimCandidateDTO"][];
+        };
+        /** AtomicClaimReviewDTO */
+        AtomicClaimReviewDTO: {
+            /** Id */
+            id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            published_source_statement: components["schemas"]["PublishedSourceStatementDTO"] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** AtomicClaimReviewRequest */
+        AtomicClaimReviewRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Normalized Text */
+            normalized_text?: string | null;
+            /** Observed Period */
+            observed_period?: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /** CancelRunResponse */
         CancelRunResponse: {
@@ -2794,6 +2922,30 @@ export interface components {
             /** Permission Status */
             permission_status: string;
         };
+        /**
+         * ExtractCandidateDTO
+         * @description One source-grounded candidate awaiting human review.
+         */
+        ExtractCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Claim Type */
+            claim_type: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Quote */
+            quote: string;
+            /** Quote Start */
+            quote_start: number;
+            /** Quote End */
+            quote_end: number;
+            /**
+             * Review State
+             * @default awaiting_review
+             * @constant
+             */
+            review_state: "awaiting_review";
+        };
         /** ExtractEventResearchRequest */
         ExtractEventResearchRequest: {
             /** Raw Input */
@@ -2837,40 +2989,24 @@ export interface components {
         };
         /**
          * ExtractResponse
-         * @description Result of running statement extraction over one document version.
+         * @description Result of running review-gated extraction over one document version.
          *
-         *     Append-only: re-running extraction on a version that already has
-         *     statements will append duplicates; the engine script only feeds
-         *     pending versions (spans present, no statements yet).  ``mode`` is
-         *     ``mock`` without an LLM key (non-production only).  ``reason`` is the
-         *     honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
-         *     事实 / LLM 拒答).
+         *     The extractor never writes formal SourceStatements. Every returned item
+         *     has a continuous source quote and stays in ``awaiting_review`` until a
+         *     human confirms, modifies, or rejects it. ``reason`` explains a zero
+         *     candidate result without pretending that extraction succeeded silently.
          */
         ExtractResponse: {
             /** Document Version Id */
             document_version_id: string;
             /** Mode */
             mode: string;
-            /** Statement Count */
-            statement_count: number;
+            /** Candidate Count */
+            candidate_count: number;
             /** Reason */
             reason?: string | null;
-            /** Statements */
-            statements: components["schemas"]["ExtractStatementDTO"][];
-        };
-        /**
-         * ExtractStatementDTO
-         * @description One statement produced by the extraction step.
-         */
-        ExtractStatementDTO: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Normalized Text */
-            normalized_text: string;
-            /** Observed Period */
-            observed_period: string | null;
+            /** Candidates */
+            candidates: components["schemas"]["ExtractCandidateDTO"][];
         };
         /**
          * FrozenRunScopeDTO
@@ -4022,6 +4158,22 @@ export interface components {
             conclusion_id: string;
             /** State */
             state: string;
+        };
+        /** PublishedSourceStatementDTO */
+        PublishedSourceStatementDTO: {
+            /** Id */
+            id: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Kind */
+            kind: string;
+            /** Observed Period */
+            observed_period: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** RelatedThesisDTO */
         RelatedThesisDTO: {
@@ -7122,6 +7274,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskItemDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get: {
+        parameters: {
+            query?: {
+                review_state?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtomicClaimQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AtomicClaimReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtomicClaimReviewDTO"];
                 };
             };
             /** @description Validation Error */

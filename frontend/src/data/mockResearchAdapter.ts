@@ -3584,7 +3584,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({
       documentVersionId,
       mode: "mock",
-      statementCount: 0,
+      candidateCount: 0,
       reason: "离线原型未运行 LLM 抽取",
     });
   }

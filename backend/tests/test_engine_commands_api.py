@@ -36,7 +36,7 @@ def _new_pending_version(cmd_session):
 # ---------------------------------------------------------------------------
 
 
-def test_extract_creates_statements_and_airun(cmd_client, cmd_seeded):
+def test_extract_creates_review_gated_candidates_and_airun(cmd_client, cmd_seeded):
     version = _new_pending_version(cmd_seeded)
 
     resp = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
@@ -44,12 +44,14 @@ def test_extract_creates_statements_and_airun(cmd_client, cmd_seeded):
     body = resp.json()
     assert body["document_version_id"] == str(version.id)
     assert body["mode"] == "mock"
-    assert body["statement_count"] >= 1
-    assert len(body["statements"]) == body["statement_count"]
-    first = body["statements"][0]
+    assert body["candidate_count"] >= 1
+    assert len(body["candidates"]) == body["candidate_count"]
+    first = body["candidates"][0]
     assert first["id"]
-    assert first["kind"]
+    assert first["claim_type"]
     assert first["normalized_text"]
+    assert first["quote"]
+    assert first["review_state"] == "awaiting_review"
 
     from app.models.ledger import AIRun
 

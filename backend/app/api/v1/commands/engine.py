@@ -4,8 +4,8 @@ Re-running the assess step for one thesis freezes a new snapshot and appends
 a new provisional AIAssessment plus its AIRun audit record.  Nothing is
 overwritten — the evolution shows up in the snapshot-compare view.
 
-Extraction runs over one document version (pending versions only make sense;
-the extractor itself is append-only), and proposal fans evidence links out
+Extraction runs over one document version and only creates review-gated atomic
+claim candidates; proposal fans evidence links out
 for one thesis into the review queue.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from app.services.compliance import ComplianceRefusedError
 from app.services.jobs import JobService
 from app.schemas.v1.commands import (
     ExtractResponse,
-    ExtractStatementDTO,
+    ExtractCandidateDTO,
     ProposedLinkDTO,
     ProposeResponse,
     RerunAssessmentDTO,
@@ -141,36 +141,35 @@ def extract_statements(
     document_version_id: uuid.UUID,
     db: Session = Depends(get_db),
 ):
-    """Run the extract step over one document version.
+    """Run the extract step without publishing formal statements.
 
-    Append-only: statements are added, never replaced.  The engine script
-    feeds only pending versions (spans present, no statements yet); calling
-    this on an already-extracted version will append duplicates.
+    Returned candidates retain an exact original quote and await an explicit
+    human decision in the Case review workbench.
     """
     version = db.get(DocumentVersion, document_version_id)
     if version is None:
         raise NotFoundError(f"document version {document_version_id} not found")
     client = LLMClient.from_env()
-    statements = StatementExtractor(client).extract(document_version_id, db)
+    candidates = StatementExtractor(client).extract(document_version_id, db)
     commit_or_rollback(db)
     # Honest reason when no statements were produced — distinguishes
     # "nothing to extract" from "LLM refused / blank input".
-    reason = _extract_reason(db, document_version_id, statements)
+    reason = _extract_reason(db, document_version_id, candidates)
     return ExtractResponse(
         document_version_id=str(document_version_id),
         mode="mock" if client._mock else client.model_version,
-        statement_count=len(statements),
+        candidate_count=len(candidates),
         reason=reason,
-        statements=[
-            ExtractStatementDTO(
-                id=str(s.id),
-                kind=s.kind,
-                normalized_text=s.normalized_text,
-                observed_period=(
-                    s.observed_period.isoformat() if s.observed_period else None
-                ),
+        candidates=[
+            ExtractCandidateDTO(
+                id=str(candidate.id),
+                claim_type=candidate.claim_type,
+                normalized_text=candidate.normalized_text,
+                quote=candidate.quote,
+                quote_start=candidate.quote_start,
+                quote_end=candidate.quote_end,
             )
-            for s in statements
+            for candidate in candidates
         ],
     )
 

@@ -59,11 +59,25 @@ class AtomicClaimService:
         self._session.flush()
         return candidate
 
-    def review(self, candidate_id, *, outcome: str, reviewer: str, reason: str, idempotency_key: str) -> AtomicClaimReview:
+    def review(
+        self,
+        candidate_id,
+        *,
+        outcome: str,
+        reviewer: str,
+        reason: str,
+        idempotency_key: str,
+        normalized_text: str | None = None,
+        observed_period: date | None = None,
+    ) -> AtomicClaimReview:
         if self._session.get(AtomicClaimCandidate, candidate_id) is None:
             raise ValidationError("atomic claim candidate not found")
         if outcome not in _REVIEW_OUTCOMES or not reviewer.strip() or not reason.strip() or not idempotency_key.strip():
             raise ValidationError("atomic claim review is incomplete or invalid")
+        if outcome == "modified" and not (normalized_text or "").strip():
+            raise ValidationError("a modified atomic claim requires reviewed normalized_text")
+        if outcome != "modified" and (normalized_text is not None or observed_period is not None):
+            raise ValidationError("only a modified atomic claim may change published fields")
         existing = self._session.scalar(select(AtomicClaimReview).where(AtomicClaimReview.atomic_claim_candidate_id == candidate_id, AtomicClaimReview.idempotency_key == idempotency_key))
         if existing is not None:
             return existing
@@ -71,13 +85,13 @@ class AtomicClaimService:
         assert candidate is not None
         statement = None
         if outcome in {"confirmed", "modified"}:
-            observed_period = candidate.structured_fields.get("observed_period")
+            candidate_period = candidate.structured_fields.get("observed_period")
             statement = SourceStatement(
                 source_span_id=candidate.source_span_id,
                 atomic_claim_candidate_id=candidate.id,
                 kind=candidate.claim_type,
-                normalized_text=candidate.normalized_text,
-                observed_period=date.fromisoformat(observed_period) if observed_period else None,
+                normalized_text=(normalized_text or candidate.normalized_text).strip(),
+                observed_period=observed_period or (date.fromisoformat(candidate_period) if candidate_period else None),
                 created_at=datetime.now(timezone.utc),
             )
             self._session.add(statement)

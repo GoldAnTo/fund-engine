@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useParams } from "react-router-dom";
 
-import { researchOsApi, type CaseMechanismProtocol, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
+import { researchOsApi, type AtomicClaimCandidate, type CaseMechanismProtocol, type MechanismTemplate, type MetricDefinition, type MonitorDetail, type Researchability } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
 import type { EventResearchClient, EventWorkbench } from "../../domain/eventResearch";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
@@ -63,7 +63,35 @@ function ReviewContent({ caseId }: { caseId: string }) {
   if (!queue) return <div className="ros-empty ros-page-gap">正在读取待审核证据；不可访问的来源不会进入审核动作。</div>;
   const actionable = queue.items.filter((item) => item.canAccept);
   const blocked = queue.items.filter((item) => !item.canAccept);
-  return <section className="ros-review-workbench"><header className="ros-section-heading"><div><p className="ros-eyebrow">人工审核</p><h2>{queue.summary.pending} 条待审核关系</h2></div><span className="ros-muted">候选仅供核对；不会自动采纳</span></header>{actionable.length === 0 ? <div className="ros-empty">当前没有待审核候选。</div> : actionable.map((item) => <ReviewItem item={item} onDecided={() => setReload((value) => value + 1)} key={item.proposalId} />)}{blocked.length > 0 && <section className="ros-rulebox"><p className="ros-eyebrow">资料受限，不能采纳</p><p>以下候选保留审计记录，但不会进入结论或审核动作。</p>{blocked.map((item) => <article key={item.proposalId}><strong>{item.sourceTitle || "来源未记录"}</strong><p>{item.sourceStatusReason}</p></article>)}</section>}</section>;
+  return <section className="ros-review-workbench"><header className="ros-section-heading"><div><p className="ros-eyebrow">人工审核</p><h2>{queue.summary.pending} 条待审核关系</h2></div><span className="ros-muted">候选仅供核对；不会自动采纳</span></header>{actionable.length === 0 ? <div className="ros-empty">当前没有待审核候选。</div> : actionable.map((item) => <ReviewItem item={item} onDecided={() => setReload((value) => value + 1)} key={item.proposalId} />)}{blocked.length > 0 && <section className="ros-rulebox"><p className="ros-eyebrow">资料受限，不能采纳</p><p>以下候选保留审计记录，但不会进入结论或审核动作。</p>{blocked.map((item) => <article key={item.proposalId}><strong>{item.sourceTitle || "来源未记录"}</strong><p>{item.sourceStatusReason}</p></article>)}</section>}<AtomicClaimReviewPanel caseId={caseId} /></section>;
+}
+
+function AtomicClaimReviewPanel({ caseId }: { caseId: string }) {
+  const [claims, setClaims] = useState<AtomicClaimCandidate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { let active = true; setClaims(null); setError(null); researchOsApi.atomicClaims(caseId).then((value) => active && setClaims(value.items)).catch(() => active && setError("原子陈述队列暂不可读；系统不会据此推定抽取结果已审核。")); return () => { active = false; }; }, [caseId]);
+  return <section className="ros-atomic-review"><header className="ros-section-heading"><div><p className="ros-eyebrow">抽取证据门禁</p><h2>原子陈述审核</h2><p>模型和表格规则的输出只能停在这里；只有人工决定才会发布为正式 SourceStatement。</p></div><span className="ros-muted">{claims ? `${claims.filter((item) => item.review_state === "awaiting_review").length} 条待审核` : "正在读取"}</span></header>{claims === null ? <div className="ros-empty ros-empty--compact">正在读取带原文定位的抽取候选…</div> : error ? <p className="ros-error">{error}</p> : claims.length === 0 ? <div className="ros-empty ros-empty--compact">当前 Case 没有待展示的原子陈述候选。</div> : claims.map((claim) => <AtomicClaimItem key={claim.id} claim={claim} />)}</section>;
+}
+
+function AtomicClaimItem({ claim }: { claim: AtomicClaimCandidate }) {
+  const [reason, setReason] = useState("");
+  const [editedText, setEditedText] = useState(claim.normalized_text);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reviewState, setReviewState] = useState(claim.review_state);
+  async function decide(outcome: "confirmed" | "modified" | "rejected") {
+    if (!reason.trim() || (outcome === "modified" && !editedText.trim())) return;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const review = await researchOsApi.reviewAtomicClaim(claim.id, { outcome, normalized_text: outcome === "modified" ? editedText.trim() : null, reviewer: "human:researcher", reason: reason.trim(), idempotency_key: `atomic-review:${claim.id}:${Date.now()}` });
+      setReviewState(review.outcome);
+      setNotice(review.published_source_statement ? "已发布为正式陈述；候选、原文定位和审核记录仍可回放。" : "已驳回候选；原文和审核理由保留在审计记录中。");
+    } catch { setError("提交原子陈述审核失败；当前候选没有被自动发布。请刷新后重试。"); } finally { setBusy(false); }
+  }
+  const isPending = reviewState === "awaiting_review";
+  return <article className="ros-atomic-claim"><div className="ros-atomic-claim__main"><span className={`ros-pill ${isPending ? "ros-pill--human" : "ros-pill--system"}`}>{isPending ? "待人工审核" : reviewState === "rejected" ? "已驳回" : "已审核"}</span><h3>{claim.normalized_text}</h3><blockquote>{claim.quote}</blockquote><p className="ros-atomic-claim__hash">连续定位 {claim.quote_start}–{claim.quote_end} · SHA-256 {claim.quote_sha256.slice(0, 12)}…</p></div><dl><div><dt>来源定位</dt><dd>{JSON.stringify(claim.locator)}</dd></div><div><dt>权威等级</dt><dd>{claim.authority_level}</dd></div><div><dt>抽取运行</dt><dd>{String(claim.structured_fields.run_ref || "未记录")}</dd></div><div><dt>历史审核</dt><dd>{claim.review_history.length ? claim.review_history.map((review) => `${review.outcome} · ${review.reviewer}`).join("；") : "尚未审核"}</dd></div></dl><div className="ros-review-actions"><a className="ros-button ros-button--secondary" href={claim.document_source_url} target="_blank" rel="noopener noreferrer">打开冻结来源</a><span>候选 ID · {claim.id}</span></div>{isPending && <div className="ros-review-decision"><label>原子陈述审核理由<textarea aria-label="原子陈述审核理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="核对原文、定位、主体、数值、期间与来源权限" /></label>{editing && <label>审核后规范表述<textarea aria-label="审核后规范表述" value={editedText} onChange={(event) => setEditedText(event.target.value)} /></label>}<div><button className="ros-button ros-button--primary" type="button" disabled={!reason.trim() || busy} onClick={() => decide("confirmed")}>确认并发布</button><button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => setEditing((value) => !value)}>{editing ? "取消修改" : "修改后发布"}</button>{editing && <button className="ros-button ros-button--primary" type="button" disabled={!reason.trim() || !editedText.trim() || busy} onClick={() => decide("modified")}>发布审核后表述</button>}<button className="ros-button ros-button--secondary" type="button" disabled={!reason.trim() || busy} onClick={() => decide("rejected")}>驳回候选</button></div>{error && <p className="ros-error">{error}</p>}</div>}{notice && <p className="ros-success">{notice}</p>}</article>;
 }
 
 function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearchClient["getEventReviewQueue"]>>["items"][number]; onDecided: () => void }) {

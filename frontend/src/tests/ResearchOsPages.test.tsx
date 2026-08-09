@@ -92,6 +92,37 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
   });
 
+  it("keeps extracted atomic claims visible until a reviewer publishes them", async () => {
+    const user = userEvent.setup();
+    const atomicClaim = {
+      id: "atomic-1", source_span_id: "span-1", document_version_id: "document-1", document_source_url: "https://disclosure.example/1",
+      locator: { page: 2, paragraph: 3 }, quote: "订单同比增长20%", quote_start: 14, quote_end: 23, quote_sha256: "a".repeat(64),
+      normalized_text: "公司披露订单同比增长 20%", claim_type: "disclosed_fact", assertion_actor: "公司", authority_level: "primary_disclosure",
+      structured_fields: { run_ref: "extract:run-1" }, validation_result: { quote_continuous: true }, created_at: "2026-08-09T00:00:00Z",
+      review_state: "awaiting_review", review_history: [], published_source_statement: null,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/atomic-claims/atomic-1/reviews")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: "review-1", outcome: "confirmed", reviewer: "human:researcher", reason: "原文和定位已复核", published_source_statement: { id: "statement-1", normalized_text: atomicClaim.normalized_text, kind: "disclosed_fact", observed_period: null, created_at: "2026-08-09T00:02:00Z" }, created_at: "2026-08-09T00:02:00Z",
+        }), { status: 201, headers: { "content-type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ items: [atomicClaim] }), { status: 200, headers: { "content-type": "application/json" } }));
+    }));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes><Route path="/events/:caseId/review" element={<CaseReviewPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("原子陈述审核")).toBeVisible();
+    expect(screen.getByText("订单同比增长20%")).toBeVisible();
+    expect(screen.getByText(/extract:run-1/)).toBeVisible();
+    await user.type(screen.getByLabelText("原子陈述审核理由"), "原文和定位已复核");
+    await user.click(screen.getByRole("button", { name: "确认并发布" }));
+    expect(await screen.findByText(/已发布为正式陈述/)).toBeVisible();
+  });
+
   it("keeps non-admissible source candidates visible with their blocking reason", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/review"]}>

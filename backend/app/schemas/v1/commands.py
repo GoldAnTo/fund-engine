@@ -6,7 +6,7 @@ services so CLI and tests get the same guarantees.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import Field
@@ -184,35 +184,93 @@ class ReviewQueueResponse(V1Model):
 
 
 # ---------------------------------------------------------------------------
+# 原子陈述审核（抽取候选只能经人工审核后发布为正式 SourceStatement）
+# ---------------------------------------------------------------------------
+
+
+class PublishedSourceStatementDTO(V1Model):
+    id: str
+    normalized_text: str
+    kind: str
+    observed_period: date | None
+    created_at: datetime
+
+
+class AtomicClaimReviewDTO(V1Model):
+    id: str
+    outcome: Literal["confirmed", "modified", "rejected"]
+    reviewer: str
+    reason: str
+    published_source_statement: PublishedSourceStatementDTO | None
+    created_at: datetime
+
+
+class AtomicClaimCandidateDTO(V1Model):
+    id: str
+    source_span_id: str
+    document_version_id: str
+    document_source_url: str
+    locator: dict[str, Any]
+    quote: str
+    quote_start: int
+    quote_end: int
+    quote_sha256: str
+    normalized_text: str
+    claim_type: str
+    assertion_actor: str | None
+    authority_level: str
+    structured_fields: dict[str, Any]
+    validation_result: dict[str, Any]
+    created_at: datetime
+    review_state: Literal["awaiting_review", "confirmed", "modified", "rejected"]
+    review_history: list[AtomicClaimReviewDTO]
+    published_source_statement: PublishedSourceStatementDTO | None
+
+
+class AtomicClaimQueueResponse(V1Model):
+    items: list[AtomicClaimCandidateDTO]
+
+
+class AtomicClaimReviewRequest(V1Model):
+    outcome: Literal["confirmed", "modified", "rejected"]
+    normalized_text: str | None = Field(default=None, min_length=1)
+    observed_period: date | None = None
+    reviewer: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+
+
+# ---------------------------------------------------------------------------
 # 抽取 / 提案 (extract / propose — AI engine steps as commands)
 # ---------------------------------------------------------------------------
 
 
-class ExtractStatementDTO(V1Model):
-    """One statement produced by the extraction step."""
+class ExtractCandidateDTO(V1Model):
+    """One source-grounded candidate awaiting human review."""
 
     id: str
-    kind: str
+    claim_type: str
     normalized_text: str
-    observed_period: str | None
+    quote: str
+    quote_start: int
+    quote_end: int
+    review_state: Literal["awaiting_review"] = "awaiting_review"
 
 
 class ExtractResponse(V1Model):
-    """Result of running statement extraction over one document version.
+    """Result of running review-gated extraction over one document version.
 
-    Append-only: re-running extraction on a version that already has
-    statements will append duplicates; the engine script only feeds
-    pending versions (spans present, no statements yet).  ``mode`` is
-    ``mock`` without an LLM key (non-production only).  ``reason`` is the
-    honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
-    事实 / LLM 拒答).
+    The extractor never writes formal SourceStatements. Every returned item
+    has a continuous source quote and stays in ``awaiting_review`` until a
+    human confirms, modifies, or rejects it. ``reason`` explains a zero
+    candidate result without pretending that extraction succeeded silently.
     """
 
     document_version_id: str
     mode: str
-    statement_count: int
+    candidate_count: int
     reason: str | None = None
-    statements: list[ExtractStatementDTO]
+    candidates: list[ExtractCandidateDTO]
 
 
 class ProposedLinkDTO(V1Model):

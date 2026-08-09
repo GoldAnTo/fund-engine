@@ -22,6 +22,8 @@ export type OutcomeBinding = Schemas["OutcomeBindingDTO"];
 export type Researchability = Schemas["ResearchabilityDTO"];
 export type MechanismTemplate = Schemas["MechanismTemplateDTO"];
 export type CaseMechanismProtocol = Schemas["CaseMechanismProtocolDTO"];
+export type AtomicClaimCandidate = Schemas["AtomicClaimCandidateDTO"];
+export type AtomicClaimReview = Schemas["AtomicClaimReviewDTO"];
 
 export const researchOsApi = {
   monitor: (caseId: string) => request<MonitorDetail>(`/research-cases/${caseId}/monitor`),
@@ -43,4 +45,6 @@ export const researchOsApi = {
   caseMechanismProtocol: (caseId: string) => request<CaseMechanismProtocol>(`/research-cases/${caseId}/mechanism-protocol`),
   selectMechanismTemplate: (caseId: string, input: Schemas["SelectMechanismTemplateRequest"]) => request<Schemas["MechanismSelectionDTO"]>(`/research-cases/${caseId}/mechanism-selection`, { method: "POST", body: JSON.stringify(input) }),
   createVerificationRule: (caseId: string, edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/research-cases/${caseId}/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
+  atomicClaims: (caseId: string) => request<Schemas["AtomicClaimQueueResponse"]>(`/research-cases/${caseId}/atomic-claims`),
+  reviewAtomicClaim: (candidateId: string, input: Schemas["AtomicClaimReviewRequest"]) => request<AtomicClaimReview>(`/atomic-claims/${candidateId}/reviews`, { method: "POST", body: JSON.stringify(input) }),
 };

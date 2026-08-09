@@ -15,6 +15,19 @@
 .ros-review-decision textarea { min-height: 4.2rem; width: 100%; resize: vertical; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; padding: .5rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); }
 .ros-review-decision > div { display: flex; gap: .5rem; flex-wrap: wrap; }
 .ros-review-decision .ros-error { grid-column: 1 / -1; margin: 0; }
+.ros-atomic-review { margin-top: 2rem; padding-top: 1.25rem; border-top: 2px solid var(--ros-strong, #cfc9bd); }
+.ros-atomic-review .ros-section-heading { align-items: start; }
+.ros-atomic-review .ros-section-heading p:not(.ros-eyebrow) { max-width: 46rem; margin: .35rem 0 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; }
+.ros-atomic-claim { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; gap: 1rem 1.25rem; padding: 1.1rem 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
+.ros-atomic-claim h3 { margin: .45rem 0 .7rem; font-size: .96rem; line-height: 1.45; }
+.ros-atomic-claim blockquote { margin: 0; padding: .7rem .8rem; border-left: 3px solid var(--ros-moss, #587259); background: var(--ros-moss-soft, #edf4ec); color: var(--ros-ink, #30332f); font-size: .78rem; line-height: 1.55; }
+.ros-atomic-claim__hash { margin: .6rem 0 0; color: var(--ros-muted, #75756e); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .66rem; }
+.ros-atomic-claim dl { display: grid; align-content: start; gap: .55rem; margin: 0; }
+.ros-atomic-claim dl div { padding-bottom: .5rem; border-bottom: 1px solid var(--ros-rule, #ded9ce); }
+.ros-atomic-claim dt { color: var(--ros-muted, #75756e); font-size: .65rem; }
+.ros-atomic-claim dd { margin: .15rem 0 0; overflow-wrap: anywhere; font-size: .7rem; line-height: 1.4; }
+.ros-atomic-claim .ros-review-actions { grid-column: 1 / -1; }
+.ros-atomic-claim .ros-review-decision, .ros-atomic-claim > .ros-success { grid-column: 1 / -1; }
 .ros-evidence-page { padding-top: 1.4rem; max-width: 980px; }
 .ros-evidence-list { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--ros-rule, #ded9ce); }
 .ros-evidence-row { display: grid; grid-template-columns: minmax(0, 1fr) 13rem; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--ros-rule, #ded9ce); }
@@ -161,6 +174,7 @@
   .ros-case-tabs a { flex: 0 0 auto; }
   .ros-header-actions { width: 100%; justify-content: flex-start; }
   .ros-review-decision { grid-template-columns: 1fr; }
+  .ros-atomic-claim { grid-template-columns: 1fr; }
   .ros-evidence-row { grid-template-columns: 1fr; }
   .ros-documents-grid { grid-template-columns: 1fr; }
   .ros-document-reader { min-height: 0; }

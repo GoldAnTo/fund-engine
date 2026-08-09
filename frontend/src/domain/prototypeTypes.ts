@@ -1230,11 +1230,11 @@ export interface EngineClient {
   extractStatements(documentVersionId: string): Promise<ExtractStatementsResult>;
 }
 
-/** Result of POST /documents/{id}/extract (陈述抽取 · append-only). */
+/** Result of POST /documents/{id}/extract (待审核原子陈述抽取). */
 export interface ExtractStatementsResult {
   documentVersionId: string;
   mode: string;
-  statementCount: number;
+  candidateCount: number;
   /** 抽取为 0 时的如实原因（无片段 / LLM 未返回 / 合规受限等）。 */
   reason: string | null;
 }

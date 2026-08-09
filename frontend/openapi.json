@@ -1973,7 +1973,7 @@
           "engine-commands-v1"
         ],
         "summary": "Extract Statements",
-        "description": "Run the extract step over one document version.\n\nAppend-only: statements are added, never replaced.  The engine script\nfeeds only pending versions (spans present, no statements yet); calling\nthis on an already-extracted version will append duplicates.",
+        "description": "Run the extract step without publishing formal statements.\n\nReturned candidates retain an exact original quote and await an explicit\nhuman decision in the Case review workbench.",
         "operationId": "extract_statements_api_v1_documents__document_version_id__extract_post",
         "parameters": [
           {
@@ -3038,6 +3038,131 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TaskItemDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/atomic-claims": {
+      "get": {
+        "tags": [
+          "atomic-claim-review-v1"
+        ],
+        "summary": "List Atomic Claims",
+        "operationId": "list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "review_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(awaiting_review|confirmed|modified|rejected)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Review State"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtomicClaimQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/atomic-claims/{candidate_id}/reviews": {
+      "post": {
+        "tags": [
+          "atomic-claim-review-v1"
+        ],
+        "summary": "Review Atomic Claim",
+        "operationId": "review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AtomicClaimReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtomicClaimReviewDTO"
                 }
               }
             }
@@ -5031,6 +5156,265 @@
         ],
         "title": "AssessmentViewDTO",
         "description": "The latest AI assessment at the cutoff, always visibly provisional."
+      },
+      "AtomicClaimCandidateDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_span_id": {
+            "type": "string",
+            "title": "Source Span Id"
+          },
+          "document_version_id": {
+            "type": "string",
+            "title": "Document Version Id"
+          },
+          "document_source_url": {
+            "type": "string",
+            "title": "Document Source Url"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote"
+          },
+          "quote_start": {
+            "type": "integer",
+            "title": "Quote Start"
+          },
+          "quote_end": {
+            "type": "integer",
+            "title": "Quote End"
+          },
+          "quote_sha256": {
+            "type": "string",
+            "title": "Quote Sha256"
+          },
+          "normalized_text": {
+            "type": "string",
+            "title": "Normalized Text"
+          },
+          "claim_type": {
+            "type": "string",
+            "title": "Claim Type"
+          },
+          "assertion_actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assertion Actor"
+          },
+          "authority_level": {
+            "type": "string",
+            "title": "Authority Level"
+          },
+          "structured_fields": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Structured Fields"
+          },
+          "validation_result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Validation Result"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "review_state": {
+            "type": "string",
+            "enum": [
+              "awaiting_review",
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Review State"
+          },
+          "review_history": {
+            "items": {
+              "$ref": "#/components/schemas/AtomicClaimReviewDTO"
+            },
+            "type": "array",
+            "title": "Review History"
+          },
+          "published_source_statement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishedSourceStatementDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "source_span_id",
+          "document_version_id",
+          "document_source_url",
+          "locator",
+          "quote",
+          "quote_start",
+          "quote_end",
+          "quote_sha256",
+          "normalized_text",
+          "claim_type",
+          "assertion_actor",
+          "authority_level",
+          "structured_fields",
+          "validation_result",
+          "created_at",
+          "review_state",
+          "review_history",
+          "published_source_statement"
+        ],
+        "title": "AtomicClaimCandidateDTO"
+      },
+      "AtomicClaimQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AtomicClaimCandidateDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "AtomicClaimQueueResponse"
+      },
+      "AtomicClaimReviewDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "reviewer": {
+            "type": "string",
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "published_source_statement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishedSourceStatementDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "outcome",
+          "reviewer",
+          "reason",
+          "published_source_statement",
+          "created_at"
+        ],
+        "title": "AtomicClaimReviewDTO"
+      },
+      "AtomicClaimReviewRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "normalized_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Text"
+          },
+          "observed_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Period"
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "reviewer",
+          "reason",
+          "idempotency_key"
+        ],
+        "title": "AtomicClaimReviewRequest"
       },
       "CancelRunResponse": {
         "properties": {
@@ -8832,6 +9216,52 @@
         ],
         "title": "ExpressionSourceDTO"
       },
+      "ExtractCandidateDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "claim_type": {
+            "type": "string",
+            "title": "Claim Type"
+          },
+          "normalized_text": {
+            "type": "string",
+            "title": "Normalized Text"
+          },
+          "quote": {
+            "type": "string",
+            "title": "Quote"
+          },
+          "quote_start": {
+            "type": "integer",
+            "title": "Quote Start"
+          },
+          "quote_end": {
+            "type": "integer",
+            "title": "Quote End"
+          },
+          "review_state": {
+            "type": "string",
+            "const": "awaiting_review",
+            "title": "Review State",
+            "default": "awaiting_review"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "claim_type",
+          "normalized_text",
+          "quote",
+          "quote_start",
+          "quote_end"
+        ],
+        "title": "ExtractCandidateDTO",
+        "description": "One source-grounded candidate awaiting human review."
+      },
       "ExtractEventResearchRequest": {
         "properties": {
           "raw_input": {
@@ -8983,9 +9413,9 @@
             "type": "string",
             "title": "Mode"
           },
-          "statement_count": {
+          "candidate_count": {
             "type": "integer",
-            "title": "Statement Count"
+            "title": "Candidate Count"
           },
           "reason": {
             "anyOf": [
@@ -8998,12 +9428,12 @@
             ],
             "title": "Reason"
           },
-          "statements": {
+          "candidates": {
             "items": {
-              "$ref": "#/components/schemas/ExtractStatementDTO"
+              "$ref": "#/components/schemas/ExtractCandidateDTO"
             },
             "type": "array",
-            "title": "Statements"
+            "title": "Candidates"
           }
         },
         "additionalProperties": false,
@@ -9011,48 +9441,11 @@
         "required": [
           "document_version_id",
           "mode",
-          "statement_count",
-          "statements"
+          "candidate_count",
+          "candidates"
         ],
         "title": "ExtractResponse",
-        "description": "Result of running statement extraction over one document version.\n\nAppend-only: re-running extraction on a version that already has\nstatements will append duplicates; the engine script only feeds\npending versions (spans present, no statements yet).  ``mode`` is\n``mock`` without an LLM key (non-production only).  ``reason`` is the\nhonest explanation when ``statement_count`` is 0 (无片段 / 表格无可提\n事实 / LLM 拒答)."
-      },
-      "ExtractStatementDTO": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
-          "normalized_text": {
-            "type": "string",
-            "title": "Normalized Text"
-          },
-          "observed_period": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Observed Period"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "kind",
-          "normalized_text",
-          "observed_period"
-        ],
-        "title": "ExtractStatementDTO",
-        "description": "One statement produced by the extraction step."
+        "description": "Result of running review-gated extraction over one document version.\n\nThe extractor never writes formal SourceStatements. Every returned item\nhas a continuous source quote and stays in ``awaiting_review`` until a\nhuman confirms, modifies, or rejects it. ``reason`` explains a zero\ncandidate result without pretending that extraction succeeded silently."
       },
       "FrozenRunScopeDTO": {
         "properties": {
@@ -12139,6 +12532,49 @@
           "state"
         ],
         "title": "PublishEventConclusionResponse"
+      },
+      "PublishedSourceStatementDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "normalized_text": {
+            "type": "string",
+            "title": "Normalized Text"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "observed_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Period"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "normalized_text",
+          "kind",
+          "observed_period",
+          "created_at"
+        ],
+        "title": "PublishedSourceStatementDTO"
       },
       "RelatedThesisDTO": {
         "properties": {
