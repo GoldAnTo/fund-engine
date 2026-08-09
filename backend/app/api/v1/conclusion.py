@@ -12,11 +12,17 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.api.v1.tenant_context import require_research_tenant
 from app.queries.basis import HistoricalBasis
 from app.queries.conclusion import ConclusionQueries
 from app.schemas.v1.conclusion import ConclusionResponse
+from app.services.case_tenant_access import CaseTenantAccess
 
-router = APIRouter(prefix="/research-cases", tags=["research-cases-v1"])
+router = APIRouter(
+    prefix="/research-cases",
+    tags=["research-cases-v1"],
+    dependencies=[Depends(require_research_tenant)],
+)
 
 
 @router.get("/{case_id}/conclusion", response_model=ConclusionResponse)
@@ -24,10 +30,12 @@ def conclusion(
     case_id: uuid.UUID,
     cutoff: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
     """读取「结论与关键因素」页面的完整读模型.
 
     与 dossier / overview 共享同一个 HistoricalBasis：cutoff 为空时按当前时间。
     """
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
     basis = HistoricalBasis.from_cutoff(cutoff)
     return ConclusionQueries(db).load(case_id=case_id, basis=basis)

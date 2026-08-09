@@ -6833,7 +6833,9 @@ export interface operations {
                 cursor?: string | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6899,7 +6901,9 @@ export interface operations {
                 cutoff?: string | null;
                 research_mode?: boolean;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -6932,7 +6936,9 @@ export interface operations {
             query?: {
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -6965,7 +6971,9 @@ export interface operations {
             query?: {
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -7001,7 +7009,9 @@ export interface operations {
                 /** @description 对比截止（较晚） */
                 compare: string;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -7032,7 +7042,9 @@ export interface operations {
     case_snapshots_api_v1_research_cases__case_id__snapshots_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -7070,7 +7082,9 @@ export interface operations {
                 limit?: number;
                 research_mode?: boolean;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -7207,7 +7221,9 @@ export interface operations {
                 case_id: string;
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
