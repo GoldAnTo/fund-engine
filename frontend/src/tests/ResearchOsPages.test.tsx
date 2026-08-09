@@ -137,7 +137,7 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByTestId("case-workbench-skeleton")).toHaveLength(3);
   });
 
-  it("keeps Case navigation focused on the six stable research workbenches", async () => {
+  it("keeps all eight stable Case research workbenches discoverable", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
         <Routes>
@@ -153,8 +153,10 @@ describe("Research OS event entry", () => {
     expect(navigation.textContent).toContain("命题与证据");
     expect(navigation.textContent).toContain("原文资料");
     expect(navigation.textContent).toContain("证据审核");
+    expect(navigation.textContent).toContain("Wiki 图谱");
     expect(navigation.textContent).toContain("市场与表达");
     expect(navigation.textContent).toContain("监测与运行");
+    expect(navigation.textContent).toContain("关联研究");
     expect(navigation.textContent).not.toContain("研究范围");
     expect(navigation.textContent).not.toContain("结论版本");
     expect(navigation.textContent).not.toContain("研究协议");

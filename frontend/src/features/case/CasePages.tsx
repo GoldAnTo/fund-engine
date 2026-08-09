@@ -41,8 +41,10 @@ const tabs = [
   ["evidence", "命题与证据"],
   ["documents", "原文资料"],
   ["review", "证据审核"],
+  ["wiki", "Wiki 图谱"],
   ["market", "市场与表达"],
   ["monitor", "监测与运行"],
+  ["relations", "关联研究"],
 ] as const;
 
 function CaseFrame({
@@ -166,7 +168,7 @@ function CaseWorkbenchSkeleton() {
   return <section className="ros-case-loading" aria-label="Case 工作台加载中" aria-busy="true">
     <header className="ros-case-loading__header"><Link to="/events" className="ros-button ros-button--secondary">返回研究调度</Link><span /></header>
     <div className="ros-case-loading__title"><i /><b /><em /></div>
-    <nav className="ros-case-tabs" aria-label="Case 页面加载中"><span /><span /><span /><span /><span /><span /></nav>
+    <nav className="ros-case-tabs" aria-label="Case 页面加载中"><span /><span /><span /><span /><span /><span /><span /><span /></nav>
     <div className="ros-case-loading__body">{[0, 1, 2].map((item) => <div data-testid="case-workbench-skeleton" key={item}><i /><b /><em /></div>)}</div>
   </section>;
 }

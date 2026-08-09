@@ -104,6 +104,23 @@ test.describe("Event-first Research OS", () => {
     await action.click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/review/);
     await expect(page.getByRole("heading", { name: /条待审核关系/ })).toBeVisible();
+
+    const wikiTab = page
+      .getByRole("navigation", { name: "Case 页面" })
+      .getByRole("link", { name: "Wiki 图谱" });
+    await wikiTab.focus();
+    await expect(wikiTab).toBeFocused();
+    await wikiTab.press("Enter");
+    await expect(page).toHaveURL(/\/events\/event-tsm\/wiki/);
+    await expect(page.getByRole("heading", { name: "从关系回到冻结原文与审核边界" })).toBeVisible();
+
+    const relationsTab = page
+      .getByRole("navigation", { name: "Case 页面" })
+      .getByRole("link", { name: "关联研究" });
+    await relationsTab.focus();
+    await relationsTab.press("Enter");
+    await expect(page).toHaveURL(/\/events\/event-tsm\/relations/);
+    await expect(page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
   });
 
   test("event intake keeps the scope confirmation unavailable until the source is read", async ({ page }) => {
