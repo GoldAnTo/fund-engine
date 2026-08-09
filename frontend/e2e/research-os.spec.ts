@@ -39,7 +39,7 @@ test.describe("Event-first Research OS", () => {
     await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
     await page.getByRole("button", { name: "识别事件与研究问题" }).click();
     await expect(page.getByLabel("研究问题")).toBeVisible();
-    await expect(page.getByRole("button", { name: "创建事件 Case" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
   });
 
   test("Case Wiki renders reviewed and candidate relationships as inspectable paths", async ({ page }) => {
