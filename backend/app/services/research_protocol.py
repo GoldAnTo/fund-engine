@@ -288,5 +288,7 @@ class ResearchProtocolService:
         if not any(rules.get(edge.id) and rules[edge.id].contradiction_predicate for edge in alternative_edges) and not any(rule and rule.contradiction_predicate for rule in rules.values()):
             reasons.append("missing_counter_hypothesis")
         if reasons:
+            if reasons == ["insufficient_primary_metrics"]:
+                return ResearchabilityResult("single_metric_monitoring", reasons, binding.id, "仅可持续监测；正式判断只能为证据不足或未到验证时点")
             return ResearchabilityResult("blocked", reasons, binding.id, "补齐机制边的验证规则与竞争解释")
         return ResearchabilityResult("ready", [], binding.id, "研究协议完整；仍须按规则采集并人工审核证据")

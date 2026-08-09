@@ -69,7 +69,7 @@ class OutcomeBindingDTO(V1Model):
 
 
 class ResearchabilityDTO(V1Model):
-    status: Literal["not_applicable", "blocked", "ready"]
+    status: Literal["not_applicable", "blocked", "single_metric_monitoring", "ready"]
     reason_codes: list[str]
     effective_binding_id: str | None
     next_action: str

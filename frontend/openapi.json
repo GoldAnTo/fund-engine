@@ -12829,6 +12829,7 @@
             "enum": [
               "not_applicable",
               "blocked",
+              "single_metric_monitoring",
               "ready"
             ],
             "title": "Status"

@@ -4267,7 +4267,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "not_applicable" | "blocked" | "ready";
+            status: "not_applicable" | "blocked" | "single_metric_monitoring" | "ready";
             /** Reason Codes */
             reason_codes: string[];
             /** Effective Binding Id */
