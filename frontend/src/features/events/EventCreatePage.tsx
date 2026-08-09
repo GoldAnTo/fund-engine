@@ -22,6 +22,7 @@ export function EventCreatePage() {
   const [factors, setFactors] = useState<string[]>(EMPTY_FACTORS);
   const [destination, setDestination] = useState<"new" | "existing">("new");
   const [existingCases, setExistingCases] = useState<Array<{ id: string; eventTitle: string; status: string }>>([]);
+  const [existingCasesError, setExistingCasesError] = useState(false);
   const [selectedExistingCase, setSelectedExistingCase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,8 +41,13 @@ export function EventCreatePage() {
         if (!active) return;
         const eligible = items.filter((item) => item.status !== "published");
         setExistingCases(eligible);
+        setExistingCasesError(false);
       })
-      .catch(() => active && setExistingCases([]));
+      .catch(() => {
+        if (!active) return;
+        setExistingCases([]);
+        setExistingCasesError(true);
+      });
     return () => { active = false; };
   }, []);
 
@@ -151,6 +157,7 @@ export function EventCreatePage() {
   return (
     <main className="ros-page ros-create-page">
       <section className="ros-page__heading"><div><p className="ros-eyebrow">资料收件箱</p><h1>先冻结材料，再决定它属于哪个研究</h1><p className="ros-lede">先将事件、新闻、研报片段或文本材料固定为可追溯快照；再由研究员选择创建新 Case，或归入一个未发布的既有 Case。</p></div></section>
+      {existingCasesError && <p className="ros-error" role="alert">无法读取可归入 Case 清单；仍可创建新 Case，但暂不能将材料归入已有 Case。</p>}
       <div className="ros-create-grid">
         <section className="ros-form-card"><div className="ros-step"><span>01</span><div><h2>提供事件材料</h2><p>可以粘贴新闻、公告、研报片段；不要把二手转述当作已确认事实。</p></div></div>
           <label>来源接入方式<select value={sourceType} onChange={(event) => changeSourceType(event.target.value as "pasted_snapshot" | "uploaded_file" | "licensed_provider")}><option value="pasted_snapshot">粘贴快照</option><option value="uploaded_file">上传原件文件</option><option value="licensed_provider">授权数据源快照</option></select></label>

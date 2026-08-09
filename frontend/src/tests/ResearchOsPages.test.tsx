@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
@@ -30,6 +30,7 @@ import {
 } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
+import type { EventWorkbench } from "../domain/eventResearch";
 
 describe("Research OS event entry", () => {
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
@@ -135,6 +136,52 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("Case 工作台加载中")).toBeVisible();
     expect(screen.getAllByTestId("case-workbench-skeleton")).toHaveLength(3);
+  });
+
+  it("does not let a stale Case response replace the current route's failure state", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const firstWorkbench = await adapter.getEventWorkbench("event-tsm");
+    let resolveFirst!: (value: EventWorkbench) => void;
+    const firstRequest = new Promise<EventWorkbench>((resolve) => {
+      resolveFirst = resolve;
+    });
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation((caseId) =>
+      caseId === "event-tsm"
+        ? firstRequest
+        : Promise.reject(new Error("Case unavailable")),
+    );
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId"
+            element={
+              <>
+                <Link to="/events/case-offline">切换到不可读取的 Case</Link>
+                <CaseEvidencePage />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      screen.getByRole("link", { name: "切换到不可读取的 Case" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取这个 Case",
+    );
+
+    await act(async () => resolveFirst(firstWorkbench));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("无法读取这个 Case");
+    expect(
+      screen.queryByRole("heading", { name: firstWorkbench.event.eventTitle }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps all eight stable Case research workbenches discoverable", async () => {
@@ -637,6 +684,39 @@ describe("Research OS event entry", () => {
       screen.queryByRole("checkbox", { name: /启用严格研究协议/ }),
     ).not.toBeInTheDocument();
     expect(screen.getByText(/新建 Case 默认采用严格研究协议/)).toBeVisible();
+  });
+
+  it("still creates a new Case when the existing-Case list cannot be read", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockRejectedValue(
+      new Error("Case list unavailable"),
+    );
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes>
+          <Route path="/events/new" element={<EventCreatePage />} />
+          <Route path="/events/:caseId" element={<p>新 Case 已建立</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法读取可归入 Case 清单",
+    );
+    await user.type(
+      screen.getByLabelText("事件原始输入"),
+      "公司更新指引后，需新建可验证的研究。",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "识别事件与研究问题" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "建立 Case，进入资料核验" }),
+    );
+
+    expect(await screen.findByText("新 Case 已建立")).toBeVisible();
   });
 
   it("lets a frozen inbox material be assigned to an existing non-published Case", async () => {

@@ -73,23 +73,34 @@ function CaseFrame({
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
-    if (!caseId) return;
+    let active = true;
+    if (!caseId) return () => { active = false; };
     setData(null);
     setLoadError(false);
     researchClient
       .getEventWorkbench(caseId)
-      .then(setData)
-      .catch(() => setLoadError(true));
+      .then((workbench) => {
+        if (active) setData(workbench);
+      })
+      .catch(() => {
+        if (active) setLoadError(true);
+      });
+    return () => { active = false; };
   }, [caseId, reload]);
   useEffect(() => {
+    let active = true;
     researchClient
       .listEventResearch()
-      .then((items) =>
+      .then((items) => {
+        if (!active) return;
         setCaseOptions(
           items.map((item) => ({ id: item.id, eventTitle: item.eventTitle })),
-        ),
-      )
-      .catch(() => setCaseOptions([]));
+        );
+      })
+      .catch(() => {
+        if (active) setCaseOptions([]);
+      });
+    return () => { active = false; };
   }, []);
   function switchCase(nextCaseId: string) {
     const suffix = location.pathname.startsWith(`/events/${caseId}`)
@@ -100,7 +111,7 @@ function CaseFrame({
   if (!data)
     return (
       <main className="ros-page ros-case-page">
-        {loadError ? <div className="ros-empty">
+        {loadError ? <div className="ros-empty" role="alert">
           {loadError ? (
             <>
               <strong>无法读取这个 Case</strong>
