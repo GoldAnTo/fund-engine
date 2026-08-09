@@ -283,12 +283,12 @@ export function AppShell() {
               >
                 <p>
                   {globalSearchMatches.length
-                    ? `全局已审核索引找到 ${globalSearchMatches.length} 条匹配`
+                    ? `全局已准入研究资产找到 ${globalSearchMatches.length} 条匹配`
                     : searchMatches.length
                       ? `当前 Case 清单中找到 ${searchMatches.length} 条匹配`
                       : globalSearchError
                         ? "全局检索暂不可读取；仅保留当前 Case 清单结果。"
-                        : "未找到可展示的已审核记录。"}
+                        : "未找到当前团队已准入的可展示记录。"}
                 </p>
                 {globalSearchMatches.length || searchMatches.length ? (
                   <ul>
@@ -332,7 +332,7 @@ export function AppShell() {
                   </ul>
                 ) : (
                   <small>
-                    搜索不会猜测未索引或未审核的命题；可从“从事件开始”录入新材料。
+                    搜索不会猜测当前团队未准入或不可展示的记录；可从“从事件开始”录入新材料。
                   </small>
                 )}
               </section>

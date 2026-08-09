@@ -1229,6 +1229,9 @@ describe("Research OS event entry", () => {
       screen.getByLabelText("搜索事件、公司、命题或证据"),
       "资本开支",
     );
+    expect(
+      await screen.findByText("全局已准入研究资产找到 1 条匹配"),
+    ).toBeVisible();
     const result = await screen.findByRole("link", {
       name: /客户资本开支转化为订单/,
     });
