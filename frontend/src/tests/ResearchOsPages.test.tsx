@@ -8,7 +8,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { CaseReviewPage } from "../features/case/CasePages";
-import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage } from "../features/case/CasePages";
+import { CaseDocumentsPage, CaseEvidencePage, CaseMonitorPage, CaseProtocolPage, MonitorConfigPage } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 
@@ -276,6 +276,38 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/尚未固定结果指标/)).toBeVisible();
     expect(screen.getByRole("button", { name: "立即补证一次" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "补齐研究协议" })).toHaveAttribute("href", "/events/event-tsm/protocol");
+  });
+
+  it("keeps the newly saved monitor version and scope visible in the configuration form", async () => {
+    const user = userEvent.setup();
+    const initial = {
+      monitor: { id: "monitor-v1", version: 1, status: "active", frequency: "weekday_08_30", factor_ids: ["event-tsm-factor-1"], allowed_source_types: ["company_disclosure"], next_verification_event: "下一次财报", budget: 10, changed_by: "human", change_reason: "初始配置", created_at: "2026-08-09T00:00:00Z" },
+      latest_run: null,
+      confirmed_factors: [{ id: "event-tsm-factor-1", statement: "资本开支指引" }],
+    };
+    const saved = { ...initial.monitor, id: "monitor-v2", version: 2, allowed_source_types: ["company_disclosure", "licensed_provider"], next_verification_event: "下一次财报后补证", change_reason: "补充授权来源" };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const payload = url.endsWith("/research-cases/event-tsm/monitor") && init?.method === "PUT" ? saved : initial;
+      return Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/events/event-tsm/monitor/config"]}><Routes><Route path="/events/:caseId/monitor/config" element={<MonitorConfigPage />} /></Routes></MemoryRouter>);
+
+    expect(await screen.findByText("当前生效版本 v1")).toBeVisible();
+    await user.click(screen.getByLabelText("授权数据源"));
+    await user.clear(screen.getByLabelText("下一验证事件"));
+    await user.type(screen.getByLabelText("下一验证事件"), "下一次财报后补证");
+    await user.clear(screen.getByLabelText("新版本变更原因"));
+    await user.type(screen.getByLabelText("新版本变更原因"), "补充授权来源");
+    await user.click(screen.getByRole("button", { name: "保存为新监控版本" }));
+
+    expect(await screen.findByText("当前生效版本 v2")).toBeVisible();
+    expect(screen.getByText(/已保存监控版本 v2/)).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/research-cases/event-tsm/monitor",
+      expect.objectContaining({ method: "PUT" }),
+    ));
   });
 
   it("edits a rule from the current Case version and never posts to a global template edge", async () => {

@@ -99,6 +99,23 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("complementary", { name: "运行详情" }).getByText("company_disclosure", { exact: true })).toBeVisible();
   });
 
+  test("saving a monitor configuration immediately shows the new effective version", async ({ page }) => {
+    const initial = { id: "monitor-v1", version: 1, status: "active", frequency: "weekday_08_30", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], next_verification_event: "下一次财报", budget: 12, changed_by: "human:researcher", change_reason: "初始配置", created_at: "2026-08-09T00:00:00Z" };
+    const saved = { ...initial, id: "monitor-v2", version: 2, allowed_source_types: ["company_disclosure", "licensed_provider"], next_verification_event: "下一次财报后补证", change_reason: "补充授权来源" };
+    await page.route("**/api/v1/research-cases/event-tsm/monitor", async (route) => route.fulfill({ json: route.request().method() === "PUT" ? saved : { monitor: initial, latest_run: null, confirmed_factors: [{ id: "factor-1", statement: "资本开支" }] } }));
+    await page.goto("/events/event-tsm/monitor/config?client=mock");
+
+    await expect(page.getByText("当前生效版本 v1")).toBeVisible();
+    await page.getByLabel("授权数据源").check();
+    await page.getByLabel("下一验证事件").fill("下一次财报后补证");
+    await page.getByLabel("新版本变更原因").fill("补充授权来源");
+    await page.getByRole("button", { name: "保存为新监控版本" }).click();
+
+    await expect(page.getByText("当前生效版本 v2")).toBeVisible();
+    await expect(page.getByText(/已保存监控版本 v2/)).toBeVisible();
+    await expect(page.getByText(/licensed_provider/)).toBeVisible();
+  });
+
   test("global network keeps reviewed Case relations separate from AI candidates", async ({ page }) => {
     await page.route("**/api/v1/event-research/network", async (route) => route.fulfill({ json: {
       reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支预期差", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],
