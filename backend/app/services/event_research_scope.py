@@ -44,7 +44,11 @@ class EventResearchScopeService:
         self._session = session
 
     def update(
-        self, case_id: uuid.UUID, factors: list[object], changed_by: str
+        self,
+        case_id: uuid.UUID,
+        factors: list[object],
+        changed_by: str,
+        change_reason: str = "未记录具体原因（兼容旧客户端）",
     ) -> UpdatedEventResearchScope:
         try:
             normalized = normalize_event_research_scope_factors([
@@ -59,6 +63,8 @@ class EventResearchScopeService:
             raise ValidationFailedError(str(exc)) from exc
         if not changed_by.strip():
             raise ValidationFailedError("changed_by must not be empty")
+        if not change_reason.strip():
+            raise ValidationFailedError("change_reason must not be empty")
         if self._session.scalar(
             select(EventResearchBrief.id).where(
                 EventResearchBrief.research_case_id == case_id
@@ -92,7 +98,7 @@ class EventResearchScopeService:
             research_case_id=case_id,
             version=(previous.version if previous else 0) + 1,
             changed_by=changed_by.strip(),
-            change_summary="Updated event research factors",
+            change_summary=change_reason.strip(),
             created_at=now,
         )
         self._session.add(scope)

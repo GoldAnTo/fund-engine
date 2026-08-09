@@ -16450,6 +16450,13 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Changed By"
+          },
+          "change_reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Change Reason",
+            "default": "未记录具体原因（兼容旧客户端）"
           }
         },
         "additionalProperties": false,

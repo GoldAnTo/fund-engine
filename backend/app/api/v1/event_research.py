@@ -103,7 +103,10 @@ def update_event_research_scope(
     db: Session = Depends(get_db),
 ) -> UpdateEventResearchScopeResponse:
     updated = EventResearchScopeService(db).update(
-        case_id, factors=payload.factors, changed_by=payload.changed_by
+        case_id,
+        factors=payload.factors,
+        changed_by=payload.changed_by,
+        change_reason=payload.change_reason,
     )
     db.commit()
     return UpdateEventResearchScopeResponse(

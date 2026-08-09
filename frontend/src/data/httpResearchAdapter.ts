@@ -2909,12 +2909,12 @@ export class HttpResearchAdapter implements ResearchClient {
     return { runId: dto.run_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
-  async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
+  async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
     const dto = await this.requestJson<{
       version: number; factors: Array<string | { statement: string; description?: string | null }>; reclassified_evidence_count: number; unmapped_evidence_count: number;
     }>(`/event-research/${encodeURIComponent(input.caseId)}/scope`, {
       method: "PUT",
-      body: JSON.stringify({ factors: input.factors, changed_by: input.changedBy }),
+      body: JSON.stringify({ factors: input.factors, changed_by: input.changedBy, change_reason: input.changeReason }),
     });
     return {
       version: dto.version,

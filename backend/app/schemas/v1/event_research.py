@@ -77,6 +77,9 @@ class EventResearchScopeFactorDTO(V1Model):
 class UpdateEventResearchScopeRequest(V1Model):
     factors: list[str | EventResearchScopeFactorDTO] = Field(min_length=3, max_length=5)
     changed_by: str = Field(min_length=1, max_length=128)
+    change_reason: str = Field(
+        default="未记录具体原因（兼容旧客户端）", min_length=1, max_length=2000
+    )
 
     @model_validator(mode="after")
     def validate_factors(self) -> "UpdateEventResearchScopeRequest":

@@ -5543,6 +5543,11 @@ export interface components {
             factors: (string | components["schemas"]["EventResearchScopeFactorDTO"])[];
             /** Changed By */
             changed_by: string;
+            /**
+             * Change Reason
+             * @default 未记录具体原因（兼容旧客户端）
+             */
+            change_reason: string;
         };
         /** UpdateEventResearchScopeResponse */
         UpdateEventResearchScopeResponse: {

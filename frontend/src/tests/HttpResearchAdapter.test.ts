@@ -1097,6 +1097,7 @@ describe("HttpResearchAdapter", () => {
         caseId: "event-1",
         factors: ["因素甲", "因素乙", "因素丙"],
         changedBy: "reviewer",
+        changeReason: "补足验证缺口",
       });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
@@ -1107,6 +1108,7 @@ describe("HttpResearchAdapter", () => {
       body: JSON.stringify({
         factors: ["因素甲", "因素乙", "因素丙"],
         changed_by: "reviewer",
+        change_reason: "补足验证缺口",
       }),
     });
     expect(scope).toEqual({
@@ -1137,6 +1139,7 @@ describe("HttpResearchAdapter", () => {
       caseId: "event-exhausted",
       factors: factors.map((statement) => ({ statement, description: null })),
       changedBy: "reviewer",
+      changeReason: "调整验证范围",
     });
     const view = await adapter.getEventWorkbench("event-exhausted");
 

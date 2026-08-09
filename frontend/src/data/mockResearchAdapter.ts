@@ -4007,7 +4007,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ runId, lifecycle });
   }
 
-  async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
+  async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
     const event = this.eventResearchItems().find((item) => item.id === input.caseId)
       ?? this.eventResearchItems()[0];
@@ -4031,7 +4031,7 @@ export class MockResearchAdapter implements ResearchClient {
         nextHumanAction: null,
       },
     });
-    void input.changedBy;
+    void input.changedBy; void input.changeReason;
     return simulateLatency({
       version: scope.version,
       factors: scope.factors,
