@@ -414,6 +414,23 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("公司补充披露订单交付节奏。");
   });
 
+  test("published Case cannot freeze a provider material without its reproducible record", async ({ page }) => {
+    await page.goto("/events/event-published/documents?client=mock");
+
+    await page.getByLabel("新增材料正文").fill("供应商研报补充了一个可能影响结论的指标。");
+    await page.getByLabel("新材料决定理由").fill("需要先保留来源许可与供应商记录，再决定是否重新复核。");
+    await page.getByLabel("新增材料来源接入方式").selectOption("licensed_provider");
+
+    await expect(page.getByLabel("新增材料供应商名称")).toBeVisible();
+    await expect(page.getByLabel("新增材料供应商记录 ID")).toBeVisible();
+    await expect(page.getByLabel("新增材料允许 AI 处理")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: "冻结材料并纳入重新复核" })).toBeDisabled();
+
+    await page.getByLabel("新增材料供应商名称").fill("聚源");
+    await page.getByLabel("新增材料供应商记录 ID").fill("report-2026-002");
+    await expect(page.getByRole("button", { name: "冻结材料并纳入重新复核" })).toBeEnabled();
+  });
+
   test("a Case keeps its own reviewed associations separate from AI candidates", async ({ page }) => {
     await page.route("**/api/v1/event-research/event-tsm/relations", async (route) => route.fulfill({ json: {
       reviewed_relations: [{ id: "relation-1", source_case: { case_id: "event-tsm", title: "台积电 Case", lifecycle_status: "researching" }, target_case: { case_id: "event-alphabet", title: "Alphabet Case", lifecycle_status: "published" }, relation_type: "shared_driver", reason: "共同验证资本开支", created_by: "human:researcher", review_state: "reviewed", created_at: "2026-08-09T00:00:00Z" }],
