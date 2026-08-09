@@ -3175,7 +3175,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(caseScoped);
   }
 
-  async getDocumentDetail(documentId: string): Promise<{
+  async getDocumentDetail(documentId: string, _caseId?: string): Promise<{
     document: SourceDocumentView;
     spans: DocumentSpan[];
   }> {

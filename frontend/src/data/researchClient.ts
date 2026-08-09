@@ -10,7 +10,10 @@ import { HttpResearchAdapter } from "./httpResearchAdapter";
 // calls in tests and prototypes.
 function defaultClient(): ResearchClient {
   const baseUrl = import.meta.env.VITE_RESEARCH_API_URL || "/api/v1";
-  return new HttpResearchAdapter({ baseUrl: baseUrl.replace(/\/$/, "") });
+  return new HttpResearchAdapter({
+    baseUrl: baseUrl.replace(/\/$/, ""),
+    bearerToken: import.meta.env.VITE_RESEARCH_BEARER_TOKEN,
+  });
 }
 
 let _client: ResearchClient = defaultClient();
@@ -40,7 +43,7 @@ export const researchClient: ResearchClient = {
   getCaseDossier: (id, q) => _client.getCaseDossier(id, q),
   getRelationshipGraph: (id, q) => _client.getRelationshipGraph(id, q),
   getDocuments: (q) => _client.getDocuments(q),
-  getDocumentDetail: (id) => _client.getDocumentDetail(id),
+  getDocumentDetail: (id, caseId) => _client.getDocumentDetail(id, caseId),
   getReviewQueue: () => _client.getReviewQueue(),
   search: (q) => _client.search(q),
   getCaseSummaries: () => _client.getCaseSummaries(),

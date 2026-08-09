@@ -1058,6 +1058,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Case Documents */
+        get: operations["event_case_documents_api_v1_event_research__case_id__documents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/documents/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Case Document Detail */
+        get: operations["event_case_document_detail_api_v1_event_research__case_id__documents__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/relations": {
         parameters: {
             query?: never;
@@ -8631,7 +8665,9 @@ export interface operations {
             query?: {
                 status?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8660,7 +8696,9 @@ export interface operations {
     create_event_research_api_v1_event_research_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8693,7 +8731,9 @@ export interface operations {
     event_research_network_api_v1_event_research_network_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8708,12 +8748,92 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchNetworkResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_case_documents_api_v1_event_research__case_id__documents_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_case_document_detail_api_v1_event_research__case_id__documents__version_id__get: {
+        parameters: {
+            query?: {
+                research_mode?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     event_research_relations_api_v1_event_research__case_id__relations_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8744,7 +8864,9 @@ export interface operations {
     review_case_relation_api_v1_event_research_case_relations__candidate_id__reviews_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 candidate_id: string;
             };
@@ -8779,7 +8901,9 @@ export interface operations {
     extract_event_api_v1_event_research_extract_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8812,7 +8936,9 @@ export interface operations {
     update_event_research_scope_api_v1_event_research__case_id__scope_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8847,7 +8973,9 @@ export interface operations {
     event_research_workbench_api_v1_event_research__case_id__workbench_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8878,7 +9006,9 @@ export interface operations {
     event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8909,7 +9039,9 @@ export interface operations {
     event_scope_history_api_v1_event_research__case_id__scope_history_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8940,7 +9072,9 @@ export interface operations {
     event_review_queue_api_v1_event_research__case_id__review_queue_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -8971,7 +9105,9 @@ export interface operations {
     publish_event_conclusion_api_v1_event_research__case_id__conclusion_publish_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9006,7 +9142,9 @@ export interface operations {
     continue_event_research_api_v1_event_research__case_id__continuations_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9041,7 +9179,9 @@ export interface operations {
     attach_event_material_api_v1_event_research__case_id__materials_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9076,7 +9216,9 @@ export interface operations {
     upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -9111,7 +9253,9 @@ export interface operations {
     decide_published_material_api_v1_event_research__case_id__published_material_decisions_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };

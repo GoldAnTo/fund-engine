@@ -19,6 +19,7 @@ from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
 from app.services.source_governance import SourceGovernanceService
+from app.services.case_tenant_access import CaseTenantAccess
 from app.errors import ValidationFailedError
 
 
@@ -37,7 +38,9 @@ class EventResearchService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, payload: CreateEventResearchRequest) -> CreatedEventResearch:
+    def create(
+        self, payload: CreateEventResearchRequest, *, tenant_id: str
+    ) -> CreatedEventResearch:
         research = ResearchService(ResearchRepository(self._session))
         case = research.add_case(
             title=payload.event_title,
@@ -63,6 +66,12 @@ class EventResearchService:
         )
         document_service.attach_to_case(
             research_case_id=case.id, document_version_id=document.id
+        )
+        CaseTenantAccess(self._session).admit_initial_case(
+            case_id=case.id,
+            tenant_id=tenant_id,
+            initial_document_version_id=document.id,
+            admitted_by=payload.created_by,
         )
         SourceGovernanceService(self._session).record_event_intake(
             document=document,

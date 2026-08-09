@@ -223,6 +223,26 @@ class DocumentReadQueries:
             spans=span_dtos,
         )
 
+    def detail_for_case(
+        self,
+        *,
+        case_id: uuid.UUID,
+        version_id: uuid.UUID,
+        research_mode: bool = False,
+    ) -> DocumentDetailResponse:
+        """Read one document only after its Case ownership is established."""
+        attached = self._session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == case_id,
+                CaseDocumentVersion.document_version_id == version_id,
+            )
+        )
+        if attached is None:
+            # A caller that can read the Case still learns nothing about an
+            # unrelated global content-addressed document version.
+            raise NotFoundError("document version not found")
+        return self.detail(version_id=version_id, research_mode=research_mode)
+
     @staticmethod
     def _locator_metadata(spans: list) -> dict:
         """Pick display metadata (title/org/kind/code) from span locators.
