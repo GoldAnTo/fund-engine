@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.errors import ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
@@ -14,10 +15,17 @@ from app.schemas.v1.event_research import (
     ExtractEventResearchRequest,
     ExtractEventResearchResponse,
     EventResearchListResponse,
+    EventConclusionHistoryResponse,
+    EventResearchScopeHistoryResponse,
+    ResearchNetworkResponse,
     EventReviewQueueResponse,
     EventWorkbenchDTO,
     PublishEventConclusionRequest,
     PublishEventConclusionResponse,
+    ContinueEventResearchRequest,
+    ContinueEventResearchResponse,
+    PublishedMaterialDecisionRequest,
+    PublishedMaterialDecisionResponse,
     UpdateEventResearchScopeRequest,
     UpdateEventResearchScopeResponse,
 )
@@ -27,6 +35,9 @@ from app.services.event_research import EventResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
+from app.services.auto_research import AutoResearchService
+from app.repositories.event_research import EventResearchLifecycleRepository
+from app.repositories.outbox import emit_event
 
 
 router = APIRouter(prefix="/event-research", tags=["event-research-v1"])
@@ -37,6 +48,18 @@ def list_event_research(
     status: str | None = None, db: Session = Depends(get_db)
 ) -> EventResearchListResponse:
     return EventResearchQueries(db).list(status=status)
+
+
+@router.get("/network", response_model=ResearchNetworkResponse)
+def event_research_network(db: Session = Depends(get_db)) -> ResearchNetworkResponse:
+    return EventResearchQueries(db).network()
+
+
+@router.get("/{case_id}/relations", response_model=ResearchNetworkResponse)
+def event_research_relations(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> ResearchNetworkResponse:
+    return EventResearchQueries(db).relations(case_id)
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
@@ -84,7 +107,10 @@ def update_event_research_scope(
     db: Session = Depends(get_db),
 ) -> UpdateEventResearchScopeResponse:
     updated = EventResearchScopeService(db).update(
-        case_id, factors=payload.factors, changed_by=payload.changed_by
+        case_id,
+        factors=payload.factors,
+        changed_by=payload.changed_by,
+        change_reason=payload.change_reason,
     )
     db.commit()
     return UpdateEventResearchScopeResponse(
@@ -105,6 +131,18 @@ def event_research_workbench(
     return EventResearchQueries(db).workbench(case_id)
 
 
+@router.get("/{case_id}/conclusion-history", response_model=EventConclusionHistoryResponse)
+def event_conclusion_history(
+    case_id: uuid.UUID, db: Session = Depends(get_db)
+) -> EventConclusionHistoryResponse:
+    return EventResearchQueries(db).conclusion_history(case_id)
+
+
+@router.get("/{case_id}/scope-history", response_model=EventResearchScopeHistoryResponse)
+def event_scope_history(case_id: uuid.UUID, db: Session = Depends(get_db)) -> EventResearchScopeHistoryResponse:
+    return EventResearchQueries(db).scope_history(case_id)
+
+
 @router.get("/{case_id}/review-queue", response_model=EventReviewQueueResponse)
 def event_review_queue(
     case_id: uuid.UUID, db: Session = Depends(get_db)
@@ -121,3 +159,83 @@ def publish_event_conclusion(
     )
     db.commit()
     return PublishEventConclusionResponse(conclusion_id=str(published.id), state=published.state)
+
+
+@router.post("/{case_id}/continuations", response_model=ContinueEventResearchResponse, status_code=status.HTTP_201_CREATED)
+def continue_event_research(
+    case_id: uuid.UUID,
+    payload: ContinueEventResearchRequest,
+    db: Session = Depends(get_db),
+) -> ContinueEventResearchResponse:
+    try:
+        run = AutoResearchService(db).continue_published_event(
+            case_id,
+            document_version_id=uuid.UUID(payload.document_version_id),
+            reason=payload.reason,
+            triggered_by=payload.triggered_by,
+        )
+        db.commit()
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = EventResearchLifecycleRepository(db).get(case_id)
+    assert lifecycle is not None
+    return ContinueEventResearchResponse(
+        run_id=str(run.id),
+        lifecycle=EventResearchLifecycleDTO(
+            status=lifecycle.status,
+            active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
+            current_round=lifecycle.current_round,
+            status_summary=lifecycle.status_summary,
+            current_gap=lifecycle.current_gap,
+            next_human_action=lifecycle.next_human_action,
+        ),
+    )
+
+
+@router.post("/{case_id}/published-material-decisions", response_model=PublishedMaterialDecisionResponse, status_code=status.HTTP_201_CREATED)
+def decide_published_material(
+    case_id: uuid.UUID,
+    payload: PublishedMaterialDecisionRequest,
+    db: Session = Depends(get_db),
+) -> PublishedMaterialDecisionResponse:
+    try:
+        document = EventResearchService(db).freeze_published_material(
+            case_id,
+            raw_input=payload.raw_input,
+            source_url=payload.source_url,
+            source_type=payload.source_type,
+            source_metadata=payload.source_metadata,
+            actor=payload.actor,
+        )
+        run_id = None
+        if payload.decision == "reopen":
+            run = AutoResearchService(db).continue_published_event(
+                case_id,
+                document_version_id=document.id,
+                reason=payload.reason,
+                triggered_by=payload.actor,
+            )
+            run_id = str(run.id)
+        event = emit_event(
+            db,
+            type="review_decision_recorded",
+            aggregate_type="published_material_decision",
+            aggregate_id=document.id,
+            ref_type="research_case",
+            ref_id=case_id,
+            origin="operational",
+            actor=payload.actor,
+            payload={"decision": payload.decision, "reason": payload.reason, "document_version_id": str(document.id), "case_id": str(case_id), "run_id": run_id},
+        )
+        db.commit()
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = EventResearchLifecycleRepository(db).get(case_id)
+    assert lifecycle is not None
+    return PublishedMaterialDecisionResponse(
+        document_version_id=str(document.id), decision=payload.decision,
+        decision_event_id=str(event.id), run_id=run_id,
+        lifecycle=EventResearchLifecycleDTO(status=lifecycle.status, active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None, current_round=lifecycle.current_round, status_summary=lifecycle.status_summary, current_gap=lifecycle.current_gap, next_human_action=lifecycle.next_human_action),
+    )

@@ -7,6 +7,7 @@ import hashlib
 from sqlalchemy import event as sqlalchemy_event, select
 
 from app.models.event_research import (
+    CaseRelation,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -43,6 +44,9 @@ def _confirmed_event() -> dict:
             "盈利前景与市场预期可能存在分歧",
             "估值重定价可能放大盘后波动",
         ],
+        # Existing workflow tests deliberately exercise the legacy Case path.
+        # New intake must use the API default and is covered separately below.
+        "research_protocol_required": False,
         "created_by": "xiongjiali",
     }
 
@@ -150,22 +154,27 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_clie
     assert len(body["candidate_factors"]) in {3, 4, 5}
 
 
-def test_create_event_case_enqueues_research_without_manual_run_button(cmd_client, cmd_session) -> None:
-    response = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
+def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_run(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload.update({"source_type": "uploaded_file", "source_metadata": {"file_name": "event-note.txt", "mime_type": "text/plain", "byte_size": 42}})
+    response = cmd_client.post("/api/v1/event-research", json=payload)
 
     assert response.status_code == 201
     body = response.json()
     case_id = body["case_id"]
-    assert body["lifecycle"]["status"] == "researching"
-    assert body["lifecycle"]["active_run_id"]
-    assert body["lifecycle"]["next_human_action"] is None
+    assert body["lifecycle"]["status"] == "awaiting_key_review"
+    assert body["lifecycle"]["active_run_id"] is None
+    assert body["lifecycle"]["next_human_action"] == "核验原文资料并完成研究协议"
 
     parsed_case_id = uuid.UUID(case_id)
     assert cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"])).research_case_id == parsed_case_id
-    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id
+    brief = cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"]))
+    assert brief.source_type == "uploaded_file"
+    assert brief.source_metadata["file_name"] == "event-note.txt"
+    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id is None
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
-    assert cmd_session.get(ResearchRun, uuid.UUID(body["lifecycle"]["active_run_id"]))
+    assert cmd_session.query(ResearchRun).filter_by(research_case_id=parsed_case_id).count() == 0
     scope = cmd_session.scalar(
         select(EventResearchScopeVersion).where(
             EventResearchScopeVersion.research_case_id == parsed_case_id,
@@ -180,6 +189,104 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
             .order_by(EventResearchScopeFactor.position)
         )
     ) == _confirmed_event()["candidate_factors"]
+
+
+def test_protocol_required_event_cannot_start_a_research_run_before_its_gate_is_ready(cmd_client) -> None:
+    payload = _confirmed_event()
+    payload["research_protocol_required"] = True
+    created = cmd_client.post("/api/v1/event-research", json=payload).json()
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 10},
+    )
+
+    assert response.status_code == 422
+    assert "missing_outcome_binding" in response.json()["error"]["message"]
+
+
+def test_new_event_requires_the_research_protocol_by_default(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload.pop("research_protocol_required")
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 201
+    theses = list(cmd_session.scalars(
+        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
+    ))
+    assert theses and all(thesis.research_protocol_required for thesis in theses)
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created.json()['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 10},
+    )
+    assert response.status_code == 422
+    assert "missing_outcome_binding" in response.json()["error"]["message"]
+
+
+def test_research_network_keeps_reviewed_relations_separate_from_ai_candidates(
+    cmd_client, cmd_session
+) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    other_payload = _confirmed_event()
+    other_payload["event_title"] = "Alphabet 后续验证事件"
+    other = cmd_client.post("/api/v1/event-research", json=other_payload).json()
+    now = datetime.now(timezone.utc)
+    cmd_session.add_all([
+        CaseRelation(
+            source_case_id=uuid.UUID(first["case_id"]),
+            target_case_id=uuid.UUID(other["case_id"]),
+            relation_type="shared_driver",
+            reason="两项研究都需要验证资本开支的预期差。",
+            created_by="human:researcher",
+            review_state="reviewed",
+            created_at=now,
+        ),
+        CaseRelation(
+            source_case_id=uuid.UUID(other["case_id"]),
+            target_case_id=uuid.UUID(first["case_id"]),
+            relation_type="potential_conflict",
+            reason="AI 发现了可能冲突的解释，等待人工复核。",
+            created_by="ai:relation-proposal",
+            review_state="machine_generated",
+            created_at=now,
+        ),
+    ])
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/event-research/network")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviewed_relations"][0]["relation_type"] == "shared_driver"
+    assert payload["reviewed_relations"][0]["reason"] == "两项研究都需要验证资本开支的预期差。"
+    assert payload["candidate_relations"][0]["review_state"] == "machine_generated"
+    assert payload["candidate_relations"][0]["target_case"]["title"] == "Alphabet 财报后股价下跌"
+
+
+def test_case_relations_only_returns_associations_for_the_current_case(
+    cmd_client, cmd_session
+) -> None:
+    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    second_payload = _confirmed_event()
+    second_payload["event_title"] = "Alphabet 后续验证事件"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
+    third_payload = _confirmed_event()
+    third_payload["event_title"] = "无关的第三个事件"
+    third = cmd_client.post("/api/v1/event-research", json=third_payload).json()
+    now = datetime.now(timezone.utc)
+    cmd_session.add_all([
+        CaseRelation(source_case_id=uuid.UUID(first["case_id"]), target_case_id=uuid.UUID(second["case_id"]), relation_type="shared_driver", reason="共同验证资本开支。", created_by="human:researcher", review_state="reviewed", created_at=now),
+        CaseRelation(source_case_id=uuid.UUID(second["case_id"]), target_case_id=uuid.UUID(third["case_id"]), relation_type="potential_conflict", reason="与当前 Case 无关。", created_by="ai:relation-proposal", review_state="machine_generated", created_at=now),
+    ])
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{first['case_id']}/relations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [relation["target_case"]["case_id"] for relation in payload["reviewed_relations"]] == [second["case_id"]]
+    assert payload["candidate_relations"] == []
 
 
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:
@@ -231,6 +338,52 @@ def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
     assert assignment is not None
     assert assignment.disposition == "mapped"
     assert assignment.factor_statement == active_thesis.statement
+
+
+def test_event_review_queue_exposes_the_proposal_version_required_for_human_decision(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Versioned review source",
+    )
+
+    response = cmd_client.get(f"/api/v1/event-research/{case_id}/review-queue")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["proposal_version"] == proposal.version
+
+
+def test_event_reviewer_can_request_more_evidence_without_publishing_candidate(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    proposal = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="https://investor.tsmc.com/english/quarterly-results",
+        title="Primary source still needs a counterexample",
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "needs_more_evidence",
+            "reason": "需要补充反证与下一期实际数据，不能先采纳该关系。",
+            "reviewer_id": "reviewer",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["outcome"] == "needs_more_evidence"
+    assert response.json()["published_entity_id"] is None
+    assert cmd_session.get(Proposal, proposal.id).status == "decided"
 
 
 def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
@@ -321,7 +474,7 @@ def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_sess
         select(SourceSpan).where(SourceSpan.document_version_id == document.id)
     ).all()
     assert len(spans) == 1
-    assert spans[0].locator == {"kind": "user_pasted_news"}
+    assert spans[0].locator == {"kind": "pasted_snapshot", "source_metadata": {}}
     assert spans[0].verbatim_text == payload["raw_input"]
 
 
@@ -565,14 +718,14 @@ def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_ses
     second_lifecycle.updated_at = first_lifecycle.updated_at.replace(year=first_lifecycle.updated_at.year + 1)
     cmd_session.commit()
 
-    response = cmd_client.get("/api/v1/event-research", params={"status": "researching"})
+    response = cmd_client.get("/api/v1/event-research", params={"status": "awaiting_key_review"})
     assert response.status_code == 200
     body = response.json()
     assert [item["case_id"] for item in body["items"]] == [second["case_id"], first["case_id"]]
     assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
     assert body["items"][0]["ticker"] == "TSM"
-    assert body["items"][0]["lifecycle_status"] == "researching"
-    assert body["items"][0]["next_human_action"] is None
+    assert body["items"][0]["lifecycle_status"] == "awaiting_key_review"
+    assert body["items"][0]["next_human_action"] == "核验原文资料并完成研究协议"
 
 
 def test_event_workbench_never_surfaces_another_case_factors_or_lifecycle(cmd_client) -> None:
@@ -630,7 +783,7 @@ def test_event_workbench_uses_summary_without_loading_review_queue_items(
         "verified": 0,
         "pending": 0,
         "invalid_source": 0,
-        "current_gap": None,
+        "current_gap": "原文资料、来源许可与研究协议尚未完成核验",
     }
 
 
@@ -716,6 +869,7 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     ).json()
     assert exhausted["progress"]["verified"] == 1
     assert exhausted["factors"][0] == {
+        "thesis_id": str(thesis.id),
         "statement": first_factor,
         "description": None,
         "position": 1,
@@ -909,6 +1063,36 @@ def test_event_workbench_factor_statistics_use_a_fixed_query_count(
     four_factor_count = workbench_select_count()
 
     assert four_factor_count == three_factor_count
+
+
+def test_event_workbench_exposes_the_thesis_id_for_each_factor_protocol(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+
+    response = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    )
+
+    assert response.status_code == 200
+    factors = response.json()["factors"]
+    assert all(uuid.UUID(factor["thesis_id"]) for factor in factors)
+    assert [factor["statement"] for factor in factors] == _confirmed_event()[
+        "candidate_factors"
+    ]
+
+
+def test_event_case_can_explicitly_require_the_research_protocol(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload["research_protocol_required"] = True
+
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 201
+    theses = list(cmd_session.scalars(
+        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
+    ))
+    assert theses and all(thesis.research_protocol_required for thesis in theses)
 
 
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:

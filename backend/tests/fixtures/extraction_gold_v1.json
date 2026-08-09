@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "extraction-gold-v1-public-synthetic",
+  "license": "synthetic; no provider or issuer source text",
+  "items": [
+    {
+      "id": "synthetic-primary-order-growth",
+      "quote": "订单同比增长20%",
+      "quote_start": 14,
+      "quote_end": 23,
+      "normalized_text": "公司披露 2026 年第一季度订单同比增长 20%",
+      "claim_type": "disclosed_fact",
+      "numeric_value": "20",
+      "unit": "%",
+      "observed_period": "2026-03-31",
+      "subject": "订单",
+      "high_impact": true,
+      "review_approved": true,
+      "expected_candidate": {
+        "candidate_id": "candidate-primary-order-growth",
+        "gold_id": "synthetic-primary-order-growth",
+        "quote": "订单同比增长20%",
+        "quote_start": 14,
+        "quote_end": 23,
+        "quote_sha256": "97a0b85d8c6fa5f9419446c76e9a8f1c8f25814b0354ca78cd5d961c7a2d62fa",
+        "normalized_text": "公司披露 2026 年第一季度订单同比增长 20%",
+        "claim_type": "disclosed_fact",
+        "authority_level": "primary_disclosure",
+        "numeric_value": "20",
+        "unit": "%",
+        "observed_period": "2026-03-31",
+        "subject": "订单",
+        "review_outcome": "confirmed"
+      }
+    },
+    {
+      "id": "synthetic-licensed-opinion",
+      "quote": "研究员认为行业供需仍有不确定性",
+      "quote_start": 0,
+      "quote_end": 15,
+      "normalized_text": "研究员认为行业供需仍有不确定性",
+      "claim_type": "research_opinion",
+      "numeric_value": null,
+      "unit": null,
+      "observed_period": null,
+      "subject": "行业供需",
+      "high_impact": false,
+      "review_approved": false,
+      "expected_candidate": {
+        "candidate_id": "candidate-licensed-opinion",
+        "gold_id": "synthetic-licensed-opinion",
+        "quote": "研究员认为行业供需仍有不确定性",
+        "quote_start": 0,
+        "quote_end": 15,
+        "quote_sha256": "fcc5ab8e2d15a6d82ab3102bbcf48d49cd722cf70ade59a00e633b8dab3426d5",
+        "normalized_text": "研究员认为行业供需仍有不确定性",
+        "claim_type": "research_opinion",
+        "authority_level": "licensed_research",
+        "numeric_value": null,
+        "unit": null,
+        "observed_period": null,
+        "subject": "行业供需",
+        "review_outcome": "rejected"
+      }
+    }
+  ]
+}

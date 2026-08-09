@@ -11,6 +11,8 @@ export type EventLifecycleStatus =
 export interface EventExtractionInput {
   rawInput: string;
   sourceUrl?: string;
+  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceMetadata?: Record<string, unknown>;
 }
 
 export interface EventExtraction {
@@ -28,7 +30,10 @@ export interface EventExtraction {
 export interface CreateEventResearchInput extends EventExtraction {
   rawInput: string;
   sourceUrl?: string;
+  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceMetadata?: Record<string, unknown>;
   eventTitle: string;
+  researchProtocolRequired?: boolean;
   createdBy: string;
 }
 
@@ -54,6 +59,7 @@ export interface EventResearchListItem {
 }
 
 export interface EventFactor {
+  thesisId?: string;
   statement: string;
   description?: string | null;
   position: number;
@@ -112,6 +118,7 @@ export type EventSourceStatus =
 /** A proposal and its frozen-source context for event evidence review. */
 export interface EventReviewQueueItem {
   proposalId: string;
+  proposalVersion: number;
   status: string;
   proposedAt: string;
   linkId: string;
@@ -152,7 +159,33 @@ export interface EventWorkbench {
   evidence: EventEvidenceCitation[];
   progress: WorkbenchProgress;
   scope: EventResearchScope;
-  nextAction: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
+  nextAction: { kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
+}
+
+export interface EventConclusionVersion {
+  id: string;
+  sequence: number;
+  state: "ai_draft" | "published";
+  text: string;
+  primaryFactor: string | null;
+  scopeVersion: number | null;
+  basedOnConclusionId: string | null;
+  reviewer: string | null;
+  evidenceCount: number;
+  createdAt: string;
+}
+
+export interface EventResearchContinuation {
+  runId: string;
+  lifecycle: EventLifecycle;
+}
+
+export interface PublishedMaterialDecision {
+  documentVersionId: string;
+  decision: "reopen" | "no_change";
+  decisionEventId: string;
+  runId: string | null;
+  lifecycle: EventLifecycle;
 }
 
 export interface EventResearchClient {
@@ -160,7 +193,10 @@ export interface EventResearchClient {
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
-  updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
+  getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;
+  continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<EventResearchContinuation>;
+  decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<PublishedMaterialDecision>;
+  updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
 }

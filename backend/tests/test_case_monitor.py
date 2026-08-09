@@ -124,6 +124,17 @@ def test_monitor_versions_are_append_only(session) -> None:
         session.execute(delete(CaseMonitorVersion).where(CaseMonitorVersion.id == version.id))
 
 
+def test_pausing_and_resuming_append_new_monitor_versions(session) -> None:
+    case, factor = _case_with_confirmed_factor(session)
+    service = CaseMonitorService(session)
+    first = service.save(case.id, actor="human:lin", config=_monitor_config(factor.id))
+    paused = service.set_status(case.id, actor="human:lin", status="paused", reason="暂时停止定时补证")
+    resumed = service.set_status(case.id, actor="human:lin", status="active", reason="恢复定时补证")
+
+    assert (first.version, paused.version, resumed.version) == (1, 2, 3)
+    assert (first.status, paused.status, resumed.status) == ("active", "paused", "active")
+
+
 def test_run_events_are_ordered_and_append_only(session) -> None:
     case, _ = _case_with_confirmed_factor(session)
     now = datetime.now(timezone.utc)

@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
+from app.models import source_governance  # noqa: F401
 
 
 class EventResearchBrief(Base):
@@ -37,6 +38,8 @@ class EventResearchBrief(Base):
     )
     raw_input: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="pasted_snapshot")
+    source_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     event_title: Mapped[str] = mapped_column(Text, nullable=False)
     company_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     ticker: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -44,6 +47,32 @@ class EventResearchBrief(Base):
     market_reaction: Mapped[str | None] = mapped_column(Text, nullable=True)
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
     extraction_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CaseRelation(Base):
+    """Append-only reviewed or candidate relation between two Cases."""
+
+    __tablename__ = "case_relations"
+    __table_args__ = (
+        CheckConstraint(
+            "relation_type IN ('shared_driver', 'follow_up_validation', 'potential_conflict', 'shared_material')",
+            name="ck_case_relations_type",
+        ),
+        CheckConstraint(
+            "review_state IN ('machine_generated', 'reviewed', 'rejected')",
+            name="ck_case_relations_review_state",
+        ),
+        CheckConstraint("source_case_id <> target_case_id", name="ck_case_relations_distinct_cases"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    source_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    target_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

@@ -14,16 +14,27 @@ from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
-from app.models.ledger import EvidenceLink, ResearchCase, Thesis
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    CaseDocumentVersion,
+    AtomicClaimReview,
+    EvidenceLink,
+    ResearchCase,
+    SourceSpan,
+    Thesis,
+)
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion
+from app.models.research_expression import KeyFactor
+from app.models.event_research import EventResearchConclusion
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_protocol import ResearchProtocolService
 from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
@@ -48,6 +59,9 @@ class AutoResearchService:
         commit: bool = True,
         thesis_ids: list[uuid.UUID] | None = None,
         monitor_version_id: uuid.UUID | None = None,
+        trigger: str = "manual",
+        allowed_source_types: list[str] | None = None,
+        scope_context: dict[str, object] | None = None,
     ):
         case = self.session.get(ResearchCase, case_id)
         if case is None:
@@ -65,11 +79,31 @@ class AutoResearchService:
                 .limit(1)
             )
         if monitor is not None and thesis_ids is None:
+            if trigger == "schedule" and monitor.status != "active":
+                raise ValueError("scheduled research is paused for this case")
             thesis_ids = [uuid.UUID(value) for value in monitor.factor_ids]
+        if allowed_source_types is not None:
+            if monitor is None or not set(allowed_source_types).issubset(set(monitor.allowed_source_types)):
+                raise ValueError("run sources must be a subset of the saved case monitor")
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
+        # A protocol-required thesis may not create a run merely because a
+        # caller reached the run endpoint. The same immutable protocol gate
+        # used by assessment generation is enforced at orchestration time.
+        protocol = ResearchProtocolService(self.session)
+        blocked_reasons: list[str] = []
+        for thesis in theses:
+            if not thesis.research_protocol_required:
+                continue
+            result = protocol.check_researchability(thesis.id)
+            if result.status == "blocked":
+                blocked_reasons.extend(result.reason_codes)
+        if blocked_reasons:
+            raise ValidationFailedError(
+                "researchability gate blocked: " + ", ".join(sorted(set(blocked_reasons)))
+            )
         run = self.repo.create_run(
             research_case_id=case_id,
             max_rounds=max(1, min(max_rounds, 3)),
@@ -77,18 +111,23 @@ class AutoResearchService:
             scope_thesis_ids=[str(thesis.id) for thesis in theses],
             monitor_version_id=monitor.id if monitor is not None else None,
         )
+        scope_payload: dict[str, object] = {
+            "trigger": trigger,
+            "monitor_version_id": str(monitor.id) if monitor is not None else None,
+            "factor_ids": [str(thesis.id) for thesis in theses],
+            "factor_statements": [thesis.statement for thesis in theses],
+            "allowed_source_types": allowed_source_types if allowed_source_types is not None else (monitor.allowed_source_types if monitor is not None else []),
+            "budget": run.budget,
+        }
+        for key, value in (scope_context or {}).items():
+            if key not in scope_payload:
+                scope_payload[key] = value
         ResearchRunEventRepository(self.session).append(
             run.id,
             stage="scope",
             status="completed",
             message="已冻结本次运行范围",
-            payload_json={
-                "trigger": "manual",
-                "monitor_version_id": str(monitor.id) if monitor is not None else None,
-                "factor_ids": [str(thesis.id) for thesis in theses],
-                "allowed_source_types": monitor.allowed_source_types if monitor is not None else [],
-                "budget": run.budget,
-            },
+            payload_json=scope_payload,
         )
         for thesis in theses:
             for task_type, label in (
@@ -116,6 +155,120 @@ class AutoResearchService:
         # execution is intentionally disabled even when an old client sends
         # auto_execute=true.
         del auto_execute
+        return run
+
+    def start_from_monitor(
+        self,
+        case_id: uuid.UUID,
+        *,
+        trigger: str = "manual",
+        commit: bool = True,
+        scope_context: dict[str, object] | None = None,
+    ):
+        """Create a run from one immutable CaseMonitor version.
+
+        The interactive monitor entry point deliberately accepts no caller
+        budget, factor, or source overrides.  Those values must be read from
+        the saved version so the first scope event can be replayed exactly.
+        A paused monitor still permits an explicit human run; only the
+        scheduler is prevented from dispatching it.
+        """
+        monitor = self.session.scalar(
+            select(CaseMonitorVersion)
+            .where(CaseMonitorVersion.research_case_id == case_id)
+            .order_by(CaseMonitorVersion.version.desc())
+            .limit(1)
+        )
+        if monitor is None:
+            raise ValueError("a saved case monitor is required before starting a monitor run")
+        return self.start(
+            case_id,
+            max_rounds=3,
+            budget=monitor.budget,
+            monitor_version_id=monitor.id,
+            trigger=trigger,
+            commit=commit,
+            scope_context=scope_context,
+        )
+
+    def start_from_key_factor(self, case_id: uuid.UUID, *, key_factor_id: uuid.UUID):
+        factor = self.session.get(KeyFactor, key_factor_id)
+        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed" or factor.thesis_id is None:
+            raise ValueError("reviewed key factor is not explicitly linked to this Case research scope")
+        monitor = self.session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
+        if monitor is None or str(factor.thesis_id) not in monitor.factor_ids:
+            raise ValueError("linked key factor is not in the current CaseMonitor scope")
+        source_types = [source for source in monitor.allowed_source_types if source in factor.allowed_source_types]
+        if not source_types:
+            raise ValueError("key factor has no allowed source shared with the current CaseMonitor")
+        return self.start(
+            case_id,
+            max_rounds=3,
+            budget=monitor.budget,
+            thesis_ids=[factor.thesis_id],
+            monitor_version_id=monitor.id,
+            trigger="factor_manual",
+            allowed_source_types=source_types,
+            scope_context={"requested_key_factor_id": str(factor.id)},
+        )
+
+    def continue_published_event(
+        self,
+        case_id: uuid.UUID,
+        *,
+        document_version_id: uuid.UUID,
+        reason: str,
+        triggered_by: str,
+    ):
+        """Start a successor run from a new, case-owned frozen document.
+
+        The earlier published conclusion remains immutable.  The explicit
+        document and reason become part of the successor run's frozen scope,
+        which makes the reopening decision inspectable rather than a hidden
+        status flip.
+        """
+        lifecycle = lock_event_research_lifecycle(self.session, case_id)
+        if lifecycle is None or lifecycle.status != "published":
+            raise ValidationFailedError("only a published event research case can start a material continuation")
+        if not reason.strip() or not triggered_by.strip():
+            raise ValidationFailedError("continuation reason and actor are required")
+        source = self.session.scalar(
+            select(CaseDocumentVersion)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(CaseDocumentVersion.document_version_id == document_version_id)
+            .limit(1)
+        )
+        if source is None:
+            raise ValidationFailedError("continuation document is not frozen in this case")
+        previous = self.session.scalar(
+            select(EventResearchConclusion)
+            .where(EventResearchConclusion.research_case_id == case_id)
+            .where(EventResearchConclusion.state == "published")
+            .order_by(EventResearchConclusion.created_at.desc())
+            .limit(1)
+        )
+        if previous is None:
+            raise ValidationFailedError("published lifecycle has no immutable published conclusion")
+        run = self.start_from_monitor(
+            case_id,
+            trigger="material_continuation",
+            commit=False,
+            scope_context={
+                "continuation_reason": reason.strip(),
+                "triggered_by": triggered_by.strip(),
+                "source_document_version_id": str(document_version_id),
+                "previous_conclusion_id": str(previous.id),
+            },
+        )
+        EventResearchLifecycleRepository(self.session).update(
+            lifecycle,
+            status="researching",
+            active_run_id=run.id,
+            current_round=0,
+            summary="已记录新材料触发原因，开始新的受控补证周期",
+            current_gap="新材料尚未经过原文与证据审核；此前发布结论保持不变",
+            next_human_action=None,
+        )
         return run
 
     def execute(self, run):
@@ -156,6 +309,10 @@ class AutoResearchService:
                 except Exception:
                     used += 1
                 self.session.commit()
+            pending_claims = self._pending_atomic_claims(run.research_case_id)
+            if pending_claims:
+                self._pause_for_atomic_claim_review(run, pending_claims, used)
+                break
             proposer, generator = EvidenceProposer(self.client), AssessmentGenerator(self.client)
             for task in self.repo.queued_tasks_for_run(run.id, current_round):
                 if self._is_cancelled(run):
@@ -298,6 +455,17 @@ class AutoResearchService:
             run.research_case_id
         )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
+        pending_claim_count = len(self._pending_atomic_claims(run.research_case_id))
+        if pending_claim_count:
+            lifecycle_repo.update(
+                lifecycle,
+                status="awaiting_key_review",
+                active_run_id=run.id,
+                summary=f"已抽取 {pending_claim_count} 条原子陈述，等待人工核对原文后再继续研究",
+                current_gap="待审核抽取候选尚未形成正式 SourceStatement",
+                next_human_action=f"审核 {pending_claim_count} 条原子陈述",
+            )
+            return
         if review_count:
             lifecycle_repo.update(
                 lifecycle,
@@ -533,6 +701,65 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
+        for candidate in self._pending_atomic_claims(run.research_case_id):
+            if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
+                continue
+            self.task_repo.add_task(
+                title="审核自动抽取的原子陈述",
+                description="核对原文、字符定位、来源权限与规范表述；未审核前不会进入证据提议或结论。",
+                task_type="review_atomic_claim",
+                ref_type="atomic_claim_candidate",
+                ref_id=candidate.id,
+                research_case_id=run.research_case_id,
+                priority="high",
+            )
+
+    def _pending_atomic_claims(self, case_id: uuid.UUID) -> list[AtomicClaimCandidate]:
+        """Return only candidates from this Case that have no human decision."""
+        reviewed = (
+            select(AtomicClaimReview.id)
+            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+            .exists()
+        )
+        return list(self.session.scalars(
+            select(AtomicClaimCandidate)
+            .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+            .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == SourceSpan.document_version_id)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(~reviewed)
+            .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
+        ))
+
+    def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
+        """Persist an explicit, replayable stop before any propose/assess work."""
+        self.repo.update_run(
+            run,
+            status="waiting_for_review",
+            stage="claim_review",
+            budget_used=used,
+            stop_reason="pending_atomic_claim_review",
+        )
+        for task in self.repo.queued_tasks_for_run(run.id, run.round):
+            self.repo.update_task(
+                task,
+                status="blocked",
+                stage="claim_review",
+                result={
+                    "task_type": task.task_type,
+                    "blocked_by": "pending_atomic_claim_review",
+                    "candidate_count": len(candidates),
+                },
+            )
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="claim_review",
+            status="waiting_for_review",
+            message=f"发现 {len(candidates)} 条待审核原子陈述，已在提议证据和生成结论前暂停",
+            payload_json={
+                "candidate_ids": [str(candidate.id) for candidate in candidates],
+                "next_action": "review_atomic_claims",
+            },
+        )
 
     def _propose_for_task(
         self, proposer: EvidenceProposer, task, run
@@ -670,7 +897,7 @@ class AutoResearchService:
         )
         return [self._run_summary_dict(run) for run in runs]
 
-    def cancel_run(self, run_id: uuid.UUID) -> dict:
+    def cancel_run(self, run_id: uuid.UUID, *, actor: str, change_reason: str) -> dict:
         run = self.repo.get_run(run_id)
         if run is None:
             raise ValueError(f"research run {run_id} not found")
@@ -680,6 +907,17 @@ class AutoResearchService:
         if run.status not in {"running", "queued", "waiting_for_review"}:
             raise RuntimeError(f"research run {run_id} is terminal ({run.status})")
         self.repo.cancel_run(run)
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="stopped",
+            status="cancelled",
+            message="研究员停止本次运行；此前阶段和冻结范围保持可回放。",
+            payload_json={
+                "actor": actor.strip(),
+                "change_reason": change_reason.strip(),
+                "stop_reason": run.stop_reason,
+            },
+        )
         self.session.commit()
         return self._run_summary_dict(run)
 

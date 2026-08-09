@@ -23,8 +23,53 @@ class RunListResponse(CursorPage):
     items: list[RunSummaryDTO]
 
 
+class FrozenRunScopeDTO(V1Model):
+    """Scope recorded when a run started; never reconstructed from current settings."""
+
+    trigger: str | None = None
+    monitor_version_id: str | None = None
+    factor_ids: list[str] = Field(default_factory=list)
+    factor_statements: list[str] = Field(default_factory=list)
+    allowed_source_types: list[str] = Field(default_factory=list)
+    budget: int | None = None
+
+
+class ActiveResearchRunDTO(V1Model):
+    run_id: str
+    case_id: str
+    case_title: str
+    status: str
+    stage: str
+    updated_at: str
+    processed_count: int
+    next_action: str
+    scope: FrozenRunScopeDTO
+
+
+class ActiveResearchRunsResponse(CursorPage):
+    items: list[ActiveResearchRunDTO]
+
+
+class ResearchRunArchiveDTO(ActiveResearchRunDTO):
+    """A global, replayable run record, including terminal runs."""
+
+    created_at: str
+    stop_reason: str | None = None
+
+
+class ResearchRunArchiveResponse(CursorPage):
+    items: list[ResearchRunArchiveDTO]
+
+
 class CancelRunResponse(RunSummaryDTO):
     pass
+
+
+class CancelRunRequest(V1Model):
+    """Human decision recorded when an in-progress run is stopped."""
+
+    actor: str = Field(min_length=1, max_length=200)
+    change_reason: str = Field(min_length=1, max_length=2_000)
 
 
 class ResearchRunEventsItemDTO(V1Model):

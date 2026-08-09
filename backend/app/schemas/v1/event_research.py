@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from app.schemas.v1.common import V1Model
@@ -16,6 +17,8 @@ from app.services.source_admission import SourceStatus
 class ExtractEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExtractEventResearchResponse(V1Model):
@@ -33,6 +36,8 @@ class ExtractEventResearchResponse(V1Model):
 class CreateEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
     event_title: str = Field(min_length=1)
     company_name: str | None = None
     ticker: str | None = None
@@ -40,6 +45,7 @@ class CreateEventResearchRequest(V1Model):
     market_reaction: str | None = None
     research_question: str = Field(min_length=1)
     candidate_factors: list[str] = Field(min_length=3, max_length=5)
+    research_protocol_required: bool = True
     created_by: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -71,6 +77,9 @@ class EventResearchScopeFactorDTO(V1Model):
 class UpdateEventResearchScopeRequest(V1Model):
     factors: list[str | EventResearchScopeFactorDTO] = Field(min_length=3, max_length=5)
     changed_by: str = Field(min_length=1, max_length=128)
+    change_reason: str = Field(
+        default="未记录具体原因（兼容旧客户端）", min_length=1, max_length=2000
+    )
 
     @model_validator(mode="after")
     def validate_factors(self) -> "UpdateEventResearchScopeRequest":
@@ -96,6 +105,19 @@ class UpdateEventResearchScopeResponse(V1Model):
     unmapped_evidence_count: int
 
 
+class EventResearchScopeHistoryItemDTO(V1Model):
+    version: int
+    factors: list[EventResearchScopeFactorDTO]
+    changed_by: str
+    change_reason: str
+    created_at: datetime
+
+
+class EventResearchScopeHistoryResponse(V1Model):
+    case_id: str
+    items: list[EventResearchScopeHistoryItemDTO]
+
+
 class EventResearchListItemDTO(V1Model):
     case_id: str
     event_title: str
@@ -112,10 +134,33 @@ class EventResearchListResponse(V1Model):
     items: list[EventResearchListItemDTO]
 
 
+class CaseRelationCaseDTO(V1Model):
+    case_id: str
+    title: str
+    lifecycle_status: str
+
+
+class CaseRelationDTO(V1Model):
+    id: str
+    source_case: CaseRelationCaseDTO
+    target_case: CaseRelationCaseDTO
+    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
+    reason: str
+    created_by: str
+    review_state: Literal["machine_generated", "reviewed", "rejected"]
+    created_at: datetime
+
+
+class ResearchNetworkResponse(V1Model):
+    reviewed_relations: list[CaseRelationDTO]
+    candidate_relations: list[CaseRelationDTO]
+
+
 class EventReviewQueueItemDTO(V1Model):
     """A pending event-evidence proposal, including source admission context."""
 
     proposal_id: str
+    proposal_version: int
     status: str
     proposed_at: datetime
     link_id: str
@@ -158,6 +203,7 @@ class EventReviewQueueResponse(V1Model):
 
 
 class EventResearchFactorDTO(V1Model):
+    thesis_id: str
     statement: str
     description: str | None = None
     position: int
@@ -186,6 +232,24 @@ class EventConclusionDraftDTO(V1Model):
     citations: list[EventKeyEvidenceDTO]
 
 
+class EventConclusionVersionDTO(V1Model):
+    id: str
+    sequence: int
+    state: str
+    text: str
+    primary_factor: str | None
+    scope_version: int | None
+    based_on_conclusion_id: str | None
+    reviewer: str | None
+    evidence_count: int
+    created_at: datetime
+
+
+class EventConclusionHistoryResponse(V1Model):
+    case_id: str
+    versions: list[EventConclusionVersionDTO]
+
+
 class PublishEventConclusionRequest(V1Model):
     text: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)
@@ -194,6 +258,35 @@ class PublishEventConclusionRequest(V1Model):
 class PublishEventConclusionResponse(V1Model):
     conclusion_id: str
     state: str
+
+
+class ContinueEventResearchRequest(V1Model):
+    document_version_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    triggered_by: str = Field(min_length=1, max_length=128)
+
+
+class ContinueEventResearchResponse(V1Model):
+    run_id: str
+    lifecycle: EventResearchLifecycleDTO
+
+
+class PublishedMaterialDecisionRequest(V1Model):
+    raw_input: str = Field(min_length=1)
+    source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+    decision: Literal["reopen", "no_change"]
+    reason: str = Field(min_length=1, max_length=2000)
+    actor: str = Field(min_length=1, max_length=128)
+
+
+class PublishedMaterialDecisionResponse(V1Model):
+    document_version_id: str
+    decision: Literal["reopen", "no_change"]
+    decision_event_id: str
+    run_id: str | None = None
+    lifecycle: EventResearchLifecycleDTO
 
 
 class EventNextActionDTO(V1Model):

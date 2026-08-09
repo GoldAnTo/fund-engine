@@ -13,6 +13,7 @@ class SourceStatus(StrEnum):
 
     ACCESSIBLE = "accessible"
     PASTED_UNVERIFIED = "pasted_unverified"
+    RESTRICTED = "restricted"
     INVALID = "invalid"
 
 
@@ -23,6 +24,31 @@ class SourceAdmission:
     status: SourceStatus
     reason: str
     can_accept: bool
+
+
+def apply_source_contract(admission: SourceAdmission, contract: object | None) -> SourceAdmission:
+    """Apply frozen use restrictions before a source can enter formal evidence.
+
+    This remains deliberately duck-typed so the URL classifier stays a pure
+    utility with no ORM dependency.  New intake documents always receive a
+    SourceContract; pre-governance historical documents retain the existing
+    provenance checks until they are explicitly re-admitted.
+    """
+    if contract is None:
+        return admission
+    if getattr(contract, "allow_ai_processing", False) is not True:
+        return SourceAdmission(
+            SourceStatus.RESTRICTED,
+            "来源合同禁止 AI 处理；资料只能保留为线索，不能作为正式证据。",
+            False,
+        )
+    if getattr(contract, "allow_display", False) is not True:
+        return SourceAdmission(
+            SourceStatus.RESTRICTED,
+            "来源合同禁止展示；不能在审核工作台中作为正式证据处理。",
+            False,
+        )
+    return admission
 
 
 def classify_source(

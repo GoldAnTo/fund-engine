@@ -24,6 +24,15 @@ class UpdateCaseMonitorRequest(V1Model):
     change_reason: str = Field(min_length=1)
 
 
+class SetCaseMonitorStatusRequest(V1Model):
+    actor: str = Field(min_length=1, max_length=128)
+    change_reason: str = Field(min_length=1)
+
+
+class StartFactorMonitorRunRequest(V1Model):
+    key_factor_id: str = Field(min_length=1)
+
+
 class CaseMonitorDTO(V1Model):
     id: str
     version: int
@@ -52,5 +61,7 @@ class ConfirmedFactorOptionDTO(V1Model):
 
 class CaseMonitorDetailResponse(V1Model):
     monitor: CaseMonitorDTO | None
+    history: list[CaseMonitorDTO]
     latest_run: LatestResearchRunDTO | None
+    next_scheduled_at: datetime | None = None
     confirmed_factors: list[ConfirmedFactorOptionDTO]

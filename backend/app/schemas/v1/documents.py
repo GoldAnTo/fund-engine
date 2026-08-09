@@ -6,11 +6,26 @@ from the first SourceSpan locator that carries them (ingest-time metadata),
 never invented; they stay ``None`` when no locator provides them.
 """
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import Field
 
 from app.schemas.v1.common import CursorPage, HistoricalBasisDTO, V1Model
+
+
+class SourceContractDTO(V1Model):
+    source_type: str
+    provider_or_tenant: str
+    permissions: dict[str, bool]
+    status: Literal["admitted", "restricted"]
+    region: str
+    effective_from: datetime | None
+    effective_until: datetime | None
+    retention_policy: str
+    deletion_policy: str
+    downstream_restrictions: list[str]
+    contract_version: str | None
 
 
 class DocumentSummaryDTO(V1Model):
@@ -21,10 +36,13 @@ class DocumentSummaryDTO(V1Model):
     available_at: str
     acquired_at: str
     parser_version: str
+    source_authority: str
     supersedes_id: str | None
     span_count: int
     statement_count: int
-    parse_state: Literal["parsed", "unparsed"]
+    parse_state: Literal["parsed", "partial", "failed", "unparsed"]
+    supplements_document_version_id: str | None = None
+    claimed_page_reference: str | None = None
     # Extraction watermark derived from AIRun audit records (defect-3 fix):
     # "extracted_empty" distinguishes a successful zero-output run from a
     # never-attempted version so batch extraction stops re-running it.
@@ -44,6 +62,7 @@ class DocumentSummaryDTO(V1Model):
     # Resolved from locator sec_code/stock_code; "寒武纪 (688256.SH)" when the
     # code matches a known Stock, the raw code otherwise, None when absent.
     entity: str | None = None
+    source_contract: SourceContractDTO | None = None
 
 
 class SourceSpanDTO(V1Model):

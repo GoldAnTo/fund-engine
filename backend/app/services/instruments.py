@@ -20,16 +20,19 @@ from sqlalchemy.orm import Session
 from app.models.ledger import (
     Company,
     ConflictError,
+    DocumentVersion,
     Fund,
     FundCompany,
     HoldingDisclosure,
     ResearchCase,
+    SourceSpan,
     SourceStatement,
     Stock,
     ThemeRole,
     ValidationError,
     ValuationSnapshot,
 )
+from app.models.source_governance import ProviderRecord, SourceContract
 from app.repositories.instruments import InstrumentRepository
 
 
@@ -134,6 +137,10 @@ class InstrumentService:
         report_period: date,
         published_at: datetime,
         source: str,
+        source_document_version_id: uuid.UUID | None = None,
+        source_span_id: uuid.UUID | None = None,
+        provider_record_id: uuid.UUID | None = None,
+        coverage_status: str = "not_recorded",
     ) -> HoldingDisclosure:
         if weight <= 0 or weight > Decimal("100"):
             raise ValidationError("weight 必须在 (0, 100] 区间内")
@@ -146,6 +153,35 @@ class InstrumentService:
             # a 409. Keeping 422 here is intentional.
             raise ValidationError("report_period 不能晚于今天")
         source = _require_non_empty(source, "source", 128)
+        if coverage_status not in {"complete", "partial", "not_recorded"}:
+            raise ValidationError("coverage_status 必须为 complete、partial 或 not_recorded")
+        document = self._session.get(DocumentVersion, source_document_version_id) if source_document_version_id else None
+        span = self._session.get(SourceSpan, source_span_id) if source_span_id else None
+        provider = self._session.get(ProviderRecord, provider_record_id) if provider_record_id else None
+        if source_document_version_id and document is None:
+            raise ValidationError("source_document_version_id 不存在")
+        if source_span_id and span is None:
+            raise ValidationError("source_span_id 不存在")
+        if provider_record_id and provider is None:
+            raise ValidationError("provider_record_id 不存在")
+        if span is not None:
+            if document is None:
+                document = self._session.get(DocumentVersion, span.document_version_id)
+                source_document_version_id = span.document_version_id
+            elif span.document_version_id != document.id:
+                raise ValidationError("source_span_id 必须属于 source_document_version_id")
+        if provider is not None:
+            if document is None:
+                document = self._session.get(DocumentVersion, provider.document_version_id)
+                source_document_version_id = provider.document_version_id
+            elif provider.document_version_id != document.id:
+                raise ValidationError("provider_record_id 必须属于 source_document_version_id")
+        if coverage_status != "not_recorded" and document is None:
+            raise ValidationError("complete 或 partial 披露必须关联冻结来源版本")
+        if document is not None:
+            contract = self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id))
+            if contract is None or not contract.allow_display:
+                raise ValidationError("持仓来源版本必须具有可展示的来源许可")
 
         existing = self._session.scalar(
             select(func.count())
@@ -167,6 +203,10 @@ class InstrumentService:
             report_period=report_period,
             published_at=published_at,
             source=source,
+            source_document_version_id=source_document_version_id,
+            source_span_id=source_span_id,
+            provider_record_id=provider_record_id,
+            coverage_status=coverage_status,
         )
 
     def add_valuation_snapshot(

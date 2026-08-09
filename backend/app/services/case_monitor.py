@@ -100,6 +100,19 @@ class CaseMonitorService:
         self._session.flush()
         return monitor
 
+    def set_status(self, case_id: uuid.UUID, *, actor: str, status: str, reason: str) -> CaseMonitorVersion:
+        previous = self._session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
+        if previous is None:
+            raise ValueError("case monitor not found")
+        if status not in {"active", "paused"}:
+            raise ValueError("unsupported monitor status")
+        if not actor.strip() or not reason.strip():
+            raise ValueError("actor and change reason must not be empty")
+        monitor = CaseMonitorVersion(research_case_id=case_id, version=previous.version + 1, status=status, frequency=previous.frequency, factor_ids=list(previous.factor_ids), allowed_source_types=list(previous.allowed_source_types), next_verification_event=previous.next_verification_event, budget=previous.budget, changed_by=actor.strip(), change_reason=reason.strip(), created_at=_utcnow())
+        self._session.add(monitor)
+        self._session.flush()
+        return monitor
+
     def _validate(
         self, case_id: uuid.UUID, *, actor: str, config: CaseMonitorConfig
     ) -> None:

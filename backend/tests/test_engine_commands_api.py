@@ -6,6 +6,7 @@ These are WRITE endpoints (they commit), so they run against the private
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
@@ -36,7 +37,7 @@ def _new_pending_version(cmd_session):
 # ---------------------------------------------------------------------------
 
 
-def test_extract_creates_statements_and_airun(cmd_client, cmd_seeded):
+def test_extract_creates_review_gated_candidates_and_airun(cmd_client, cmd_seeded):
     version = _new_pending_version(cmd_seeded)
 
     resp = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
@@ -44,12 +45,14 @@ def test_extract_creates_statements_and_airun(cmd_client, cmd_seeded):
     body = resp.json()
     assert body["document_version_id"] == str(version.id)
     assert body["mode"] == "mock"
-    assert body["statement_count"] >= 1
-    assert len(body["statements"]) == body["statement_count"]
-    first = body["statements"][0]
+    assert body["candidate_count"] >= 1
+    assert len(body["candidates"]) == body["candidate_count"]
+    first = body["candidates"][0]
     assert first["id"]
-    assert first["kind"]
+    assert first["claim_type"]
     assert first["normalized_text"]
+    assert first["quote"]
+    assert first["review_state"] == "awaiting_review"
 
     from app.models.ledger import AIRun
 
@@ -63,6 +66,143 @@ def test_extract_creates_statements_and_airun(cmd_client, cmd_seeded):
 def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/documents/{ZERO_UUID}/extract")
     assert resp.status_code == 404
+
+
+def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd_client, cmd_seeded):
+    from app.models.ledger import AIRun
+    from app.models.source_governance import SourceContract
+
+    version = _new_pending_version(cmd_seeded)
+    cmd_seeded.add(
+        SourceContract(
+            document_version_id=version.id,
+            source_type="licensed_provider",
+            provider_or_tenant="restricted-provider",
+            allow_ai_processing=False,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=["no AI"],
+            contract_version="fixture-v1",
+            intake_metadata={},
+            declared_by="human:researcher",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
+
+    assert response.status_code == 422
+    assert "禁止 AI 处理" in response.json()["error"]["message"]
+    refused_run = cmd_seeded.scalar(
+        select(AIRun)
+        .where(AIRun.kind == "extract")
+        .where(AIRun.input_ref["document_version_id"].as_string() == str(version.id))
+    )
+    assert refused_run is not None
+    assert refused_run.status == "failed"
+
+
+def test_supplement_text_creates_a_separate_case_document_with_intersected_permissions(
+    cmd_client, cmd_seeded
+):
+    from app.models.ledger import ResearchCase
+    from app.models.source_governance import SourceContract
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="Failed report intake",
+        industry_topic="事件研究",
+        created_by="human:researcher",
+        created_at=now,
+    )
+    cmd_seeded.add(case)
+    cmd_seeded.flush()
+    docs = DocumentService(DocumentRepository(cmd_seeded))
+    original = docs.freeze(
+        raw=b"unreadable-pdf-placeholder",
+        source_url="https://provider.example.com/report.pdf",
+        parser_version="pdf-v1",
+        parse_state="failed",
+        title="Original report",
+    )
+    docs.attach_to_case(research_case_id=case.id, document_version_id=original.id)
+    cmd_seeded.add(
+        SourceContract(
+            document_version_id=original.id,
+            source_type="licensed_provider",
+            provider_or_tenant="provider",
+            allow_ai_processing=False,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=["provider no AI"],
+            contract_version="provider-v1",
+            intake_metadata={},
+            declared_by="human:researcher",
+            created_at=now,
+        )
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/documents/{original.id}/supplements",
+        json={
+            "case_id": str(case.id),
+            "raw_text": "用户补充的报告正文，声称来自第 3 页。",
+            "claimed_page_reference": "第 3 页",
+            "created_by": "human:researcher",
+            "source_metadata": {
+                "permissions": {"ai_processing": True, "display": True},
+                "authority_level": "user_supplied",
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["original_document_version_id"] == str(original.id)
+    supplement_id = uuid.UUID(body["document_version_id"])
+    supplement = cmd_seeded.get(type(original), supplement_id)
+    assert supplement is not None
+    assert supplement.id != original.id
+    assert supplement.supplements_document_version_id == original.id
+    assert supplement.claimed_page_reference == "第 3 页"
+    assert original.parse_state == "failed"
+    assert DocumentRepository(cmd_seeded).spans_for_version(supplement.id)[0].verbatim_text == "用户补充的报告正文，声称来自第 3 页。"
+    contract = cmd_seeded.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == supplement.id)
+    )
+    assert contract is not None
+    assert contract.allow_ai_processing is False
+    assert contract.allow_display is True
+
+    retried = cmd_client.post(
+        f"/api/v1/documents/{original.id}/supplements",
+        json={
+            "case_id": str(case.id),
+            "raw_text": "用户补充的报告正文，声称来自第 3 页。",
+            "claimed_page_reference": "第 3 页",
+            "created_by": "human:researcher",
+            "source_metadata": {"permissions": {"ai_processing": True, "display": True}},
+        },
+    )
+    assert retried.status_code == 201
+    assert retried.json()["document_version_id"] == str(supplement.id)
+    assert len(DocumentRepository(cmd_seeded).spans_for_version(supplement.id)) == 1
 
 
 # ---------------------------------------------------------------------------

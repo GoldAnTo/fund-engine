@@ -247,6 +247,7 @@ class EventReviewQueueService:
         payload = proposal.payload if isinstance(proposal.payload, dict) else {}
         return EventReviewQueueItemDTO(
             proposal_id=str(proposal.id),
+            proposal_version=proposal.version,
             status=proposal.status,
             proposed_at=proposal.proposed_at,
             link_id=str(proposal.id),

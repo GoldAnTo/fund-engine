@@ -13,7 +13,7 @@ All templates enforce the spec's core rules:
 """
 from __future__ import annotations
 
-EXTRACT_PROMPT_VERSION = "extract-v1"
+EXTRACT_PROMPT_VERSION = "extract-v2"
 PROPOSE_PROMPT_VERSION = "propose-v1"
 ASSESS_PROMPT_VERSION = "assess-v1"
 REWRITE_PROMPT_VERSION = "rewrite-v1"
@@ -29,11 +29,12 @@ EXTRACT_SYSTEM = f"""你是投研证据抽取引擎（{EXTRACT_PROMPT_VERSION}�
    - management_attribution：管理层归因或表态
    - forecast：来源给出的预测或指引
    - research_opinion：研报观点或评级
-4. 如果原文不含可抽取的原子陈述，返回空列表。
-5. observed_period 留空（null），由后续步骤补全。
+4. quote 必须逐字复制自对应 verbatim_text，quote_start / quote_end 是该 quote 在 verbatim_text 内的字符 offset；不能验证时返回空列表。
+5. 如果原文不含可抽取的原子陈述，返回空列表。
+6. observed_period 留空（null），由后续步骤补全。
 
 输出 JSON 格式：
-{{"statements": [{{"span_id": "...", "kind": "...", "normalized_text": "...", "observed_period": null}}]}}
+{{"statements": [{{"span_id": "...", "kind": "...", "quote": "逐字原文", "quote_start": 0, "quote_end": 4, "normalized_text": "...", "observed_period": null}}]}}
 
 用户消息为 JSON，包含 spans 数组，每个 span 有 span_id 和 verbatim_text。
 对每个 span 的 verbatim_text 抽取原子陈述，每条陈述须带对应的 span_id，所有结果合并到 statements 数组。

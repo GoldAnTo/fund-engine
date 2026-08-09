@@ -34,22 +34,25 @@ from app.models.ledger import (
 # ---------------------------------------------------------------------------
 
 
-def test_extraction_creates_statements_and_airun(session, span):
+def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     client = LLMClient(model_version="mock-test", mock=True)
     extractor = StatementExtractor(client)
 
-    statements = extractor.extract(span.document_version_id, session)
+    candidates = extractor.extract(span.document_version_id, session)
 
-    assert len(statements) >= 1
-    for stmt in statements:
-        assert stmt.kind in {
+    assert len(candidates) >= 1
+    for candidate in candidates:
+        assert candidate.claim_type in {
             "disclosed_fact",
+            "reported_claim",
             "management_attribution",
             "forecast",
             "research_opinion",
         }
-        assert stmt.normalized_text
-        assert stmt.source_span_id == span.id
+        assert candidate.normalized_text
+        assert candidate.source_span_id == span.id
+        assert candidate.quote == span.verbatim_text
+    assert list(session.scalars(select(SourceStatement))) == []
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
     assert len(runs) == 1
@@ -59,7 +62,7 @@ def test_extraction_creates_statements_and_airun(session, span):
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
     assert "span_ids" in run.input_ref
     assert str(span.id) in run.input_ref["span_ids"]
-    assert "extracted" in run.output_summary
+    assert "atomic candidates" in run.output_summary
 
 
 def test_extractor_releases_read_transaction_before_llm_provider(session, span):
@@ -71,15 +74,18 @@ def test_extractor_releases_read_transaction_before_llm_provider(session, span):
             "statements": [
                 {
                     "span_id": str(span.id),
-                    "normalized_text": "Management disclosed a material operating update.",
+                        "quote": span.verbatim_text,
+                        "quote_start": 0,
+                        "quote_end": len(span.verbatim_text),
+                        "normalized_text": "Management disclosed a material operating update.",
                     "kind": "disclosed_fact",
                 }
             ]
         }
 
     with patch.object(client, "chat_json", side_effect=provider):
-        statements = StatementExtractor(client).extract(span.document_version_id, session)
-    assert len(statements) == 1
+        candidates = StatementExtractor(client).extract(span.document_version_id, session)
+    assert len(candidates) == 1
 
 
 def test_extraction_records_no_spans(session, document_service):

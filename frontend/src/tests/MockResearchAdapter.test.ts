@@ -60,6 +60,75 @@ describe("MockResearchAdapter scenarios", () => {
     expect(docs.some((d) => d.parse_quality === "ok")).toBe(true);
   });
 
+  it("keeps a newly created strict Case in intake review without creating a run", async () => {
+    const adapter = new MockResearchAdapter();
+
+    const created = await adapter.createEventResearch({
+      rawInput: "公司上调资本开支指引，盘后股价下跌。",
+      eventTitle: "资本开支指引更新",
+      companyName: "示例公司",
+      ticker: "600000.SH",
+      eventAt: "2026-08-09T00:00:00Z",
+      marketReaction: "盘后下跌",
+      summary: null,
+      researchQuestion: "资本开支上调是否解释了市场反应？",
+      candidateFactors: ["现金流", "盈利预期", "估值"],
+      confirmationRequired: true,
+      researchProtocolRequired: true,
+      createdBy: "human:researcher",
+    });
+
+    expect(created.lifecycle).toMatchObject({
+      status: "awaiting_key_review",
+      activeRunId: null,
+      currentRound: 0,
+      nextHumanAction: "核验原文资料并完成研究协议",
+    });
+
+    const workbench = await adapter.getEventWorkbench(created.caseId);
+    expect(workbench.event).toMatchObject({
+      id: created.caseId,
+      eventTitle: "资本开支指引更新",
+      ticker: "600000.SH",
+    });
+    expect(workbench.nextAction).toMatchObject({
+      kind: "review_intake",
+      label: "核验原文资料并完成研究协议",
+    });
+
+    const documents = await adapter.getDocuments({ caseId: created.caseId });
+    expect(documents).toHaveLength(1);
+    expect(documents[0]).toMatchObject({
+      linked_cases: [{ id: created.caseId, title: "资本开支指引更新" }],
+      source_authority: "unknown",
+      parse_quality: "partial",
+    });
+
+    const detail = await adapter.getDocumentDetail(documents[0].id);
+    expect(detail.spans).toEqual([expect.objectContaining({
+      document_id: documents[0].id,
+      verbatim_text: "公司上调资本开支指引，盘后股价下跌。",
+    })]);
+  });
+
+  it("freezes a document supplement in the same Case without changing the original", async () => {
+    const adapter = new MockResearchAdapter();
+    const created = await adapter.createEventResearch({
+      rawInput: "公司上调资本开支指引。",
+      eventTitle: "资本开支指引更新",
+      companyName: "示例公司", ticker: "600000.SH", eventAt: "2026-08-09T00:00:00Z", marketReaction: null, summary: null,
+      researchQuestion: "资本开支上调是否可验证？", candidateFactors: ["资本开支"], confirmationRequired: true, researchProtocolRequired: true, createdBy: "human:researcher",
+    });
+    const [original] = await adapter.getDocuments({ caseId: created.caseId });
+
+    const supplement = await adapter.createDocumentSupplement({ caseId: created.caseId, documentId: original.id, rawText: "公司在第 3 页明确上调全年资本开支指引。", claimedPageReference: "第 3 页", createdBy: "human:researcher" });
+
+    expect(supplement).toMatchObject({ originalDocumentVersionId: original.id, extractionAllowed: true });
+    expect((await adapter.getDocuments({ caseId: created.caseId })).map((document) => document.id)).toEqual([original.id, supplement.documentVersionId]);
+    expect((await adapter.getDocumentDetail(original.id)).spans[0].verbatim_text).toBe("公司上调资本开支指引。");
+    expect((await adapter.getDocumentDetail(supplement.documentVersionId)).spans[0]).toMatchObject({ verbatim_text: "公司在第 3 页明确上调全年资本开支指引。", locator: { claimed_page_reference: "第 3 页" } });
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);

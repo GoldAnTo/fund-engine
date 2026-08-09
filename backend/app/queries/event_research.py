@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.event_research import (
+    CaseRelation,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -28,7 +29,11 @@ from app.models.proposals import Proposal
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
+    CaseRelationCaseDTO,
+    CaseRelationDTO,
     EventConclusionDraftDTO,
+    EventConclusionHistoryResponse,
+    EventConclusionVersionDTO,
     EventKeyEvidenceDTO,
     EventNextActionDTO,
     EventResearchFactorDTO,
@@ -36,8 +41,11 @@ from app.schemas.v1.event_research import (
     EventResearchListItemDTO,
     EventResearchListResponse,
     EventResearchScopeDTO,
+    EventResearchScopeHistoryItemDTO,
+    EventResearchScopeHistoryResponse,
     EventWorkbenchProgressDTO,
     EventWorkbenchDTO,
+    ResearchNetworkResponse,
 )
 from app.services.event_review_queue import EventReviewQueueService
 
@@ -59,6 +67,58 @@ class EventResearchQueries:
             stmt = stmt.where(EventResearchLifecycle.status == status)
         return EventResearchListResponse(
             items=[self._list_item(brief, lifecycle) for brief, lifecycle in self._session.execute(stmt)]
+        )
+
+    def network(self) -> ResearchNetworkResponse:
+        cases = {
+            brief.research_case_id: CaseRelationCaseDTO(
+                case_id=str(brief.research_case_id),
+                title=brief.event_title,
+                lifecycle_status=lifecycle.status,
+            )
+            for brief, lifecycle in self._session.execute(
+                select(EventResearchBrief, EventResearchLifecycle).join(
+                    EventResearchLifecycle,
+                    EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
+                )
+            )
+        }
+        visible = [
+            CaseRelationDTO(
+                id=str(relation.id),
+                source_case=cases[relation.source_case_id],
+                target_case=cases[relation.target_case_id],
+                relation_type=relation.relation_type,
+                reason=relation.reason,
+                created_by=relation.created_by,
+                review_state=relation.review_state,
+                created_at=relation.created_at,
+            )
+            for relation in self._session.scalars(
+                select(CaseRelation).order_by(CaseRelation.created_at.desc(), CaseRelation.id.desc())
+            )
+            if relation.source_case_id in cases and relation.target_case_id in cases
+        ]
+        return ResearchNetworkResponse(
+            reviewed_relations=[item for item in visible if item.review_state == "reviewed"],
+            candidate_relations=[item for item in visible if item.review_state == "machine_generated"],
+        )
+
+    def relations(self, case_id: uuid.UUID) -> ResearchNetworkResponse:
+        if self._session.scalar(
+            select(EventResearchBrief.id)
+            .where(EventResearchBrief.research_case_id == case_id)
+            .limit(1)
+        ) is None:
+            raise NotFoundError("event research case not found")
+        network = self.network()
+        involves_case = lambda relation: (
+            relation.source_case.case_id == str(case_id)
+            or relation.target_case.case_id == str(case_id)
+        )
+        return ResearchNetworkResponse(
+            reviewed_relations=[item for item in network.reviewed_relations if involves_case(item)],
+            candidate_relations=[item for item in network.candidate_relations if involves_case(item)],
         )
 
     def workbench(self, case_id: uuid.UUID) -> EventWorkbenchDTO:
@@ -88,6 +148,61 @@ class EventResearchQueries:
             scope=self._scope(scope, case_id),
             next_action=self._next_action(lifecycle),
         )
+
+    def conclusion_history(self, case_id: uuid.UUID) -> EventConclusionHistoryResponse:
+        if self._session.scalar(
+            select(EventResearchBrief.id)
+            .where(EventResearchBrief.research_case_id == case_id)
+            .limit(1)
+        ) is None:
+            raise NotFoundError("event research case not found")
+        records = list(
+            self._session.scalars(
+                select(EventResearchConclusion)
+                .where(EventResearchConclusion.research_case_id == case_id)
+                .order_by(EventResearchConclusion.created_at, EventResearchConclusion.id)
+            )
+        )
+        scope_versions = {
+            scope.id: scope.version
+            for scope in self._session.scalars(
+                select(EventResearchScopeVersion).where(
+                    EventResearchScopeVersion.research_case_id == case_id
+                )
+            )
+        }
+        return EventConclusionHistoryResponse(
+            case_id=str(case_id),
+            versions=[
+                EventConclusionVersionDTO(
+                    id=str(record.id),
+                    sequence=index,
+                    state=record.state,
+                    text=record.text,
+                    primary_factor=record.primary_factor,
+                    scope_version=(
+                        scope_versions.get(record.scope_version_id)
+                        if record.scope_version_id is not None
+                        else None
+                    ),
+                    based_on_conclusion_id=(
+                        str(record.based_on_conclusion_id)
+                        if record.based_on_conclusion_id is not None
+                        else None
+                    ),
+                    reviewer=record.reviewer,
+                    evidence_count=len(record.evidence_link_ids),
+                    created_at=record.created_at,
+                )
+                for index, record in enumerate(records, start=1)
+            ],
+        )
+
+    def scope_history(self, case_id: uuid.UUID) -> EventResearchScopeHistoryResponse:
+        if self._session.scalar(select(EventResearchBrief.id).where(EventResearchBrief.research_case_id == case_id).limit(1)) is None:
+            raise NotFoundError("event research case not found")
+        scopes = list(self._session.scalars(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case_id).order_by(EventResearchScopeVersion.version.desc())))
+        return EventResearchScopeHistoryResponse(case_id=str(case_id), items=[EventResearchScopeHistoryItemDTO(version=scope.version, factors=[{"statement": factor.statement, "description": factor.description} for factor in self._session.scalars(select(EventResearchScopeFactor).where(EventResearchScopeFactor.scope_version_id == scope.id).order_by(EventResearchScopeFactor.position))], changed_by=scope.changed_by, change_reason=scope.change_summary, created_at=scope.created_at) for scope in scopes])
 
     def _conclusion(
         self,
@@ -259,6 +374,14 @@ class EventResearchQueries:
                 )
             )
         counts_by_factor: dict[str, dict[str, int]] = {}
+        thesis_ids_by_statement = {
+            statement: thesis_id
+            for thesis_id, statement in self._session.execute(
+                select(Thesis.id, Thesis.statement)
+                .where(Thesis.research_case_id == case_id)
+                .where(Thesis.statement.in_([factor.statement for factor in factors]))
+            )
+        }
         if scope is not None:
             rows = self._session.execute(
                 select(
@@ -293,6 +416,7 @@ class EventResearchQueries:
             counts = counts_by_factor.get(factor.statement, {})
             result.append(
                 EventResearchFactorDTO(
+                    thesis_id=str(thesis_ids_by_statement[factor.statement]),
                     statement=factor.statement,
                     description=getattr(factor, "description", None),
                     position=factor.position,
@@ -472,6 +596,14 @@ class EventResearchQueries:
     @staticmethod
     def _next_action(lifecycle: EventResearchLifecycle) -> EventNextActionDTO:
         if lifecycle.status == "awaiting_key_review":
+            if (
+                lifecycle.active_run_id is None
+                and lifecycle.next_human_action == "核验原文资料并完成研究协议"
+            ):
+                return EventNextActionDTO(
+                    kind="review_intake",
+                    label=lifecycle.next_human_action or "核验原文资料并完成研究协议",
+                )
             count = _leading_count(lifecycle.next_human_action)
             return EventNextActionDTO(
                 kind="review_evidence",

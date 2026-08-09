@@ -42,9 +42,11 @@ from app.models.ledger import (
     AIAssessment,
     SourceStatement,
     Thesis,
+    ValidationError,
 )
 from app.repositories.research import ResearchRepository
 from app.services.assessment import AssessmentService
+from app.services.research_protocol import ResearchProtocolService
 from app.services.compliance import (
     ComplianceAction,
     ComplianceRefusedError,
@@ -73,6 +75,11 @@ class AssessmentGenerator:
         thesis = session.get(Thesis, thesis_id)
         if thesis is None:
             raise ValueError(f"thesis {thesis_id} not found")
+        gate = ResearchProtocolService(session).check_researchability(thesis_id)
+        if thesis.research_protocol_required and gate.status == "blocked":
+            raise ValidationError(
+                f"researchability gate blocked: {', '.join(gate.reason_codes)}"
+            )
 
         input_ref = {
             "thesis_id": str(thesis_id),

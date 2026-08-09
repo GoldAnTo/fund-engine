@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Integer, JSON, Numeric, String, Text, Uuid, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -50,6 +50,23 @@ IMMUTABLE_TABLES = frozenset(
         "event_research_conclusions",
         "case_monitor_versions",
         "research_run_events",
+        "report_claims",
+        "key_factors",
+        "claim_verifications",
+        "market_instrument_bindings",
+        "fundamental_impacts",
+        "market_observations",
+        "source_contracts",
+        "provider_records",
+        "metric_definition_versions",
+        "outcome_binding_versions",
+        "mechanism_template_versions",
+        "mechanism_node_versions",
+        "mechanism_edge_versions",
+        "case_mechanism_selection_versions",
+        "verification_rule_versions",
+        "atomic_claim_candidates",
+        "atomic_claim_reviews",
         "source_spans",
         "research_cases",
         "theses",
@@ -165,6 +182,21 @@ class DocumentVersion(Base):
     parse_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="success"
     )
+    # The authority of the frozen source is a declared, immutable intake
+    # attribute. It controls what kind of *candidate* extraction may retain;
+    # it never replaces the later human review gate.
+    source_authority: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unknown"
+    )
+    # A recovery text is a separate frozen version. It may point to the
+    # unreadable original, but never mutates it or pretends its claimed page
+    # reference is a parser-generated locator.
+    supplements_document_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=True
+    )
+    claimed_page_reference: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
 
 
 class CaseDocumentVersion(Base):
@@ -244,6 +276,9 @@ class Thesis(Base):
         Uuid, ForeignKey("research_cases.id"), nullable=False
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
+    research_protocol_required: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -310,9 +345,51 @@ class SourceStatement(Base):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
     observed_period: Mapped[date | None] = mapped_column(Date, nullable=True)
+    atomic_claim_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+class AtomicClaimCandidate(Base):
+    """A validated but not-yet-formal statement candidate from frozen text."""
+
+    __tablename__ = "atomic_claim_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    source_span_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=False, index=True)
+    canonical_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    quote_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    assertion_actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authority_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    structured_fields: Mapped[dict] = mapped_column(JSON, nullable=False)
+    validation_result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AtomicClaimReview(Base):
+    """Append-only human decision for one atomic claim candidate."""
+
+    __tablename__ = "atomic_claim_reviews"
+    __table_args__ = (UniqueConstraint("atomic_claim_candidate_id", "idempotency_key", name="uq_atomic_claim_reviews_idempotency"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    atomic_claim_candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=False, index=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    published_source_statement_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("source_statements.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class EvidenceLink(Base):
@@ -494,6 +571,9 @@ class ValuationSnapshot(Base):
 
 class HoldingDisclosure(Base):
     __tablename__ = "holding_disclosures"
+    __table_args__ = (
+        CheckConstraint("coverage_status IN ('complete', 'partial', 'not_recorded')", name="ck_holding_disclosures_coverage_status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     fund_id: Mapped[uuid.UUID] = mapped_column(
@@ -511,6 +591,10 @@ class HoldingDisclosure(Base):
         DateTime(timezone=True), nullable=False
     )
     source: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_document_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("document_versions.id"), nullable=True)
+    source_span_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=True)
+    provider_record_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("provider_records.id"), nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_recorded")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

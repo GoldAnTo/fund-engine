@@ -27,6 +27,7 @@ import type {
   ValuationSnapshot,
   WorkspaceOverview,
 } from "../domain/types";
+import type { components } from "../contracts/v1";
 import { PageStateError } from "../domain/types";
 import type {
   CreateEventResearchInput,
@@ -879,6 +880,58 @@ const RELATIONSHIP: RelationshipGraph = {
 };
 
 const DOCUMENTS: SourceDocumentView[] = [
+  {
+    id: "doc-event-tsm-q2",
+    title: "台积电 2026 年第二季度法说会摘要",
+    publisher: "台积电",
+    document_type: "公司披露",
+    publish_date: "2026-08-07",
+    available_at: "2026-08-07T09:00:00Z",
+    acquired_at: "2026-08-07T09:05:00Z",
+    parser_version: "docling-v1.2.3",
+    parse_quality: "ok",
+    linked_cases: [{ id: "event-tsm", title: "台积电上调 CoWoS 指引后下跌" }],
+    span_count: 2,
+    statement_count: 1,
+    version_label: "v1 · 2026-08-07",
+    source_contract: {
+      source_type: "company_disclosure",
+      provider_or_tenant: "台积电",
+      permissions: { ai_processing: true, display: true, export: false, api: false },
+      status: "admitted",
+      region: "not_recorded",
+      retention_policy: "case_retained",
+      deletion_policy: "not_recorded",
+      downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+      contract_version: null,
+    },
+  },
+  {
+    id: "doc-fund-holdings-2026q2",
+    title: "演示成长基金 2026 年第二季度持仓披露",
+    publisher: "授权基金数据源",
+    document_type: "基金持仓披露",
+    publish_date: "2026-07-20",
+    available_at: "2026-07-20T00:00:00Z",
+    acquired_at: "2026-07-21T00:00:00Z",
+    parser_version: "provider-v1",
+    parse_quality: "ok",
+    linked_cases: [{ id: "event-tsm", title: "台积电上调 CoWoS 指引后下跌" }],
+    span_count: 1,
+    statement_count: 0,
+    version_label: "v1 · 2026-07-20",
+    source_contract: {
+      source_type: "licensed_provider",
+      provider_or_tenant: "授权基金数据源",
+      permissions: { ai_processing: true, display: true, export: false, api: false },
+      status: "admitted",
+      region: "not_recorded",
+      retention_policy: "case_retained",
+      deletion_policy: "not_recorded",
+      downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+      contract_version: null,
+    },
+  },
   {
     id: "doc-1",
     title: "中汽协：2024 年 4 月新能源汽车产销数据 PDF",
@@ -2948,9 +3001,17 @@ export class MockResearchAdapter implements ResearchClient {
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmProposalPending = true;
   private eventStates = new Map<string, {
+    event?: EventResearchListItem;
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
   }>();
+  private createdDocuments = new Map<string, {
+    document: SourceDocumentView;
+    spans: DocumentSpan[];
+  }>();
+  private createdEventCount = 0;
+  private createdSupplementCount = 0;
+  private extractedDocumentIds = new Set<string>();
 
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
@@ -2963,6 +3024,10 @@ export class MockResearchAdapter implements ResearchClient {
     this.decisions = [];
     this.eventTsmProposalPending = true;
     this.eventStates.clear();
+    this.createdDocuments.clear();
+    this.createdEventCount = 0;
+    this.createdSupplementCount = 0;
+    this.extractedDocumentIds.clear();
   }
 
   getDecisions() {
@@ -3065,7 +3130,10 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getDocuments(query?: DocumentsQuery): Promise<SourceDocumentView[]> {
     this.throwIfOffline();
-    const docs = this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS;
+    const docs = [
+      ...(this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS),
+      ...[...this.createdDocuments.values()].map(({ document }) => document),
+    ];
     const q = (query?.query ?? "").toLowerCase();
     const filtered = q
       ? docs.filter(
@@ -3075,7 +3143,12 @@ export class MockResearchAdapter implements ResearchClient {
             d.linked_cases.some((c) => c.title.toLowerCase().includes(q))
         )
       : docs;
-    return simulateLatency(filtered);
+    const caseScoped = query?.caseId === "event-published"
+      ? filtered.slice(0, 1)
+      : query?.caseId
+      ? filtered.filter((document) => document.linked_cases.some((item) => item.id === query.caseId))
+      : filtered;
+    return simulateLatency(caseScoped);
   }
 
   async getDocumentDetail(documentId: string): Promise<{
@@ -3083,11 +3156,40 @@ export class MockResearchAdapter implements ResearchClient {
     spans: DocumentSpan[];
   }> {
     this.throwIfOffline();
+    const created = this.createdDocuments.get(documentId);
+    if (created) return simulateLatency(created);
     const docs = this.scenario === "parse_failed" ? parseFailedDocs() : DOCUMENTS;
     const document = docs.find((d) => d.id === documentId) ?? docs[0];
     const spans: DocumentSpan[] =
       document.parse_quality === "failed"
         ? []
+        : document.id === "doc-event-tsm-q2"
+          ? [
+              {
+                id: "sp-tsm-capex",
+                document_id: document.id,
+                locator: { page: 12, section: "资本开支" },
+                verbatim_text: "公司上调全年资本开支指引，同时市场关注自由现金流承压。",
+                cited_by: [{ evidence_id: "event-tsm-evidence-1", thesis_id: "event-tsm-factor-1", role: "supports" }],
+              },
+              {
+                id: "sp-tsm-cowos",
+                document_id: document.id,
+                locator: { page: 4, section: "先进封装" },
+                verbatim_text: "管理层说明 CoWoS 产能扩充仍在按既定节奏推进。",
+                cited_by: [],
+              },
+            ]
+        : document.id === "doc-fund-holdings-2026q2"
+          ? [
+              {
+                id: "sp-fund-holdings-tsm",
+                document_id: document.id,
+                locator: { table: "前十大持仓", row: 3 },
+                verbatim_text: "截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。",
+                cited_by: [],
+              },
+            ]
         : [
             {
               id: "sp-1",
@@ -3534,13 +3636,65 @@ export class MockResearchAdapter implements ResearchClient {
     documentVersionId: string,
   ): Promise<ExtractStatementsResult> {
     this.throwIfOffline();
-    // 离线原型无法运行 LLM 抽取；如实返回 0 条。
+    const created = this.createdDocuments.get(documentVersionId);
+    if (created && created.document.source_contract?.permissions.ai_processing !== false) {
+      this.extractedDocumentIds.add(documentVersionId);
+      return simulateLatency({ documentVersionId, mode: "mock", candidateCount: 1, reason: null });
+    }
+    // Seed documents deliberately model an extraction gap; they remain recoverable.
     return simulateLatency({
       documentVersionId,
       mode: "mock",
-      statementCount: 0,
+      candidateCount: 0,
       reason: "离线原型未运行 LLM 抽取",
     });
+  }
+
+  getAtomicClaimCandidates(caseId: string): components["schemas"]["AtomicClaimCandidateDTO"][] {
+    return [...this.extractedDocumentIds].flatMap((documentId) => {
+      const item = this.createdDocuments.get(documentId);
+      const span = item?.spans[0];
+      if (!item || !span || !item.document.linked_cases.some((linked) => linked.id === caseId)) return [];
+      return [{ id: `atomic-${documentId}`, source_span_id: span.id, document_version_id: documentId, document_source_url: "", locator: span.locator, quote: span.verbatim_text, quote_start: 0, quote_end: span.verbatim_text.length, quote_sha256: "b".repeat(64), normalized_text: span.verbatim_text, claim_type: "source_excerpt", assertion_actor: item.document.publisher, authority_level: item.document.source_authority ?? "unknown", structured_fields: { run_ref: `mock-extract:${documentId}` }, validation_result: { quote_continuous: true }, created_at: "2026-08-09T12:06:00Z", review_state: "awaiting_review", review_history: [], published_source_statement: null }];
+    });
+  }
+
+  /** Test-only mock equivalent of the append-only supplement endpoint. */
+  async createDocumentSupplement(input: {
+    caseId: string;
+    documentId: string;
+    rawText: string;
+    claimedPageReference: string;
+    createdBy: string;
+  }): Promise<{ documentVersionId: string; originalDocumentVersionId: string; extractionAllowed: boolean }> {
+    this.throwIfOffline();
+    const original = await this.getDocumentDetail(input.documentId);
+    if (!original.document.linked_cases.some((item) => item.id === input.caseId)) {
+      throw new PageStateError("stale", "资料不属于当前 Case");
+    }
+    const documentVersionId = `document-supplement-${++this.createdSupplementCount}`;
+    const contract = original.document.source_contract;
+    const extractionAllowed = original.document.parse_quality !== "failed" && contract?.permissions.ai_processing !== false;
+    const document: SourceDocumentView = {
+      ...original.document,
+      id: documentVersionId,
+      title: `${original.document.title || "未命名资料"} · 补充正文`,
+      publisher: input.createdBy,
+      document_type: "pasted_snapshot",
+      available_at: "2026-08-09T12:05:00Z",
+      acquired_at: "2026-08-09T12:05:00Z",
+      parser_version: "user-supplement-v1",
+      parse_quality: "partial",
+      span_count: 1,
+      statement_count: 0,
+      version_label: `${original.document.version_label || "v1"} · 补充 v${this.createdSupplementCount}`,
+      source_contract: contract ? { ...contract, provider_or_tenant: input.createdBy } : contract,
+    };
+    this.createdDocuments.set(documentVersionId, {
+      document,
+      spans: [{ id: `span-supplement-${this.createdSupplementCount}`, document_id: documentVersionId, locator: { claimed_page_reference: input.claimedPageReference }, verbatim_text: input.rawText, cited_by: [] }],
+    });
+    return simulateLatency({ documentVersionId, originalDocumentVersionId: input.documentId, extractionAllowed });
   }
 
   // ── 公司研究（/companies）───────────────────────────────────────────────
@@ -3696,7 +3850,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(undefined);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     this.throwIfOffline();
     return simulateLatency({
       eventTitle: input.rawInput.trim().slice(0, 80) || null,
@@ -3709,9 +3863,83 @@ export class MockResearchAdapter implements ResearchClient {
 
   async createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
     this.throwIfOffline();
+    const caseId = `event-created-${++this.createdEventCount}`;
+    const sourceType = input.sourceType ?? "pasted_snapshot";
+    const sourceMetadata = input.sourceMetadata ?? {};
+    const permissions = sourceMetadata.permissions && typeof sourceMetadata.permissions === "object"
+      ? sourceMetadata.permissions as Record<string, unknown>
+      : {};
+    const userControlled = sourceType === "pasted_snapshot" || sourceType === "uploaded_file";
+    const aiProcessing = typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled;
+    const display = typeof permissions.display === "boolean" ? permissions.display : userControlled;
+    const documentId = `document-created-${this.createdEventCount}`;
+    const document: SourceDocumentView = {
+      id: documentId,
+      title: typeof sourceMetadata.file_name === "string" ? sourceMetadata.file_name : "事件原始材料快照",
+      publisher: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
+      document_type: sourceType,
+      publish_date: input.eventAt?.slice(0, 10) ?? null,
+      available_at: "2026-08-09T12:00:00Z",
+      acquired_at: "2026-08-09T12:00:00Z",
+      parser_version: sourceType === "pasted_snapshot" ? "user-pasted-v1" : sourceType === "uploaded_file" ? "uploaded-text-v1" : "provider-snapshot-v1",
+      source_authority: typeof sourceMetadata.authority_level === "string" ? sourceMetadata.authority_level : "unknown",
+      parse_quality: "partial",
+      linked_cases: [{ id: caseId, title: input.eventTitle }],
+      span_count: 1,
+      statement_count: 0,
+      version_label: "v1 · 2026-08-09",
+      source_contract: {
+        source_type: sourceType,
+        provider_or_tenant: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
+        permissions: { ai_processing: aiProcessing, display, export: typeof permissions.export === "boolean" ? permissions.export : false, api: typeof permissions.api === "boolean" ? permissions.api : false },
+        status: display ? "admitted" : "restricted",
+        region: typeof sourceMetadata.region === "string" ? sourceMetadata.region : "not_recorded",
+        retention_policy: typeof sourceMetadata.retention_policy === "string" ? sourceMetadata.retention_policy : "case_retained",
+        deletion_policy: typeof sourceMetadata.deletion_policy === "string" ? sourceMetadata.deletion_policy : "not_recorded",
+        downstream_restrictions: Array.isArray(sourceMetadata.downstream_restrictions) ? sourceMetadata.downstream_restrictions.filter((value): value is string => typeof value === "string") : userControlled ? ["仅限当前 Case 研究与人工审核"] : ["权限未完整记录；不得作为正式证据"],
+        contract_version: typeof sourceMetadata.contract_version === "string" ? sourceMetadata.contract_version : null,
+      },
+    };
+    this.createdDocuments.set(documentId, {
+      document,
+      spans: [{
+        id: `span-created-${this.createdEventCount}`,
+        document_id: documentId,
+        locator: { kind: sourceType, source_metadata: sourceMetadata },
+        verbatim_text: input.rawInput,
+        cited_by: [],
+      }],
+    });
+    const lifecycle: EventLifecycle = {
+      status: "awaiting_key_review",
+      activeRunId: null,
+      currentRound: 0,
+      summary: "资料已冻结，等待核验原文与研究协议；尚未启动后台研究",
+      currentGap: "原文资料、来源许可与研究协议尚未完成核验",
+      nextHumanAction: "核验原文资料并完成研究协议",
+    };
+    this.eventStates.set(caseId, {
+      event: {
+        id: caseId,
+        eventTitle: input.eventTitle,
+        companyName: input.companyName,
+        ticker: input.ticker,
+        eventAt: input.eventAt,
+        status: lifecycle.status,
+        statusSummary: lifecycle.summary,
+        nextHumanAction: lifecycle.nextHumanAction,
+        updatedAt: "2026-08-09T12:00:00Z",
+      },
+      lifecycle,
+      scope: {
+        version: 1,
+        factors: input.candidateFactors.map((statement) => ({ statement, description: null })),
+        unmappedEvidenceCount: 0,
+      },
+    });
     return simulateLatency({
-      caseId: "event-created", briefId: "brief-created",
-      lifecycle: { status: "researching", activeRunId: "run-created", currentRound: 1, summary: "正在建立第一轮证据检索", currentGap: null, nextHumanAction: null },
+      caseId, briefId: `brief-created-${this.createdEventCount}`,
+      lifecycle,
     });
   }
 
@@ -3739,6 +3967,7 @@ export class MockResearchAdapter implements ResearchClient {
       { id: "event-exhausted", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
       { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
       { id: "event-published", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
+      ...[...this.eventStates.values()].flatMap((state) => state.event ? [state.event] : []),
     ];
   }
 
@@ -3769,7 +3998,9 @@ export class MockResearchAdapter implements ResearchClient {
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
     const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
-      ? { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
+      ? lifecycle.activeRunId === null && lifecycle.nextHumanAction === "核验原文资料并完成研究协议"
+        ? { kind: "review_intake", label: lifecycle.nextHumanAction }
+        : { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
       : event.status === "draft_ready"
         ? { kind: "review_conclusion", label: "审核结论草案" }
         : event.status === "published"
@@ -3784,7 +4015,7 @@ export class MockResearchAdapter implements ResearchClient {
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", confidence: "low", citations: [] },
-      factors: activeFactors.map((factor, index) => { const pendingProposalCount = caseId === "event-tsm" && index === 0 ? 1 : 0; const reviewedSupportCount = reviewedCount ? 1 : 0; return { statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
+      factors: activeFactors.map((factor, index) => { const pendingProposalCount = caseId === "event-tsm" && index === 0 ? 1 : 0; const reviewedSupportCount = reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
       evidence,
       progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },
@@ -3792,7 +4023,40 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
-  async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
+  async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
+    this.throwIfOffline();
+    const isPublished = (await this.getEventWorkbench(caseId)).conclusion.state === "published";
+    return simulateLatency(isPublished ? [
+      { id: `draft-${caseId}-v1`, sequence: 1, state: "ai_draft" as const, text: "当前结论草案等待人工复核。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: null, reviewer: null, evidenceCount: 3, createdAt: "2026-08-07T07:00:00Z" },
+      { id: `published-${caseId}-v1`, sequence: 2, state: "published" as const, text: "人工确认：当前材料不足以断定唯一原因。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: `draft-${caseId}-v1`, reviewer: "human:researcher", evidenceCount: 3, createdAt: "2026-08-07T08:00:00Z" },
+    ] : []);
+  }
+
+  async continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<import("../domain/eventResearch").EventResearchContinuation> {
+    this.throwIfOffline();
+    if (!input.reason.trim()) throw new Error("continuation reason is required");
+    const runId = `run-continuation-${input.caseId}`;
+    const lifecycle: EventLifecycle = { status: "researching", activeRunId: runId, currentRound: 0, summary: "已记录新材料触发原因，开始新的受控补证周期", currentGap: "新材料尚未经过原文与证据审核；此前发布结论保持不变", nextHumanAction: null };
+    const previous = this.eventStates.get(input.caseId);
+    this.eventStates.set(input.caseId, { event: previous?.event, scope: previous?.scope ?? { version: 1, factors: ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"].map((statement) => ({ statement, description: null })), unmappedEvidenceCount: 0 }, lifecycle });
+    void input.documentVersionId; void input.triggeredBy;
+    return simulateLatency({ runId, lifecycle });
+  }
+
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    this.throwIfOffline();
+    if (!input.rawInput.trim() || !input.reason.trim()) throw new Error("material and decision reason are required");
+    const documentVersionId = `document-published-material-${input.caseId}`;
+    if (input.decision === "reopen") {
+      const next = await this.continueEventResearch({ caseId: input.caseId, documentVersionId, reason: input.reason, triggeredBy: input.actor });
+      return { documentVersionId, decision: "reopen", decisionEventId: `decision-${input.caseId}`, runId: next.runId, lifecycle: next.lifecycle };
+    }
+    const current = (await this.getEventWorkbench(input.caseId)).lifecycle;
+    void input.sourceUrl; void input.sourceType; void input.sourceMetadata;
+    return simulateLatency({ documentVersionId, decision: "no_change", decisionEventId: `decision-${input.caseId}`, runId: null, lifecycle: current });
+  }
+
+  async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {
     this.throwIfOffline();
     const event = this.eventResearchItems().find((item) => item.id === input.caseId)
       ?? this.eventResearchItems()[0];
@@ -3805,6 +4069,7 @@ export class MockResearchAdapter implements ResearchClient {
       unmappedEvidenceCount: 0,
     };
     this.eventStates.set(event.id, {
+      event: previous?.event,
       scope,
       lifecycle: {
         status: "continuing",
@@ -3815,7 +4080,7 @@ export class MockResearchAdapter implements ResearchClient {
         nextHumanAction: null,
       },
     });
-    void input.changedBy;
+    void input.changedBy; void input.changeReason;
     return simulateLatency({
       version: scope.version,
       factors: scope.factors,
@@ -3827,38 +4092,36 @@ export class MockResearchAdapter implements ResearchClient {
   async getEventReviewQueue(caseId: string): Promise<EventReviewQueue> {
     this.throwIfOffline();
     const isTsm = caseId === "event-tsm";
+    const hasPending = isTsm && this.eventTsmProposalPending;
+    const items: EventReviewQueue["items"] = isTsm ? [
+      ...(hasPending ? [{
+        proposalId: "proposal-event-tsm", proposalVersion: 1, status: "pending", proposedAt: "2026-08-07T09:00:00Z", linkId: "link-event-tsm", thesisId: "thesis-event-tsm", caseId,
+        thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "自由现金流承压", aiScope: { period: "2026Q2" },
+        statementId: "statement-event-tsm", statementText: "资本开支指引上调", statementKind: "management_attribution", spanId: "span-event-tsm", verbatimText: "全年资本开支预计上调。", locator: { page: 12 },
+        documentVersionId: "document-event-tsm", documentSourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentPublishedAt: "2026-08-07T00:00:00Z", availableAt: "2026-08-07T09:00:00Z",
+        sourceTitle: "台积电季度财报与电话会", sourceStatus: "accessible" as const, sourceStatusReason: "公司投资者关系页面可验证且已冻结", canAccept: true, proposalReason: "自由现金流承压", position: 1,
+      }] : []),
+      {
+        proposalId: "proposal-event-tsm-pasted", proposalVersion: 1, status: "pending", proposedAt: "2026-08-07T09:00:30Z", linkId: "link-event-tsm-pasted", thesisId: "thesis-event-tsm", caseId,
+        thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "contextualizes", aiReason: "来源尚未完成内容验证", aiScope: {}, statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
+        documentVersionId: null, documentSourceUrl: "https://www.reuters.com/technology/tsmc", documentPublishedAt: null, availableAt: null, sourceTitle: "用户粘贴的市场报道", sourceStatus: "pasted_unverified" as const, sourceStatusReason: "来源由用户粘贴解析，尚未完成内容验证", canAccept: false, proposalReason: "来源尚未完成内容验证", position: null,
+      },
+      {
+        proposalId: "proposal-event-tsm-invalid", proposalVersion: 1, status: "pending", proposedAt: "2026-08-07T09:01:00Z", linkId: "link-event-tsm-invalid", thesisId: "thesis-event-tsm", caseId,
+        thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "来源不可验证", aiScope: {}, statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
+        documentVersionId: null, documentSourceUrl: "https://unverified-source.invalid/evidence", documentPublishedAt: null, availableAt: null, sourceTitle: "未验证测试来源", sourceStatus: "invalid" as const, sourceStatusReason: "测试域名不能作为正式证据来源", canAccept: false, proposalReason: "来源不可验证", position: null,
+      },
+    ] : [];
     return simulateLatency({
       summary: {
         total: isTsm ? 3 : 0,
-        reviewed: 0,
-        pending: isTsm ? 1 : 0,
+        reviewed: isTsm && !hasPending ? 1 : 0,
+        pending: hasPending ? 1 : 0,
         invalidSource: isTsm ? 1 : 0,
         currentRound: isTsm ? 1 : 0,
         nextAction: isTsm ? "审核 1 条关键证据" : null,
       },
-      items: isTsm ? [
-        {
-          proposalId: "proposal-event-tsm", status: "pending", proposedAt: "2026-08-07T09:00:00Z", linkId: "link-event-tsm", thesisId: "thesis-event-tsm", caseId,
-          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "自由现金流承压", aiScope: { period: "2026Q2" },
-          statementId: "statement-event-tsm", statementText: "资本开支指引上调", statementKind: "management_attribution", spanId: "span-event-tsm", verbatimText: "全年资本开支预计上调。", locator: { page: 12 },
-          documentVersionId: "document-event-tsm", documentSourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentPublishedAt: "2026-08-07T00:00:00Z", availableAt: "2026-08-07T09:00:00Z",
-          sourceTitle: "台积电季度财报与电话会", sourceStatus: "accessible", sourceStatusReason: "公司投资者关系页面可验证且已冻结", canAccept: true, proposalReason: "自由现金流承压", position: 1,
-        },
-        {
-          proposalId: "proposal-event-tsm-pasted", status: "pending", proposedAt: "2026-08-07T09:00:30Z", linkId: "link-event-tsm-pasted", thesisId: "thesis-event-tsm", caseId,
-          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "contextualizes", aiReason: "来源尚未完成内容验证", aiScope: {},
-          statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
-          documentVersionId: null, documentSourceUrl: "https://www.reuters.com/technology/tsmc", documentPublishedAt: null, availableAt: null,
-          sourceTitle: "用户粘贴的市场报道", sourceStatus: "pasted_unverified", sourceStatusReason: "来源由用户粘贴解析，尚未完成内容验证", canAccept: false, proposalReason: "来源尚未完成内容验证", position: null,
-        },
-        {
-          proposalId: "proposal-event-tsm-invalid", status: "pending", proposedAt: "2026-08-07T09:01:00Z", linkId: "link-event-tsm-invalid", thesisId: "thesis-event-tsm", caseId,
-          thesisStatement: "资本开支 / 自由现金流担忧", aiRole: "supports", aiReason: "来源不可验证", aiScope: {},
-          statementId: null, statementText: null, statementKind: null, spanId: null, verbatimText: null, locator: {},
-          documentVersionId: null, documentSourceUrl: "https://unverified-source.invalid/evidence", documentPublishedAt: null, availableAt: null,
-          sourceTitle: "未验证测试来源", sourceStatus: "invalid", sourceStatusReason: "测试域名不能作为正式证据来源", canAccept: false, proposalReason: "来源不可验证", position: null,
-        },
-      ] : [],
+      items,
     });
   }
 

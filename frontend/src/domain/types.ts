@@ -340,12 +340,31 @@ export interface SourceDocumentView {
   available_at: string;
   acquired_at: string;
   parser_version: string;
+  source_authority?: string;
   parse_quality: "ok" | "partial" | "failed";
   parse_failure_stage?: string;
   linked_cases: { id: string; title: string }[];
   span_count: number;
   statement_count: number;
   version_label: string | null; // e.g. v3 · 2024-05-12
+  source_contract?: {
+    source_type: string;
+    provider_or_tenant: string;
+    permissions: {
+      ai_processing: boolean;
+      display: boolean;
+      export: boolean;
+      api: boolean;
+    };
+    status: "admitted" | "restricted";
+    region: string;
+    retention_policy: string;
+    deletion_policy: string;
+    downstream_restrictions: string[];
+    contract_version: string | null;
+  } | null;
+  supplements_document_id?: string | null;
+  claimed_page_reference?: string | null;
 }
 
 export interface DocumentSpan {
@@ -432,6 +451,7 @@ export interface RelationshipQuery {
 export interface DocumentsQuery {
   query?: string;
   cutoff?: string;
+  caseId?: string;
 }
 
 export interface SearchHit {

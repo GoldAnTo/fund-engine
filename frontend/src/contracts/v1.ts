@@ -547,6 +547,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_version_id}/supplements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Document Supplement
+         * @description Freeze user-supplied recovery text without changing the original file.
+         */
+        post: operations["create_document_supplement_api_v1_documents__document_version_id__supplements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_version_id}/extract": {
         parameters: {
             query?: never;
@@ -558,11 +578,10 @@ export interface paths {
         put?: never;
         /**
          * Extract Statements
-         * @description Run the extract step over one document version.
+         * @description Run the extract step without publishing formal statements.
          *
-         *     Append-only: statements are added, never replaced.  The engine script
-         *     feeds only pending versions (spans present, no statements yet); calling
-         *     this on an already-extracted version will append duplicates.
+         *     Returned candidates retain an exact original quote and await an explicit
+         *     human decision in the Case review workbench.
          */
         post: operations["extract_statements_api_v1_documents__document_version_id__extract_post"];
         delete?: never;
@@ -861,6 +880,80 @@ export interface paths {
         patch: operations["update_task_api_v1_tasks__task_id__patch"];
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/atomic-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Atomic Claims */
+        get: operations["list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/atomic-claims/{candidate_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Atomic Claim */
+        post: operations["review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-runs/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Active Runs
+         * @description Return active work with the run's recorded scope, never live monitor settings.
+         */
+        get: operations["list_active_runs_api_v1_research_runs_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Run Archive
+         * @description List current and terminal runs without reconstructing their scope.
+         */
+        get: operations["list_run_archive_api_v1_research_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/runs": {
         parameters: {
             query?: never;
@@ -948,6 +1041,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Research Network */
+        get: operations["event_research_network_api_v1_event_research_network_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/relations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Research Relations */
+        get: operations["event_research_relations_api_v1_event_research__case_id__relations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/extract": {
         parameters: {
             query?: never;
@@ -999,6 +1126,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/conclusion-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Conclusion History */
+        get: operations["event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/scope-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Event Scope History */
+        get: operations["event_scope_history_api_v1_event_research__case_id__scope_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/review-queue": {
         parameters: {
             query?: never;
@@ -1033,6 +1194,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/continuations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Continue Event Research */
+        post: operations["continue_event_research_api_v1_event_research__case_id__continuations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/published-material-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Published Material */
+        post: operations["decide_published_material_api_v1_event_research__case_id__published_material_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/monitor": {
         parameters: {
             query?: never;
@@ -1045,6 +1240,351 @@ export interface paths {
         /** Save Monitor */
         put: operations["save_monitor_api_v1_research_cases__case_id__monitor_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/monitor/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Manual Monitor Run
+         * @description Queue an explicit replenishment using the effective monitor version.
+         */
+        post: operations["start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/monitor/factor-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Factor Monitor Run */
+        post: operations["start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/monitor/{target_status}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Monitor Status */
+        post: operations["set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/market-expression": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Market Expression */
+        get: operations["get_market_expression_api_v1_research_cases__case_id__market_expression_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/source-statements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admitted Source Statements */
+        get: operations["admitted_source_statements_api_v1_research_cases__case_id__source_statements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/market-instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market Instruments */
+        get: operations["market_instruments_api_v1_research_cases__case_id__market_instruments_get"];
+        put?: never;
+        /** Register Market Instrument Binding */
+        post: operations["register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market Instrument Catalog */
+        get: operations["market_instrument_catalog_api_v1_market_instruments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/fundamental-impacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Fundamental Impact */
+        post: operations["register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/market-observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Market Observation */
+        post: operations["register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/report-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Report Claim */
+        post: operations["register_report_claim_api_v1_research_cases__case_id__report_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Key Factor */
+        post: operations["register_key_factor_api_v1_research_cases__case_id__key_factors_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/key-factors/{factor_id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Claim Verification */
+        post: operations["register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/metric-definitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Metrics */
+        get: operations["list_metrics_api_v1_metric_definitions_get"];
+        put?: never;
+        /** Create Metric */
+        post: operations["create_metric_api_v1_metric_definitions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/outcome-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Binding */
+        post: operations["create_binding_api_v1_theses__thesis_id__outcome_bindings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outcome-bindings/{binding_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Binding */
+        post: operations["approve_binding_api_v1_outcome_bindings__binding_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/theses/{thesis_id}/researchability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Researchability */
+        get: operations["researchability_api_v1_theses__thesis_id__researchability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mechanism-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Mechanism Templates */
+        get: operations["list_mechanism_templates_api_v1_mechanism_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/mechanism-selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Mechanism Template */
+        post: operations["select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/mechanism-protocol": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Case Mechanism Protocol */
+        get: operations["case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Verification Rule */
+        post: operations["create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1123,6 +1663,38 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActiveResearchRunDTO */
+        ActiveResearchRunDTO: {
+            /** Run Id */
+            run_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Updated At */
+            updated_at: string;
+            /** Processed Count */
+            processed_count: number;
+            /** Next Action */
+            next_action: string;
+            scope: components["schemas"]["FrozenRunScopeDTO"];
+        };
+        /** ActiveResearchRunsResponse */
+        ActiveResearchRunsResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ActiveResearchRunDTO"][];
+        };
         /** ActivityItemDTO */
         ActivityItemDTO: {
             /** Event Id */
@@ -1159,6 +1731,13 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** ApproveOutcomeBindingRequest */
+        ApproveOutcomeBindingRequest: {
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * AssessFailureDTO
@@ -1247,6 +1826,111 @@ export interface components {
             /** Assessed At */
             assessed_at?: string | null;
         };
+        /** AtomicClaimCandidateDTO */
+        AtomicClaimCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Source Span Id */
+            source_span_id: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Document Source Url */
+            document_source_url: string;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /** Quote */
+            quote: string;
+            /** Quote Start */
+            quote_start: number;
+            /** Quote End */
+            quote_end: number;
+            /** Quote Sha256 */
+            quote_sha256: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Claim Type */
+            claim_type: string;
+            /** Assertion Actor */
+            assertion_actor: string | null;
+            /** Authority Level */
+            authority_level: string;
+            /** Structured Fields */
+            structured_fields: {
+                [key: string]: unknown;
+            };
+            /** Validation Result */
+            validation_result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "awaiting_review" | "confirmed" | "modified" | "rejected";
+            /** Review History */
+            review_history: components["schemas"]["AtomicClaimReviewDTO"][];
+            published_source_statement: components["schemas"]["PublishedSourceStatementDTO"] | null;
+        };
+        /** AtomicClaimQueueResponse */
+        AtomicClaimQueueResponse: {
+            /** Items */
+            items: components["schemas"]["AtomicClaimCandidateDTO"][];
+        };
+        /** AtomicClaimReviewDTO */
+        AtomicClaimReviewDTO: {
+            /** Id */
+            id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            published_source_statement: components["schemas"]["PublishedSourceStatementDTO"] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** AtomicClaimReviewRequest */
+        AtomicClaimReviewRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "modified" | "rejected";
+            /** Normalized Text */
+            normalized_text?: string | null;
+            /** Observed Period */
+            observed_period?: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /**
+         * CancelRunRequest
+         * @description Human decision recorded when an in-progress run is stopped.
+         */
+        CancelRunRequest: {
+            /** Actor */
+            actor: string;
+            /** Change Reason */
+            change_reason: string;
+        };
         /** CancelRunResponse */
         CancelRunResponse: {
             /** Id */
@@ -1330,6 +2014,15 @@ export interface components {
             items: components["schemas"]["CaseSummaryDTO"][];
             page: components["schemas"]["CursorPage"];
         };
+        /** CaseMechanismProtocolDTO */
+        CaseMechanismProtocolDTO: {
+            selection: components["schemas"]["MechanismSelectionDTO"] | null;
+            template: components["schemas"]["MechanismTemplateDTO"] | null;
+            /** Rules */
+            rules: components["schemas"]["VerificationRuleDTO"][];
+            /** Rule History */
+            rule_history: components["schemas"]["VerificationRuleDTO"][];
+        };
         /** CaseMonitorDTO */
         CaseMonitorDTO: {
             /** Id */
@@ -1361,9 +2054,48 @@ export interface components {
         /** CaseMonitorDetailResponse */
         CaseMonitorDetailResponse: {
             monitor: components["schemas"]["CaseMonitorDTO"] | null;
+            /** History */
+            history: components["schemas"]["CaseMonitorDTO"][];
             latest_run: components["schemas"]["LatestResearchRunDTO"] | null;
+            /** Next Scheduled At */
+            next_scheduled_at?: string | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
+        };
+        /** CaseRelationCaseDTO */
+        CaseRelationCaseDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Title */
+            title: string;
+            /** Lifecycle Status */
+            lifecycle_status: string;
+        };
+        /** CaseRelationDTO */
+        CaseRelationDTO: {
+            /** Id */
+            id: string;
+            source_case: components["schemas"]["CaseRelationCaseDTO"];
+            target_case: components["schemas"]["CaseRelationCaseDTO"];
+            /**
+             * Relation Type
+             * @enum {string}
+             */
+            relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
+            /** Reason */
+            reason: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Review State
+             * @enum {string}
+             */
+            review_state: "machine_generated" | "reviewed" | "rejected";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /**
          * CaseSnapshotDTO
@@ -1445,6 +2177,21 @@ export interface components {
             claimed_at: string;
             /** Lease Expires At */
             lease_expires_at?: string | null;
+        };
+        /** ClaimVerificationDTO */
+        ClaimVerificationDTO: {
+            /** Outcome */
+            outcome: string;
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /** CompanyDTO */
         CompanyDTO: {
@@ -1664,6 +2411,21 @@ export interface components {
             /** Statement */
             statement: string;
         };
+        /** ContinueEventResearchRequest */
+        ContinueEventResearchRequest: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Reason */
+            reason: string;
+            /** Triggered By */
+            triggered_by: string;
+        };
+        /** ContinueEventResearchResponse */
+        ContinueEventResearchResponse: {
+            /** Run Id */
+            run_id: string;
+            lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
+        };
         /** CounterResearchTaskDTO */
         CounterResearchTaskDTO: {
             /** Id */
@@ -1755,12 +2517,48 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** CreateDocumentSupplementRequest */
+        CreateDocumentSupplementRequest: {
+            /** Case Id */
+            case_id: string;
+            /** Raw Text */
+            raw_text: string;
+            /** Claimed Page Reference */
+            claimed_page_reference: string;
+            /** Created By */
+            created_by: string;
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /** CreateDocumentSupplementResponse */
+        CreateDocumentSupplementResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /** Original Document Version Id */
+            original_document_version_id: string;
+            /** Claimed Page Reference */
+            claimed_page_reference: string;
+            /** Extraction Allowed */
+            extraction_allowed: boolean;
+        };
         /** CreateEventResearchRequest */
         CreateEventResearchRequest: {
             /** Raw Input */
             raw_input: string;
             /** Source Url */
             source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
             /** Event Title */
             event_title: string;
             /** Company Name */
@@ -1775,6 +2573,11 @@ export interface components {
             research_question: string;
             /** Candidate Factors */
             candidate_factors: string[];
+            /**
+             * Research Protocol Required
+             * @default true
+             */
+            research_protocol_required: boolean;
             /** Created By */
             created_by: string;
         };
@@ -1822,6 +2625,18 @@ export interface components {
             published_at: string;
             /** Source */
             source: string;
+            /** Source Document Version Id */
+            source_document_version_id?: string | null;
+            /** Source Span Id */
+            source_span_id?: string | null;
+            /** Provider Record Id */
+            provider_record_id?: string | null;
+            /**
+             * Coverage Status
+             * @default not_recorded
+             * @enum {string}
+             */
+            coverage_status: "complete" | "partial" | "not_recorded";
         };
         /** CreateStockRequest */
         CreateStockRequest: {
@@ -2023,6 +2838,8 @@ export interface components {
             acquired_at: string;
             /** Parser Version */
             parser_version: string;
+            /** Source Authority */
+            source_authority: string;
             /** Supersedes Id */
             supersedes_id: string | null;
             /** Span Count */
@@ -2033,7 +2850,11 @@ export interface components {
              * Parse State
              * @enum {string}
              */
-            parse_state: "parsed" | "unparsed";
+            parse_state: "parsed" | "partial" | "failed" | "unparsed";
+            /** Supplements Document Version Id */
+            supplements_document_version_id?: string | null;
+            /** Claimed Page Reference */
+            claimed_page_reference?: string | null;
             /**
              * Extraction State
              * @enum {string}
@@ -2057,6 +2878,7 @@ export interface components {
             doc_kind?: string | null;
             /** Entity */
             entity?: string | null;
+            source_contract?: components["schemas"]["SourceContractDTO"] | null;
         };
         /** DocumentVersionAddedDTO */
         DocumentVersionAddedDTO: {
@@ -2139,6 +2961,39 @@ export interface components {
             /** Citations */
             citations: components["schemas"]["EventKeyEvidenceDTO"][];
         };
+        /** EventConclusionHistoryResponse */
+        EventConclusionHistoryResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Versions */
+            versions: components["schemas"]["EventConclusionVersionDTO"][];
+        };
+        /** EventConclusionVersionDTO */
+        EventConclusionVersionDTO: {
+            /** Id */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** State */
+            state: string;
+            /** Text */
+            text: string;
+            /** Primary Factor */
+            primary_factor: string | null;
+            /** Scope Version */
+            scope_version: number | null;
+            /** Based On Conclusion Id */
+            based_on_conclusion_id: string | null;
+            /** Reviewer */
+            reviewer: string | null;
+            /** Evidence Count */
+            evidence_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** EventKeyEvidenceDTO */
         EventKeyEvidenceDTO: {
             /** Case Id */
@@ -2176,6 +3031,8 @@ export interface components {
         };
         /** EventResearchFactorDTO */
         EventResearchFactorDTO: {
+            /** Thesis Id */
+            thesis_id: string;
             /** Statement */
             statement: string;
             /** Description */
@@ -2251,6 +3108,29 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /** EventResearchScopeHistoryItemDTO */
+        EventResearchScopeHistoryItemDTO: {
+            /** Version */
+            version: number;
+            /** Factors */
+            factors: components["schemas"]["EventResearchScopeFactorDTO"][];
+            /** Changed By */
+            changed_by: string;
+            /** Change Reason */
+            change_reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** EventResearchScopeHistoryResponse */
+        EventResearchScopeHistoryResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Items */
+            items: components["schemas"]["EventResearchScopeHistoryItemDTO"][];
+        };
         /**
          * EventReviewQueueItemDTO
          * @description A pending event-evidence proposal, including source admission context.
@@ -2258,6 +3138,8 @@ export interface components {
         EventReviewQueueItemDTO: {
             /** Proposal Id */
             proposal_id: string;
+            /** Proposal Version */
+            proposal_version: number;
             /** Status */
             status: string;
             /**
@@ -2434,12 +3316,65 @@ export interface components {
             /** Pb */
             pb: number | null;
         };
+        /** ExpressionSourceDTO */
+        ExpressionSourceDTO: {
+            /** Source Statement Id */
+            source_statement_id: string | null;
+            /** Document Version Id */
+            document_version_id: string | null;
+            /** Document Title */
+            document_title: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            } | null;
+            /** Available At */
+            available_at: string | null;
+            /** Permission Status */
+            permission_status: string;
+        };
+        /**
+         * ExtractCandidateDTO
+         * @description One source-grounded candidate awaiting human review.
+         */
+        ExtractCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Claim Type */
+            claim_type: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Quote */
+            quote: string;
+            /** Quote Start */
+            quote_start: number;
+            /** Quote End */
+            quote_end: number;
+            /**
+             * Review State
+             * @default awaiting_review
+             * @constant
+             */
+            review_state: "awaiting_review";
+        };
         /** ExtractEventResearchRequest */
         ExtractEventResearchRequest: {
             /** Raw Input */
             raw_input: string;
             /** Source Url */
             source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** ExtractEventResearchResponse */
         ExtractEventResearchResponse: {
@@ -2467,40 +3402,42 @@ export interface components {
         };
         /**
          * ExtractResponse
-         * @description Result of running statement extraction over one document version.
+         * @description Result of running review-gated extraction over one document version.
          *
-         *     Append-only: re-running extraction on a version that already has
-         *     statements will append duplicates; the engine script only feeds
-         *     pending versions (spans present, no statements yet).  ``mode`` is
-         *     ``mock`` without an LLM key (non-production only).  ``reason`` is the
-         *     honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
-         *     事实 / LLM 拒答).
+         *     The extractor never writes formal SourceStatements. Every returned item
+         *     has a continuous source quote and stays in ``awaiting_review`` until a
+         *     human confirms, modifies, or rejects it. ``reason`` explains a zero
+         *     candidate result without pretending that extraction succeeded silently.
          */
         ExtractResponse: {
             /** Document Version Id */
             document_version_id: string;
             /** Mode */
             mode: string;
-            /** Statement Count */
-            statement_count: number;
+            /** Candidate Count */
+            candidate_count: number;
             /** Reason */
             reason?: string | null;
-            /** Statements */
-            statements: components["schemas"]["ExtractStatementDTO"][];
+            /** Candidates */
+            candidates: components["schemas"]["ExtractCandidateDTO"][];
         };
         /**
-         * ExtractStatementDTO
-         * @description One statement produced by the extraction step.
+         * FrozenRunScopeDTO
+         * @description Scope recorded when a run started; never reconstructed from current settings.
          */
-        ExtractStatementDTO: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Normalized Text */
-            normalized_text: string;
-            /** Observed Period */
-            observed_period: string | null;
+        FrozenRunScopeDTO: {
+            /** Trigger */
+            trigger?: string | null;
+            /** Monitor Version Id */
+            monitor_version_id?: string | null;
+            /** Factor Ids */
+            factor_ids?: string[];
+            /** Factor Statements */
+            factor_statements?: string[];
+            /** Allowed Source Types */
+            allowed_source_types?: string[];
+            /** Budget */
+            budget?: number | null;
         };
         /**
          * FundCompositionResponse
@@ -2542,6 +3479,66 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** FundDisclosureExposureDTO */
+        FundDisclosureExposureDTO: {
+            /** Fund Id */
+            fund_id: string;
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /** Disclosed Exposure */
+            disclosed_exposure: number | null;
+            /** Positions */
+            positions: components["schemas"]["FundDisclosurePositionDTO"][];
+        };
+        /** FundDisclosurePositionDTO */
+        FundDisclosurePositionDTO: {
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /** Weight */
+            weight: number;
+            /**
+             * Report Period
+             * Format: date
+             */
+            report_period: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /**
+             * Acquired At
+             * Format: date-time
+             */
+            acquired_at: string;
+            /** Source */
+            source: string;
+            /** Source Document Version Id */
+            source_document_version_id: string | null;
+            /**
+             * Source Visible In Case
+             * @default false
+             */
+            source_visible_in_case: boolean;
+            /** Source Locator */
+            source_locator: {
+                [key: string]: unknown;
+            } | null;
+            /** Provider Record Id */
+            provider_record_id: string | null;
+            /** Source Permission Status */
+            source_permission_status: string;
+            /** Coverage Status */
+            coverage_status: string;
+            /** Freshness Status */
+            freshness_status: string;
         };
         /**
          * FundExposureDTO
@@ -2599,6 +3596,39 @@ export interface components {
             acquired_at?: string | null;
             /** Source */
             source: string;
+        };
+        /** FundamentalImpactDTO */
+        FundamentalImpactDTO: {
+            /** Id */
+            id: string;
+            /** Key Factor Id */
+            key_factor_id: string;
+            /** Company Id */
+            company_id: string;
+            /** Company Name */
+            company_name: string;
+            /** Stock Id */
+            stock_id: string | null;
+            /** Stock Code */
+            stock_code: string | null;
+            /** Stock Name */
+            stock_name: string | null;
+            /** Metric Name */
+            metric_name: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /**
          * GapExplanationDTO
@@ -2756,6 +3786,14 @@ export interface components {
             acquired_at: string;
             /** Source */
             source: string;
+            /** Source Document Version Id */
+            source_document_version_id: string | null;
+            /** Source Span Id */
+            source_span_id: string | null;
+            /** Provider Record Id */
+            provider_record_id: string | null;
+            /** Coverage Status */
+            coverage_status: string;
             /**
              * Created At
              * Format: date-time
@@ -2940,6 +3978,43 @@ export interface components {
             /** Review State */
             review_state: ("machine_generated" | "reviewed" | "rejected") | null;
         };
+        /** KeyFactorDTO */
+        KeyFactorDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
+            /** Report Claim Id */
+            report_claim_id: string | null;
+            /** Name */
+            name: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Allowed Source Types */
+            allowed_source_types: string[];
+            /** Verification Window Start */
+            verification_window_start: string | null;
+            /** Verification Window End */
+            verification_window_end: string | null;
+            /** Support Condition */
+            support_condition: string;
+            /** Refutation Condition */
+            refutation_condition: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            verification: components["schemas"]["ClaimVerificationDTO"] | null;
+        };
         /**
          * KeyFactorRowDTO
          * @description 单个命题下的「关键因素」行（含 AI / 人工角色 + 复盘链路）.
@@ -3067,6 +4142,204 @@ export interface components {
         LinkReviewResponse: {
             review: components["schemas"]["EvidenceReviewDTO"];
         };
+        /** MarketExpressionResponse */
+        MarketExpressionResponse: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Claims */
+            claims: components["schemas"]["ReportClaimDTO"][];
+            /** Factors */
+            factors: components["schemas"]["KeyFactorDTO"][];
+            /** Fundamentals */
+            fundamentals: components["schemas"]["FundamentalImpactDTO"][];
+            /** Market Observations */
+            market_observations: components["schemas"]["MarketObservationDTO"][];
+            /** Fund Exposure */
+            fund_exposure: components["schemas"]["FundDisclosureExposureDTO"][];
+        };
+        /** MarketInstrumentBindingDTO */
+        MarketInstrumentBindingDTO: {
+            /** Id */
+            id: string;
+            /** Company Id */
+            company_id: string;
+            /** Company Code */
+            company_code: string;
+            /** Company Name */
+            company_name: string;
+            /** Stock Id */
+            stock_id: string | null;
+            /** Stock Code */
+            stock_code: string | null;
+            /** Stock Name */
+            stock_name: string | null;
+            /** Relationship Role */
+            relationship_role: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
+        };
+        /** MarketInstrumentBindingsResponse */
+        MarketInstrumentBindingsResponse: {
+            /** Items */
+            items: components["schemas"]["MarketInstrumentBindingDTO"][];
+        };
+        /** MarketInstrumentCatalogItemDTO */
+        MarketInstrumentCatalogItemDTO: {
+            /** Company Id */
+            company_id: string;
+            /** Company Code */
+            company_code: string;
+            /** Company Name */
+            company_name: string;
+            /** Company Type */
+            company_type: string;
+            /** Stocks */
+            stocks: components["schemas"]["MarketInstrumentStockOptionDTO"][];
+        };
+        /** MarketInstrumentCatalogResponse */
+        MarketInstrumentCatalogResponse: {
+            /** Items */
+            items: components["schemas"]["MarketInstrumentCatalogItemDTO"][];
+        };
+        /** MarketInstrumentStockOptionDTO */
+        MarketInstrumentStockOptionDTO: {
+            /** Id */
+            id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Market */
+            market: string;
+        };
+        /** MarketObservationDTO */
+        MarketObservationDTO: {
+            /** Id */
+            id: string;
+            /** Key Factor Id */
+            key_factor_id: string | null;
+            /** Stock Id */
+            stock_id: string;
+            /** Stock Code */
+            stock_code: string;
+            /** Stock Name */
+            stock_name: string;
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Window Label */
+            window_label: string;
+            /** Benchmark */
+            benchmark: string;
+            /** Price Source */
+            price_source: string;
+            /** After Hours Treatment */
+            after_hours_treatment: string;
+            /** Relative Return */
+            relative_return: number | null;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+        };
+        /** MechanismEdgeDTO */
+        MechanismEdgeDTO: {
+            /** Id */
+            id: string;
+            /** Edge Key */
+            edge_key: string;
+            /** Source Node Id */
+            source_node_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /** MechanismNodeDTO */
+        MechanismNodeDTO: {
+            /** Id */
+            id: string;
+            /** Node Key */
+            node_key: string;
+            /** Display Name */
+            display_name: string;
+            /** Role */
+            role: string;
+        };
+        /** MechanismSelectionDTO */
+        MechanismSelectionDTO: {
+            /** Id */
+            id: string;
+            /** Research Case Id */
+            research_case_id: string;
+            /** Template Version Id */
+            template_version_id: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MechanismTemplateDTO */
+        MechanismTemplateDTO: {
+            /** Id */
+            id: string;
+            /** Template Key */
+            template_key: string;
+            /** Version */
+            version: number;
+            /** Display Name */
+            display_name: string;
+            /** Industry Scope */
+            industry_scope: string;
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Nodes */
+            nodes: components["schemas"]["MechanismNodeDTO"][];
+            /** Edges */
+            edges: components["schemas"]["MechanismEdgeDTO"][];
+        };
         /**
          * MetricCatalogEntryDTO
          * @description One catalog row: an entity-metric pair with its latest frozen value.
@@ -3094,6 +4367,60 @@ export interface components {
             /** Entries */
             entries: components["schemas"]["MetricCatalogEntryDTO"][];
         };
+        /** MetricDefinitionDTO */
+        MetricDefinitionDTO: {
+            /** Id */
+            id: string;
+            /** Metric Id */
+            metric_id: string;
+            /** Version */
+            version: number;
+            /** Display Name */
+            display_name: string;
+            /** Entity Scope */
+            entity_scope: string;
+            /** Unit */
+            unit: string;
+            /** Role Eligibility */
+            role_eligibility: string[];
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MetricDefinitionRequest */
+        MetricDefinitionRequest: {
+            /** Metric Id */
+            metric_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Canonical Definition */
+            canonical_definition: string;
+            /**
+             * Entity Scope
+             * @enum {string}
+             */
+            entity_scope: "company" | "business_line" | "product_line";
+            /** Unit */
+            unit: string;
+            /** Frequency */
+            frequency: string;
+            /** Period Semantics */
+            period_semantics: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /** Role Eligibility */
+            role_eligibility: ("outcome" | "driver" | "mediator" | "context")[];
+            /** Approved By */
+            approved_by: string;
+            /** Reason */
+            reason: string;
+        };
         /** MetricPointDTO */
         MetricPointDTO: {
             /** Value */
@@ -3116,6 +4443,83 @@ export interface components {
             metric_name: string;
             /** Points */
             points: components["schemas"]["MetricPointDTO"][];
+        };
+        /** OutcomeBindingDTO */
+        OutcomeBindingDTO: {
+            /** Id */
+            id: string;
+            /** Thesis Id */
+            thesis_id: string;
+            /** Metric Definition Id */
+            metric_definition_id: string;
+            /** Entity Scope */
+            entity_scope: {
+                [key: string]: string;
+            };
+            /** Direction */
+            direction: string;
+            /** Baseline */
+            baseline: {
+                [key: string]: string;
+            };
+            /**
+             * Horizon Start
+             * Format: date
+             */
+            horizon_start: string;
+            /**
+             * Horizon End
+             * Format: date
+             */
+            horizon_end: string;
+            /** State */
+            state: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** OutcomeBindingRequest */
+        OutcomeBindingRequest: {
+            /**
+             * Metric Definition Id
+             * Format: uuid
+             */
+            metric_definition_id: string;
+            /** Entity Scope */
+            entity_scope: {
+                [key: string]: string;
+            };
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease" | "stable" | "mixed";
+            /** Baseline */
+            baseline: {
+                [key: string]: string;
+            };
+            /**
+             * Horizon Start
+             * Format: date
+             */
+            horizon_start: string;
+            /**
+             * Horizon End
+             * Format: date
+             */
+            horizon_end: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /** OverviewResponse */
         OverviewResponse: {
@@ -3260,6 +4664,222 @@ export interface components {
             /** State */
             state: string;
         };
+        /** PublishedMaterialDecisionRequest */
+        PublishedMaterialDecisionRequest: {
+            /** Raw Input */
+            raw_input: string;
+            /** Source Url */
+            source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "reopen" | "no_change";
+            /** Reason */
+            reason: string;
+            /** Actor */
+            actor: string;
+        };
+        /** PublishedMaterialDecisionResponse */
+        PublishedMaterialDecisionResponse: {
+            /** Document Version Id */
+            document_version_id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "reopen" | "no_change";
+            /** Decision Event Id */
+            decision_event_id: string;
+            /** Run Id */
+            run_id?: string | null;
+            lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
+        };
+        /** PublishedSourceStatementDTO */
+        PublishedSourceStatementDTO: {
+            /** Id */
+            id: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /** Kind */
+            kind: string;
+            /** Observed Period */
+            observed_period: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** RegisterClaimVerificationRequest */
+        RegisterClaimVerificationRequest: {
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "supported" | "contradicted" | "insufficient_evidence" | "not_due";
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterFundamentalImpactRequest */
+        RegisterFundamentalImpactRequest: {
+            /**
+             * Market Instrument Binding Id
+             * Format: uuid
+             */
+            market_instrument_binding_id: string;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Metric Name */
+            metric_name: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "positive" | "negative" | "neutral";
+            /** Rationale */
+            rationale: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterKeyFactorRequest */
+        RegisterKeyFactorRequest: {
+            /**
+             * Report Claim Id
+             * Format: uuid
+             */
+            report_claim_id: string;
+            /** Thesis Id */
+            thesis_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "positive" | "negative" | "neutral";
+            /** Metric Name */
+            metric_name: string;
+            /** Allowed Source Types */
+            allowed_source_types: string[];
+            /** Verification Window Start */
+            verification_window_start?: string | null;
+            /** Verification Window End */
+            verification_window_end?: string | null;
+            /** Support Condition */
+            support_condition: string;
+            /** Refutation Condition */
+            refutation_condition: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterMarketInstrumentBindingRequest */
+        RegisterMarketInstrumentBindingRequest: {
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /** Stock Id */
+            stock_id?: string | null;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /**
+             * Relationship Role
+             * @enum {string}
+             */
+            relationship_role: "directly_affected" | "supply_chain" | "competitor" | "beneficiary" | "risk_exposure";
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterMarketObservationRequest */
+        RegisterMarketObservationRequest: {
+            /**
+             * Market Instrument Binding Id
+             * Format: uuid
+             */
+            market_instrument_binding_id: string;
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Window Label */
+            window_label: string;
+            /** Benchmark */
+            benchmark: string;
+            /** Price Source */
+            price_source: string;
+            /** After Hours Treatment */
+            after_hours_treatment: string;
+            /** Relative Return */
+            relative_return?: number | null;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** RegisterReportClaimRequest */
+        RegisterReportClaimRequest: {
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Claim Kind
+             * @enum {string}
+             */
+            claim_kind: "disclosed_fact" | "forecast" | "research_opinion";
+            /** Asserted Period */
+            asserted_period?: string | null;
+            /** Asserted By */
+            asserted_by: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
         /** RelatedThesisDTO */
         RelatedThesisDTO: {
             /**
@@ -3280,6 +4900,29 @@ export interface components {
             title?: string | null;
             ai_assessment?: components["schemas"]["AssessmentViewDTO"] | null;
             review?: components["schemas"]["RoleReviewDTO"] | null;
+        };
+        /** ReportClaimDTO */
+        ReportClaimDTO: {
+            /** Id */
+            id: string;
+            /** Text */
+            text: string;
+            /** Claim Kind */
+            claim_kind: string;
+            /** Asserted Period */
+            asserted_period: string | null;
+            /** Asserted By */
+            asserted_by: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /**
          * ReproductionManifestDTO
@@ -3340,6 +4983,13 @@ export interface components {
             mode: string;
             assessment: components["schemas"]["RerunAssessmentDTO"];
         };
+        /** ResearchNetworkResponse */
+        ResearchNetworkResponse: {
+            /** Reviewed Relations */
+            reviewed_relations: components["schemas"]["CaseRelationDTO"][];
+            /** Candidate Relations */
+            candidate_relations: components["schemas"]["CaseRelationDTO"][];
+        };
         /**
          * ResearchOpsResponse
          * @description 研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。
@@ -3352,6 +5002,45 @@ export interface components {
             throughput: components["schemas"]["ReviewThroughputDTO"];
             agreement: components["schemas"]["HumanAiAgreementDTO"];
             latency: components["schemas"]["JudgmentLatencyDTO"];
+        };
+        /**
+         * ResearchRunArchiveDTO
+         * @description A global, replayable run record, including terminal runs.
+         */
+        ResearchRunArchiveDTO: {
+            /** Run Id */
+            run_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Case Title */
+            case_title: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Updated At */
+            updated_at: string;
+            /** Processed Count */
+            processed_count: number;
+            /** Next Action */
+            next_action: string;
+            scope: components["schemas"]["FrozenRunScopeDTO"];
+            /** Created At */
+            created_at: string;
+            /** Stop Reason */
+            stop_reason?: string | null;
+        };
+        /** ResearchRunArchiveResponse */
+        ResearchRunArchiveResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ResearchRunArchiveDTO"][];
         };
         /** ResearchRunEventsItemDTO */
         ResearchRunEventsItemDTO: {
@@ -3468,13 +5157,27 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** ResearchabilityDTO */
+        ResearchabilityDTO: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_applicable" | "blocked" | "single_metric_monitoring" | "ready";
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Effective Binding Id */
+            effective_binding_id: string | null;
+            /** Next Action */
+            next_action: string;
+        };
         /** ReviewDecisionRequest */
         ReviewDecisionRequest: {
             /**
              * Outcome
              * @enum {string}
              */
-            outcome: "confirmed" | "modified" | "rejected";
+            outcome: "confirmed" | "modified" | "rejected" | "needs_more_evidence";
             /** Reason */
             reason: string;
             /** Expected Version */
@@ -3659,6 +5362,25 @@ export interface components {
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
         };
+        /** SelectMechanismTemplateRequest */
+        SelectMechanismTemplateRequest: {
+            /**
+             * Template Version Id
+             * Format: uuid
+             */
+            template_version_id: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+        };
+        /** SetCaseMonitorStatusRequest */
+        SetCaseMonitorStatusRequest: {
+            /** Actor */
+            actor: string;
+            /** Change Reason */
+            change_reason: string;
+        };
         /**
          * SourceCitationDTO
          * @description 「支持、反驳与缺口」下的一条支持/反驳引用.
@@ -3679,6 +5401,36 @@ export interface components {
             citation: string;
             /** Locator */
             locator: string;
+        };
+        /** SourceContractDTO */
+        SourceContractDTO: {
+            /** Source Type */
+            source_type: string;
+            /** Provider Or Tenant */
+            provider_or_tenant: string;
+            /** Permissions */
+            permissions: {
+                [key: string]: boolean;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "admitted" | "restricted";
+            /** Region */
+            region: string;
+            /** Effective From */
+            effective_from: string | null;
+            /** Effective Until */
+            effective_until: string | null;
+            /** Retention Policy */
+            retention_policy: string;
+            /** Deletion Policy */
+            deletion_policy: string;
+            /** Downstream Restrictions */
+            downstream_restrictions: string[];
+            /** Contract Version */
+            contract_version: string | null;
         };
         /**
          * SourceGroupDTO
@@ -3714,11 +5466,53 @@ export interface components {
             text_sha256?: string | null;
         };
         /**
+         * SourceStatementOptionDTO
+         * @description A Case-owned, display-and-processing-admitted statement selectable by a researcher.
+         */
+        SourceStatementOptionDTO: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Text */
+            text: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Document Title */
+            document_title: string;
+            /** Source Url */
+            source_url: string | null;
+            /** Locator */
+            locator: {
+                [key: string]: unknown;
+            };
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /**
+             * Permission Status
+             * @constant
+             */
+            permission_status: "admitted";
+        };
+        /** SourceStatementOptionsResponse */
+        SourceStatementOptionsResponse: {
+            /** Items */
+            items: components["schemas"]["SourceStatementOptionDTO"][];
+        };
+        /**
          * SourceStatus
          * @description The admissibility of a source link for event evidence.
          * @enum {string}
          */
-        SourceStatus: "accessible" | "pasted_unverified" | "invalid";
+        SourceStatus: "accessible" | "pasted_unverified" | "restricted" | "invalid";
+        /** StartFactorMonitorRunRequest */
+        StartFactorMonitorRunRequest: {
+            /** Key Factor Id */
+            key_factor_id: string;
+        };
         /** StartResearchRunRequest */
         StartResearchRunRequest: {
             /**
@@ -4320,6 +6114,11 @@ export interface components {
             factors: (string | components["schemas"]["EventResearchScopeFactorDTO"])[];
             /** Changed By */
             changed_by: string;
+            /**
+             * Change Reason
+             * @default 未记录具体原因（兼容旧客户端）
+             */
+            change_reason: string;
         };
         /** UpdateEventResearchScopeResponse */
         UpdateEventResearchScopeResponse: {
@@ -4406,6 +6205,93 @@ export interface components {
             source: string;
             /** Definition */
             definition: string;
+        };
+        /** VerificationRuleDTO */
+        VerificationRuleDTO: {
+            /** Id */
+            id: string;
+            /** Research Case Id */
+            research_case_id: string | null;
+            /** Mechanism Edge Id */
+            mechanism_edge_id: string;
+            /** Metric Definition Id */
+            metric_definition_id: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /** Support Predicate */
+            support_predicate: string;
+            /** Contradiction Predicate */
+            contradiction_predicate: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At Deadline
+             * Format: date
+             */
+            available_at_deadline: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** VerificationRuleRequest */
+        VerificationRuleRequest: {
+            /**
+             * Metric Definition Id
+             * Format: uuid
+             */
+            metric_definition_id: string;
+            /**
+             * Expected Direction
+             * @enum {string}
+             */
+            expected_direction: "increase" | "decrease" | "stable" | "mixed";
+            /** Support Predicate */
+            support_predicate: string;
+            /** Contradiction Predicate */
+            contradiction_predicate: string;
+            /** Allowed Source Roles */
+            allowed_source_roles: string[];
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At Deadline
+             * Format: date
+             */
+            available_at_deadline: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Reason */
+            reason: string;
         };
         /** CausalStepDTO */
         app__schemas__v1__cases__CausalStepDTO: {
@@ -4840,6 +6726,7 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string | null;
+                case_id?: string | null;
                 cutoff?: string | null;
                 limit?: number;
                 cursor?: string | null;
@@ -5548,6 +7435,41 @@ export interface operations {
             };
         };
     };
+    create_document_supplement_api_v1_documents__document_version_id__supplements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDocumentSupplementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateDocumentSupplementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     extract_statements_api_v1_documents__document_version_id__extract_post: {
         parameters: {
             query?: never;
@@ -6191,6 +8113,137 @@ export interface operations {
             };
         };
     };
+    list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get: {
+        parameters: {
+            query?: {
+                review_state?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtomicClaimQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_atomic_claim_api_v1_atomic_claims__candidate_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AtomicClaimReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtomicClaimReviewDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_active_runs_api_v1_research_runs_active_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActiveResearchRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_archive_api_v1_research_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunArchiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_runs_api_v1_research_cases__case_id__runs_get: {
         parameters: {
             query?: {
@@ -6270,7 +8323,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelRunRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -6420,6 +8477,57 @@ export interface operations {
             };
         };
     };
+    event_research_network_api_v1_event_research_network_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchNetworkResponse"];
+                };
+            };
+        };
+    };
+    event_research_relations_api_v1_event_research__case_id__relations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchNetworkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     extract_event_api_v1_event_research_extract_post: {
         parameters: {
             query?: never;
@@ -6519,6 +8627,68 @@ export interface operations {
             };
         };
     };
+    event_conclusion_history_api_v1_event_research__case_id__conclusion_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventConclusionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_scope_history_api_v1_event_research__case_id__scope_history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventResearchScopeHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     event_review_queue_api_v1_event_research__case_id__review_queue_get: {
         parameters: {
             query?: never;
@@ -6585,6 +8755,76 @@ export interface operations {
             };
         };
     };
+    continue_event_research_api_v1_event_research__case_id__continuations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueEventResearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_published_material_api_v1_event_research__case_id__published_material_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishedMaterialDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedMaterialDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_monitor_api_v1_research_cases__case_id__monitor_get: {
         parameters: {
             query?: never;
@@ -6638,6 +8878,724 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_manual_monitor_run_api_v1_research_cases__case_id__monitor_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_factor_monitor_run_api_v1_research_cases__case_id__monitor_factor_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartFactorMonitorRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_monitor_status_api_v1_research_cases__case_id__monitor__target_status__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                target_status: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetCaseMonitorStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMonitorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_market_expression_api_v1_research_cases__case_id__market_expression_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+                cutoff?: string | null;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketExpressionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admitted_source_statements_api_v1_research_cases__case_id__source_statements_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceStatementOptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_instruments_api_v1_research_cases__case_id__market_instruments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentBindingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_market_instrument_binding_api_v1_research_cases__case_id__market_instruments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMarketInstrumentBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    market_instrument_catalog_api_v1_market_instruments_get: {
+        parameters: {
+            query?: {
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstrumentCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_fundamental_impact_api_v1_research_cases__case_id__key_factors__factor_id__fundamental_impacts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterFundamentalImpactRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundamentalImpactDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_market_observation_api_v1_research_cases__case_id__key_factors__factor_id__market_observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMarketObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketObservationDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_report_claim_api_v1_research_cases__case_id__report_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterReportClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportClaimDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_key_factor_api_v1_research_cases__case_id__key_factors_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterKeyFactorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyFactorDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_claim_verification_api_v1_research_cases__case_id__key_factors__factor_id__verifications_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                factor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterClaimVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimVerificationDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_metrics_api_v1_metric_definitions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricDefinitionDTO"][];
+                };
+            };
+        };
+    };
+    create_metric_api_v1_metric_definitions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricDefinitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricDefinitionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_binding_api_v1_theses__thesis_id__outcome_bindings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutcomeBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_binding_api_v1_outcome_bindings__binding_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveOutcomeBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutcomeBindingDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    researchability_api_v1_theses__thesis_id__researchability_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchabilityDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mechanism_templates_api_v1_mechanism_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MechanismTemplateDTO"][];
+                };
+            };
+        };
+    };
+    select_mechanism_template_api_v1_research_cases__case_id__mechanism_selection_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectMechanismTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MechanismSelectionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    case_mechanism_protocol_api_v1_research_cases__case_id__mechanism_protocol_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseMechanismProtocolDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_verification_rule_api_v1_research_cases__case_id__mechanism_edges__edge_id__verification_rules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                case_id: string;
+                edge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationRuleDTO"];
                 };
             };
             /** @description Validation Error */

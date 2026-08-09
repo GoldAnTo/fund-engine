@@ -37,6 +37,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 
 
@@ -87,10 +88,19 @@ def _pending_versions(
         texts_by_version.setdefault(span_row.document_version_id, []).append(
             span_row.verbatim_text
         )
+    contracts = {
+        contract.document_version_id: contract
+        for contract in session.scalars(
+            select(SourceContract).where(
+                SourceContract.document_version_id.in_([v.id for v in retryable])
+            )
+        )
+    } if retryable else {}
     return [
         v
         for v in retryable
         if assess_span_texts(texts_by_version.get(v.id, []))[0] != "degenerate"
+        and (contracts.get(v.id) is None or contracts[v.id].allow_ai_processing)
     ]
 
 

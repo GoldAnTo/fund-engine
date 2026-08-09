@@ -226,6 +226,7 @@ class ResearchRepository:
         next_verification_event: str | None = None,
         creator_type: str = "human",
         review_state: str = "confirmed",
+        research_protocol_required: bool = False,
     ) -> Thesis:
         thesis = Thesis(
             research_case_id=research_case_id,
@@ -240,6 +241,7 @@ class ResearchRepository:
             next_verification_event=next_verification_event,
             creator_type=creator_type,
             review_state=review_state,
+            research_protocol_required=research_protocol_required,
         )
         self._session.add(thesis)
         self._session.flush()

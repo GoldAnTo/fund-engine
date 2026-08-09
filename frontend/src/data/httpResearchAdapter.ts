@@ -94,6 +94,12 @@ import type {
 
 type Schemas = components["schemas"];
 
+// These compatibility-only screen builders are never part of the Research OS
+// production surface. Keep their fixture out of the Vite production graph
+// while allowing legacy adapter tests to exercise it in the local runtime.
+const retiredPrototypeFixtureModule = "./" + "prototypeFixture";
+const loadRetiredPrototypeFixture = () => import(/* @vite-ignore */ retiredPrototypeFixtureModule);
+
 type TaskItemWire = {
   id: string;
   title: string;
@@ -212,25 +218,25 @@ function mapEventSourceAdmission(
 }
 
 // Backend search deep_link paths are prefixed with /research-cases/... but
-// the React routes are /cases/... and /relationships/...; rewrite to the
+// the React routes are /events/... and /network; rewrite to the
 // real frontend routes so clicks do not hit the wildcard redirect.
 // Exact-match patterns only: case-level, dossier, graph.
 function rewriteDeepLink(deepLink: string): string {
   if (deepLink.startsWith("/research-cases/")) {
     if (deepLink.endsWith("/dossier")) {
-      // /research-cases/{id}/dossier -> /cases/{id}
+      // /research-cases/{id}/dossier -> /events/{id}
       return deepLink
-        .replace(/^\/research-cases\//, "/cases/")
+        .replace(/^\/research-cases\//, "/events/")
         .replace(/\/dossier$/, "");
     }
     if (deepLink.endsWith("/graph")) {
-      // /research-cases/{id}/graph -> /relationships/{id}
+      // /research-cases/{id}/graph -> /events/{id}/wiki
       return deepLink
-        .replace(/^\/research-cases\//, "/relationships/")
-        .replace(/\/graph$/, "");
+        .replace(/^\/research-cases\//, "/events/")
+        .replace(/\/graph$/, "/wiki");
     }
-    // /research-cases/{id} -> /cases/{id}
-    return deepLink.replace(/^\/research-cases\//, "/cases/");
+    // /research-cases/{id} -> /events/{id}
+    return deepLink.replace(/^\/research-cases\//, "/events/");
   }
   return deepLink;
 }
@@ -710,11 +716,30 @@ export class HttpResearchAdapter implements ResearchClient {
       available_at: dto.available_at,
       acquired_at: dto.acquired_at,
       parser_version: dto.parser_version,
-      parse_quality: dto.parse_state === "parsed" ? "ok" : "partial",
+      source_authority: dto.source_authority,
+      parse_quality: dto.parse_state === "failed" ? "failed" : dto.parse_state === "parsed" ? "ok" : "partial",
       linked_cases: [],
       span_count: dto.span_count,
       statement_count: dto.statement_count,
       version_label: null,
+      source_contract: dto.source_contract ? {
+        source_type: dto.source_contract.source_type,
+        provider_or_tenant: dto.source_contract.provider_or_tenant,
+        permissions: {
+          ai_processing: dto.source_contract.permissions.ai_processing === true,
+          display: dto.source_contract.permissions.display === true,
+          export: dto.source_contract.permissions.export === true,
+          api: dto.source_contract.permissions.api === true,
+        },
+        status: dto.source_contract.status,
+        region: dto.source_contract.region,
+        retention_policy: dto.source_contract.retention_policy,
+        deletion_policy: dto.source_contract.deletion_policy,
+        downstream_restrictions: dto.source_contract.downstream_restrictions,
+        contract_version: dto.source_contract.contract_version,
+      } : null,
+      supplements_document_id: dto.supplements_document_version_id ?? null,
+      claimed_page_reference: dto.claimed_page_reference ?? null,
     };
   }
 
@@ -953,6 +978,7 @@ export class HttpResearchAdapter implements ResearchClient {
       `/documents${this.buildQuery({
         q: query?.query,
         cutoff: query?.cutoff,
+        case_id: query?.caseId,
       })}`,
     );
     return dto.items.map((d) => this.mapDocument(d));
@@ -1031,7 +1057,7 @@ export class HttpResearchAdapter implements ResearchClient {
   //    to a live endpoint is a one-line change once the backend ships it.)
 
   async getWorkspaceOverviewView() {
-    return (await import("./prototypeFixture")).buildWorkspaceOverview();
+    return (await loadRetiredPrototypeFixture()).buildWorkspaceOverview();
   }
 
   async getWorkspaceOverviewScreen(): Promise<WorkspaceOverviewScreen> {
@@ -1045,9 +1071,7 @@ export class HttpResearchAdapter implements ResearchClient {
     );
     // 任务队列 / 证据变化 / 活动流: explicitly out of target scope (binding
     // doc 缺口清单 "明确不建"); the screen labels these blocks as 示例.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildWorkspaceOverviewScreen();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildWorkspaceOverviewScreen();
 
     const assessment = overview.assessment;
     const CONCLUSION_LABEL: Record<string, string> = {
@@ -1367,9 +1391,7 @@ export class HttpResearchAdapter implements ResearchClient {
     ]);
     // Provider 查询计划 / 证据检索计划: no backend entity (binding doc 缺口
     // 清单 "明确不建"); keep the fixture plan block labeled 非目标范围.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildNewResearchView();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildNewResearchView();
     return {
       caseId: "",
       caseTitle: "新建研究",
@@ -1472,9 +1494,7 @@ export class HttpResearchAdapter implements ResearchClient {
     ]);
     // Provider 查询计划 / 采集编排 / 计划指标: no backend entity (binding
     // doc "明确不建"); keep the fixture blocks labeled 非目标范围.
-    const fixture = await (
-      await import("./prototypeFixture")
-    ).buildResearchPlanView();
+    const fixture = await (await loadRetiredPrototypeFixture()).buildResearchPlanView();
 
     const assets: PlanAsset[] = documents.items.map((d) => ({
       id: d.id,
@@ -2482,7 +2502,7 @@ export class HttpResearchAdapter implements ResearchClient {
     return {
       documentVersionId: dto.document_version_id,
       mode: dto.mode,
-      statementCount: dto.statement_count,
+      candidateCount: dto.candidate_count,
       reason: dto.reason ?? null,
     };
   }
@@ -2794,12 +2814,12 @@ export class HttpResearchAdapter implements ResearchClient {
     await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     const dto = await this.post<{
       event_title: string | null; company_name: string | null; ticker: string | null;
       event_at: string | null; market_reaction: string | null; summary: string | null;
       research_question: string; candidate_factors: string[]; confirmation_required: boolean;
-    }>("/event-research/extract", { raw_input: input.rawInput, source_url: input.sourceUrl || null });
+    }>("/event-research/extract", { raw_input: input.rawInput, source_url: input.sourceUrl || null, source_type: input.sourceType ?? "pasted_snapshot", source_metadata: input.sourceMetadata ?? {} });
     return {
       eventTitle: dto.event_title, companyName: dto.company_name, ticker: dto.ticker,
       eventAt: dto.event_at, marketReaction: dto.market_reaction, summary: dto.summary,
@@ -2813,10 +2833,11 @@ export class HttpResearchAdapter implements ResearchClient {
       status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
       status_summary: string; current_gap: string | null; next_human_action: string | null;
     } }>("/event-research", {
-      raw_input: input.rawInput, source_url: input.sourceUrl || null,
+      raw_input: input.rawInput, source_url: input.sourceUrl || null, source_type: input.sourceType ?? "pasted_snapshot", source_metadata: input.sourceMetadata ?? {},
       event_title: input.eventTitle, company_name: input.companyName, ticker: input.ticker,
       event_at: input.eventAt, market_reaction: input.marketReaction,
       research_question: input.researchQuestion, candidate_factors: input.candidateFactors,
+      research_protocol_required: input.researchProtocolRequired ?? true,
       created_by: input.createdBy,
     });
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
@@ -2837,7 +2858,7 @@ export class HttpResearchAdapter implements ResearchClient {
       event: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string };
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
       conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
-      factors: Array<{ statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
+      factors: Array<{ thesis_id: string; statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
       evidence: unknown[];
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
@@ -2847,7 +2868,7 @@ export class HttpResearchAdapter implements ResearchClient {
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
       conclusion: { ...dto.conclusion, confidence: dto.conclusion.confidence ?? "low", citations: dto.conclusion.citations as EventWorkbench["conclusion"]["citations"] },
-      factors: dto.factors.map((factor) => ({ statement: factor.statement, description: factor.description, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, pendingProposalCount: factor.pending_proposal_count ?? 0, currentGap: factor.current_gap })),
+      factors: dto.factors.map((factor) => ({ thesisId: factor.thesis_id, statement: factor.statement, description: factor.description, position: factor.position, reviewedSupportCount: factor.reviewed_support_count, reviewedContradictionCount: factor.reviewed_contradiction_count, pendingProposalCount: factor.pending_proposal_count ?? 0, currentGap: factor.current_gap })),
       evidence,
       progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
@@ -2855,12 +2876,50 @@ export class HttpResearchAdapter implements ResearchClient {
     };
   }
 
-  async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
+  async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
+    const dto = await this.get<{ versions: Array<{
+      id: string; sequence: number; state: "ai_draft" | "published"; text: string;
+      primary_factor: string | null; scope_version: number | null;
+      based_on_conclusion_id: string | null; reviewer: string | null;
+      evidence_count: number; created_at: string;
+    }> }>(`/event-research/${encodeURIComponent(caseId)}/conclusion-history`);
+    return dto.versions.map((version) => ({
+      id: version.id,
+      sequence: version.sequence,
+      state: version.state,
+      text: version.text,
+      primaryFactor: version.primary_factor,
+      scopeVersion: version.scope_version,
+      basedOnConclusionId: version.based_on_conclusion_id,
+      reviewer: version.reviewer,
+      evidenceCount: version.evidence_count,
+      createdAt: version.created_at,
+    }));
+  }
+
+  async continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<import("../domain/eventResearch").EventResearchContinuation> {
+    const dto = await this.post<{ run_id: string; lifecycle: {
+      status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
+      status_summary: string; current_gap: string | null; next_human_action: string | null;
+    } }>(`/event-research/${encodeURIComponent(input.caseId)}/continuations`, {
+      document_version_id: input.documentVersionId,
+      reason: input.reason,
+      triggered_by: input.triggeredBy,
+    });
+    return { runId: dto.run_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    const dto = await this.post<{ document_version_id: string; decision: "reopen" | "no_change"; decision_event_id: string; run_id?: string | null; lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null; } }>(`/event-research/${encodeURIComponent(input.caseId)}/published-material-decisions`, { raw_input: input.rawInput, source_url: input.sourceUrl, source_type: input.sourceType, source_metadata: input.sourceMetadata, decision: input.decision, reason: input.reason, actor: input.actor });
+    return { documentVersionId: dto.document_version_id, decision: dto.decision, decisionEventId: dto.decision_event_id, runId: dto.run_id ?? null, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
+  async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {
     const dto = await this.requestJson<{
       version: number; factors: Array<string | { statement: string; description?: string | null }>; reclassified_evidence_count: number; unmapped_evidence_count: number;
     }>(`/event-research/${encodeURIComponent(input.caseId)}/scope`, {
       method: "PUT",
-      body: JSON.stringify({ factors: input.factors, changed_by: input.changedBy }),
+      body: JSON.stringify({ factors: input.factors, changed_by: input.changedBy, change_reason: input.changeReason }),
     });
     return {
       version: dto.version,
@@ -2874,7 +2933,7 @@ export class HttpResearchAdapter implements ResearchClient {
     const dto = await this.get<{
       summary: { total: number; reviewed: number; pending: number; invalid_source: number; current_round: number; next_action?: string | null };
       items?: Array<{
-        proposal_id: string; status: string; proposed_at: string; link_id: string; case_id: string;
+        proposal_id: string; proposal_version: number; status: string; proposed_at: string; link_id: string; case_id: string;
         thesis_id?: string | null; thesis_statement?: string | null; ai_role?: string | null; ai_reason?: string | null; ai_scope?: Record<string, unknown> | null;
         statement_id?: string | null; statement_text?: string | null; statement_kind?: string | null; span_id?: string | null; verbatim_text?: string | null; locator?: Record<string, unknown> | null;
         document_version_id?: string | null; document_source_url?: string | null; document_published_at?: string | null; available_at?: string | null;
@@ -2892,6 +2951,7 @@ export class HttpResearchAdapter implements ResearchClient {
       },
       items: (dto.items ?? []).map((item): EventReviewQueueItem => ({
           proposalId: item.proposal_id,
+          proposalVersion: item.proposal_version,
           status: item.status,
           proposedAt: item.proposed_at,
           linkId: item.link_id,

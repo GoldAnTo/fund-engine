@@ -15,8 +15,13 @@ from app.schemas.v1.case_monitor import (
     ConfirmedFactorOptionDTO,
     LatestResearchRunDTO,
     UpdateCaseMonitorRequest,
+    SetCaseMonitorStatusRequest,
+    StartFactorMonitorRunRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
+from app.services.auto_research import AutoResearchService
+from app.services.monitor_scheduler import MonitorScheduler
+from app.schemas.v1.auto_research import ResearchRunResponse
 
 
 router = APIRouter(tags=["case-monitor-v1"])
@@ -45,6 +50,7 @@ def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
     run = query.latest_run(case_id)
     return CaseMonitorDetailResponse(
         monitor=_dto(monitor) if monitor is not None else None,
+        history=[_dto(item) for item in query.history(case_id)],
         latest_run=(
             LatestResearchRunDTO(
                 id=str(run.id), status=run.status, stage=run.stage, updated_at=run.updated_at
@@ -52,6 +58,7 @@ def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
             if run is not None
             else None
         ),
+        next_scheduled_at=(MonitorScheduler.next_due_at(monitor.frequency) if monitor is not None and monitor.status == "active" else None),
         confirmed_factors=[
             ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
             for factor in query.confirmed_factors(case_id)
@@ -78,6 +85,48 @@ def save_monitor(
                 change_reason=request.change_reason,
             ),
         )
+        db.commit()
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    return _dto(monitor)
+
+
+@router.post(
+    "/research-cases/{case_id}/monitor/runs",
+    response_model=ResearchRunResponse,
+    status_code=201,
+)
+def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Queue an explicit replenishment using the effective monitor version."""
+    try:
+        service = AutoResearchService(db)
+        run = service.start_from_monitor(case_id)
+        return service.detail(run.id)
+    except ValueError as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.post(
+    "/research-cases/{case_id}/monitor/factor-runs",
+    response_model=ResearchRunResponse,
+    status_code=201,
+)
+def start_factor_monitor_run(case_id: uuid.UUID, request: StartFactorMonitorRunRequest, db: Session = Depends(get_db)):
+    try:
+        service = AutoResearchService(db)
+        run = service.start_from_key_factor(case_id, key_factor_id=uuid.UUID(request.key_factor_id))
+        return service.detail(run.id)
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.post("/research-cases/{case_id}/monitor/{target_status}", response_model=CaseMonitorDTO)
+def set_monitor_status(case_id: uuid.UUID, target_status: str, request: SetCaseMonitorStatusRequest, db: Session = Depends(get_db)):
+    try:
+        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()

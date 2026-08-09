@@ -12,6 +12,19 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe("HttpResearchAdapter", () => {
+  it("creates new event Cases with the strict research protocol by default", async () => {
+    let requestBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse({ case_id: "event-1", brief_id: "brief-1", lifecycle: { status: "awaiting_key_review", active_run_id: null, current_round: 0, status_summary: "等待核验", current_gap: null, next_human_action: "核验原文资料并完成研究协议" } });
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await adapter.createEventResearch({ rawInput: "公司更新资本开支指引。", eventTitle: "资本开支更新", companyName: null, ticker: null, eventAt: null, marketReaction: null, summary: null, researchQuestion: "影响是什么？", candidateFactors: ["因素一", "因素二", "因素三"], confirmationRequired: true, createdBy: "human:researcher" });
+
+    expect((requestBody as Record<string, unknown> | null)?.research_protocol_required).toBe(true);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -203,7 +216,7 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/cases/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1");
   });
 
   it("throws on unknown graph semantic_kind instead of silently rewriting", async () => {
@@ -458,7 +471,7 @@ describe("HttpResearchAdapter", () => {
     expect(overview.key_changes[1].review_state).toBe("reviewed");
   });
 
-  it("search maps case deep links to the React /cases/ route (not graph)", async () => {
+  it("search maps case deep links to the active React /events/ route", async () => {
     const search = {
       schema_version: "v1",
       basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
@@ -487,10 +500,10 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/cases/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1");
   });
 
-  it("search maps graph deep links to the React /relationships/ route", async () => {
+  it("search maps graph deep links to the active Case Wiki route", async () => {
     const search = {
       schema_version: "v1",
       basis: { cutoff: "2024-05-24T00:00:00Z", is_historical: false },
@@ -519,7 +532,7 @@ describe("HttpResearchAdapter", () => {
     );
     const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
     const hits = await adapter.search("ab");
-    expect(hits[0].navigate_to).toBe("/relationships/c-1");
+    expect(hits[0].navigate_to).toBe("/events/c-1/wiki");
   });
 
   it("rejects unknown review outcome (does not silently coerce to human_confirmed)", async () => {
@@ -1084,6 +1097,7 @@ describe("HttpResearchAdapter", () => {
         caseId: "event-1",
         factors: ["因素甲", "因素乙", "因素丙"],
         changedBy: "reviewer",
+        changeReason: "补足验证缺口",
       });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
@@ -1094,6 +1108,7 @@ describe("HttpResearchAdapter", () => {
       body: JSON.stringify({
         factors: ["因素甲", "因素乙", "因素丙"],
         changed_by: "reviewer",
+        change_reason: "补足验证缺口",
       }),
     });
     expect(scope).toEqual({
@@ -1124,6 +1139,7 @@ describe("HttpResearchAdapter", () => {
       caseId: "event-exhausted",
       factors: factors.map((statement) => ({ statement, description: null })),
       changedBy: "reviewer",
+      changeReason: "调整验证范围",
     });
     const view = await adapter.getEventWorkbench("event-exhausted");
 

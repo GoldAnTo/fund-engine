@@ -58,6 +58,9 @@ class DocumentRepository:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
+        source_authority: str = "unknown",
+        supplements_document_version_id: uuid.UUID | None = None,
+        claimed_page_reference: str | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
@@ -72,6 +75,9 @@ class DocumentRepository:
             byte_size=byte_size,
             language=language,
             parse_state=parse_state,
+            source_authority=source_authority,
+            supplements_document_version_id=supplements_document_version_id,
+            claimed_page_reference=claimed_page_reference,
         )
         self._session.add(version)
         self._session.flush()
@@ -128,6 +134,7 @@ class DocumentRepository:
         cutoff: datetime,
         limit: int,
         query: str | None = None,
+        case_id: uuid.UUID | None = None,
         cursor_at: datetime | None = None,
         cursor_id: uuid.UUID | None = None,
     ) -> list[DocumentVersion]:
@@ -140,6 +147,11 @@ class DocumentRepository:
         )
         if query:
             stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
+        if case_id is not None:
+            stmt = stmt.join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.document_version_id == DocumentVersion.id,
+            ).where(CaseDocumentVersion.research_case_id == case_id)
         if cursor_at is not None and cursor_id is not None:
             # Order is (available_at DESC, id DESC); fetch rows strictly before
             # the cursor tuple.

@@ -33,6 +33,10 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5174",
     ],
+    # Each isolated frontend worktree may choose a different Vite port.  Keep
+    # local live-read verification usable without granting access to nonlocal
+    # origins or widening the deployed same-origin surface.
+    allow_origin_regex=r"^https?://(?:localhost|127\.0\.0\.1):\d+$",
     allow_methods=["*"],
     allow_headers=["*"],
 )

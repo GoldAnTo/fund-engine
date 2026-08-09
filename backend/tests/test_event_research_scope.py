@@ -32,6 +32,7 @@ from app.models.ledger import (
 )
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
 from app.models.proposals import Proposal
+from app.models.research_monitor import ResearchRunEvent
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
@@ -42,6 +43,7 @@ from app.services.event_research_scope_evidence import (
     lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
+from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.repositories.operational import TaskRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
@@ -66,11 +68,28 @@ def _create_event(client) -> dict:
             "market_reaction": "盘后下跌",
             "research_question": "资本开支上调是否是盘后下跌的主要因素？",
             "candidate_factors": INITIAL_FACTORS,
+            # Scope replacement coverage preserves the pre-protocol workflow.
+            "research_protocol_required": False,
             "created_by": "tester",
         },
     )
     assert response.status_code == 201
     return response.json()
+
+
+def _start_case_run(client, session, case_id: uuid.UUID) -> uuid.UUID:
+    """Scope-replacement tests need an explicitly authorized prior run."""
+    response = client.post(
+        f"/api/v1/research-cases/{case_id}/runs",
+        json={"max_rounds": 3, "budget": 100},
+    )
+    assert response.status_code == 201
+    run_id = uuid.UUID(response.json()["id"])
+    lifecycle = session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = run_id
+    session.commit()
+    return run_id
 
 
 def _scope_statements(session, version_id: uuid.UUID) -> list[str]:
@@ -223,6 +242,7 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
                 event_title="Concurrent event",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -406,6 +426,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
                 event_title="In-flight replacement",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -572,6 +593,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
                 event_title="Draft snapshot concurrency",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -690,6 +712,7 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
                 event_title="Conclusion concurrency",
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
+                research_protocol_required=False,
                 created_by="tester",
             )
         )
@@ -1203,7 +1226,7 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    initial_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    initial_run_id = _start_case_run(cmd_client, cmd_session, case_id)
     reviewed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     lifecycle.status = paused_status
@@ -1290,7 +1313,7 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    old_run_id = uuid.UUID(created["lifecycle"]["active_run_id"])
+    old_run_id = _start_case_run(cmd_client, cmd_session, case_id)
     old_run = cmd_session.get(ResearchRun, old_run_id)
     assert old_run is not None
     old_run.status = old_status
@@ -1363,6 +1386,7 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
             event_title="Remove stale review",
             research_question="What explains the event?",
             candidate_factors=INITIAL_FACTORS,
+            research_protocol_required=False,
             created_by="tester",
         )
     )
@@ -1770,6 +1794,148 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
     assert published is not None
     assert published.based_on_conclusion_id == v2_draft.id
     assert published.scope_version_id == v2_draft.scope_version_id
+
+
+def test_conclusion_history_keeps_drafts_and_published_versions_in_order(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    first = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="ai_draft",
+        text="第一版草案",
+        primary_factor=INITIAL_FACTORS[0],
+        evidence_link_ids=["evidence-1"],
+        based_on_conclusion_id=None,
+        reviewer=None,
+        created_at=datetime(2026, 8, 9, 8, 0, tzinfo=timezone.utc),
+    )
+    cmd_session.add(first)
+    cmd_session.flush()
+    published = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="published",
+        text="人工发布的第一版结论",
+        primary_factor=INITIAL_FACTORS[0],
+        evidence_link_ids=["evidence-1", "evidence-2"],
+        based_on_conclusion_id=first.id,
+        reviewer="human:lin",
+        created_at=datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc),
+    )
+    cmd_session.add(published)
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{case_id}/conclusion-history")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["case_id"] == str(case_id)
+    assert response.json()["versions"] == [
+        {
+            "id": str(first.id), "sequence": 1, "state": "ai_draft",
+            "text": "第一版草案", "primary_factor": INITIAL_FACTORS[0],
+            "scope_version": None, "based_on_conclusion_id": None,
+            "reviewer": None, "evidence_count": 1,
+            "created_at": "2026-08-09T08:00:00",
+        },
+        {
+            "id": str(published.id), "sequence": 2, "state": "published",
+            "text": "人工发布的第一版结论", "primary_factor": INITIAL_FACTORS[0],
+            "scope_version": None, "based_on_conclusion_id": str(first.id),
+            "reviewer": "human:lin", "evidence_count": 2,
+            "created_at": "2026-08-09T09:00:00",
+        },
+    ]
+
+
+def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_conclusion(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "published"
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    thesis = cmd_session.scalar(
+        select(Thesis).where(Thesis.research_case_id == case_id).limit(1)
+    )
+    assert document_id is not None and thesis is not None
+    thesis.review_state = "confirmed"
+    prior = EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="published",
+        text="原发布结论",
+        primary_factor=thesis.statement,
+        evidence_link_ids=[],
+        based_on_conclusion_id=None,
+        reviewer="human:lin",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(prior)
+    cmd_session.flush()
+    unchanged = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-material-decisions",
+        json={
+            "raw_input": "新增研报仅重复既有订单判断，未提供新的可核验指标。",
+            "source_type": "pasted_snapshot",
+            "source_metadata": {"authority_level": "secondary_source"},
+            "decision": "no_change",
+            "reason": "材料没有改变已发布结论的证据边界。",
+            "actor": "human:lin",
+        },
+    )
+    assert unchanged.status_code == 201, unchanged.text
+    assert unchanged.json()["decision"] == "no_change"
+    assert unchanged.json()["run_id"] is None
+    assert unchanged.json()["lifecycle"]["status"] == "published"
+    assert unchanged.json()["decision_event_id"]
+    CaseMonitorService(cmd_session).save(
+        case_id,
+        actor="human:lin",
+        config=CaseMonitorConfig(
+            frequency="daily_20_00",
+            factor_ids=[thesis.id],
+            allowed_source_types=["uploaded_file"],
+            next_verification_event="补充资料复核",
+            budget=9,
+            change_reason="为新材料配置受控补证",
+        ),
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-material-decisions",
+        json={
+            "raw_input": "公司新增业绩说明，需核验是否影响原判断。",
+            "source_type": "uploaded_file",
+            "source_metadata": {"authority_level": "primary_disclosure"},
+            "decision": "reopen",
+            "reason": "公司新增业绩说明，需核验是否影响原判断",
+            "actor": "human:lin",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["lifecycle"]["status"] == "researching"
+    assert response.json()["lifecycle"]["active_run_id"] == response.json()["run_id"]
+    run_id = uuid.UUID(response.json()["run_id"])
+    scope = cmd_session.scalar(
+        select(ResearchRunEvent).where(ResearchRunEvent.run_id == run_id)
+    )
+    assert scope is not None
+    assert scope.payload_json["trigger"] == "material_continuation"
+    assert scope.payload_json["source_document_version_id"] == response.json()["document_version_id"]
+    assert scope.payload_json["previous_conclusion_id"] == str(prior.id)
+    assert scope.payload_json["continuation_reason"] == "公司新增业绩说明，需核验是否影响原判断"
+    assert cmd_session.get(EventResearchConclusion, prior.id).text == "原发布结论"
 
 
 @pytest.mark.parametrize(

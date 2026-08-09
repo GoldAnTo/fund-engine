@@ -13,12 +13,18 @@ from app.models.ledger import (
     SourceStatement,
     SourceSpan,
     DocumentVersion,
+    AtomicClaimCandidate,
+    AIAssessment,
 )
-from app.models.operational import ResearchRun, ResearchTask
+from app.models.operational import ResearchRun, ResearchTask, TaskItem
 from app.models.proposals import Proposal
+from app.models.source_governance import SourceContract
 from app.services.auto_research import AutoResearchService
 from app.repositories.auto_research import AutoResearchRepository
 from app.scripts.run_ai_engine import _pending_versions
+from app.domain.atomic_claims import AtomicClaimDraft
+from app.services.atomic_claims import AtomicClaimService
+from app.models.research_monitor import ResearchRunEvent
 
 
 @pytest.fixture
@@ -62,6 +68,24 @@ def test_pending_documents_are_isolated_to_the_research_case(session):
     assert [item.id for item in _pending_versions(session, first_case.id)] == [first_document.id]
 
 
+def test_pending_documents_exclude_a_frozen_contract_that_forbids_ai_processing(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="restricted", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    document = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://provider.example.com/restricted", available_at=now, acquired_at=now, parser_version="provider-v1")
+    session.add(document)
+    session.flush()
+    session.add_all([
+        SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="Source text with enough detail that content quality would otherwise allow extraction."),
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
+        SourceContract(document_version_id=document.id, source_type="licensed_provider", provider_or_tenant="provider", allow_ai_processing=False, allow_display=True, allow_export=False, allow_api=False, region="not_recorded", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=["no AI"], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+    ])
+    session.commit()
+
+    assert _pending_versions(session, case.id) == []
+
+
 def test_start_and_get_run(session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     session.add(case)
@@ -90,6 +114,38 @@ def test_tasks_created(session):
     assert any(t.task_type == "contradict" for t in tasks)
     assert any(t.task_type == "result" for t in tasks)
     assert any(t.task_type == "alternative" for t in tasks)
+
+
+def test_auto_research_stops_before_propose_or_assess_when_atomic_claims_await_review(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="claim gate", industry_topic="i", created_by="u", created_at=now)
+    session.add(case); session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="订单增长将改善收入", created_by="u", created_at=now)
+    document = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://issuer.example.com/disclosure", available_at=now, acquired_at=now, parser_version="test")
+    session.add_all([thesis, document]); session.flush()
+    source_text = "公司披露订单同比增长20%。"
+    quote = "订单同比增长20%"
+    span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text=source_text)
+    session.add_all([span, CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now)])
+    session.flush()
+    AtomicClaimService(session).admit(
+        AtomicClaimDraft(source_span_id=span.id, quote=quote, quote_start=source_text.index(quote), quote_end=source_text.index(quote) + len(quote), normalized_text="公司披露订单同比增长 20%", claim_type="disclosed_fact", assertion_actor="公司", subject="订单", predicate="同比增长", object_text="20%", numeric_value="20", unit="%", observed_period=None, scope={}),
+        authority_level="primary_disclosure",
+        run_ref="extract:already-pending",
+    )
+    session.commit()
+
+    run = AutoResearchService(session).start(case.id, max_rounds=1, budget=20)
+    AutoResearchService(session).execute(run)
+    session.commit()
+
+    assert run.status == "waiting_for_review"
+    assert run.stop_reason == "pending_atomic_claim_review"
+    assert session.scalar(select(func.count()).select_from(Proposal)) == 0
+    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
+    assert session.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 1
+    assert any(event.stage == "claim_review" and "原子陈述" in event.message for event in session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)))
+    assert any(task.task_type == "review_atomic_claim" and task.status == "open" for task in session.scalars(select(TaskItem).where(TaskItem.research_case_id == case.id)))
 
 
 def test_budget_stop(session):
@@ -261,11 +317,15 @@ def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     run.status = "running"
     cmd_session.commit()
 
-    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    payload = {"actor": "human:researcher", "change_reason": "授权来源异常，停止后重新配置"}
+    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+    events = cmd_client.get(f"/api/v1/research-runs/{run.id}/events").json()["items"]
+    assert events[-1]["stage"] == "stopped"
+    assert events[-1]["details"] == {"actor": payload["actor"], "change_reason": payload["change_reason"], "stop_reason": "cancelled"}
 
-    resp2 = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    resp2 = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp2.status_code == 200
     assert resp2.json()["status"] == "cancelled"
 
@@ -279,7 +339,7 @@ def test_cancel_run_terminal_conflict(cmd_client, cmd_session):
     run.status = "succeeded"
     cmd_session.commit()
 
-    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel")
+    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json={"actor": "human:researcher", "change_reason": "测试终态"})
     assert resp.status_code == 409
 
 
