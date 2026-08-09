@@ -96,6 +96,9 @@ test.describe("Event-first Research OS", () => {
   });
 
   test("global monitoring keeps a terminal run and its frozen scope visible", async ({ page }) => {
+    await page.route("**/api/v1/research-runs/run-tsm/events", async (route) => route.fulfill({ json: {
+      run_id: "run-tsm", items: [{ seq: 1, status: "recorded", stage: "scope", message: "冻结本次范围", details: { allowed_source_types: ["company_disclosure"] }, created_at: "2026-08-09T00:00:00Z" }, { seq: 2, status: "failed", stage: "failed", message: "授权来源返回失败", details: { stop_reason: "task_failed" }, created_at: "2026-08-09T00:04:00Z" }], next_cursor: null, has_more: false,
+    } }));
     await page.route("**/api/v1/research-runs", async (route) => route.fulfill({ json: {
       items: [{ run_id: "run-tsm", case_id: "event-tsm", case_title: "台积电 Case", status: "failed", stage: "failed", created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:04:00Z", processed_count: 3, stop_reason: "task_failed", next_action: "查看失败原因", scope: { trigger: "schedule", monitor_version_id: "monitor-v2", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false,
     } }));
@@ -105,6 +108,9 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("main")).toContainText("company_disclosure");
     await expect(page.getByRole("main")).toContainText("monitor-v2");
     await expect(page.getByRole("main")).toContainText("task_failed");
+    await page.getByRole("main").getByRole("button", { name: "展开本次运行记录" }).click();
+    await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("授权来源返回失败");
+    await page.getByRole("button", { name: "关闭全局运行记录" }).click();
     await page.getByRole("main").getByRole("link", { name: "查看失败原因", exact: true }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
   });
