@@ -1168,6 +1168,18 @@ describe("Research OS event entry", () => {
                     },
                     created_at: "2026-08-09T00:00:00Z",
                   },
+                  {
+                    seq: 2,
+                    stage: "retrieve",
+                    status: "completed",
+                    message: "已按许可检查候选资料",
+                    details: {
+                      accepted: 2,
+                      excluded: 1,
+                      exclusion_reason: "来源许可不足",
+                    },
+                    created_at: "2026-08-09T00:01:00Z",
+                  },
                 ],
               }
             : {
@@ -1212,6 +1224,9 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("complementary", { name: "运行详情" }),
     ).toHaveTextContent("7");
+    expect(
+      screen.getByRole("complementary", { name: "运行详情" }),
+    ).toHaveTextContent("排除原因：来源许可不足");
   });
 
   it("requires a recorded reason before a researcher stops an in-progress run", async () => {

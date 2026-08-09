@@ -3132,12 +3132,7 @@ function MonitorContent({
                     </strong>
                     <p>{event.message || "无文字摘要"}</p>
                     <small>
-                      {Object.entries(event.details)
-                        .map(
-                          ([key, value]) =>
-                            `${key}: ${Array.isArray(value) ? value.join("、") : String(value)}`,
-                        )
-                        .join(" · ")}
+                      {formatRunEventDetails(event.details) || "无额外字段"}
                     </small>
                   </div>
                 </li>
@@ -3365,6 +3360,13 @@ function RunDrawer({
               <div>
                 <strong>{event.stage || "阶段"}</strong>
                 <p>{event.message || "无文字摘要"}</p>
+                <small>
+                  {event.createdAt
+                    ? new Date(event.createdAt).toLocaleString("zh-CN")
+                    : "时间未记录"}{" "}
+                  ·{" "}
+                  {formatRunEventDetails(event.details) || "无额外字段"}
+                </small>
               </div>
             </li>
           ))}
@@ -3372,6 +3374,30 @@ function RunDrawer({
       </div>
     </aside>
   );
+}
+
+const runEventDetailLabels: Record<string, string> = {
+  accepted: "已纳入资料",
+  excluded: "已排除资料",
+  exclusion_reason: "排除原因",
+  pending_review: "待人工审核",
+  failed: "失败项",
+  failure_reason: "失败原因",
+  candidates: "候选数",
+  frozen: "已冻结资料",
+};
+
+function formatRunEventDetails(details: Record<string, unknown>) {
+  return Object.entries(details)
+    .map(([key, value]) => {
+      const rendered = Array.isArray(value)
+        ? value.join("、")
+        : typeof value === "object" && value !== null
+          ? JSON.stringify(value)
+          : String(value);
+      return `${runEventDetailLabels[key] || key}：${rendered}`;
+    })
+    .join(" · ");
 }
 
 export function MonitorConfigPage() {

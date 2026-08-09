@@ -193,6 +193,16 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("complementary", { name: "运行详情" })).toContainText("company_disclosure");
   });
 
+  test("Case run detail makes exclusions and counts readable instead of hiding them in a worker log", async ({ page }) => {
+    await page.goto("/events/event-tsm/monitor?client=mock");
+
+    await page.getByRole("button", { name: "打开运行详情" }).click();
+    const drawer = page.getByRole("complementary", { name: "运行详情" });
+    await expect(drawer).toContainText("已纳入资料：2");
+    await expect(drawer).toContainText("已排除资料：1");
+    await expect(drawer).toContainText("排除原因：来源许可不足");
+  });
+
   test("saving a monitor configuration immediately shows the new effective version", async ({ page }) => {
     const initial = { id: "monitor-v1", version: 1, status: "active", frequency: "weekday_08_30", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], next_verification_event: "下一次财报", budget: 12, changed_by: "human:researcher", change_reason: "初始配置", created_at: "2026-08-09T00:00:00Z" };
     const saved = { ...initial, id: "monitor-v2", version: 2, allowed_source_types: ["company_disclosure", "licensed_provider"], next_verification_event: "下一次财报后补证", change_reason: "补充授权来源" };
