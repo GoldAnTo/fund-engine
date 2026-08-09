@@ -199,6 +199,16 @@ class MarketExpressionQueries:
                 contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
                 span = self._db.get(SourceSpan, disclosure.source_span_id) if disclosure.source_span_id else None
                 source_visible = bool(contract and contract.allow_display)
+                disclosure_is_stale = (as_of - disclosure.report_period).days > 180
+                freshness_status = (
+                    "coverage_incomplete"
+                    if disclosure.coverage_status != "complete"
+                    else "source_unlinked"
+                    if not source_visible
+                    else "stale_disclosure"
+                    if disclosure_is_stale
+                    else "historical_disclosure"
+                )
                 positions.append(FundDisclosurePositionDTO(
                     stock_id=str(stock.id), stock_code=stock.code, stock_name=stock.name,
                     weight=float(disclosure.weight), report_period=disclosure.report_period,
@@ -209,10 +219,11 @@ class MarketExpressionQueries:
                     provider_record_id=str(disclosure.provider_record_id) if disclosure.provider_record_id and source_visible else None,
                     source_permission_status="admitted" if source_visible else "not_recorded" if document is None else "restricted",
                     coverage_status=disclosure.coverage_status,
-                    freshness_status="coverage_incomplete" if disclosure.coverage_status != "complete" else "historical_disclosure" if source_visible else "source_unlinked",
+                    freshness_status=freshness_status,
                 ))
             coverage_complete = positions and all(
-                position.coverage_status == "complete" for position in positions
+                position.coverage_status == "complete" and position.freshness_status == "historical_disclosure"
+                for position in positions
             )
             result.append(FundDisclosureExposureDTO(
                 fund_id=str(fund.id),

@@ -158,12 +158,12 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         fund_id=fund.id,
         stock_id=stock.id,
         weight=Decimal("0.056"),
-        report_period=date(2026, 6, 30),
-        published_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        report_period=date(2025, 12, 31),
+        published_at=datetime(2026, 1, 20, tzinfo=timezone.utc),
         acquired_at=now,
         source="licensed_provider",
         source_document_version_id=document.id,
-        coverage_status="partial",
+        coverage_status="complete",
         created_at=now,
     ))
     cmd_session.commit()
@@ -184,16 +184,15 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert payload["market_observations"][0]["benchmark"] == "中证全指"
     assert "causal_result" not in payload["market_observations"][0]
     position = payload["fund_exposure"][0]["positions"][0]
-    assert position["report_period"] == "2026-06-30"
-    assert position["published_at"].startswith("2026-07-20")
+    assert position["report_period"] == "2025-12-31"
+    assert position["published_at"].startswith("2026-01-20")
     assert position["acquired_at"].startswith("2026-08-09")
     assert position["source"] == "licensed_provider"
-    assert position["coverage_status"] == "partial"
+    assert position["coverage_status"] == "complete"
     assert position["source_document_version_id"] == str(document.id)
-    assert position["freshness_status"] == "coverage_incomplete"
-    # A position weight is observable, but the ledger does not yet record a
-    # complete fund portfolio coverage ratio. Do not promote this subset into
-    # a precise fund-level exposure total.
+    assert position["freshness_status"] == "stale_disclosure"
+    # Complete coverage does not rescue an expired disclosure.  Do not promote
+    # it into a precise current fund exposure.
     assert payload["fund_exposure"][0]["disclosed_exposure"] is None
 
 
