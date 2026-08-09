@@ -58,11 +58,10 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/event-tsm/wiki?client=mock");
 
     await expect(page.getByRole("button", { name: "source 冻结公告 已进入 Case 图谱" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "proposal AI 候选 AI 候选，未进入结论" })).toBeVisible();
-    await expect(page.getByLabel("Case Wiki 关系")).toContainText("已审核关系");
-    await expect(page.getByLabel("Case Wiki 关系")).toContainText("AI 候选，未经复核");
-    await page.getByRole("button", { name: "隐藏 AI 候选 1" }).click();
-    await expect(page.getByLabel("Case Wiki 关系")).not.toContainText("AI 候选，未经复核");
+    await expect(page.getByRole("button", { name: "proposal AI 候选 AI 候选，未经人工复核" })).toBeVisible();
+    await page.getByRole("button", { name: "source 冻结公告 已进入 Case 图谱" }).click();
+    await expect(page.getByText("可追溯检查器")).toBeVisible();
+    await expect(page.getByText("已审核对象")).toBeVisible();
   });
 
   test("immediate replenishment starts from a visible frozen monitor scope", async ({ page }) => {

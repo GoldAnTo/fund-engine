@@ -82,6 +82,7 @@
 .ros-expression-status { font-size: .74rem; color: var(--ros-accent, #285b54); }
 .ros-expression-status.is-contradicted { color: #a44c3b; }
 .ros-expression-status.is-insufficient_evidence, .ros-expression-status.is-not_due { color: var(--ros-muted, #767b76); }
+.ros-wiki-quote { margin: 1rem 0; padding: .8rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-deep, #f6f3ec); color: var(--ros-soft, #59615d); line-height: 1.6; }
 
 @media (max-width: 640px) {
   .ros-case-tabs { overflow-x: auto; scrollbar-width: none; }

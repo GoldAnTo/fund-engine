@@ -234,6 +234,7 @@ class RelationshipGraphQueries:
                         "span",
                         _span_label(span),
                         locator=span.locator,
+                        verbatim_text=span.verbatim_text,
                     )
                 add_node(
                     statement.id,

@@ -7,6 +7,7 @@ import type { EventResearchClient, EventWorkbench } from "../../domain/eventRese
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
 import { CaseRelationsContent } from "./CaseRelationsContent";
+import { WikiInspectorContent } from "./WikiInspectorContent";
 
 const tabs = [["", "研究结论"], ["evidence", "命题与证据"], ["documents", "原文资料"], ["review", "证据审核"], ["wiki", "Case Wiki"], ["market", "市场与表达"], ["monitor", "监测与运行"], ["relations", "关联研究"]] as const;
 
@@ -67,7 +68,7 @@ function ReviewItem({ item, onDecided }: { item: Awaited<ReturnType<EventResearc
   return <article className="ros-review-item"><div><span className="ros-pill ros-pill--human">未经人工复核</span><h3>{item.thesisStatement || "未关联关键因素"}</h3><blockquote>{item.verbatimText || item.statementText || "未抽取到可定位原文"}</blockquote></div><dl><div><dt>原文定位</dt><dd>{JSON.stringify(item.locator)}</dd></div><div><dt>可用时点</dt><dd>{item.availableAt || "未记录"}</dd></div><div><dt>来源与许可</dt><dd>{item.sourceStatusReason}</dd></div></dl><div className="ros-review-actions"><span>{item.aiRole || "候选关系"} · {item.proposalReason}</span>{item.documentSourceUrl ? <a className="ros-button ros-button--secondary" href={item.documentSourceUrl} target="_blank" rel="noopener noreferrer">打开冻结来源</a> : <span>冻结来源地址未记录</span>}</div><div className="ros-review-decision"><label>审核理由<textarea aria-label="审核理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何原文支持或不支持这个关系" /></label><div><button className="ros-button ros-button--primary" type="button" disabled={!reason.trim() || submitting} onClick={() => decide("confirmed")}>确认采纳</button><button className="ros-button ros-button--secondary" type="button" disabled={!reason.trim() || submitting} onClick={() => decide("needs_more_evidence")}>要求补充证据</button><button className="ros-button ros-button--secondary" type="button" disabled={!reason.trim() || submitting} onClick={() => decide("rejected")}>驳回候选</button></div>{error && <p className="ros-error">{error}</p>}</div></article>;
 }
 
-export function CaseWikiPage() { return <CaseFrame>{(_data, caseId) => <WikiContent caseId={caseId} />}</CaseFrame>; }
+export function CaseWikiPage() { return <CaseFrame>{(_data, caseId) => <WikiInspectorContent caseId={caseId} />}</CaseFrame>; }
 export function CaseRelationsPage() { return <CaseFrame>{(_data, caseId) => <CaseRelationsContent caseId={caseId} />}</CaseFrame>; }
 function WikiContent({ caseId }: { caseId: string }) {
   const [graph, setGraph] = useState<Graph | null>(null);
