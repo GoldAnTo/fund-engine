@@ -48,10 +48,15 @@ class EventResearchService:
             evidence_cutoff=payload.event_at.date() if payload.event_at else None,
         )
         document_service = DocumentService(DocumentRepository(self._session))
+        document_url = payload.source_url or {
+            "pasted_snapshot": "event://pasted-news",
+            "uploaded_file": "upload://event-text-snapshot",
+            "licensed_provider": "provider://unresolved-record",
+        }[payload.source_type]
         document = document_service.freeze(
             raw=payload.raw_input.encode("utf-8"),
-            source_url=payload.source_url or "event://pasted-news",
-            parser_version="user-pasted-v1",
+            source_url=document_url,
+            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1"}[payload.source_type],
             parse_state="partial",
         )
         document_service.attach_to_case(
@@ -59,7 +64,7 @@ class EventResearchService:
         )
         document_service.add_span(
             document_version_id=document.id,
-            locator={"kind": "user_pasted_news"},
+            locator={"kind": payload.source_type, "source_metadata": payload.source_metadata},
             verbatim_text=payload.raw_input,
         )
         now = _utcnow()
@@ -67,6 +72,8 @@ class EventResearchService:
             research_case_id=case.id,
             raw_input=payload.raw_input,
             source_url=payload.source_url,
+            source_type=payload.source_type,
+            source_metadata=payload.source_metadata,
             event_title=payload.event_title,
             company_name=payload.company_name,
             ticker=payload.ticker,

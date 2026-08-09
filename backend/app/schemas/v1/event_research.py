@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from app.schemas.v1.common import V1Model
@@ -17,6 +17,8 @@ from app.services.source_admission import SourceStatus
 class ExtractEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExtractEventResearchResponse(V1Model):
@@ -34,6 +36,8 @@ class ExtractEventResearchResponse(V1Model):
 class CreateEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
+    source_type: Literal["pasted_snapshot", "uploaded_file", "licensed_provider"] = "pasted_snapshot"
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
     event_title: str = Field(min_length=1)
     company_name: str | None = None
     ticker: str | None = None

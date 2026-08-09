@@ -152,7 +152,9 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_clie
 
 
 def test_create_event_case_enqueues_research_without_manual_run_button(cmd_client, cmd_session) -> None:
-    response = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
+    payload = _confirmed_event()
+    payload.update({"source_type": "uploaded_file", "source_metadata": {"file_name": "event-note.txt", "mime_type": "text/plain", "byte_size": 42}})
+    response = cmd_client.post("/api/v1/event-research", json=payload)
 
     assert response.status_code == 201
     body = response.json()
@@ -163,6 +165,9 @@ def test_create_event_case_enqueues_research_without_manual_run_button(cmd_clien
 
     parsed_case_id = uuid.UUID(case_id)
     assert cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"])).research_case_id == parsed_case_id
+    brief = cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"]))
+    assert brief.source_type == "uploaded_file"
+    assert brief.source_metadata["file_name"] == "event-note.txt"
     assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
@@ -433,7 +438,7 @@ def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_sess
         select(SourceSpan).where(SourceSpan.document_version_id == document.id)
     ).all()
     assert len(spans) == 1
-    assert spans[0].locator == {"kind": "user_pasted_news"}
+    assert spans[0].locator == {"kind": "pasted_snapshot", "source_metadata": {}}
     assert spans[0].verbatim_text == payload["raw_input"]
 
 

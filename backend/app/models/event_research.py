@@ -37,6 +37,8 @@ class EventResearchBrief(Base):
     )
     raw_input: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="pasted_snapshot")
+    source_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     event_title: Mapped[str] = mapped_column(Text, nullable=False)
     company_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     ticker: Mapped[str | None] = mapped_column(String(32), nullable=True)

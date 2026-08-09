@@ -1914,6 +1914,16 @@ export interface components {
             raw_input: string;
             /** Source Url */
             source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
             /** Event Title */
             event_title: string;
             /** Company Name */
@@ -2612,6 +2622,16 @@ export interface components {
             raw_input: string;
             /** Source Url */
             source_url?: string | null;
+            /**
+             * Source Type
+             * @default pasted_snapshot
+             * @enum {string}
+             */
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            /** Source Metadata */
+            source_metadata?: {
+                [key: string]: unknown;
+            };
         };
         /** ExtractEventResearchResponse */
         ExtractEventResearchResponse: {

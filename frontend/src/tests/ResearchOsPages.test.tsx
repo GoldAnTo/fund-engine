@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -46,6 +46,18 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("研究问题")).toBeVisible();
     expect(screen.getAllByLabelText(/关键因素/)).toHaveLength(3);
     expect(screen.getByRole("button", { name: "创建事件 Case" })).toBeEnabled();
+  });
+
+  it("reads an uploaded text snapshot without claiming that the original file was stored", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/events/new"]}><Routes><Route path="/events/new" element={<EventCreatePage />} /></Routes></MemoryRouter>);
+
+    await user.selectOptions(screen.getByLabelText("来源接入方式"), "uploaded_file");
+    const file = new File(["公司更新指引，盘后股价下跌。"], "event-note.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("上传正文文件"), file);
+
+    await waitFor(() => expect(screen.getByLabelText("事件原始输入")).toHaveValue("公司更新指引，盘后股价下跌。"));
+    expect(screen.getByText(/不保存或冒充原件 PDF/)).toBeVisible();
   });
 
   it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {

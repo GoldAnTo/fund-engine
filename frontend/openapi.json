@@ -6059,6 +6059,21 @@
             ],
             "title": "Source Url"
           },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "pasted_snapshot",
+              "uploaded_file",
+              "licensed_provider"
+            ],
+            "title": "Source Type",
+            "default": "pasted_snapshot"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata"
+          },
           "event_title": {
             "type": "string",
             "minLength": 1,
@@ -8287,6 +8302,21 @@
               }
             ],
             "title": "Source Url"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "pasted_snapshot",
+              "uploaded_file",
+              "licensed_provider"
+            ],
+            "title": "Source Type",
+            "default": "pasted_snapshot"
+          },
+          "source_metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Source Metadata"
           }
         },
         "additionalProperties": false,

@@ -2795,12 +2795,12 @@ export class HttpResearchAdapter implements ResearchClient {
     await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     const dto = await this.post<{
       event_title: string | null; company_name: string | null; ticker: string | null;
       event_at: string | null; market_reaction: string | null; summary: string | null;
       research_question: string; candidate_factors: string[]; confirmation_required: boolean;
-    }>("/event-research/extract", { raw_input: input.rawInput, source_url: input.sourceUrl || null });
+    }>("/event-research/extract", { raw_input: input.rawInput, source_url: input.sourceUrl || null, source_type: input.sourceType ?? "pasted_snapshot", source_metadata: input.sourceMetadata ?? {} });
     return {
       eventTitle: dto.event_title, companyName: dto.company_name, ticker: dto.ticker,
       eventAt: dto.event_at, marketReaction: dto.market_reaction, summary: dto.summary,
@@ -2814,7 +2814,7 @@ export class HttpResearchAdapter implements ResearchClient {
       status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
       status_summary: string; current_gap: string | null; next_human_action: string | null;
     } }>("/event-research", {
-      raw_input: input.rawInput, source_url: input.sourceUrl || null,
+      raw_input: input.rawInput, source_url: input.sourceUrl || null, source_type: input.sourceType ?? "pasted_snapshot", source_metadata: input.sourceMetadata ?? {},
       event_title: input.eventTitle, company_name: input.companyName, ticker: input.ticker,
       event_at: input.eventAt, market_reaction: input.marketReaction,
       research_question: input.researchQuestion, candidate_factors: input.candidateFactors,

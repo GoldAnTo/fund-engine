@@ -3731,7 +3731,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(undefined);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     this.throwIfOffline();
     return simulateLatency({
       eventTitle: input.rawInput.trim().slice(0, 80) || null,

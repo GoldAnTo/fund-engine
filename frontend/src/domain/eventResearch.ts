@@ -11,6 +11,8 @@ export type EventLifecycleStatus =
 export interface EventExtractionInput {
   rawInput: string;
   sourceUrl?: string;
+  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceMetadata?: Record<string, unknown>;
 }
 
 export interface EventExtraction {
@@ -28,6 +30,8 @@ export interface EventExtraction {
 export interface CreateEventResearchInput extends EventExtraction {
   rawInput: string;
   sourceUrl?: string;
+  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceMetadata?: Record<string, unknown>;
   eventTitle: string;
   createdBy: string;
 }
