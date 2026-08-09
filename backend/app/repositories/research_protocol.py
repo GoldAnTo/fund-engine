@@ -7,7 +7,12 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
+from app.models.research_protocol import (
+    CaseMechanismSelectionVersion,
+    MechanismTemplateVersion,
+    MetricDefinitionVersion,
+    OutcomeBindingVersion,
+)
 
 
 class ResearchProtocolRepository:
@@ -103,3 +108,38 @@ class ResearchProtocolRepository:
             .order_by(OutcomeBindingVersion.created_at.desc(), OutcomeBindingVersion.id.desc())
             .limit(1)
         )
+
+    def effective_case_template(
+        self, research_case_id: uuid.UUID
+    ) -> CaseMechanismSelectionVersion | None:
+        return self._session.scalar(
+            select(CaseMechanismSelectionVersion)
+            .where(CaseMechanismSelectionVersion.research_case_id == research_case_id)
+            .order_by(CaseMechanismSelectionVersion.created_at.desc(), CaseMechanismSelectionVersion.id.desc())
+            .limit(1)
+        )
+
+    def add_case_template_selection(
+        self,
+        *,
+        research_case_id: uuid.UUID,
+        template_version_id: uuid.UUID,
+        reviewer: str,
+        reason: str,
+        created_at: datetime,
+    ) -> CaseMechanismSelectionVersion:
+        prior = self.effective_case_template(research_case_id)
+        selection = CaseMechanismSelectionVersion(
+            research_case_id=research_case_id,
+            template_version_id=template_version_id,
+            supersedes_id=prior.id if prior else None,
+            reviewer=reviewer,
+            reason=reason,
+            created_at=created_at,
+        )
+        self._session.add(selection)
+        self._session.flush()
+        return selection
+
+    def template(self, template_version_id: uuid.UUID) -> MechanismTemplateVersion | None:
+        return self._session.get(MechanismTemplateVersion, template_version_id)

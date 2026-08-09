@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.ledger import Thesis, ValidationError
+from app.models.ledger import ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
 from app.repositories.research_protocol import ResearchProtocolRepository
 
@@ -126,6 +126,28 @@ class ResearchProtocolService:
 
     def effective_metric(self, metric_id: str) -> MetricDefinitionVersion | None:
         return self._repo.effective_metric(metric_id)
+
+    def select_template(
+        self,
+        research_case_id: uuid.UUID,
+        template_version_id: uuid.UUID,
+        *,
+        reviewer: str,
+        reason: str,
+    ):
+        if self._session.get(ResearchCase, research_case_id) is None:
+            raise ValidationError("research case not found")
+        if self._repo.template(template_version_id) is None:
+            raise ValidationError("mechanism template not found")
+        if not reviewer.strip() or not reason.strip():
+            raise ValidationError("template reviewer and reason must not be empty")
+        return self._repo.add_case_template_selection(
+            research_case_id=research_case_id,
+            template_version_id=template_version_id,
+            reviewer=reviewer.strip(),
+            reason=reason.strip(),
+            created_at=_utcnow(),
+        )
 
     def approve_outcome_binding(
         self, binding_id: uuid.UUID, *, reviewer: str, reason: str
