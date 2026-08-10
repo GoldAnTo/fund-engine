@@ -925,6 +925,7 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText(/已保存配置版本/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "立即补充一次" }));
     expect(await screen.findByText("本次补充记录")).toBeVisible();
+    expect(await screen.findByText("已完成")).toBeVisible();
     expect(screen.getAllByText(/同基金、同报告期季报/).length).toBeGreaterThan(1);
   });
 

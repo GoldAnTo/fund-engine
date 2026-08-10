@@ -716,9 +716,10 @@ function SourceReference({
     <p>
       {label}：{source.document_version_id ? (
         <Link className="ros-source-link" to={`/events/${caseId}/documents?document=${source.document_version_id}`}>
-          {source.document_title ?? "定位到冻结原文"}
+          定位到冻结原文
         </Link>
       ) : "冻结版本未记录"}
+      {source.document_title ? `（${source.document_title}）` : ""}
       {source.locator ? ` · 定位 ${JSON.stringify(source.locator)}` : ""}
       {source.available_at ? ` · 可得 ${new Date(source.available_at).toLocaleString("zh-CN")}` : ""}
     </p>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { researchOsApi, type FundDisclosureSyncDetail } from "../../app/researchOsApi";
 
@@ -40,8 +40,10 @@ export function FundDisclosureSyncTask({
   const [state, setState] = useState<"loading" | "saving" | "running" | "idle">("loading");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const reloadSequence = useRef(0);
 
   async function reload() {
+    const sequence = ++reloadSequence.current;
     setError(null);
     try {
       const next = await researchOsApi.fundDisclosureSync(caseId);
@@ -52,15 +54,17 @@ export function FundDisclosureSyncTask({
       ) {
         throw new Error("fund disclosure sync response is incomplete");
       }
+      if (sequence !== reloadSequence.current) return;
       setDetail(next);
       const configured = next.effective_config;
       setSelectedCodes(configured?.fund_codes ?? next.suggestions.map((item) => item.fund_code));
       setFrequency(configured?.frequency ?? "monthly");
       setAllowDisplay(configured?.allow_display ?? true);
     } catch {
+      if (sequence !== reloadSequence.current) return;
       setError("暂时无法读取基金披露补充记录。不会以空白记录替代，请重试读取。");
     } finally {
-      setState("idle");
+      if (sequence === reloadSequence.current) setState("idle");
     }
   }
 
@@ -115,6 +119,13 @@ export function FundDisclosureSyncTask({
     setError(null);
     try {
       const run = await researchOsApi.startFundDisclosureSync(caseId);
+      // A just-created run is authoritative even when an earlier background
+      // reload resolves late.  Researchers should see its frozen scope and
+      // failure/success record immediately, never a blank task history.
+      setDetail((current) => current
+        ? { ...current, runs: [run, ...current.runs.filter((item) => item.id !== run.id)] }
+        : current,
+      );
       setNotice(run.status === "failed" ? "本次补充未完成，失败原因已写入运行记录。" : "已完成一次基金披露补充，结果已写入运行记录。");
       await reload();
       onCompleted();
@@ -128,7 +139,11 @@ export function FundDisclosureSyncTask({
     setState("running");
     setError(null);
     try {
-      await researchOsApi.retryFundDisclosureSync(caseId, runId);
+      const run = await researchOsApi.retryFundDisclosureSync(caseId, runId);
+      setDetail((current) => current
+        ? { ...current, runs: [run, ...current.runs.filter((item) => item.id !== run.id)] }
+        : current,
+      );
       setNotice("已按失败运行当时冻结的范围发起重试。");
       await reload();
       onCompleted();

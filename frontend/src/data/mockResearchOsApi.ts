@@ -940,6 +940,14 @@ export class MockResearchOsApi implements ResearchOsApi {
   async forecastVerdicts(
     caseId: string,
   ): ReturnType<ResearchOsApi["forecastVerdicts"]> {
+    const actualSource = {
+      ...source,
+      document_version_id: "doc-demo-annual-report",
+      document_title: "公司年度报告（实际值）",
+      source_url: "https://disclosure.example/mock-annual-report",
+      locator: { page: 126, table: "主要财务指标" },
+      available_at: "2026-03-25T08:00:00Z",
+    };
     return {
       case_id: caseId,
       cutoff: now,
@@ -950,7 +958,7 @@ export class MockResearchOsApi implements ResearchOsApi {
           supersedes_id: null,
           decision: "confirmed",
           outcome: "contradicted",
-          reason: "实际毛利率显著低于冻结预测，研究员确认该预测未兑现。",
+          reason: "实际资本开支增速显著低于冻结预测，研究员确认该预测未兑现。",
           reviewed_by: "human:reviewer",
           reviewed_at: now,
           target: {
@@ -963,8 +971,8 @@ export class MockResearchOsApi implements ResearchOsApi {
             baseline_value: 0.19,
             expected_value: 0.28,
             unit: "%",
-            forecast_period_start: "2026-01-01",
-            forecast_period_end: "2026-12-31",
+            forecast_period_start: "2025-01-01",
+            forecast_period_end: "2025-12-31",
             comparator: "within_tolerance",
             relative_tolerance: 0.1,
             reviewed_by: "human:reviewer",
@@ -979,12 +987,12 @@ export class MockResearchOsApi implements ResearchOsApi {
             entity_key: "TSM",
             observed_value: 0.12,
             unit: "%",
-            observed_period_start: "2026-01-01",
-            observed_period_end: "2026-12-31",
+            observed_period_start: "2025-01-01",
+            observed_period_end: "2025-12-31",
             available_at: now,
             recorded_by: "human:reviewer",
             record_reason: "已披露年报口径，与预测期间和单位精确匹配。",
-            source,
+            source: actualSource,
           },
           rule_version: "forecast-numeric-v1",
           inputs: {
@@ -996,7 +1004,7 @@ export class MockResearchOsApi implements ResearchOsApi {
           },
           candidate_rationale: "实际值不满足冻结的数值比较规则。",
           forecast_source: source,
-          actual_source: source,
+          actual_source: actualSource,
         },
       ],
     } satisfies ForecastVerdictHistory;
