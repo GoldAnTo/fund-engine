@@ -914,6 +914,9 @@ describe("Research OS event entry", () => {
       await screen.findByRole("heading", { name: "建议补充的基金披露" }),
     ).toBeVisible();
     expect(
+      await screen.findByRole("heading", { name: "历史预测验证" }),
+    ).toBeVisible();
+    expect(
       screen.getByLabelText("建议基金：演示成长基金（000001）"),
     ).toBeChecked();
     await user.selectOptions(screen.getByLabelText("补充频率"), "weekly");

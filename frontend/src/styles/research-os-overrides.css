@@ -374,6 +374,22 @@
 .ros-market-checks div { display: grid; gap: 3px; }
 .ros-market-checks dt { color: var(--ros-muted); font-size: 10px; }
 .ros-market-checks dd { margin: 0; font-size: 11px; line-height: 1.45; }
+.ros-forecast-verdicts { display: grid; gap: .55rem; margin: 1rem 0; padding: .9rem 0; border-top: 1px solid var(--ros-rule); border-bottom: 1px solid var(--ros-rule); }
+.ros-forecast-verdicts > h3 { margin: -.25rem 0 0; font-size: .94rem; }
+.ros-forecast-verdicts > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft); font-size: .72rem; line-height: 1.5; }
+.ros-forecast-verdict { display: grid; gap: .5rem; padding: .7rem; border: 1px solid var(--ros-strong); border-radius: .42rem; background: var(--ros-surface); }
+.ros-forecast-verdict header { display: grid; gap: .18rem; }
+.ros-forecast-verdict header strong { color: var(--ros-blue); font-size: .78rem; }
+.ros-forecast-verdict header span, .ros-forecast-verdict small { color: var(--ros-soft); font-size: .69rem; line-height: 1.45; }
+.ros-forecast-verdict dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; margin: 0; }
+.ros-forecast-verdict dl div { display: grid; gap: .12rem; }
+.ros-forecast-verdict dt { color: var(--ros-muted); font-size: .62rem; }
+.ros-forecast-verdict dd { margin: 0; font-size: .7rem; font-variant-numeric: tabular-nums; }
+.ros-forecast-verdict > p { margin: 0; font-size: .72rem; line-height: 1.5; }
+.ros-forecast-verdict details { color: var(--ros-soft); font-size: .68rem; line-height: 1.5; }
+.ros-forecast-verdict summary { color: var(--ros-ink); cursor: pointer; font-weight: 700; }
+.ros-forecast-verdict details p { margin: .38rem 0 0; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .ros-forecast-verdict dl { grid-template-columns: 1fr; } }
 
 .ros-fund-sync { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--ros-rule); container-type: inline-size; }
 .ros-fund-sync h3 { margin: 0; font-size: 15px; }

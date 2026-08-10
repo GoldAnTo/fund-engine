@@ -9,6 +9,7 @@ import {
   researchOsApi,
   type MarketExpression,
   type MarketInstrumentBindings,
+  type ForecastVerdictHistory,
   type SourceStatementOptions,
 } from "../../app/researchOsApi";
 import { FundDisclosureSyncTask } from "./FundDisclosureSyncTask";
@@ -65,6 +66,8 @@ export function MarketExpressionContent({
 }) {
   const navigate = useNavigate();
   const [expression, setExpression] = useState<MarketExpression | null>(null);
+  const [forecastHistory, setForecastHistory] =
+    useState<ForecastVerdictHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedFactorId, setSelectedFactorId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -75,8 +78,12 @@ export function MarketExpressionContent({
   async function reloadExpression() {
     setError(null);
     try {
-      const value = await researchOsApi.marketExpression(caseId);
+      const [value, verdicts] = await Promise.all([
+        researchOsApi.marketExpression(caseId),
+        researchOsApi.forecastVerdicts(caseId),
+      ]);
       setExpression(value);
+      setForecastHistory(verdicts);
       setSelectedFactorId(value.factors[0]?.id ?? null);
       setFundDisclosureScopeRevision((revision) => revision + 1);
     } catch {
@@ -139,6 +146,11 @@ export function MarketExpressionContent({
       ),
     }))
     .filter((fund) => fund.positions.length > 0);
+  const selectedForecastVerdicts = selectedFactor
+    ? (forecastHistory?.items ?? []).filter(
+        (verdict) => verdict.target.key_factor_id === selectedFactor.id,
+      )
+    : [];
   const hasOperatingEvidence = fundamentals.length > 0;
   const hasMarketEvidence = observations.length > 0;
   const transmissionStatus = !selectedFactor
@@ -541,6 +553,10 @@ export function MarketExpressionContent({
               {runError && <p className="ros-error">{runError}</p>}
             </>
           )}
+          <ForecastVerdictPanel
+            caseId={caseId}
+            verdicts={selectedForecastVerdicts}
+          />
           {relatedFunds.length ? (
             relatedFunds.map((fund) => {
               const disclosedExposure = fund.disclosed_exposure;
@@ -620,6 +636,92 @@ export function MarketExpressionContent({
         </aside>
       </div>
     </section>
+  );
+}
+
+function ForecastVerdictPanel({
+  caseId,
+  verdicts,
+}: {
+  caseId: string;
+  verdicts: ForecastVerdictHistory["items"];
+}) {
+  return (
+    <section className="ros-forecast-verdicts" aria-live="polite">
+      <p className="ros-eyebrow">冻结预测 · 人工发布</p>
+      <h3>历史预测验证</h3>
+      <p>
+        只展示已由人工确认或修订的数值裁决；机器候选、被否决结论和未经审核推断不会进入这里。
+      </p>
+      {!verdicts.length ? (
+        <Empty text="当前关键因素尚无已发布的历史预测裁决。" />
+      ) : (
+        verdicts.map((verdict) => {
+          const outcome = verificationLabels[verdict.outcome] ?? verdict.outcome;
+          const forecastSource = verdict.forecast_source;
+          const actualSource = verdict.actual_source;
+          return (
+            <article className="ros-forecast-verdict" key={verdict.id}>
+              <header>
+                <strong>{outcome}</strong>
+                <span>{verdict.target.metric_name} · {verdict.target.entity_key}</span>
+              </header>
+              <dl>
+                <div>
+                  <dt>冻结预测</dt>
+                  <dd>{formatForecastValue(verdict.target.expected_value, verdict.target.unit)}</dd>
+                </div>
+                <div>
+                  <dt>后续实际</dt>
+                  <dd>{formatForecastValue(verdict.actual.observed_value, verdict.actual.unit)}</dd>
+                </div>
+                <div>
+                  <dt>适用期间</dt>
+                  <dd>{verdict.target.forecast_period_start} 至 {verdict.target.forecast_period_end}</dd>
+                </div>
+              </dl>
+              <p>{verdict.reason}</p>
+              <small>
+                人工 {verdict.reviewed_by} · {new Date(verdict.reviewed_at).toLocaleString("zh-CN")}
+              </small>
+              <details>
+                <summary>查看规则、冻结来源与审核轨迹</summary>
+                <p>规则 {verdict.rule_version} · {verdict.candidate_rationale}</p>
+                <p>输入 {Object.entries(verdict.inputs).map(([key, value]) => `${key}=${value}`).join("；")}</p>
+                <SourceReference label="预测原文" source={forecastSource} caseId={caseId} />
+                <SourceReference label="实际原文" source={actualSource} caseId={caseId} />
+              </details>
+            </article>
+          );
+        })
+      )}
+    </section>
+  );
+}
+
+function formatForecastValue(value: number, unit: string): string {
+  return `${value.toLocaleString("zh-CN", { maximumFractionDigits: 6 })}${unit ? ` ${unit}` : ""}`;
+}
+
+function SourceReference({
+  label,
+  source,
+  caseId,
+}: {
+  label: string;
+  source: ForecastVerdictHistory["items"][number]["forecast_source"];
+  caseId: string;
+}) {
+  return (
+    <p>
+      {label}：{source.document_version_id ? (
+        <Link className="ros-source-link" to={`/events/${caseId}/documents?document=${source.document_version_id}`}>
+          {source.document_title ?? "定位到冻结原文"}
+        </Link>
+      ) : "冻结版本未记录"}
+      {source.locator ? ` · 定位 ${JSON.stringify(source.locator)}` : ""}
+      {source.available_at ? ` · 可得 ${new Date(source.available_at).toLocaleString("zh-CN")}` : ""}
+    </p>
   );
 }
 

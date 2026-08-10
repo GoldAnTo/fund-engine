@@ -10,6 +10,7 @@ type Rule = Schemas["VerificationRuleDTO"];
 type FundDisclosureSyncDetail = Schemas["FundDisclosureSyncDetailResponse"];
 type FundDisclosureSyncConfig = Schemas["FundDisclosureSyncConfigDTO"];
 type FundDisclosureSyncRun = Schemas["FundDisclosureSyncRunDTO"];
+type ForecastVerdictHistory = Schemas["ForecastVerdictHistoryResponse"];
 
 const now = "2026-08-09T09:30:00Z";
 const source = {
@@ -934,6 +935,71 @@ export class MockResearchOsApi implements ResearchOsApi {
       next_scheduled_at: history[0] ? "2026-08-17T01:00:00Z" : null,
       runs,
     } satisfies FundDisclosureSyncDetail;
+  }
+
+  async forecastVerdicts(
+    caseId: string,
+  ): ReturnType<ResearchOsApi["forecastVerdicts"]> {
+    return {
+      case_id: caseId,
+      cutoff: now,
+      items: [
+        {
+          id: "forecast-verdict-demo",
+          candidate_id: "forecast-candidate-demo",
+          supersedes_id: null,
+          decision: "confirmed",
+          outcome: "contradicted",
+          reason: "实际毛利率显著低于冻结预测，研究员确认该预测未兑现。",
+          reviewed_by: "human:reviewer",
+          reviewed_at: now,
+          target: {
+            id: "forecast-target-demo",
+            case_id: caseId,
+            key_factor_id: "factor-capex",
+            report_claim_id: "report-claim-demo",
+            metric_name: "资本开支同比增速",
+            entity_key: "TSM",
+            baseline_value: 0.19,
+            expected_value: 0.28,
+            unit: "%",
+            forecast_period_start: "2026-01-01",
+            forecast_period_end: "2026-12-31",
+            comparator: "within_tolerance",
+            relative_tolerance: 0.1,
+            reviewed_by: "human:reviewer",
+            review_reason: "冻结研报预测表的口径与期间。",
+            reviewed_at: now,
+            forecast_source: source,
+            baseline_source: source,
+          },
+          actual: {
+            id: "forecast-actual-demo",
+            forecast_target_id: "forecast-target-demo",
+            entity_key: "TSM",
+            observed_value: 0.12,
+            unit: "%",
+            observed_period_start: "2026-01-01",
+            observed_period_end: "2026-12-31",
+            available_at: now,
+            recorded_by: "human:reviewer",
+            record_reason: "已披露年报口径，与预测期间和单位精确匹配。",
+            source,
+          },
+          rule_version: "forecast-numeric-v1",
+          inputs: {
+            expected_value: "0.28",
+            actual_value: "0.12",
+            comparator: "within_tolerance",
+            relative_tolerance: "0.10",
+            unit: "%",
+          },
+          candidate_rationale: "实际值不满足冻结的数值比较规则。",
+          forecast_source: source,
+          actual_source: source,
+        },
+      ],
+    } satisfies ForecastVerdictHistory;
   }
 
   async saveFundDisclosureSync(

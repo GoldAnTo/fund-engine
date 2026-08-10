@@ -42,6 +42,7 @@ export type ResearchSession = Schemas["ResearchSessionDTO"];
 export type LegacyCaseAdmissionCandidate = Schemas["LegacyCaseAdmissionCandidateDTO"];
 export type FundDisclosureSyncDetail = Schemas["FundDisclosureSyncDetailResponse"];
 export type FundDisclosureSyncRun = Schemas["FundDisclosureSyncRunDTO"];
+export type ForecastVerdictHistory = Schemas["ForecastVerdictHistoryResponse"];
 
 const httpResearchOsApi = {
   session: () => request<ResearchSession>("/research-session"),
@@ -63,6 +64,7 @@ const httpResearchOsApi = {
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
   marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),
+  forecastVerdicts: (caseId: string) => request<ForecastVerdictHistory>(`/research-cases/${caseId}/forecast-verdicts?cutoff=${encodeURIComponent(new Date().toISOString())}`),
   fundDisclosureSync: (caseId: string) => request<FundDisclosureSyncDetail>(`/research-cases/${caseId}/fund-disclosure-sync`),
   saveFundDisclosureSync: (caseId: string, input: Schemas["SaveFundDisclosureSyncConfigRequest"]) => request<Schemas["FundDisclosureSyncConfigDTO"]>(`/research-cases/${caseId}/fund-disclosure-sync/config`, { method: "PUT", body: JSON.stringify(input) }),
   startFundDisclosureSync: (caseId: string) => request<FundDisclosureSyncRun>(`/research-cases/${caseId}/fund-disclosure-sync/runs`, { method: "POST" }),
@@ -132,6 +134,7 @@ export const researchOsApi: ResearchOsApi = {
   graph: (caseId) => selectedResearchOsApi.graph(caseId),
   exposure: (caseId) => selectedResearchOsApi.exposure(caseId),
   marketExpression: (caseId) => selectedResearchOsApi.marketExpression(caseId),
+  forecastVerdicts: (caseId) => selectedResearchOsApi.forecastVerdicts(caseId),
   fundDisclosureSync: (caseId) => selectedResearchOsApi.fundDisclosureSync(caseId),
   saveFundDisclosureSync: (caseId, input) => selectedResearchOsApi.saveFundDisclosureSync(caseId, input),
   startFundDisclosureSync: (caseId) => selectedResearchOsApi.startFundDisclosureSync(caseId),
