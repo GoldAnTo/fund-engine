@@ -9,15 +9,21 @@ than becoming a misleading fund-exposure record.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+import json
+import os
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.datasources.gildata import adapters
+from app.datasources.gildata.client import GildataMCPClient
+from app.env import load_local_env
+from app.models.ledger import Base
 from app.models.ledger import Fund, HoldingDisclosure, Stock
 from app.models.source_governance import ProviderRecord
 from app.repositories.documents import DocumentRepository
@@ -304,3 +310,61 @@ def ingest(
         pending_permission_rows=pending_permission,
         invalid_rows=invalid,
     )
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--fund-codes",
+        required=True,
+        type=lambda value: [item.strip() for item in value.split(",") if item.strip()],
+        help="comma-separated fund codes, for example 005827,110011.OF",
+    )
+    parser.add_argument(
+        "--allow-display",
+        action="store_true",
+        help="declare that the team's provider licence permits displaying the frozen report",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="query and validate the run, then roll back every ledger write",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run a bounded, operator-visible fund disclosure intake."""
+    args = _parse_args(argv)
+    load_local_env()
+    database_url = os.getenv("DATABASE_URL", "sqlite:///./evidence_seed.db")
+    engine = create_engine(database_url, future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    with GildataMCPClient.from_env() as client, session_local() as session:
+        stats = ingest(
+            session,
+            client,
+            fund_codes=args.fund_codes,
+            permissions={"display": args.allow_display},
+        )
+        if args.dry_run:
+            session.rollback()
+        else:
+            session.commit()
+    print(
+        json.dumps(
+            {
+                "fund_codes": args.fund_codes,
+                "allow_display": args.allow_display,
+                "dry_run": args.dry_run,
+                **asdict(stats),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

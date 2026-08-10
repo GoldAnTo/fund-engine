@@ -96,3 +96,20 @@ def test_ingest_keeps_matched_holding_out_of_formal_exposure_without_display_per
     assert result.pending_permission_rows == 1
     assert result.holding_disclosures_written == 0
     assert session.scalar(select(HoldingDisclosure)) is None
+
+
+def test_cli_arguments_require_explicit_funds_and_permission_declaration():
+    from app.scripts.ingest_gildata_fund_holdings import _parse_args
+
+    args = _parse_args(
+        [
+            "--fund-codes",
+            "005827,110011.OF",
+            "--allow-display",
+            "--dry-run",
+        ]
+    )
+
+    assert args.fund_codes == ["005827", "110011.OF"]
+    assert args.allow_display is True
+    assert args.dry_run is True
