@@ -18,6 +18,7 @@ import {
   type ActiveFundDisclosureSyncRun,
   type ActiveResearchRun,
   type ResearchSession,
+  type ResearchWorkerStatus,
 } from "./researchOsApi";
 
 function pageLabel(pathname: string) {
@@ -39,6 +40,34 @@ type RunStageEvent = {
   created_at: string;
 };
 
+function queuedRunExecutionState(
+  workerStatus: ResearchWorkerStatus | null,
+  unreadable: boolean,
+): { ariaLabel: string; heading: string; detail: string } | null {
+  if (workerStatus?.status === "unavailable") {
+    return {
+      ariaLabel: "已排队但执行器未启动",
+      heading: "排队中 · 执行器未启动",
+      detail: "本次范围已冻结，尚未执行；待执行器恢复后才会领取",
+    };
+  }
+  if (workerStatus?.status === "stale") {
+    return {
+      ariaLabel: "已排队但执行器心跳失联",
+      heading: "排队中 · 执行器心跳已失联",
+      detail: "本次范围已冻结，尚未执行；请恢复执行器后确认新的阶段记录",
+    };
+  }
+  if (unreadable) {
+    return {
+      ariaLabel: "已排队但执行器状态不可确认",
+      heading: "排队中 · 执行器状态暂不可确认",
+      detail: "本次范围已冻结，无法确认是否会被领取，不会把排队显示为执行中",
+    };
+  }
+  return null;
+}
+
 export function AppShell() {
   const location = useLocation();
   const [events, setEvents] = useState<EventResearchListItem[]>([]);
@@ -56,6 +85,8 @@ export function AppShell() {
     Record<string, boolean>
   >({});
   const [runLoadError, setRunLoadError] = useState(false);
+  const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
+  const [workerStatusError, setWorkerStatusError] = useState(false);
   const [fundRunLoadError, setFundRunLoadError] = useState(false);
   const [runReload, setRunReload] = useState(0);
   const [drawerRun, setDrawerRun] = useState<ActiveResearchRun | null>(null);
@@ -142,6 +173,27 @@ export function AppShell() {
       live = false;
       window.clearInterval(refresh);
       window.removeEventListener("research-os-run-refresh", refreshAfterRunStart);
+    };
+  }, [runReload]);
+  useEffect(() => {
+    let live = true;
+    const load = () => researchOsApi
+      .workerStatus()
+      .then((status) => {
+        if (!live) return;
+        setWorkerStatus(status);
+        setWorkerStatusError(false);
+      })
+      .catch(() => {
+        if (!live) return;
+        setWorkerStatus(null);
+        setWorkerStatusError(true);
+      });
+    void load();
+    const refresh = window.setInterval(load, 15_000);
+    return () => {
+      live = false;
+      window.clearInterval(refresh);
     };
   }, [runReload]);
   useEffect(() => {
@@ -441,22 +493,27 @@ export function AppShell() {
           const runEvents = activeRunEvents[run.run_id];
           const latestActiveEvent = runEvents?.[runEvents.length - 1];
           const activeRunEventError = activeRunEventErrors[run.run_id];
+          const queuedExecution = run.status === "queued"
+            ? queuedRunExecutionState(workerStatus, workerStatusError)
+            : null;
           return (
             <section
-              className="ros-run-strip"
-              aria-label="系统正在运行"
+              className={`ros-run-strip${queuedExecution ? " ros-run-strip--error" : ""}`}
+              aria-label={queuedExecution?.ariaLabel ?? "系统正在运行"}
               key={run.run_id}
             >
               <div className="ros-run-strip__left">
-                <i className="ros-run-strip__pulse" />
+                {!queuedExecution && <i className="ros-run-strip__pulse" />}
                 <div>
                   <strong>
-                    {runStatusLabel(run.status)} · {runStageLabel(run.stage)}
+                    {queuedExecution?.heading ?? `${runStatusLabel(run.status)} · ${runStageLabel(run.stage)}`}
                   </strong>
                   <span>
                     {sourceTypeListLabel(run.scope.allowed_source_types)}{" "}
                     · {run.case_title} · 已处理 {run.processed_count}
-                    {latestActiveEvent
+                    {queuedExecution
+                      ? ` · ${queuedExecution.detail}`
+                      : latestActiveEvent
                       ? ` · 最近记录 · ${runStageLabel(latestActiveEvent.stage)} · ${latestActiveEvent.message || "已记录阶段事件"}`
                       : activeRunEventError
                         ? " · 最近运行记录暂不可读取"

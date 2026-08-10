@@ -1,5 +1,7 @@
 /* Safeguards for the compact event-first workbench. */
 .ros-run-strip__left > div { min-width: 0; }
+.ros-run-strip--error { background: var(--ros-oxide-soft); border-bottom-color: oklch(.77 .055 32); }
+.ros-run-strip--error strong { color: var(--ros-oxide); }
 .ros-case-tabs { min-width: 0; max-width: 100%; }
 .ros-case-tabs__hint { display: none; }
 .ros-case-primary-tabs { display: flex; align-items: stretch; gap: .25rem; margin-top: 1.05rem; border-bottom: 1px solid var(--ros-rule, #ded9ce); }

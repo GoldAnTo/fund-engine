@@ -1910,6 +1910,53 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("does not describe queued work as advancing when the shared worker is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/research-runs/worker-status")
+          ? { status: "unavailable", last_seen_at: null, mode: null, state: null }
+          : url.endsWith("/research-runs/active")
+            ? {
+                items: [{
+                  run_id: "run-queued",
+                  case_id: "event-tsm",
+                  case_title: "等待执行器的 Case",
+                  status: "queued",
+                  stage: "scope",
+                  updated_at: "2026-08-09T00:00:00Z",
+                  processed_count: 0,
+                  next_action: "查看本次运行",
+                  scope: { allowed_source_types: ["company_disclosure"] },
+                }],
+                next_cursor: null,
+                has_more: false,
+              }
+            : { items: [], next_cursor: null, has_more: false };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "已排队但执行器未启动" });
+    expect(strip).toHaveTextContent("排队中 · 执行器未启动");
+    expect(strip).toHaveTextContent("已冻结，尚未执行");
+  });
+
   it("keeps an active fund-disclosure replenishment visible outside the market page", async () => {
     vi.stubGlobal(
       "fetch",
