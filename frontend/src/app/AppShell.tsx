@@ -3,6 +3,14 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { researchClient } from "../data/researchClient";
 import type { EventResearchListItem } from "../domain/eventResearch";
+import {
+  formatRunEventDetails,
+  runFrequencyLabel,
+  runStageLabel,
+  runStatusLabel,
+  runStopReasonLabel,
+  runTriggerLabel,
+} from "../domain/runPresentation";
 import { sourceTypeListLabel } from "../domain/sourcePresentation";
 import type { SearchHit } from "../domain/types";
 import {
@@ -21,17 +29,6 @@ function pageLabel(pathname: string) {
   if (pathname.endsWith("/new")) return "从事件开始";
   return "研究调度";
 }
-const runStageLabels: Record<string, string> = {
-  retrieve: "采集资料",
-  parse: "解析原文",
-  verify: "验证因素",
-  review: "等待审核",
-  planning: "准备范围",
-  claim_review: "等待原子陈述审核",
-  stopped: "已停止",
-  failed: "运行失败",
-};
-
 type RunStageEvent = {
   seq: number;
   stage: string | null;
@@ -379,16 +376,13 @@ export function AppShell() {
                 <i className="ros-run-strip__pulse" />
                 <div>
                   <strong>
-                    系统正在运行 · {run.stage}
-                    {runStageLabels[run.stage]
-                      ? ` · ${runStageLabels[run.stage]}`
-                      : ""}
+                    系统正在运行 · {runStageLabel(run.stage)}
                   </strong>
                   <span>
                     {sourceTypeListLabel(run.scope.allowed_source_types)}{" "}
                     · {run.case_title} · 已处理 {run.processed_count}
                     {latestActiveEvent
-                      ? ` · 最近记录 · ${runStageLabels[latestActiveEvent.stage ?? ""] ?? latestActiveEvent.stage ?? "阶段"} · ${latestActiveEvent.message || "已记录阶段事件"}`
+                      ? ` · 最近记录 · ${runStageLabel(latestActiveEvent.stage)} · ${latestActiveEvent.message || "已记录阶段事件"}`
                       : activeRunEventError
                         ? " · 最近运行记录暂不可读取"
                         : " · 正在读取最近阶段记录"}
@@ -446,7 +440,7 @@ function GlobalRunDrawer({
 }) {
   const scope = run.scope;
   const scopeRows = [
-    ["触发方式", scope.trigger],
+    ["触发方式", runTriggerLabel(scope.trigger)],
     ["配置版本", scope.monitor_version_id],
     [
       "关键因素",
@@ -457,7 +451,7 @@ function GlobalRunDrawer({
     ],
     ["允许来源", sourceTypeListLabel(scope.allowed_source_types)],
     ["资料预算", scope.budget],
-    ["执行频率", scope.frequency],
+    ["执行频率", runFrequencyLabel(scope.frequency)],
     ["下一验证事件", scope.next_verification_event],
     ["配置人", scope.configured_by],
     ["本次配置依据", scope.configuration_change_reason],
@@ -514,17 +508,12 @@ function GlobalRunDrawer({
                   <span>{event.seq}</span>
                   <div>
                     <strong>
-                      {event.stage || "阶段"} · {event.status || "已记录"}
+                      {runStageLabel(event.stage)} · {runStatusLabel(event.status)}
                     </strong>
                     <p>{event.message || "无文字摘要"}</p>
                     <small>
                       {new Date(event.created_at).toLocaleString("zh-CN")} ·{" "}
-                      {Object.entries(event.details || {})
-                        .map(
-                          ([key, value]) =>
-                            `${key}: ${Array.isArray(value) ? value.join("、") : String(value)}`,
-                        )
-                        .join(" · ") || "无额外字段"}
+                      {formatRunEventDetails(event.details || {}) || "无额外字段"}
                     </small>
                   </div>
                 </li>

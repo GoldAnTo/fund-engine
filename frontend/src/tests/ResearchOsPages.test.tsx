@@ -1581,7 +1581,7 @@ describe("Research OS event entry", () => {
         "最近记录 · 采集资料 · 已按许可范围读取公司披露",
       );
       expect(strips[1]).toHaveTextContent(
-        "最近记录 · 验证因素 · 正在核验毛利率验证指标",
+        "最近记录 · 验证关键因素 · 正在核验毛利率验证指标",
       );
     });
     expect(screen.getAllByRole("button", { name: "展开运行详情" })).toHaveLength(2);
@@ -1810,9 +1810,9 @@ describe("Research OS event entry", () => {
     const drawer = await screen.findByRole("complementary", {
       name: "全局运行详情",
     });
-    expect(drawer).toHaveTextContent("company_disclosure");
+    expect(drawer).toHaveTextContent("公司披露");
     expect(drawer).toHaveTextContent("冻结本次范围");
-    expect(drawer).toHaveTextContent("weekday_08_30");
+    expect(drawer).toHaveTextContent("工作日 08:30");
     expect(drawer).toHaveTextContent("2026Q1 财报披露");
     expect(drawer).toHaveTextContent("human:lin");
     expect(drawer).toHaveTextContent("以晨间披露核验订单指引");
@@ -2180,7 +2180,7 @@ describe("Research OS event entry", () => {
     ).toHaveTextContent("monitor-v3");
     expect(
       screen.getByRole("complementary", { name: "运行详情" }),
-    ).toHaveTextContent("uploaded_file");
+    ).toHaveTextContent("上传原件");
     expect(
       screen.getByRole("complementary", { name: "运行详情" }),
     ).toHaveTextContent("7");
@@ -2676,7 +2676,7 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
     expect(screen.getByText("台积电 Case")).toBeVisible();
     expect(screen.getByText("公司披露")).toBeVisible();
-    expect(screen.getByText("task_failed")).toBeVisible();
+    expect(screen.getByText("任务执行失败")).toBeVisible();
     expect(screen.getByRole("link", { name: "查看失败原因" })).toHaveAttribute(
       "href",
       "/events/event-tsm/monitor",
@@ -2686,7 +2686,7 @@ describe("Research OS event entry", () => {
       name: "全局运行记录",
     });
     expect(drawer).toHaveTextContent("授权来源返回失败");
-    expect(drawer).toHaveTextContent("weekday_08_30");
+    expect(drawer).toHaveTextContent("工作日 08:30");
     expect(drawer).toHaveTextContent("2026Q1 财报披露");
     expect(drawer).toHaveTextContent("human:lin");
     expect(drawer).toHaveTextContent("以晨间披露核验订单指引");

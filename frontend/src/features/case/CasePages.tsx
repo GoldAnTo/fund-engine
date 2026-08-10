@@ -29,6 +29,12 @@ import {
   decodeRecoveryRouteState,
   encodeRecoveryRouteState,
 } from "../../domain/recoveryRoute";
+import {
+  formatRunEventDetails,
+  runStageLabel,
+  runStatusLabel,
+  runTriggerLabel,
+} from "../../domain/runPresentation";
 import { sourceTypeLabel, sourceTypeListLabel } from "../../domain/sourcePresentation";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
@@ -3483,7 +3489,7 @@ function MonitorContent({
               <p className="ros-eyebrow">
                 {run ? "选中的运行" : "尚未开始运行"}
               </p>
-              <h2>{run ? `${run.stage} · ${run.status}` : "先配置持续研究"}</h2>
+              <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : "先配置持续研究"}</h2>
             </div>
             <span>{run ? `更新于 ${run.updated_at}` : ""}</span>
           </header>
@@ -3506,7 +3512,7 @@ function MonitorContent({
                   <span>{event.seq}</span>
                   <div>
                     <strong>
-                      {event.stage || "运行阶段"} · {event.status || "已记录"}
+                      {runStageLabel(event.stage)} · {runStatusLabel(event.status)}
                     </strong>
                     <p>{event.message || "无文字摘要"}</p>
                     <small>
@@ -3658,7 +3664,7 @@ function RunDrawer({
       <header>
         <div>
           <p className="ros-eyebrow">ResearchRun · {run?.id || "尚无运行"}</p>
-          <h2>{run ? `${run.stage} · ${run.status}` : "运行详情"}</h2>
+          <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : "运行详情"}</h2>
           <p>
             {scope
               ? "以下口径来自本次运行的冻结事件。"
@@ -3675,7 +3681,7 @@ function RunDrawer({
           <dl>
             <div>
               <dt>触发方式</dt>
-              <dd>{list("trigger") || "未记录"}</dd>
+              <dd>{runTriggerLabel(list("trigger"))}</dd>
             </div>
             <div>
               <dt>配置版本</dt>
@@ -3740,7 +3746,7 @@ function RunDrawer({
             <li key={event.seq}>
               <span>{event.seq}</span>
               <div>
-                <strong>{event.stage || "阶段"}</strong>
+                <strong>{runStageLabel(event.stage)} · {runStatusLabel(event.status)}</strong>
                 <p>{event.message || "无文字摘要"}</p>
                 <small>
                   {event.createdAt
@@ -3756,30 +3762,6 @@ function RunDrawer({
       </div>
     </aside>
   );
-}
-
-const runEventDetailLabels: Record<string, string> = {
-  accepted: "已纳入资料",
-  excluded: "已排除资料",
-  exclusion_reason: "排除原因",
-  pending_review: "待人工审核",
-  failed: "失败项",
-  failure_reason: "失败原因",
-  candidates: "候选数",
-  frozen: "已冻结资料",
-};
-
-function formatRunEventDetails(details: Record<string, unknown>) {
-  return Object.entries(details)
-    .map(([key, value]) => {
-      const rendered = Array.isArray(value)
-        ? value.join("、")
-        : typeof value === "object" && value !== null
-          ? JSON.stringify(value)
-          : String(value);
-      return `${runEventDetailLabels[key] || key}：${rendered}`;
-    })
-    .join(" · ");
 }
 
 export function MonitorConfigPage() {

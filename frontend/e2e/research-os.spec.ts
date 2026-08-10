@@ -132,7 +132,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
     await expect(page.getByText("当前优先")).toBeVisible();
     await expect(page.getByRole("main").getByText("研究网络")).toBeVisible();
-    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · review");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · 等待审核");
     await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("授权供应商资料");
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
