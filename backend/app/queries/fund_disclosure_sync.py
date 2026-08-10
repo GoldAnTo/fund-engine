@@ -59,9 +59,10 @@ class FundDisclosureSyncQuery:
                 .order_by(FundDisclosureSyncRun.created_at.desc(), FundDisclosureSyncRun.id.desc())
             )
         )
+        suggestions = self._suggestions(case_id)
         return FundDisclosureSyncDetail(
-            suggestions=self._suggestions(case_id),
-            manual_code_fallback=not bool(self._suggestions(case_id)),
+            suggestions=suggestions,
+            manual_code_fallback=not bool(suggestions),
             effective_config=configs[0] if configs else None,
             config_history=configs,
             runs=[

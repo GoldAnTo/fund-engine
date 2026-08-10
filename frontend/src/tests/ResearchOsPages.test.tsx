@@ -899,6 +899,32 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByText(/许可：已准入/).slice(-1)[0]).toBeVisible();
   });
 
+  it("lets a researcher configure suggested fund disclosure replenishment and replay the immediate run", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "建议补充的基金披露" }),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("建议基金：演示成长基金（000001）"),
+    ).toBeChecked();
+    await user.selectOptions(screen.getByLabelText("补充频率"), "weekly");
+    await user.type(screen.getByLabelText("配置调整理由"), "本周补充当前股票相关基金披露");
+    await user.click(screen.getByRole("button", { name: "保存基金披露配置" }));
+    expect(await screen.findByText(/已保存配置版本/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "立即补充一次" }));
+    expect(await screen.findByText("本次补充记录")).toBeVisible();
+    expect(screen.getAllByText(/同基金、同报告期季报/).length).toBeGreaterThan(1);
+  });
+
   it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));

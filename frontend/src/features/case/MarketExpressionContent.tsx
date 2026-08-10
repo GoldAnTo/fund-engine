@@ -11,6 +11,7 @@ import {
   type MarketInstrumentBindings,
   type SourceStatementOptions,
 } from "../../app/researchOsApi";
+import { FundDisclosureSyncTask } from "./FundDisclosureSyncTask";
 
 const claimKindLabels: Record<string, string> = {
   disclosed_fact: "已披露事实",
@@ -69,6 +70,7 @@ export function MarketExpressionContent({
   const [starting, setStarting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [fundDisclosureScopeRevision, setFundDisclosureScopeRevision] = useState(0);
 
   async function reloadExpression() {
     setError(null);
@@ -76,6 +78,7 @@ export function MarketExpressionContent({
       const value = await researchOsApi.marketExpression(caseId);
       setExpression(value);
       setSelectedFactorId(value.factors[0]?.id ?? null);
+      setFundDisclosureScopeRevision((revision) => revision + 1);
     } catch {
       setError(
         "无法读取已审核的市场表达；系统不会以 Case 摘要或未审核候选替代该层记录。",
@@ -609,6 +612,11 @@ export function MarketExpressionContent({
           ) : (
             <Empty text="当前因素未关联到可用的基金历史披露。" />
           )}
+          <FundDisclosureSyncTask
+            caseId={caseId}
+            scopeRevision={fundDisclosureScopeRevision}
+            onCompleted={() => void reloadExpression()}
+          />
         </aside>
       </div>
     </section>

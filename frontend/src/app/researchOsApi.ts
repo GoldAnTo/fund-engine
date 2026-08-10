@@ -40,6 +40,8 @@ export type AtomicClaimReview = Schemas["AtomicClaimReviewDTO"];
 export type CaseRelationReview = Schemas["CaseRelationReviewDTO"];
 export type ResearchSession = Schemas["ResearchSessionDTO"];
 export type LegacyCaseAdmissionCandidate = Schemas["LegacyCaseAdmissionCandidateDTO"];
+export type FundDisclosureSyncDetail = Schemas["FundDisclosureSyncDetailResponse"];
+export type FundDisclosureSyncRun = Schemas["FundDisclosureSyncRunDTO"];
 
 const httpResearchOsApi = {
   session: () => request<ResearchSession>("/research-session"),
@@ -61,6 +63,10 @@ const httpResearchOsApi = {
   graph: (caseId: string) => request<Graph>(`/research-cases/${caseId}/graph?research_mode=true`),
   exposure: (caseId: string) => request<FundExposure>(`/research-cases/${caseId}/fund-exposure`),
   marketExpression: (caseId: string) => request<MarketExpression>(`/research-cases/${caseId}/market-expression`),
+  fundDisclosureSync: (caseId: string) => request<FundDisclosureSyncDetail>(`/research-cases/${caseId}/fund-disclosure-sync`),
+  saveFundDisclosureSync: (caseId: string, input: Schemas["SaveFundDisclosureSyncConfigRequest"]) => request<Schemas["FundDisclosureSyncConfigDTO"]>(`/research-cases/${caseId}/fund-disclosure-sync/config`, { method: "PUT", body: JSON.stringify(input) }),
+  startFundDisclosureSync: (caseId: string) => request<FundDisclosureSyncRun>(`/research-cases/${caseId}/fund-disclosure-sync/runs`, { method: "POST" }),
+  retryFundDisclosureSync: (caseId: string, runId: string) => request<FundDisclosureSyncRun>(`/research-cases/${caseId}/fund-disclosure-sync/runs/${runId}/retry`, { method: "POST" }),
   sourceStatements: (caseId: string) => request<SourceStatementOptions>(`/research-cases/${caseId}/source-statements`),
   marketInstruments: (caseId: string) => request<MarketInstrumentBindings>(`/research-cases/${caseId}/market-instruments`),
   marketInstrumentCatalog: (query: string) => request<MarketInstrumentCatalog>(`/market-instruments?query=${encodeURIComponent(query)}`),
@@ -126,6 +132,10 @@ export const researchOsApi: ResearchOsApi = {
   graph: (caseId) => selectedResearchOsApi.graph(caseId),
   exposure: (caseId) => selectedResearchOsApi.exposure(caseId),
   marketExpression: (caseId) => selectedResearchOsApi.marketExpression(caseId),
+  fundDisclosureSync: (caseId) => selectedResearchOsApi.fundDisclosureSync(caseId),
+  saveFundDisclosureSync: (caseId, input) => selectedResearchOsApi.saveFundDisclosureSync(caseId, input),
+  startFundDisclosureSync: (caseId) => selectedResearchOsApi.startFundDisclosureSync(caseId),
+  retryFundDisclosureSync: (caseId, runId) => selectedResearchOsApi.retryFundDisclosureSync(caseId, runId),
   sourceStatements: (caseId) => selectedResearchOsApi.sourceStatements(caseId),
   marketInstruments: (caseId) => selectedResearchOsApi.marketInstruments(caseId),
   marketInstrumentCatalog: (query) => selectedResearchOsApi.marketInstrumentCatalog(query),

@@ -7,6 +7,9 @@ type MonitorDetail = Schemas["CaseMonitorDetailResponse"];
 type AtomicClaim = Schemas["AtomicClaimCandidateDTO"];
 type Protocol = Schemas["CaseMechanismProtocolDTO"];
 type Rule = Schemas["VerificationRuleDTO"];
+type FundDisclosureSyncDetail = Schemas["FundDisclosureSyncDetailResponse"];
+type FundDisclosureSyncConfig = Schemas["FundDisclosureSyncConfigDTO"];
+type FundDisclosureSyncRun = Schemas["FundDisclosureSyncRunDTO"];
 
 const now = "2026-08-09T09:30:00Z";
 const source = {
@@ -206,6 +209,8 @@ export class MockResearchOsApi implements ResearchOsApi {
     string,
     Map<string, Schemas["CaseRelationReviewDTO"]>
   >();
+  private fundDisclosureSyncConfigs = new Map<string, FundDisclosureSyncConfig[]>();
+  private fundDisclosureSyncRuns = new Map<string, FundDisclosureSyncRun[]>();
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
@@ -907,6 +912,84 @@ export class MockResearchOsApi implements ResearchOsApi {
         },
       ],
     };
+  }
+
+  async fundDisclosureSync(
+    caseId: string,
+  ): ReturnType<ResearchOsApi["fundDisclosureSync"]> {
+    const history = this.fundDisclosureSyncConfigs.get(caseId) ?? [];
+    const runs = this.fundDisclosureSyncRuns.get(caseId) ?? [];
+    return {
+      suggestions: [
+        {
+          fund_code: "000001",
+          fund_name: "演示成长基金",
+          matching_stock_codes: ["TSM"],
+          latest_report_period: "2026-06-30",
+        },
+      ],
+      manual_code_fallback: false,
+      effective_config: history[0] ?? null,
+      config_history: history,
+      next_scheduled_at: history[0] ? "2026-08-17T01:00:00Z" : null,
+      runs,
+    } satisfies FundDisclosureSyncDetail;
+  }
+
+  async saveFundDisclosureSync(
+    caseId: string,
+    input: Parameters<ResearchOsApi["saveFundDisclosureSync"]>[1],
+  ): ReturnType<ResearchOsApi["saveFundDisclosureSync"]> {
+    const history = this.fundDisclosureSyncConfigs.get(caseId) ?? [];
+    const config: FundDisclosureSyncConfig = {
+      id: `fund-sync-${caseId}-v${history.length + 1}`,
+      version: history.length + 1,
+      frequency: input.frequency,
+      fund_codes: [...input.fund_codes],
+      stock_codes: ["TSM"],
+      allow_display: input.allow_display,
+      changed_by: input.actor,
+      change_reason: input.change_reason,
+      created_at: now,
+    };
+    this.fundDisclosureSyncConfigs.set(caseId, [config, ...history]);
+    return config;
+  }
+
+  async startFundDisclosureSync(
+    caseId: string,
+  ): ReturnType<ResearchOsApi["startFundDisclosureSync"]> {
+    const config = (this.fundDisclosureSyncConfigs.get(caseId) ?? [])[0];
+    if (!config) throw new Error("fund disclosure sync configuration not found");
+    const run: FundDisclosureSyncRun = {
+      id: `fund-sync-run-${caseId}-${Date.now()}`,
+      config_version_id: config.id,
+      trigger: "manual",
+      fund_codes: [...config.fund_codes],
+      stock_codes: [...config.stock_codes],
+      allow_display: config.allow_display,
+      status: "completed",
+      created_at: now,
+      events: [
+        { seq: 1, stage: "scope", status: "completed", message: "已冻结基金与当前 Case 股票范围", payload: { fund_codes: config.fund_codes, stock_codes: config.stock_codes, allow_display: config.allow_display }, created_at: now },
+        { seq: 2, stage: "match_report", status: "completed", message: "已按同基金、同报告期季报规则核验来源", payload: { holding_rows_seen: 1, matched_reports: 1, pending_match_rows: 0, pending_permission_rows: 0 }, created_at: now },
+        { seq: 3, stage: "finished", status: "completed", message: "本次基金披露补充已完成；结果仅代表历史披露", payload: { holding_disclosures_written: 1, holding_disclosures_skipped_duplicate: 0, invalid_rows: 0 }, created_at: now },
+      ],
+    };
+    this.fundDisclosureSyncRuns.set(caseId, [run, ...(this.fundDisclosureSyncRuns.get(caseId) ?? [])]);
+    return run;
+  }
+
+  async retryFundDisclosureSync(
+    caseId: string,
+    runId: string,
+  ): ReturnType<ResearchOsApi["retryFundDisclosureSync"]> {
+    const prior = (this.fundDisclosureSyncRuns.get(caseId) ?? []).find((run) => run.id === runId);
+    if (!prior) throw new Error("fund disclosure sync run not found");
+    const run = await this.startFundDisclosureSync(caseId);
+    const retried = { ...run, trigger: "retry" as const, fund_codes: [...prior.fund_codes], stock_codes: [...prior.stock_codes] };
+    this.fundDisclosureSyncRuns.set(caseId, [retried, ...(this.fundDisclosureSyncRuns.get(caseId) ?? []).filter((item) => item.id !== run.id)]);
+    return retried;
   }
 
   async sourceStatements(

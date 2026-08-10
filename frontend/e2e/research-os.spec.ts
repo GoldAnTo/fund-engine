@@ -26,6 +26,23 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。")).toBeVisible();
   });
 
+  test("fund disclosure task saves a monthly scope and replays its exact matching rule", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await expect(page.getByRole("heading", { name: "建议补充的基金披露" })).toBeVisible();
+    await expect(page.getByLabel("建议基金：演示成长基金（000001）")).toBeChecked();
+    await page.getByLabel("补充频率").selectOption("monthly");
+    await page.getByLabel("配置调整理由").fill("按月补充当前股票相关的基金季报披露");
+    await page.getByRole("button", { name: "保存基金披露配置" }).click();
+    await expect(page.getByRole("status")).toContainText("已保存配置版本 1");
+    await expect(page.getByText(/下次定时：/)).toBeVisible();
+
+    await page.getByRole("button", { name: "立即补充一次" }).click();
+    const record = page.getByRole("heading", { name: "本次补充记录" }).locator("..");
+    await expect(record).toContainText("同基金、同报告期季报规则核验来源");
+    await expect(record).toContainText("写入披露 1");
+  });
+
   test("researcher can create a review-only candidate from one frozen paragraph", async ({ page }) => {
     await page.goto("/events/event-tsm/documents?document=doc-event-tsm-q2&client=mock");
 
@@ -414,7 +431,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute("href", "/events/event-tsm/documents?document=doc-demo-capex");
     await expect(page.getByRole("button", { name: /尚未到验证时点/ })).toBeVisible();
     await expect(page.getByText("这是市场观测，不自动表述为研报或因素造成。")).toBeVisible();
-    await expect(page.getByText(/报告期 2026-06-30/)).toBeVisible();
+    await expect(page.locator(".ros-fund-row").getByText(/报告期 2026-06-30/)).toBeVisible();
     await expect(page.getByRole("button", { name: "立即补证此因素" })).toBeEnabled();
     await page.getByRole("button", { name: "立即补证此因素" }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
