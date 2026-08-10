@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def test_live_event_ui_verifier_creates_configures_and_reads_a_case_through_default_http_client() -> None:
+def test_live_event_ui_verifier_creates_configures_runs_and_reads_a_case_through_default_http_client() -> None:
     frontend = Path(__file__).parents[2] / "frontend"
     script = frontend / "scripts" / "verify-live-event-ui.mjs"
     node = shutil.which("node")
@@ -24,4 +24,4 @@ def test_live_event_ui_verifier_creates_configures_and_reads_a_case_through_defa
     )
 
     assert result.returncode == 0, result.stderr
-    assert "PASS: default frontend created, configured its monitor, and listed the same Case through the live API" in result.stdout
+    assert "PASS: default frontend created, configured, ran, and listed the same Case through the live API" in result.stdout

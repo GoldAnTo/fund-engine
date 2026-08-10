@@ -71,6 +71,111 @@ async function waitFor(url, { headers = {}, label }) {
   throw new Error(`${label} did not become ready: ${latest}`);
 }
 
+async function apiJson(base, path, token, init = {}) {
+  const response = await fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(init.headers || {}),
+    },
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`protocol setup ${init.method || "GET"} ${path} failed (${response.status}): ${body}`);
+  }
+  return body ? JSON.parse(body) : null;
+}
+
+async function prepareReadyProtocol({ apiBase, token, caseId }) {
+  // A fresh verifier database deliberately has no governed metric catalogue.
+  // Seed the minimal reviewed protocol through the same public governance API,
+  // then leave the monitored run itself to the normal browser UI below.
+  const monitor = await apiJson(apiBase, `/research-cases/${caseId}/monitor`, token);
+  const thesisId = monitor.monitor?.factor_ids[0];
+  if (!thesisId) throw new Error("created Case did not expose a confirmed factor for its monitor");
+  const documents = await apiJson(apiBase, `/event-research/${caseId}/documents`, token);
+  const baseline = documents.items.find(
+    (document) => document.source_contract?.status === "admitted" && document.source_contract.permissions?.display,
+  );
+  if (!baseline) throw new Error("created Case did not retain an admitted frozen baseline document");
+  const metric = await apiJson(apiBase, "/metric-definitions", token, {
+    method: "POST",
+    body: JSON.stringify({
+      metric_id: "live_verifier_company_revenue",
+      display_name: "验收公司收入",
+      canonical_definition: "隔离验收用的公司收入结果指标",
+      entity_scope: "company",
+      unit: "yuan",
+      frequency: "quarterly",
+      period_semantics: "period_end",
+      allowed_source_roles: ["primary_disclosure"],
+      role_eligibility: ["outcome", "driver"],
+      approved_by: "human:data-governance",
+      reason: "真实浏览器监控验收",
+    }),
+  });
+  const binding = await apiJson(apiBase, `/theses/${thesisId}/outcome-bindings`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      metric_definition_id: metric.id,
+      entity_scope: { company_id: "company:live-verifier", company: "live-verifier" },
+      direction: "increase",
+      baseline: {
+        source_ref: `document:${baseline.id}`,
+        value: "1",
+        unit: "yuan",
+        observed_period: "2026-01-01",
+        available_at: baseline.available_at,
+      },
+      horizon_start: "2026-01-02",
+      horizon_end: "2026-12-31",
+      reviewer: "human:researcher",
+      reason: "冻结本次运行的可回放结果基线",
+    }),
+  });
+  await apiJson(apiBase, `/outcome-bindings/${binding.id}/approve`, token, {
+    method: "POST",
+    body: JSON.stringify({ reviewer: "human:reviewer", reason: "验收协议审核" }),
+  });
+  const templates = await apiJson(apiBase, "/mechanism-templates", token);
+  const template = templates.find((item) => item.template_key === "overseas_ai_capex_to_china_hardware");
+  if (!template) throw new Error("reviewed mechanism template was not available");
+  await apiJson(apiBase, `/research-cases/${caseId}/mechanism-selection`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      template_version_id: template.id,
+      reviewer: "human:researcher",
+      reason: "真实浏览器验收选择可检验路径",
+    }),
+  });
+  await Promise.all(template.edges.map((edge) => apiJson(
+    apiBase,
+    `/research-cases/${caseId}/mechanism-edges/${edge.id}/verification-rules`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        metric_definition_id: metric.id,
+        expected_direction: "increase",
+        support_predicate: "公司一手披露同口径指标增长",
+        contradiction_predicate: "公司一手披露同口径指标下降",
+        allowed_source_roles: ["primary_disclosure"],
+        observed_period_start: "2026-01-01",
+        observed_period_end: "2026-12-31",
+        available_at_deadline: "2027-03-31",
+        next_verification_event: "下一次公司财报披露",
+        reviewer: "human:researcher",
+        reason: `验收机制边 ${edge.edge_key}`,
+      }),
+    },
+  )));
+  const gate = await apiJson(apiBase, `/theses/${thesisId}/researchability`, token);
+  if (gate.status !== "ready") {
+    throw new Error(`governed protocol did not become ready: ${JSON.stringify(gate)}`);
+  }
+}
+
 async function main() {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "fund-engine-live-ui-"));
   const apiPort = await freePort();
@@ -141,6 +246,15 @@ async function main() {
 
     await page.goto(`${uiBase}/events/${caseId}/monitor/config`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "调整后会创建新的可复现版本" }).waitFor();
+    const factorChoices = page
+      .locator("fieldset")
+      .filter({ hasText: "已确认关键因素" })
+      .locator('input[type="checkbox"]');
+    const factorCount = await factorChoices.count();
+    if (!factorCount) throw new Error("created Case did not offer a confirmed factor for monitor configuration");
+    for (let index = 1; index < factorCount; index += 1) {
+      await factorChoices.nth(index).uncheck();
+    }
     await page.getByLabel("下一验证事件").fill("下一次公司财报披露");
     await page.getByLabel("新版本变更原因").fill("为新建事件设置受控补证范围");
     await page.getByRole("button", { name: "保存为新监控版本" }).click();
@@ -151,6 +265,14 @@ async function main() {
     await page.getByRole("button", { name: "立即补证一次" }).isDisabled().then((disabled) => {
       if (!disabled) throw new Error("strict protocol gate unexpectedly enabled a monitor run");
     });
+    await prepareReadyProtocol({ apiBase, token, caseId });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "立即补证一次" }).isEnabled().then((enabled) => {
+      if (!enabled) throw new Error("ready research protocol did not enable a monitor run");
+    });
+    await page.getByRole("button", { name: "立即补证一次" }).click();
+    await page.getByRole("heading", { name: "准备研究范围 · 排队中" }).first().waitFor();
+    await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
 
     await page.goto(`${uiBase}/events`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "今天，先推进哪一个判断？" }).waitFor();
@@ -162,6 +284,7 @@ async function main() {
       ["POST /event-research/extract", (request) => request.startsWith("POST ") && request.endsWith("/event-research/extract")],
       ["POST /event-research", (request) => request.startsWith("POST ") && request.endsWith("/event-research")],
       ["PUT /research-cases/:caseId/monitor", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/monitor`)],
+      ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
       ["GET /event-research", (request) => request.startsWith("GET ") && request.endsWith("/event-research")],
     ];
     for (const [expected, observed] of expectedRequests) {
@@ -171,7 +294,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured its monitor, and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured, ran, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)

@@ -2171,6 +2171,71 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("checks protocol readiness only for the factors selected by the active monitor", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.includes("/researchability")
+          ? url.endsWith("/theses/selected-factor/researchability")
+            ? {
+                status: "ready",
+                reason_codes: [],
+                effective_binding_id: "binding-selected",
+                next_action: "可开始补证",
+              }
+            : {
+                status: "blocked",
+                reason_codes: ["missing_outcome_binding"],
+                effective_binding_id: null,
+                next_action: "确认结果指标、范围、基线和时间窗",
+              }
+          : {
+              monitor: {
+                id: "monitor-selected",
+                version: 1,
+                status: "active",
+                frequency: "weekday_08_30",
+                factor_ids: ["selected-factor"],
+                allowed_source_types: ["company_disclosure"],
+                next_verification_event: "下一次财报",
+                budget: 10,
+                changed_by: "human",
+                change_reason: "只跟踪已就绪因素",
+                created_at: "2026-08-09T00:00:00Z",
+              },
+              latest_run: null,
+              confirmed_factors: [
+                { id: "selected-factor", statement: "已就绪因素" },
+                { id: "unselected-factor", statement: "未纳入本次监控的因素" },
+              ],
+            };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "立即补证一次" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.queryByText("研究协议尚未通过，不能启动补证。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("starts immediate replenishment through the frozen-monitor endpoint", async () => {
     const user = userEvent.setup();
     let monitorRunCreated = false;

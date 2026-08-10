@@ -43,7 +43,13 @@ _RESEARCH_STATES = frozenset({"reviewed", "machine_generated"})
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    if value is None:
+        return None
+    # SQLite drops tzinfo from DateTime(timezone=True).  The document ledger
+    # treats naive legacy values as UTC, and API callers may safely reuse this
+    # representation as an OutcomeBinding baseline without inventing a time.
+    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return normalized.isoformat()
 
 
 def _encode_cursor(available_at: datetime, version_id: uuid.UUID) -> str:

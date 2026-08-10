@@ -3522,7 +3522,13 @@ function MonitorContent({
   }, [selectedRunId]);
   useEffect(() => {
     let active = true;
-    const factors = detail?.confirmed_factors ?? [];
+    // A manual run is frozen from CaseMonitor.factor_ids.  Checking every
+    // confirmed Case factor here would make an out-of-scope protocol gap
+    // incorrectly block the exact run the researcher configured.
+    const monitoredIds = new Set(detail?.monitor?.factor_ids ?? []);
+    const factors = detail?.monitor
+      ? (detail.confirmed_factors ?? []).filter((factor) => monitoredIds.has(factor.id))
+      : [];
     setProtocolLoadError(false);
     if (!factors.length) {
       setProtocolStates({});
