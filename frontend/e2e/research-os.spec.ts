@@ -26,6 +26,21 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("截至 2026 年 6 月 30 日，台积电占基金资产净值 3.80%。")).toBeVisible();
   });
 
+  test("researcher can create a review-only candidate from one frozen paragraph", async ({ page }) => {
+    await page.goto("/events/event-tsm/documents?document=doc-event-tsm-q2&client=mock");
+
+    await expect(page.getByRole("heading", { name: "台积电 2026 年第二季度法说会摘要" })).toBeVisible();
+    await page.getByRole("button", { name: "将此段纳入待审候选" }).first().click();
+    await page.getByLabel("候选表述").fill("管理层上调全年资本开支指引。 ");
+    await page.getByRole("button", { name: "创建待审候选" }).click();
+
+    await expect(page.getByRole("status")).toContainText("已创建待审候选，尚未写入正式结论。");
+    await expect(page.getByRole("link", { name: "前往审核此候选" })).toHaveAttribute(
+      "href",
+      "/events/event-tsm/review",
+    );
+  });
+
   test("market expression drills from a reviewed stock to its Case-scoped fund disclosure", async ({ page }) => {
     await page.goto("/events/event-tsm/market?client=mock");
 

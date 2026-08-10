@@ -80,6 +80,7 @@ const httpResearchOsApi = {
   selectMechanismTemplate: (caseId: string, input: Schemas["SelectMechanismTemplateRequest"]) => request<Schemas["MechanismSelectionDTO"]>(`/research-cases/${caseId}/mechanism-selection`, { method: "POST", body: JSON.stringify(input) }),
   createVerificationRule: (caseId: string, edgeId: string, input: Schemas["VerificationRuleRequest"]) => request<Schemas["VerificationRuleDTO"]>(`/research-cases/${caseId}/mechanism-edges/${edgeId}/verification-rules`, { method: "POST", body: JSON.stringify(input) }),
   atomicClaims: (caseId: string) => request<Schemas["AtomicClaimQueueResponse"]>(`/research-cases/${caseId}/atomic-claims`),
+  createAtomicClaim: (caseId: string, input: Schemas["CreateAtomicClaimCandidateRequest"]) => request<AtomicClaimCandidate>(`/research-cases/${caseId}/atomic-claims`, { method: "POST", body: JSON.stringify(input) }),
   reviewAtomicClaim: (candidateId: string, input: Schemas["AtomicClaimReviewRequest"]) => request<AtomicClaimReview>(`/atomic-claims/${candidateId}/reviews`, { method: "POST", body: JSON.stringify(input) }),
   createDocumentSupplement: (documentId: string, input: Schemas["CreateDocumentSupplementRequest"]) => request<Schemas["CreateDocumentSupplementResponse"]>(`/documents/${documentId}/supplements`, { method: "POST", body: JSON.stringify(input) }),
 };
@@ -144,6 +145,7 @@ export const researchOsApi: ResearchOsApi = {
   selectMechanismTemplate: (caseId, input) => selectedResearchOsApi.selectMechanismTemplate(caseId, input),
   createVerificationRule: (caseId, edgeId, input) => selectedResearchOsApi.createVerificationRule(caseId, edgeId, input),
   atomicClaims: (caseId) => selectedResearchOsApi.atomicClaims(caseId),
+  createAtomicClaim: (caseId, input) => selectedResearchOsApi.createAtomicClaim(caseId, input),
   reviewAtomicClaim: (candidateId, input) => selectedResearchOsApi.reviewAtomicClaim(candidateId, input),
   createDocumentSupplement: (documentId, input) => selectedResearchOsApi.createDocumentSupplement(documentId, input),
 };

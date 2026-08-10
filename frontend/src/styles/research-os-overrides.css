@@ -109,6 +109,12 @@
 .ros-source-spans code { display: block; overflow-wrap: anywhere; color: var(--ros-soft, #59615d); font-size: .68rem; }
 .ros-source-spans blockquote { margin: .65rem 0; padding-left: .75rem; border-left: 2px solid var(--ros-accent, #285b54); line-height: 1.6; }
 .ros-source-spans small { color: var(--ros-muted, #767b76); }
+.ros-source-spans article > .ros-button { display: block; margin-top: .8rem; }
+.ros-inline-form { display: grid; gap: .7rem; margin-top: .85rem; padding: .85rem; border: 1px solid var(--ros-strong, #c9c3b8); border-radius: .4rem; background: var(--ros-paper, #fffdf8); }
+.ros-inline-form p { margin: 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.5; }
+.ros-inline-form label { display: grid; gap: .35rem; color: var(--ros-soft, #59615d); font-size: .76rem; }
+.ros-inline-form textarea, .ros-inline-form select { width: 100%; border: 1px solid var(--ros-strong, #c9c3b8); border-radius: .3rem; background: var(--ros-surface, #fff); color: var(--ros-ink, #202520); padding: .5rem; font: inherit; }
+.ros-inline-form textarea { min-height: 5rem; resize: vertical; }
 
 /* Historical Case admission is an operations decision, not a dashboard. The
    source choice and the written rationale share one working surface so the

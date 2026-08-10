@@ -11,6 +11,7 @@ from app.models.ledger import (
     ResearchCase,
     SourceSpan,
 )
+from app.models.source_governance import SourceContract
 from app.services.atomic_claims import AtomicClaimService
 
 
@@ -117,3 +118,54 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
     assert item["review_state"] == "modified"
     assert item["review_history"][0]["reason"] == "已复核原文、主体和期间"
     assert item["published_source_statement"]["id"] == body["published_source_statement"]["id"]
+
+
+def test_researcher_can_propose_one_frozen_source_span_for_review(
+    cmd_client, cmd_session
+) -> None:
+    case, existing = _candidate_for_case(cmd_session)
+    span = cmd_session.get(SourceSpan, existing.source_span_id)
+    assert span is not None
+    cmd_session.add(
+        SourceContract(
+            document_version_id=span.document_version_id,
+            source_type="company_disclosure",
+            provider_or_tenant="测试公司",
+            allow_ai_processing=False,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="CN",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="not_recorded",
+            downstream_restrictions=["仅限当前 Case 审核"],
+            contract_version=None,
+            intake_metadata={},
+            declared_by="human:owner",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/atomic-claims",
+        json={
+            "source_span_id": str(span.id),
+            "normalized_text": "管理层披露 2026 年第一季度订单同比增长 20%。",
+            "claim_type": "reported_claim",
+            "assertion_actor": "管理层",
+            "actor": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["source_span_id"] == str(span.id)
+    assert body["quote"] == span.verbatim_text
+    assert body["quote_start"] == 0
+    assert body["quote_end"] == len(span.verbatim_text)
+    assert body["review_state"] == "awaiting_review"
+    assert body["published_source_statement"] is None
+    assert body["structured_fields"]["run_ref"] == "human:source-reader:human:researcher"

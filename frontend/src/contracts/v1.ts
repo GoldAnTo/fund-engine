@@ -890,7 +890,15 @@ export interface paths {
         /** List Atomic Claims */
         get: operations["list_atomic_claims_api_v1_research_cases__case_id__atomic_claims_get"];
         put?: never;
-        post?: never;
+        /**
+         * Propose Atomic Claim
+         * @description Create a human-proposed candidate from exactly one frozen span.
+         *
+         *     This is deliberately not an extraction shortcut: the quote and offsets
+         *     come from the immutable span, and the result stays awaiting human review.
+         *     A visible source permission is sufficient because no AI processing occurs.
+         */
+        post: operations["propose_atomic_claim_api_v1_research_cases__case_id__atomic_claims_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2700,6 +2708,48 @@ export interface components {
             contradicts_count: number;
             /** Next Action */
             next_action: string;
+        };
+        /**
+         * CreateAtomicClaimCandidateRequest
+         * @description A researcher-proposed, review-gated claim from one frozen span.
+         *
+         *     The server derives the quote and offsets from ``source_span_id`` so the
+         *     browser cannot silently alter the cited wording or location.
+         */
+        CreateAtomicClaimCandidateRequest: {
+            /**
+             * Source Span Id
+             * Format: uuid
+             */
+            source_span_id: string;
+            /** Normalized Text */
+            normalized_text: string;
+            /**
+             * Claim Type
+             * @default reported_claim
+             * @enum {string}
+             */
+            claim_type: "disclosed_fact" | "reported_claim" | "management_attribution" | "forecast" | "research_opinion";
+            /** Assertion Actor */
+            assertion_actor?: string | null;
+            /** Subject */
+            subject?: string | null;
+            /** Predicate */
+            predicate?: string | null;
+            /** Object Text */
+            object_text?: string | null;
+            /** Numeric Value */
+            numeric_value?: string | null;
+            /** Unit */
+            unit?: string | null;
+            /** Observed Period */
+            observed_period?: string | null;
+            /** Scope */
+            scope?: {
+                [key: string]: string;
+            };
+            /** Actor */
+            actor: string;
         };
         /**
          * CreateCaseRequest
@@ -8542,6 +8592,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AtomicClaimQueueResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    propose_atomic_claim_api_v1_research_cases__case_id__atomic_claims_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAtomicClaimCandidateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtomicClaimCandidateDTO"];
                 };
             };
             /** @description Validation Error */

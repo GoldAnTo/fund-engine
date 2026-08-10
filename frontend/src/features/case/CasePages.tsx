@@ -884,6 +884,13 @@ function DocumentReader({
   const [continuationNotice, setContinuationNotice] = useState<string | null>(
     null,
   );
+  const [candidateSpanId, setCandidateSpanId] = useState<string | null>(null);
+  const [candidateText, setCandidateText] = useState("");
+  const [candidateType, setCandidateType] = useState<
+    "reported_claim" | "forecast" | "research_opinion"
+  >("reported_claim");
+  const [candidateSubmitting, setCandidateSubmitting] = useState(false);
+  const [candidateNotice, setCandidateNotice] = useState<string | null>(null);
   async function continueFromMaterial() {
     if (!reason.trim()) return;
     setContinuing(true);
@@ -904,6 +911,35 @@ function DocumentReader({
       );
     } finally {
       setContinuing(false);
+    }
+  }
+  function beginCandidate(span: DocumentSpan) {
+    setCandidateSpanId(span.id);
+    setCandidateText(span.verbatim_text);
+    setCandidateType("reported_claim");
+    setCandidateNotice(null);
+  }
+  async function createCandidate(span: DocumentSpan) {
+    if (!candidateText.trim()) return;
+    setCandidateSubmitting(true);
+    setCandidateNotice(null);
+    try {
+      await researchOsApi.createAtomicClaim(caseId, {
+        source_span_id: span.id,
+        normalized_text: candidateText.trim(),
+        claim_type: candidateType,
+        assertion_actor: document.publisher,
+        scope: { research_case_id: caseId },
+        actor: "human:researcher",
+      });
+      setCandidateNotice("已创建待审候选，尚未写入正式结论。");
+      setCandidateSpanId(null);
+    } catch {
+      setCandidateNotice(
+        "无法创建待审候选；原文、既有候选和结论均未被改写。请确认本资料仍获展示许可后重试。",
+      );
+    } finally {
+      setCandidateSubmitting(false);
     }
   }
   return (
@@ -1110,6 +1146,26 @@ function DocumentReader({
           </section>
           <section className="ros-source-spans">
             <p className="ros-eyebrow">可定位正文片段</p>
+            {candidateNotice && (
+              <p
+                className={
+                  candidateNotice.startsWith("已创建")
+                    ? "ros-note"
+                    : "ros-error"
+                }
+                role={candidateNotice.startsWith("已创建") ? "status" : "alert"}
+              >
+                {candidateNotice}
+                {candidateNotice.startsWith("已创建") && (
+                  <>
+                    {" "}
+                    <Link to={`/events/${caseId}/review`}>
+                      前往审核此候选
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
             {focused && (
               <p className="ros-note">
                 已定位到审核候选对应的冻结原文片段；请核对原文、定位、许可与候选表述后再决定。
@@ -1128,6 +1184,68 @@ function DocumentReader({
                       ? `已被 ${span.cited_by.length} 条证据关系引用`
                       : "尚未被证据关系引用"}
                   </small>
+                  <button
+                    className="ros-button ros-button--secondary"
+                    type="button"
+                    disabled={!contract?.permissions.display}
+                    onClick={() => beginCandidate(span)}
+                  >
+                    将此段纳入待审候选
+                  </button>
+                  {candidateSpanId === span.id && (
+                    <form
+                      className="ros-inline-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void createCandidate(span);
+                      }}
+                    >
+                      <p>
+                        这只创建待审原子陈述。原文引用、定位和正式结论不会被直接修改。
+                      </p>
+                      <label>
+                        候选性质
+                        <select
+                          aria-label="候选性质"
+                          value={candidateType}
+                          onChange={(event) =>
+                            setCandidateType(
+                              event.target.value as typeof candidateType,
+                            )
+                          }
+                        >
+                          <option value="reported_claim">来源陈述</option>
+                          <option value="forecast">预测</option>
+                          <option value="research_opinion">研究观点</option>
+                        </select>
+                      </label>
+                      <label>
+                        候选表述
+                        <textarea
+                          aria-label="候选表述"
+                          value={candidateText}
+                          onChange={(event) => setCandidateText(event.target.value)}
+                        />
+                      </label>
+                      <div className="ros-header-actions">
+                        <button
+                          className="ros-button ros-button--primary"
+                          type="submit"
+                          disabled={!candidateText.trim() || candidateSubmitting}
+                        >
+                          {candidateSubmitting ? "正在创建候选…" : "创建待审候选"}
+                        </button>
+                        <button
+                          className="ros-button ros-button--secondary"
+                          type="button"
+                          disabled={candidateSubmitting}
+                          onClick={() => setCandidateSpanId(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </article>
               ))
             ) : (

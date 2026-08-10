@@ -3371,6 +3371,74 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "atomic-claim-review-v1"
+        ],
+        "summary": "Propose Atomic Claim",
+        "description": "Create a human-proposed candidate from exactly one frozen span.\n\nThis is deliberately not an extraction shortcut: the quote and offsets\ncome from the immutable span, and the result stays awaiting human review.\nA visible source permission is sufficient because no AI processing occurs.",
+        "operationId": "propose_atomic_claim_api_v1_research_cases__case_id__atomic_claims_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAtomicClaimCandidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtomicClaimCandidateDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/atomic-claims/{candidate_id}/reviews": {
@@ -9457,6 +9525,138 @@
           "next_action"
         ],
         "title": "CounterResearchTaskDTO"
+      },
+      "CreateAtomicClaimCandidateRequest": {
+        "properties": {
+          "source_span_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Span Id"
+          },
+          "normalized_text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Normalized Text"
+          },
+          "claim_type": {
+            "type": "string",
+            "enum": [
+              "disclosed_fact",
+              "reported_claim",
+              "management_attribution",
+              "forecast",
+              "research_opinion"
+            ],
+            "title": "Claim Type",
+            "default": "reported_claim"
+          },
+          "assertion_actor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assertion Actor"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
+          "predicate": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicate"
+          },
+          "object_text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Text"
+          },
+          "numeric_value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numeric Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "observed_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Period"
+          },
+          "scope": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Scope"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_span_id",
+          "normalized_text",
+          "actor"
+        ],
+        "title": "CreateAtomicClaimCandidateRequest",
+        "description": "A researcher-proposed, review-gated claim from one frozen span.\n\nThe server derives the quote and offsets from ``source_span_id`` so the\nbrowser cannot silently alter the cited wording or location."
       },
       "CreateCaseRequest": {
         "properties": {

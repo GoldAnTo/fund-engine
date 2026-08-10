@@ -1311,6 +1311,32 @@ export class MockResearchOsApi implements ResearchOsApi {
       items: items.filter((claim) => !this.reviewedClaimIds.has(claim.id)),
     };
   }
+  async createAtomicClaim(
+    caseId: string,
+    input: Parameters<ResearchOsApi["createAtomicClaim"]>[1],
+  ): ReturnType<ResearchOsApi["createAtomicClaim"]> {
+    const template = atomicClaim(caseId);
+    const created: AtomicClaim = {
+      ...template,
+      id: `atomic-${caseId}-${Date.now()}`,
+      source_span_id: input.source_span_id,
+      normalized_text: input.normalized_text,
+      claim_type: input.claim_type,
+      assertion_actor: input.assertion_actor ?? template.assertion_actor,
+      structured_fields: {
+        subject: input.subject ?? null,
+        predicate: input.predicate ?? null,
+        object_text: input.object_text ?? null,
+        numeric_value: input.numeric_value ?? null,
+        unit: input.unit ?? null,
+        observed_period: input.observed_period ?? null,
+        scope: input.scope ?? {},
+        run_ref: `human:source-reader:${input.actor}`,
+      },
+    };
+    this.claims.set(caseId, [created, ...(this.claims.get(caseId) ?? [])]);
+    return created;
+  }
   async reviewAtomicClaim(
     candidateId: string,
     input: Parameters<ResearchOsApi["reviewAtomicClaim"]>[1],

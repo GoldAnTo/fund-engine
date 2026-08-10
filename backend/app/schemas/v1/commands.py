@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import Field
 
@@ -253,6 +254,33 @@ class AtomicClaimReviewRequest(V1Model):
     reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
+
+
+class CreateAtomicClaimCandidateRequest(V1Model):
+    """A researcher-proposed, review-gated claim from one frozen span.
+
+    The server derives the quote and offsets from ``source_span_id`` so the
+    browser cannot silently alter the cited wording or location.
+    """
+
+    source_span_id: UUID
+    normalized_text: str = Field(min_length=1)
+    claim_type: Literal[
+        "disclosed_fact",
+        "reported_claim",
+        "management_attribution",
+        "forecast",
+        "research_opinion",
+    ] = "reported_claim"
+    assertion_actor: str | None = Field(default=None, max_length=512)
+    subject: str | None = Field(default=None, max_length=512)
+    predicate: str | None = Field(default=None, max_length=512)
+    object_text: str | None = Field(default=None, max_length=2_000)
+    numeric_value: str | None = Field(default=None, max_length=128)
+    unit: str | None = Field(default=None, max_length=128)
+    observed_period: date | None = None
+    scope: dict[str, str] = Field(default_factory=dict)
+    actor: str = Field(min_length=1, max_length=128)
 
 
 # ---------------------------------------------------------------------------

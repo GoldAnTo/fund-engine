@@ -22,13 +22,16 @@ from app.schemas.v1.commands import (
     AtomicClaimQueueResponse,
     AtomicClaimReviewDTO,
     AtomicClaimReviewRequest,
+    CreateAtomicClaimCandidateRequest,
     PublishedSourceStatementDTO,
 )
+from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
 from app.repositories.operational import TaskRepository
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.models.ledger import CaseTenantAdmission
+from app.models.source_governance import SourceContract
 
 
 router = APIRouter(
@@ -95,6 +98,48 @@ def _review_dto(db: Session, value: AtomicClaimReview) -> AtomicClaimReviewDTO:
     )
 
 
+def _candidate_dto(
+    db: Session,
+    candidate: AtomicClaimCandidate,
+    span: SourceSpan,
+    document: DocumentVersion,
+) -> AtomicClaimCandidateDTO:
+    reviews = list(
+        db.scalars(
+            select(AtomicClaimReview)
+            .where(AtomicClaimReview.atomic_claim_candidate_id == candidate.id)
+            .order_by(AtomicClaimReview.created_at.asc())
+        )
+    )
+    latest = reviews[-1] if reviews else None
+    published = (
+        db.get(SourceStatement, latest.published_source_statement_id)
+        if latest and latest.published_source_statement_id
+        else None
+    )
+    return AtomicClaimCandidateDTO(
+        id=str(candidate.id),
+        source_span_id=str(candidate.source_span_id),
+        document_version_id=str(document.id),
+        document_source_url=document.source_url,
+        locator=dict(span.locator),
+        quote=candidate.quote,
+        quote_start=candidate.quote_start,
+        quote_end=candidate.quote_end,
+        quote_sha256=candidate.quote_sha256,
+        normalized_text=candidate.normalized_text,
+        claim_type=candidate.claim_type,
+        assertion_actor=candidate.assertion_actor,
+        authority_level=candidate.authority_level,
+        structured_fields=dict(candidate.structured_fields),
+        validation_result=dict(candidate.validation_result),
+        created_at=candidate.created_at,
+        review_state=latest.outcome if latest else "awaiting_review",
+        review_history=[_review_dto(db, review) for review in reviews],
+        published_source_statement=_statement_dto(published),
+    )
+
+
 @router.get(
     "/research-cases/{case_id}/atomic-claims",
     response_model=AtomicClaimQueueResponse,
@@ -118,42 +163,79 @@ def list_atomic_claims(
     ).all()
     items: list[AtomicClaimCandidateDTO] = []
     for candidate, span, document in rows:
-        reviews = list(db.scalars(
-            select(AtomicClaimReview)
-            .where(AtomicClaimReview.atomic_claim_candidate_id == candidate.id)
-            .order_by(AtomicClaimReview.created_at.asc())
-        ))
-        latest = reviews[-1] if reviews else None
-        state = latest.outcome if latest else "awaiting_review"
-        if review_state and state != review_state:
+        item = _candidate_dto(db, candidate, span, document)
+        if review_state and item.review_state != review_state:
             continue
-        published = (
-            db.get(SourceStatement, latest.published_source_statement_id)
-            if latest and latest.published_source_statement_id
-            else None
-        )
-        items.append(AtomicClaimCandidateDTO(
-            id=str(candidate.id),
-            source_span_id=str(candidate.source_span_id),
-            document_version_id=str(document.id),
-            document_source_url=document.source_url,
-            locator=dict(span.locator),
-            quote=candidate.quote,
-            quote_start=candidate.quote_start,
-            quote_end=candidate.quote_end,
-            quote_sha256=candidate.quote_sha256,
-            normalized_text=candidate.normalized_text,
-            claim_type=candidate.claim_type,
-            assertion_actor=candidate.assertion_actor,
-            authority_level=candidate.authority_level,
-            structured_fields=dict(candidate.structured_fields),
-            validation_result=dict(candidate.validation_result),
-            created_at=candidate.created_at,
-            review_state=state,
-            review_history=[_review_dto(db, review) for review in reviews],
-            published_source_statement=_statement_dto(published),
-        ))
+        items.append(item)
     return AtomicClaimQueueResponse(items=items)
+
+
+@router.post(
+    "/research-cases/{case_id}/atomic-claims",
+    response_model=AtomicClaimCandidateDTO,
+    status_code=status.HTTP_201_CREATED,
+)
+def propose_atomic_claim(
+    case_id: uuid.UUID,
+    payload: CreateAtomicClaimCandidateRequest,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+):
+    """Create a human-proposed candidate from exactly one frozen span.
+
+    This is deliberately not an extraction shortcut: the quote and offsets
+    come from the immutable span, and the result stays awaiting human review.
+    A visible source permission is sufficient because no AI processing occurs.
+    """
+    _require_case(db, case_id, tenant_id)
+    row = db.execute(
+        select(SourceSpan, DocumentVersion, SourceContract)
+        .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+        .join(
+            CaseDocumentVersion,
+            CaseDocumentVersion.document_version_id == DocumentVersion.id,
+        )
+        .outerjoin(
+            SourceContract,
+            SourceContract.document_version_id == DocumentVersion.id,
+        )
+        .where(CaseDocumentVersion.research_case_id == case_id)
+        .where(SourceSpan.id == payload.source_span_id)
+    ).one_or_none()
+    if row is None:
+        from app.errors import NotFoundError
+
+        raise NotFoundError("source span not found")
+    span, document, contract = row
+    if contract is None or not contract.allow_display:
+        from app.errors import NotFoundError
+
+        # Do not reveal whether a non-displayable source is attached to the Case.
+        raise NotFoundError("source span not found")
+
+    candidate = translate_validation(
+        AtomicClaimService(db).admit,
+        AtomicClaimDraft(
+            source_span_id=span.id,
+            quote=span.verbatim_text,
+            quote_start=0,
+            quote_end=len(span.verbatim_text),
+            normalized_text=payload.normalized_text,
+            claim_type=payload.claim_type,
+            assertion_actor=payload.assertion_actor or document.publisher,
+            subject=payload.subject,
+            predicate=payload.predicate,
+            object_text=payload.object_text,
+            numeric_value=payload.numeric_value,
+            unit=payload.unit,
+            observed_period=payload.observed_period,
+            scope=payload.scope,
+        ),
+        authority_level=document.source_authority or "unknown",
+        run_ref=f"human:source-reader:{payload.actor.strip()}",
+    )
+    commit_or_rollback(db)
+    return _candidate_dto(db, candidate, span, document)
 
 
 @router.post(

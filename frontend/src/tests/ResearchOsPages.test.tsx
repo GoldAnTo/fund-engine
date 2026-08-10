@@ -2490,6 +2490,7 @@ describe("Research OS event entry", () => {
 
   it("opens a Case-scoped frozen source snapshot with its exact locator", async () => {
     const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
         <ResearchOsRoutes />
@@ -2520,6 +2521,21 @@ describe("Research OS event entry", () => {
     );
     expect(screen.getByText(/资本开支指引/)).toBeVisible();
     expect(screen.getByText('{"page":12,"section":"资本开支"}')).toBeVisible();
+    await user.click(
+      screen.getAllByRole("button", { name: "将此段纳入待审候选" })[0],
+    );
+    await user.clear(screen.getByLabelText("候选表述"));
+    await user.type(
+      screen.getByLabelText("候选表述"),
+      "管理层上调全年资本开支指引。",
+    );
+    await user.click(screen.getByRole("button", { name: "创建待审候选" }));
+    expect(await screen.findByText("已创建待审候选，尚未写入正式结论。"))
+      .toBeVisible();
+    expect(screen.getByRole("link", { name: "前往审核此候选" })).toHaveAttribute(
+      "href",
+      "/events/event-tsm/review",
+    );
   });
 
   it("renders reviewed Case relations separately from AI candidates in the global network", async () => {
