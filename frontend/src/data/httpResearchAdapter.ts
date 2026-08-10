@@ -1500,7 +1500,6 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       scope: "—",
       falsifier: "—",
       counterexample: "—",
-      impactObject: "—",
     }));
     const EMPTY_FACTOR: CaseWorkbenchFactorRow = {
       factorId: "—",
@@ -1516,7 +1515,6 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       scope: "—",
       falsifier: "—",
       counterexample: "—",
-      impactObject: "—",
     };
 
     const assessment = dto.assessment;
@@ -3000,7 +2998,6 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         differenceExplanation: f.difference_explanation,
         scopeWarning: f.scope_warning,
         falsifier: f.falsifier,
-        impactObject: f.impact_object,
       })),
       comparison: {
         columns: dto.comparison.columns,

@@ -3482,7 +3482,6 @@ export class MockResearchAdapter implements ResearchClient {
         scope: "",
         falsifier: "",
         counterexample: "",
-        impactObject: "",
       },
       sources: [],
     };
@@ -4432,7 +4431,6 @@ function buildConclusionView(caseId: string): ConclusionView {
         differenceExplanation: "无显著反证",
         scopeWarning: null,
         falsifier: "资本开支指引回落同向降至两位数以下",
-        impactObject: "云厂商CapEx",
       },
       {
         factorId: "F-1-02",
@@ -4450,7 +4448,6 @@ function buildConclusionView(caseId: string): ConclusionView {
         differenceExplanation: "（待人工补充）",
         scopeWarning: null,
         falsifier: "毛利率持续下降并带动交付延期",
-        impactObject: "代工ODM",
       },
       {
         factorId: "F-1-03",
@@ -4468,7 +4465,6 @@ function buildConclusionView(caseId: string): ConclusionView {
         differenceExplanation: "（暂无分歧）",
         scopeWarning: null,
         falsifier: "电力许可被否",
-        impactObject: "数据中心",
       },
     ],
     comparison: {

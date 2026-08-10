@@ -415,7 +415,6 @@ export const FACTORS = [
     scope: "主要云厂商，2025—2027 年。",
     falsifier: "支出下调或未转化为部署。",
     counterexample: "未观察到下调或撤回动作。",
-    impactObject: "上游芯片与系统厂商订单池。",
   },
   {
     id: "F-T-01",
@@ -433,7 +432,6 @@ export const FACTORS = [
     scope: "同一主体、业务口径与可对齐报告期。",
     falsifier: "订单取消、交付延迟或收入来自别的业务。",
     counterexample: "Broadcom 交付口径未对齐。",
-    impactObject: "云厂商收入兑现节奏。",
   },
   {
     id: "F-C-01",
@@ -451,7 +449,6 @@ export const FACTORS = [
     scope: "具体项目、地区与并网窗口。",
     falsifier: "电力到位而投产仍延迟。",
     counterexample: "Microsoft 业绩说明会提到容量受限。",
-    impactObject: "AI 数据中心投产时点。",
   },
   {
     id: "F-X-01",
@@ -469,7 +466,6 @@ export const FACTORS = [
     scope: "可对齐投入、交付与收入的披露主体。",
     falsifier: "交付与同口径收入按期同步兑现。",
     counterexample: "Microsoft 业绩说明会证伪即时同步。",
-    impactObject: "需求—兑现传导效率评估。",
   },
 ];
 
@@ -1164,7 +1160,6 @@ export function buildCaseWorkbenchView(): CaseWorkbenchView {
     scope: factor.scope,
     falsifier: factor.falsifier,
     counterexample: factor.counterexample,
-    impactObject: factor.impactObject,
   }));
   const selectedFactor = factorRows.find((f) => f.factorId === "F-T-01")!;
   const sources: CaseWorkbenchView["sources"] = EVIDENCE_LINKS.map((link) => {

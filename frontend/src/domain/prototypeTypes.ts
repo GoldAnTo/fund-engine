@@ -409,7 +409,6 @@ export interface CaseWorkbenchFactorRow {
   scope: string;
   falsifier: string;
   counterexample: string;
-  impactObject: string;
 }
 
 export interface CaseWorkbenchSourceRow {
@@ -946,7 +945,6 @@ export interface ConclusionKeyFactor {
   differenceExplanation: string;
   scopeWarning: string | null;
   falsifier: string;
-  impactObject: string;
 }
 
 export interface ConclusionComparisonCell {
