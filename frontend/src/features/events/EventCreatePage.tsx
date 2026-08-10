@@ -3,6 +3,11 @@ import { useNavigate } from "react-router-dom";
 
 import { researchClient } from "../../data/researchClient";
 import type { EventExtraction, EventSourceType } from "../../domain/eventResearch";
+import {
+  DEFAULT_SOURCE_GOVERNANCE,
+  SourceGovernanceFields,
+  sourceGovernanceMetadata,
+} from "../sources/SourceGovernanceFields";
 
 const EMPTY_FACTORS = ["", "", ""];
 type SourceAuthority = "unknown" | "primary_disclosure" | "licensed_research" | "secondary_source" | "user_supplied";
@@ -15,6 +20,7 @@ export function EventCreatePage() {
   const [sourceAuthority, setSourceAuthority] = useState<SourceAuthority>("unknown");
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [sourcePermissions, setSourcePermissions] = useState({ ai_processing: true, display: true, export: false, api: false });
+  const [sourceGovernance, setSourceGovernance] = useState(DEFAULT_SOURCE_GOVERNANCE);
   const [originalFile, setOriginalFile] = useState<File | null>(null);
   const [providerName, setProviderName] = useState("");
   const [providerRecordId, setProviderRecordId] = useState("");
@@ -33,6 +39,7 @@ export function EventCreatePage() {
       : true;
   const frozenSourceMetadata = {
     ...sourceMetadata,
+    ...sourceGovernanceMetadata(sourceGovernance),
     authority_level: sourceAuthority,
     permissions: sourcePermissions,
     ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), retrieval_reference: sourceUrl.trim() || undefined } : {}),
@@ -78,7 +85,7 @@ export function EventCreatePage() {
         sourceUrl: sourceUrl.trim() || undefined,
         sourceType: originalFile && sourceType === "uploaded_file" ? "pasted_snapshot" : sourceType,
         sourceMetadata: originalFile && sourceType === "uploaded_file"
-          ? { authority_level: "user_supplied", permissions: sourcePermissions, intake_note: "用于识别事件的人工输入；原件另行冻结" }
+          ? { ...sourceGovernanceMetadata(sourceGovernance), authority_level: "user_supplied", permissions: sourcePermissions, intake_note: "用于识别事件的人工输入；原件另行冻结" }
           : frozenSourceMetadata,
         eventTitle: draft.eventTitle?.trim() || rawInput.trim().slice(0, 80),
         candidateFactors: factors.map((factor) => factor.trim()).filter(Boolean),
@@ -172,6 +179,7 @@ export function EventCreatePage() {
           {sourceType === "uploaded_file" && <label>上传原件文件<input aria-label="选择上传原件文件" type="file" accept="application/pdf,text/plain,text/markdown,text/csv,.pdf,.txt,.md,.csv" onChange={loadOriginalFile} /><small>支持 PDF、TXT、Markdown、CSV（最多 20 MiB）。原件与解析片段分别冻结；扫描或异常 PDF 会保留原件并进入补充正文恢复，不会伪造可读正文。</small></label>}
           {sourceType === "licensed_provider" && <section className="ros-source-governance"><label>供应商名称<input aria-label="供应商名称" value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="例如：聚源" /></label><label>供应商记录 ID<input aria-label="供应商记录 ID" value={providerRecordId} onChange={(event) => setProviderRecordId(event.target.value)} placeholder="可重取的报告或公告记录 ID" /></label><small>授权来源必须固定供应商和具体记录；否则只能作为线索，不能创建或归入 Case。</small></section>}
           <fieldset className="ros-source-governance"><legend>资料使用许可声明</legend><small>这些权限会随冻结版本保存；勾选只表示当前团队获得的许可，不会把材料自动变成已审核证据。</small>{([['ai_processing', '允许 AI 处理'], ['display', '允许团队展示'], ['export', '允许导出'], ['api', '允许 API 使用']] as const).map(([key, label]) => <label key={key}><input aria-label={label} type="checkbox" checked={sourcePermissions[key]} onChange={(event) => setSourcePermissions((current) => ({ ...current, [key]: event.target.checked }))} /> {label}</label>)}</fieldset>
+          <SourceGovernanceFields value={sourceGovernance} onChange={setSourceGovernance} />
           <label>{sourceType === "public_url" ? "网页原文或事件摘要" : "事件原始输入"}<textarea aria-label={sourceType === "public_url" ? "网页原文或事件摘要" : "事件原始输入"} value={rawInput} onChange={(event) => setRawInput(event.target.value)} placeholder="粘贴原文或清晰描述发生了什么…" /></label>
           <label>{sourceType === "licensed_provider" ? "供应商记录或可重取链接" : sourceType === "public_url" ? "公开网页链接（必填）" : "来源链接（可选）"}<input aria-label={sourceType === "public_url" ? "公开网页链接（必填）" : undefined} type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" /></label>
           {sourceType === "public_url" && <p className="ros-note">系统只冻结你提交的正文快照，不会抓取网页、绕过访问限制，或把 URL 视为已核验内容。它只能作为待人工核验的线索。</p>}

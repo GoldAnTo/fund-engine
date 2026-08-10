@@ -921,6 +921,12 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
     expect(screen.getByText("当前已发布结论")).toBeVisible();
     expect(screen.getByText("待冻结的新材料")).toBeVisible();
+    expect(screen.getByLabelText("资料适用地域")).toHaveValue("CN");
+    expect(screen.getByLabelText("保留策略")).toHaveValue("case_retained");
+    expect(screen.getByLabelText("删除策略")).toHaveValue("not_recorded");
+    expect(screen.getByLabelText("下游使用限制")).toHaveValue(
+      "仅限当前 Case 研究与人工审核",
+    );
     await user.type(
       screen.getByLabelText("新增材料正文"),
       "这份新材料只重复既有判断。 ",
@@ -939,6 +945,57 @@ describe("Research OS event entry", () => {
       await screen.findByText(/记录“不改变当前判断”的人工决定/),
     ).toBeVisible();
     expect(screen.queryByText(/已创建后继运行/)).not.toBeInTheDocument();
+  });
+
+  it("freezes the configured governance boundary with new published-Case material", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const decide = vi.spyOn(adapter, "decidePublishedMaterial");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-published/documents"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/documents"
+            element={<CaseDocumentsPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", {
+      name: "新材料是否需要改变复核范围？",
+    });
+    await user.clear(screen.getByLabelText("资料适用地域"));
+    await user.type(screen.getByLabelText("资料适用地域"), "US");
+    await user.clear(screen.getByLabelText("保留策略"));
+    await user.type(screen.getByLabelText("保留策略"), "contract_2026");
+    await user.clear(screen.getByLabelText("删除策略"));
+    await user.type(screen.getByLabelText("删除策略"), "delete_after_2027");
+    await user.clear(screen.getByLabelText("下游使用限制"));
+    await user.type(
+      screen.getByLabelText("下游使用限制"),
+      "仅限投研团队；禁止外部导出",
+    );
+    await user.type(screen.getByLabelText("新增材料正文"), "新材料正文。");
+    await user.click(screen.getByRole("radio", { name: /记录为不改变当前判断/ }));
+    await user.type(screen.getByLabelText("新材料决定理由"), "仅作为已冻结的边界验证。");
+    await user.click(
+      screen.getByRole("button", { name: "冻结材料并记录不改变判断" }),
+    );
+
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceMetadata: expect.objectContaining({
+            region: "US",
+            retention_policy: "contract_2026",
+            deletion_policy: "delete_after_2027",
+            downstream_restrictions: ["仅限投研团队", "禁止外部导出"],
+          }),
+        }),
+      ),
+    );
   });
 
   it("reads a published-Case text upload as a snapshot without calling it the original file", async () => {

@@ -20,6 +20,8 @@
 .ros-source-governance label { display: grid; gap: .3rem; margin: 0; color: var(--ros-ink, #30332f); font-size: .8rem; }
 .ros-source-governance label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: .45rem; }
 .ros-source-governance input[type="checkbox"] { width: auto; padding: 0; }
+.ros-source-governance input:not([type="checkbox"]), .ros-source-governance textarea { width: 100%; padding: .5rem; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); font: inherit; }
+.ros-source-governance textarea { min-height: 4.5rem; resize: vertical; }
 .ros-source-governance small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible

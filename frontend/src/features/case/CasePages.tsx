@@ -42,6 +42,11 @@ import {
   sourceTypeLabel,
   sourceTypeListLabel,
 } from "../../domain/sourcePresentation";
+import {
+  DEFAULT_SOURCE_GOVERNANCE,
+  SourceGovernanceFields,
+  sourceGovernanceMetadata,
+} from "../sources/SourceGovernanceFields";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
 import {
@@ -618,6 +623,7 @@ function PublishedMaterialDecisionForm({
   const [sourceType, setSourceType] = useState<EventSourceType>("pasted_snapshot");
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [sourcePermissions, setSourcePermissions] = useState({ ai_processing: true, display: true, export: false, api: false });
+  const [sourceGovernance, setSourceGovernance] = useState(DEFAULT_SOURCE_GOVERNANCE);
   const [providerName, setProviderName] = useState("");
   const [providerRecordId, setProviderRecordId] = useState("");
   const [decision, setDecision] = useState<"reopen" | "no_change">("reopen");
@@ -641,6 +647,7 @@ function PublishedMaterialDecisionForm({
         sourceType,
         sourceMetadata: {
           ...sourceMetadata,
+          ...sourceGovernanceMetadata(sourceGovernance),
           permissions: sourcePermissions,
           ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), retrieval_reference: sourceUrl.trim() || undefined } : {}),
           ...(sourceType === "public_url" ? { intake_note: "公开网页 URL 仅作为可复查线索；已冻结内容尚未完成原文核验。" } : {}),
@@ -760,6 +767,7 @@ function PublishedMaterialDecisionForm({
           <label key={key}><input aria-label={label} type="checkbox" checked={sourcePermissions[key]} onChange={(event) => setSourcePermissions((current) => ({ ...current, [key]: event.target.checked }))} /> {label}</label>
         ))}
       </fieldset>
+      <SourceGovernanceFields value={sourceGovernance} onChange={setSourceGovernance} />
       {sourceType === "uploaded_file" && (
         <label>
           上传新增材料正文文件
