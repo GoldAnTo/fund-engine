@@ -883,6 +883,7 @@ const RELATIONSHIP: RelationshipGraph = {
 const DOCUMENTS: SourceDocumentView[] = [
   {
     id: "doc-event-tsm-q2",
+    source_url: "https://investor.tsmc.com/english/quarterly-results/2026/q2",
     title: "台积电 2026 年第二季度法说会摘要",
     publisher: "台积电",
     document_type: "公司披露",
@@ -3910,6 +3911,7 @@ export class MockResearchAdapter implements ResearchClient {
     const documentId = `document-created-${this.createdEventCount}`;
     const document: SourceDocumentView = {
       id: documentId,
+      source_url: input.sourceUrl ?? null,
       title: typeof sourceMetadata.file_name === "string" ? sourceMetadata.file_name : "事件原始材料快照",
       publisher: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
       document_type: sourceType,
@@ -4000,6 +4002,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.createdDocuments.set(documentVersionId, {
       document: {
         id: documentVersionId,
+        source_url: input.sourceUrl ?? null,
         title: typeof input.sourceMetadata.file_name === "string" ? input.sourceMetadata.file_name : "收件箱新增材料",
         publisher: input.actor,
         document_type: input.sourceType,
@@ -4217,6 +4220,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.createdDocuments.set(documentVersionId, {
       document: {
         id: documentVersionId,
+        source_url: input.sourceUrl ?? null,
         title: typeof input.sourceMetadata.file_name === "string" ? input.sourceMetadata.file_name : "新增待比较材料",
         publisher: typeof input.sourceMetadata.provider_name === "string" ? input.sourceMetadata.provider_name : input.actor,
         document_type: input.sourceType,

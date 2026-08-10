@@ -865,6 +865,9 @@ function DocumentReader({
   const permissionText = contract
     ? `AI ${contract.permissions.ai_processing ? "允许" : "禁止"} · 展示 ${contract.permissions.display ? "允许" : "禁止"} · 导出 ${contract.permissions.export ? "允许" : "禁止"} · API ${contract.permissions.api ? "允许" : "禁止"}`
     : "未记录；不得据此推定可处理或可导出";
+  const publicSourceUrl = document.source_url?.match(/^https?:\/\//i)
+    ? document.source_url
+    : null;
   const extractionAllowed =
     document.parse_quality !== "failed" &&
     contract?.permissions.ai_processing !== false;
@@ -923,6 +926,25 @@ function DocumentReader({
         <div>
           <dt>来源类型</dt>
           <dd>{contract?.source_type || document.document_type || "未记录"}</dd>
+        </div>
+        <div>
+          <dt>来源定位</dt>
+          <dd>
+            {publicSourceUrl ? (
+              <a
+                href={publicSourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="打开来源链接"
+              >
+                {publicSourceUrl}
+              </a>
+            ) : document.source_url ? (
+              <code>{document.source_url}</code>
+            ) : (
+              "未记录"
+            )}
+          </dd>
         </div>
         <div>
           <dt>来源权威性</dt>

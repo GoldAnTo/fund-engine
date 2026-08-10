@@ -2512,6 +2512,10 @@ describe("Research OS event entry", () => {
       screen.getByText("AI 允许 · 展示 允许 · 导出 禁止 · API 禁止"),
     ).toBeVisible();
     expect(screen.getByText("仅限当前 Case 研究与人工审核")).toBeVisible();
+    expect(screen.getByRole("link", { name: "打开来源链接" })).toHaveAttribute(
+      "href",
+      "https://investor.tsmc.com/english/quarterly-results/2026/q2",
+    );
     expect(screen.getByText(/资本开支指引/)).toBeVisible();
     expect(screen.getByText('{"page":12,"section":"资本开支"}')).toBeVisible();
   });

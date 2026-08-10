@@ -736,6 +736,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   ): SourceDocumentView {
     return {
       id: dto.id,
+      source_url: dto.source_url,
       title: null,
       publisher: null,
       document_type: null,

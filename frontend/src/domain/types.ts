@@ -333,6 +333,8 @@ export interface CitationEntry {
 
 export interface SourceDocumentView {
   id: string;
+  /** Frozen source locator.  Only HTTP(S) values may be opened as links. */
+  source_url?: string | null;
   title: string | null;
   publisher: string | null;
   document_type: string | null;
