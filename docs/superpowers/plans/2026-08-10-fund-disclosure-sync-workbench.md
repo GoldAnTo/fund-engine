@@ -38,7 +38,7 @@ assert (first.version, second.version, run.config_version_id) == (1, 2, second.i
 - [ ] Run the focused pytest file; expect query/service method failures.
 - [ ] Implement `FundDisclosureSyncQuery.detail(case_id)` with suggestions, effective config, config history and replayable event streams. Suggestions use only known historical disclosures, never provider screening or a presumed recommendation.
 - [ ] Implement service stages `scope`, `query_holdings`, `match_report`, `write_disclosure`, `finished` or `failed`. Pass only the frozen config's fund codes to the existing importer. A matching report with missing display permission remains counted, never formal exposure.
-- [ ] Implement `next_due_at`: weekly is next Monday 09:00, monthly is first business day 09:00; Cases without active config are skipped. Scheduled runs snapshot configuration before provider work.
+- [ ] Implement `next_due_at`: weekly is next Monday 09:00 and monthly is the first calendar day at 09:00 (Asia/Shanghai); this provider-document task does not invent a trading-calendar dependency. Cases without active config are skipped. Scheduled runs snapshot configuration before provider work.
 - [ ] Run `cd backend && .venv/bin/python -m pytest tests/test_fund_disclosure_sync_api.py tests/test_ingest_gildata_fund_holdings.py -q`; expect PASS. Commit with message `feat: run replayable fund disclosure syncs`.
 
 ### Task 3: Case-scoped API and generated contract
