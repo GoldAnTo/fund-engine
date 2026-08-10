@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.models.ledger import ResearchCase
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
 from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun
 from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
 from app.models.research_expression import MarketInstrumentBinding
@@ -109,6 +109,9 @@ class _UnmatchedFundClient:
         )
         return json.dumps({"code": "0", "results": [{"table_markdown": table}]}, ensure_ascii=False)
 
+    def close(self) -> None:
+        return None
+
 
 def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(session) -> None:
     case = _case(session)
@@ -127,3 +130,79 @@ def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(sess
     assert run.events[-1].stage == "finished"
     assert run.events[-1].payload_json["pending_match_rows"] == 1
     assert session.query(HoldingDisclosure).count() == 0
+
+
+def _admitted_case(cmd_session) -> ResearchCase:
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="接口基金补充", industry_topic="事件", created_by="tester", created_at=now)
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    cmd_session.add_all([case, document])
+    cmd_session.flush()
+    cmd_session.add_all([
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
+        CaseTenantAdmission(research_case_id=case.id, tenant_id="test-team", initial_document_version_id=document.id, admitted_by="test", admitted_at=now),
+    ])
+    cmd_session.commit()
+    return case
+
+
+def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_client, cmd_session, monkeypatch) -> None:
+    case = _admitted_case(cmd_session)
+    payload = {
+        "actor": "human:researcher",
+        "fund_codes": ["005827"],
+        "frequency": "monthly",
+        "allow_display": True,
+        "change_reason": "按月核验官方季报",
+    }
+
+    saved = cmd_client.put(f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config", json=payload)
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/fund-disclosure-sync")
+    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"other-token":"other-team","test-tenant-token":"test-team"}')
+    foreign = cmd_client.get(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync",
+        headers={"Authorization": "Bearer other-token"},
+    )
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["version"] == 1
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["effective_config"]["frequency"] == "monthly"
+    assert detail.json()["effective_config"]["fund_codes"] == ["005827"]
+    assert foreign.status_code == 404
+
+
+def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scope(cmd_client, cmd_session, monkeypatch) -> None:
+    from app.api.v1 import fund_disclosure_sync
+
+    case = _admitted_case(cmd_session)
+    configured = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["005827"],
+            "frequency": "weekly",
+            "allow_display": True,
+            "change_reason": "立即核验历史持仓季报",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    monkeypatch.setattr(fund_disclosure_sync, "get_fund_disclosure_client", _UnmatchedFundClient)
+
+    started = cmd_client.post(f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs")
+    retried = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs/{started.json()['id']}/retry"
+    )
+
+    assert started.status_code == 201, started.text
+    assert started.json()["events"][-1]["stage"] == "finished"
+    assert started.json()["events"][-1]["payload"]["pending_match_rows"] == 1
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["trigger"] == "retry"
+    assert retried.json()["fund_codes"] == ["005827"]

@@ -1812,6 +1812,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fund Disclosure Sync */
+        get: operations["get_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Fund Disclosure Sync Config */
+        put: operations["save_fund_disclosure_sync_config_api_v1_research_cases__case_id__fund_disclosure_sync_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Fund Disclosure Sync */
+        post: operations["start_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/runs/{run_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Fund Disclosure Sync */
+        post: operations["retry_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs__run_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -3892,6 +3960,108 @@ export interface components {
             /** Freshness Status */
             freshness_status: string;
         };
+        /** FundDisclosureSyncConfigDTO */
+        FundDisclosureSyncConfigDTO: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: number;
+            /**
+             * Frequency
+             * @enum {string}
+             */
+            frequency: "weekly" | "monthly";
+            /** Fund Codes */
+            fund_codes: string[];
+            /** Stock Codes */
+            stock_codes: string[];
+            /** Allow Display */
+            allow_display: boolean;
+            /** Changed By */
+            changed_by: string;
+            /** Change Reason */
+            change_reason: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** FundDisclosureSyncDetailResponse */
+        FundDisclosureSyncDetailResponse: {
+            /** Suggestions */
+            suggestions: components["schemas"]["FundDisclosureSyncSuggestionDTO"][];
+            /** Manual Code Fallback */
+            manual_code_fallback: boolean;
+            effective_config: components["schemas"]["FundDisclosureSyncConfigDTO"] | null;
+            /** Config History */
+            config_history: components["schemas"]["FundDisclosureSyncConfigDTO"][];
+            /** Next Scheduled At */
+            next_scheduled_at: string | null;
+            /** Runs */
+            runs: components["schemas"]["FundDisclosureSyncRunDTO"][];
+        };
+        /** FundDisclosureSyncRunDTO */
+        FundDisclosureSyncRunDTO: {
+            /** Id */
+            id: string;
+            /** Config Version Id */
+            config_version_id: string;
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "manual" | "scheduled" | "retry";
+            /** Fund Codes */
+            fund_codes: string[];
+            /** Stock Codes */
+            stock_codes: string[];
+            /** Allow Display */
+            allow_display: boolean;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Events */
+            events: components["schemas"]["FundDisclosureSyncRunEventDTO"][];
+        };
+        /** FundDisclosureSyncRunEventDTO */
+        FundDisclosureSyncRunEventDTO: {
+            /** Seq */
+            seq: number;
+            /** Stage */
+            stage: string;
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** FundDisclosureSyncSuggestionDTO */
+        FundDisclosureSyncSuggestionDTO: {
+            /** Fund Code */
+            fund_code: string;
+            /** Fund Name */
+            fund_name: string;
+            /** Matching Stock Codes */
+            matching_stock_codes: string[];
+            /**
+             * Latest Report Period
+             * Format: date
+             */
+            latest_report_period: string;
+        };
         /**
          * FundExposureDTO
          * @description One fund's aggregate exposure to the case's theme stocks.
@@ -5776,6 +5946,25 @@ export interface components {
             updated_at: string;
             /** Next Action */
             next_action: string;
+        };
+        /** SaveFundDisclosureSyncConfigRequest */
+        SaveFundDisclosureSyncConfigRequest: {
+            /** Actor */
+            actor: string;
+            /** Fund Codes */
+            fund_codes: string[];
+            /**
+             * Frequency
+             * @enum {string}
+             */
+            frequency: "weekly" | "monthly";
+            /**
+             * Allow Display
+             * @default false
+             */
+            allow_display: boolean;
+            /** Change Reason */
+            change_reason: string;
         };
         /** SearchGroupDTO */
         SearchGroupDTO: {
@@ -10664,6 +10853,143 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchSessionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundDisclosureSyncDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_fund_disclosure_sync_config_api_v1_research_cases__case_id__fund_disclosure_sync_config_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveFundDisclosureSyncConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundDisclosureSyncConfigDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundDisclosureSyncRunDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs__run_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundDisclosureSyncRunDTO"];
                 };
             };
             /** @description Validation Error */

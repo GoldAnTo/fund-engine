@@ -7194,6 +7194,262 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync": {
+      "get": {
+        "tags": [
+          "fund-disclosure-sync-v1"
+        ],
+        "summary": "Get Fund Disclosure Sync",
+        "operationId": "get_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundDisclosureSyncDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/config": {
+      "put": {
+        "tags": [
+          "fund-disclosure-sync-v1"
+        ],
+        "summary": "Save Fund Disclosure Sync Config",
+        "operationId": "save_fund_disclosure_sync_config_api_v1_research_cases__case_id__fund_disclosure_sync_config_put",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFundDisclosureSyncConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundDisclosureSyncConfigDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/runs": {
+      "post": {
+        "tags": [
+          "fund-disclosure-sync-v1"
+        ],
+        "summary": "Start Fund Disclosure Sync",
+        "operationId": "start_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundDisclosureSyncRunDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/fund-disclosure-sync/runs/{run_id}/retry": {
+      "post": {
+        "tags": [
+          "fund-disclosure-sync-v1"
+        ],
+        "summary": "Retry Fund Disclosure Sync",
+        "operationId": "retry_fund_disclosure_sync_api_v1_research_cases__case_id__fund_disclosure_sync_runs__run_id__retry_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundDisclosureSyncRunDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -13202,6 +13458,276 @@
         ],
         "title": "FundDisclosurePositionDTO"
       },
+      "FundDisclosureSyncConfigDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "title": "Frequency"
+          },
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fund Codes"
+          },
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stock Codes"
+          },
+          "allow_display": {
+            "type": "boolean",
+            "title": "Allow Display"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "change_reason": {
+            "type": "string",
+            "title": "Change Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "frequency",
+          "fund_codes",
+          "stock_codes",
+          "allow_display",
+          "changed_by",
+          "change_reason",
+          "created_at"
+        ],
+        "title": "FundDisclosureSyncConfigDTO"
+      },
+      "FundDisclosureSyncDetailResponse": {
+        "properties": {
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosureSyncSuggestionDTO"
+            },
+            "type": "array",
+            "title": "Suggestions"
+          },
+          "manual_code_fallback": {
+            "type": "boolean",
+            "title": "Manual Code Fallback"
+          },
+          "effective_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundDisclosureSyncConfigDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config_history": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosureSyncConfigDTO"
+            },
+            "type": "array",
+            "title": "Config History"
+          },
+          "next_scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scheduled At"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosureSyncRunDTO"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "suggestions",
+          "manual_code_fallback",
+          "effective_config",
+          "config_history",
+          "next_scheduled_at",
+          "runs"
+        ],
+        "title": "FundDisclosureSyncDetailResponse"
+      },
+      "FundDisclosureSyncRunDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "config_version_id": {
+            "type": "string",
+            "title": "Config Version Id"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled",
+              "retry"
+            ],
+            "title": "Trigger"
+          },
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fund Codes"
+          },
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stock Codes"
+          },
+          "allow_display": {
+            "type": "boolean",
+            "title": "Allow Display"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/FundDisclosureSyncRunEventDTO"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "config_version_id",
+          "trigger",
+          "fund_codes",
+          "stock_codes",
+          "allow_display",
+          "status",
+          "created_at",
+          "events"
+        ],
+        "title": "FundDisclosureSyncRunDTO"
+      },
+      "FundDisclosureSyncRunEventDTO": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seq",
+          "stage",
+          "status",
+          "message",
+          "payload",
+          "created_at"
+        ],
+        "title": "FundDisclosureSyncRunEventDTO"
+      },
+      "FundDisclosureSyncSuggestionDTO": {
+        "properties": {
+          "fund_code": {
+            "type": "string",
+            "title": "Fund Code"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "matching_stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matching Stock Codes"
+          },
+          "latest_report_period": {
+            "type": "string",
+            "format": "date",
+            "title": "Latest Report Period"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fund_code",
+          "fund_name",
+          "matching_stock_codes",
+          "latest_report_period"
+        ],
+        "title": "FundDisclosureSyncSuggestionDTO"
+      },
       "FundExposureDTO": {
         "properties": {
           "fund_id": {
@@ -18343,6 +18869,52 @@
           "next_action"
         ],
         "title": "RunSummaryDTO"
+      },
+      "SaveFundDisclosureSyncConfigRequest": {
+        "properties": {
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Fund Codes"
+          },
+          "frequency": {
+            "type": "string",
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "title": "Frequency"
+          },
+          "allow_display": {
+            "type": "boolean",
+            "title": "Allow Display",
+            "default": false
+          },
+          "change_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Change Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor",
+          "fund_codes",
+          "frequency",
+          "change_reason"
+        ],
+        "title": "SaveFundDisclosureSyncConfigRequest"
       },
       "SearchGroupDTO": {
         "properties": {
