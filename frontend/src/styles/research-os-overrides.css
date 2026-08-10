@@ -30,6 +30,23 @@
 }
 
 .ros-header-actions { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: flex-end; }
+.ros-wiki-canvas { display: block; min-height: 0; padding: 0; overflow: auto; background: radial-gradient(oklch(.79 .01 82 / .48) .7px, transparent .7px); background-size: 14px 14px; }
+.ros-wiki-canvas svg { display: block; width: 100%; min-width: 760px; min-height: 420px; }
+.ros-wiki-graph__edge { stroke: var(--ros-strong, #cfc9bd); stroke-width: 1.5; fill: none; }
+.ros-wiki-graph__edge.is-candidate { stroke: var(--ros-blue, #3972a3); stroke-dasharray: 5 4; }
+.ros-wiki-graph__edge.is-selected { stroke: var(--ros-ink, #30332f); stroke-width: 2.4; }
+.ros-wiki-canvas marker path { fill: var(--ros-strong, #cfc9bd); }
+.ros-wiki-graph__node { cursor: pointer; }
+.ros-wiki-graph__node rect { fill: var(--ros-surface, #fffdf8); stroke: var(--ros-strong, #cfc9bd); stroke-width: 1.2; transition: stroke .18s ease-out, filter .18s ease-out; }
+.ros-wiki-graph__node:hover rect, .ros-wiki-graph__node.is-selected rect { stroke: var(--ros-ink, #30332f); stroke-width: 1.8; filter: drop-shadow(0 4px 6px oklch(.25 .02 65 / .13)); }
+.ros-wiki-graph__node.is-candidate rect { fill: var(--ros-blue-soft, #eef4f8); stroke: var(--ros-blue, #3972a3); stroke-dasharray: 4 3; }
+.ros-wiki-graph__node:focus-visible { outline: none; }
+.ros-wiki-graph__node:focus-visible rect { stroke: var(--ros-blue, #3972a3); stroke-width: 3; }
+.ros-wiki-graph__kind, .ros-wiki-graph__state { fill: var(--ros-muted, #73766f); font-family: inherit; font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }
+.ros-wiki-graph__label { fill: var(--ros-ink, #30332f); font-family: inherit; font-size: 10px; font-weight: 700; }
+.ros-wiki-graph__node.is-candidate .ros-wiki-graph__state { fill: var(--ros-blue, #3972a3); }
+.ros-wiki-node-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .55rem; padding: .8rem; border-top: 1px solid var(--ros-line, #ded9ce); background: color-mix(in srgb, var(--ros-deep, #f6f3ec) 58%, transparent); }
+.ros-wiki-node-list .ros-wiki-node { min-height: 0; }
 .ros-wiki-edges { display: grid; gap: .55rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--ros-line, #ded9ce); }
 .ros-wiki-edge { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 1.25rem minmax(0, 1fr) auto; gap: .45rem; align-items: center; text-align: left; padding: .75rem; color: inherit; background: #fffdf8; border: 1px solid var(--ros-line, #ded9ce); border-radius: .5rem; cursor: pointer; }
 .ros-wiki-edge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

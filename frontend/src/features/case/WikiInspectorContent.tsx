@@ -11,6 +11,55 @@ function isCandidateEdge(edge: Graph["edges"][number]) {
   return edge.review_state === "machine_generated";
 }
 
+const graphKindOrder = [
+  "document",
+  "source",
+  "statement",
+  "claim",
+  "thesis",
+  "factor",
+  "company",
+  "stock",
+  "fund",
+  "case",
+  "proposal",
+];
+
+type GraphPosition = { id: string; x: number; y: number };
+
+function graphPositions(nodes: Graph["nodes"]): {
+  positions: GraphPosition[];
+  width: number;
+  height: number;
+} {
+  const groups = new Map<string, Graph["nodes"]>();
+  nodes.forEach((node) => {
+    const key = graphKindOrder.includes(node.kind) ? node.kind : "other";
+    groups.set(key, [...(groups.get(key) ?? []), node]);
+  });
+  const columns = [...graphKindOrder.filter((kind) => groups.has(kind)), ...(groups.has("other") ? ["other"] : [])];
+  const widestColumn = Math.max(...[...groups.values()].map((group) => group.length), 1);
+  const width = Math.max(760, columns.length * 168 + 80);
+  const height = Math.max(420, widestColumn * 90 + 130);
+  return {
+    width,
+    height,
+    positions: columns.flatMap((kind, columnIndex) => {
+      const group = groups.get(kind) ?? [];
+      const gap = Math.max(88, (height - 120) / Math.max(group.length, 1));
+      return group.map((node, rowIndex) => ({
+        id: node.id,
+        x: 90 + columnIndex * 168,
+        y: 70 + gap * (rowIndex + 0.5),
+      }));
+    }),
+  };
+}
+
+function graphLabel(label: string, maxLength = 19) {
+  return label.length > maxLength ? `${label.slice(0, maxLength - 1)}…` : label;
+}
+
 const PROPERTY_LABELS: Record<string, string> = {
   available_at: "可用时点",
   document_id: "冻结版本",
@@ -150,6 +199,8 @@ export function WikiInspectorContent({ caseId }: { caseId: string }) {
   const reviewedCount = graph.edges.filter((edge) => !isCandidateEdge(edge)).length;
   const candidateCount = graph.edges.filter(isCandidateEdge).length;
   const selectedProperties = selected?.properties ?? {};
+  const layout = graphPositions(nodes);
+  const positionById = new Map(layout.positions.map((position) => [position.id, position]));
   const frozenDocumentId = typeof selectedProperties.document_id === "string"
     ? selectedProperties.document_id
     : selected?.kind === "document" ? selected?.id : null;
@@ -168,10 +219,66 @@ export function WikiInspectorContent({ caseId }: { caseId: string }) {
         {showCandidates ? `隐藏 AI 候选 ${candidateCount}` : `显示 AI 候选 ${candidateCount}`}
       </button>
     </header>
-    <div className="ros-wiki-grid">
+      <div className="ros-wiki-grid">
       <div className="ros-wiki-wrap">
         <div className="ros-wiki-bar"><span>已审核关系 {reviewedCount}</span><span>实线：已审核 · 虚线：未经人工复核</span></div>
-        <div className="ros-wiki-canvas" aria-label="Case Wiki 节点列表">
+        <div className="ros-wiki-canvas">
+          <svg
+            role="img"
+            aria-label="Case Wiki 关系图谱"
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
+            preserveAspectRatio="xMidYMin meet"
+          >
+            <defs>
+              <marker id="ros-wiki-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+            {edges.map((edge) => {
+              const source = positionById.get(edge.source);
+              const target = positionById.get(edge.target);
+              if (!source || !target) return null;
+              const isSelected = selectedEdge?.id === edge.id;
+              return <line
+                className={`ros-wiki-graph__edge${isCandidateEdge(edge) ? " is-candidate" : ""}${isSelected ? " is-selected" : ""}`}
+                key={edge.id}
+                x1={source.x + 58}
+                y1={source.y}
+                x2={target.x - 58}
+                y2={target.y}
+                markerEnd="url(#ros-wiki-arrow)"
+              />;
+            })}
+            {nodes.map((node) => {
+              const position = positionById.get(node.id);
+              if (!position) return null;
+              const candidate = isCandidateNode(node);
+              const isSelected = !selectedEdge && node.id === selected?.id;
+              const selectNode = () => { setSelectedId(node.id); setSelectedEdgeId(null); };
+              return <g
+                className={`ros-wiki-graph__node${candidate ? " is-candidate" : ""}${isSelected ? " is-selected" : ""}`}
+                key={node.id}
+                role="button"
+                aria-label={`图谱节点：${node.label}`}
+                aria-pressed={isSelected}
+                tabIndex={0}
+                onClick={selectNode}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    selectNode();
+                  }
+                }}
+              >
+                <rect x={position.x - 58} y={position.y - 31} width="116" height="62" rx="7" />
+                <text className="ros-wiki-graph__kind" x={position.x - 46} y={position.y - 14}>{node.kind}</text>
+                <text className="ros-wiki-graph__label" x={position.x - 46} y={position.y + 3}>{graphLabel(node.label)}</text>
+                <text className="ros-wiki-graph__state" x={position.x - 46} y={position.y + 19}>{candidate ? "AI 候选" : "已审核"}</text>
+              </g>;
+            })}
+          </svg>
+        </div>
+        <div className="ros-wiki-node-list" aria-label="Case Wiki 节点列表">
           {nodes.map((node) => <button type="button" onClick={() => { setSelectedId(node.id); setSelectedEdgeId(null); }} className={`ros-wiki-node ros-wiki-node--${node.kind}${!selectedEdge && node.id === selected?.id ? " is-selected" : ""}${isCandidateNode(node) ? " is-candidate" : ""}`} key={node.id}>
             <span>{node.kind}</span><strong>{node.label}</strong><small>{isCandidateNode(node) ? "AI 候选，未经人工复核" : "已进入 Case 图谱"}</small>
           </button>)}

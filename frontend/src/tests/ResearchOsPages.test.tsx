@@ -597,8 +597,21 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
+    expect(
+      await screen.findByRole("img", { name: "Case Wiki 关系图谱" }),
+    ).toBeVisible();
     await user.click(
-      await screen.findByRole("button", {
+      screen.getByRole("button", { name: "图谱节点：冻结公司披露" }),
+    );
+    expect(
+      await screen.findByRole("link", { name: "定位到冻结原文" }),
+    ).toHaveAttribute(
+      "href",
+      "/events/event-tsm/documents?document=doc-event-tsm-q2",
+    );
+
+    await user.click(
+      screen.getByRole("button", {
         name: "document 冻结公司披露 已进入 Case 图谱",
       }),
     );
