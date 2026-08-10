@@ -37,6 +37,10 @@ class FundDisclosureSyncExecution:
     def id(self) -> uuid.UUID:
         return self.run.id
 
+    @property
+    def trigger(self) -> str:
+        return self.run.trigger
+
 
 class FundDisclosureSyncService:
     _timezone = ZoneInfo("Asia/Shanghai")
@@ -84,9 +88,35 @@ class FundDisclosureSyncService:
     def start_manual_run(self, case_id: uuid.UUID) -> FundDisclosureSyncRun:
         return self._start_run(case_id, trigger="manual")
 
+    def start_scheduled_run(self, case_id: uuid.UUID) -> FundDisclosureSyncRun:
+        return self._start_run(case_id, trigger="scheduled")
+
     def run_now(self, case_id: uuid.UUID, *, client: object) -> FundDisclosureSyncExecution:
         """Execute one transparent, bounded run against its frozen config."""
         run = self.start_manual_run(case_id)
+        return self.execute(run.id, client=client)
+
+    def start_retry(self, case_id: uuid.UUID, run_id: uuid.UUID) -> FundDisclosureSyncRun:
+        previous = self._session.get(FundDisclosureSyncRun, run_id)
+        if previous is None or previous.research_case_id != case_id:
+            raise ValueError("fund disclosure sync run not found")
+        run = FundDisclosureSyncRun(
+            research_case_id=case_id,
+            config_version_id=previous.config_version_id,
+            trigger="retry",
+            fund_codes=list(previous.fund_codes),
+            stock_codes=list(previous.stock_codes),
+            allow_display=previous.allow_display,
+            created_at=_utcnow(),
+        )
+        self._session.add(run)
+        self._session.flush()
+        return run
+
+    def execute(self, run_id: uuid.UUID, *, client: object) -> FundDisclosureSyncExecution:
+        run = self._session.get(FundDisclosureSyncRun, run_id)
+        if run is None:
+            raise ValueError("fund disclosure sync run not found")
         self._append_event(
             run.id,
             stage="scope",
@@ -153,6 +183,21 @@ class FundDisclosureSyncService:
             status="completed",
             message="本次基金披露补充已完成；结果仅代表历史披露",
             payload_json=payload,
+        )
+        return self._run(run.id)
+
+    def record_failure(
+        self, run_id: uuid.UUID, *, error: Exception, message: str = "基金披露补充失败；可在本记录基础上重试"
+    ) -> FundDisclosureSyncExecution:
+        run = self._session.get(FundDisclosureSyncRun, run_id)
+        if run is None:
+            raise ValueError("fund disclosure sync run not found")
+        self._append_event(
+            run.id,
+            stage="failed",
+            status="failed",
+            message=message,
+            payload_json={"error_type": type(error).__name__, "error": str(error)},
         )
         return self._run(run.id)
 

@@ -18,12 +18,14 @@ from app.db import SessionLocal
 from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
+from app.services.fund_disclosure_sync_scheduler import FundDisclosureSyncScheduler
 
 
 def run_once(*, recover_after_minutes: int = 30) -> bool:
     """Claim and execute one persisted run; return whether work was found."""
     with SessionLocal() as session:
         MonitorScheduler(session).dispatch_due()
+        scheduled_fund_runs = FundDisclosureSyncScheduler(session).dispatch_due()
         session.commit()
         service = AutoResearchService(session)
         service.repo.recover_stale_run_jobs(
@@ -32,7 +34,7 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
         job = service.repo.claim_next_run_job()
         if job is None:
             session.commit()
-            return False
+            return bool(scheduled_fund_runs)
         run = session.get(ResearchRun, job.target_id)
         session.commit()  # publish the claim before provider work begins
         if run is None:
