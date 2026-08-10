@@ -53,6 +53,9 @@ npm run dev:live                                     # 默认真实 API（VITE_R
 npm run dev:mock                                     # 显式内存 mock，用于 UI 演示和隔离测试
 npm test                                             # 62 vitest
 npm run e2e                                          # 32 条 Playwright（macOS 12 用 PW_BROWSER_CHANNEL=chrome）
+
+# 真实 HTTP 闭环：临时 SQLite + Uvicorn + Bearer tenant，创建并读取事件 Case
+cd .. && python backend/scripts/verify_live_event_api.py
 ```
 
 本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
