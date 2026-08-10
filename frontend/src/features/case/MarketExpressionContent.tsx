@@ -701,7 +701,6 @@ function MarketInstrumentWorkspace({
       await reload();
       setOpen(false);
       const notice = "已追加已审核标的关联；后续传导只能引用此清单。 ";
-      setMessage(notice);
       onRegistered(notice);
     } catch {
       setMessage(
@@ -944,7 +943,6 @@ function FundamentalImpactRegistration({
         review_reason: reason.trim(),
       });
       const notice = "已追加已审核基本面传导；它不等同于市场因果。 ";
-      setMessage(notice);
       onSaved(notice);
     } catch {
       setMessage("基本面传导未登记。请核对已审核标的、来源和理由。 ");
@@ -1137,7 +1135,6 @@ function MarketObservationRegistration({
         review_reason: reason.trim(),
       });
       const notice = "已追加已审核市场观测；它描述窗口表现，不构成因果结论。 ";
-      setMessage(notice);
       onSaved(notice);
     } catch {
       setMessage("市场观测未登记。请核对股票绑定、时点、数据来源和审核理由。 ");

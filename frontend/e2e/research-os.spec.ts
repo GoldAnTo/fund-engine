@@ -62,19 +62,19 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("button", { name: "关联公司与股票" }).click();
     await page.getByLabel("标的审核理由").fill("冻结原文明确该公司处于本 Case 的传导范围。");
     await page.getByRole("button", { name: "保存已审核标的关联" }).click();
-    await expect(page.getByText(/已追加已审核标的关联/)).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("已追加已审核标的关联");
 
     await page.getByRole("button", { name: "登记基本面传导" }).click();
     await page.getByLabel("传导机制").fill("订单兑现将按履约周期传导为收入增长。");
     await page.getByLabel("传导审核理由").fill("已核对来源、标的绑定和指标口径。");
     await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
-    await expect(page.getByText(/已追加已审核基本面传导/)).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("已追加已审核基本面传导");
 
     await page.getByRole("button", { name: "登记市场观测" }).click();
     await expect(page.getByText("市场窗口只记录发生了什么，不表示研报、事件或因素造成价格变化。")).toBeVisible();
     await page.getByLabel("市场观测审核理由").fill("已核对事件时点、资料可得时点、窗口和价格来源。");
     await page.getByRole("button", { name: "保存已审核市场观测" }).click();
-    await expect(page.getByText(/已追加已审核市场观测/)).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("已追加已审核市场观测");
   });
 
   test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {
@@ -149,7 +149,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "今天，先推进哪一个判断？" })).toBeVisible();
     await expect(page.getByText("当前优先")).toBeVisible();
     await expect(page.getByRole("main").getByText("研究网络")).toBeVisible();
-    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · 等待审核");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("等待人工审核 · 等待审核");
     await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("授权供应商资料");
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
@@ -392,9 +392,9 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("button", { name: "刷新运行档案" })).toBeVisible();
     await expect(page.getByRole("main")).toContainText("公司披露");
     await expect(page.getByRole("main")).toContainText("monitor-event-tsm-v1");
-    await expect(page.getByRole("main")).toContainText("awaiting_review");
+    await expect(page.getByRole("main")).toContainText("等待人工审核");
     await page.getByRole("main").getByRole("button", { name: "展开本次运行记录" }).click();
-    await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("已按许可读取候选资料");
+    await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("候选证据等待人工审核");
     await page.getByRole("button", { name: "关闭全局运行记录" }).click();
     await page.getByRole("main").getByRole("link", { name: "查看运行详情", exact: true }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
