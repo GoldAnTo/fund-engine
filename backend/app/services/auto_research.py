@@ -25,7 +25,7 @@ from app.models.ledger import (
 )
 from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
-from app.models.research_monitor import CaseMonitorVersion
+from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 from app.models.research_expression import KeyFactor
 from app.models.event_research import EventResearchConclusion
 from app.models.source_governance import SourceContract
@@ -373,6 +373,7 @@ class AutoResearchService:
         used = run.budget_used or 0
         previous = self._run_evidence_count(run)
         failed = False
+        allowed_source_types = self._run_allowed_source_types(run)
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
                 break
@@ -386,7 +387,10 @@ class AutoResearchService:
                     stop_reason="budget_exhausted",
                 )
                 break
-            for version in _pending_versions(self.session, run.research_case_id):
+            for version in self._pending_versions_in_run_scope(
+                run,
+                allowed_source_types=allowed_source_types,
+            ):
                 if self._is_cancelled(run):
                     break
                 if used >= run.budget:
@@ -398,7 +402,10 @@ class AutoResearchService:
                 except Exception:
                     used += 1
                 self.session.commit()
-            pending_claims = self._pending_atomic_claims(run.research_case_id)
+            pending_claims = self._pending_atomic_claims(
+                run.research_case_id,
+                allowed_source_types=allowed_source_types,
+            )
             if pending_claims:
                 self._pause_for_atomic_claim_review(run, pending_claims, used)
                 break
@@ -417,7 +424,12 @@ class AutoResearchService:
                 cancelled_during_task = False
                 try:
                     if task.task_type in {"support", "contradict", "alternative"}:
-                        proposed_ids = self._propose_for_task(proposer, task, run)
+                        proposed_ids = self._propose_for_task(
+                            proposer,
+                            task,
+                            run,
+                            allowed_source_types=allowed_source_types,
+                        )
                     else:
                         assessment = generator.generate(
                             task.thesis_id,
@@ -803,14 +815,77 @@ class AutoResearchService:
                 priority="high",
             )
 
-    def _pending_atomic_claims(self, case_id: uuid.UUID) -> list[AtomicClaimCandidate]:
+    def _run_allowed_source_types(self, run) -> set[str]:
+        """Read the immutable source-type boundary from this run's scope event."""
+        scope = self.session.scalar(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run.id)
+            .where(ResearchRunEvent.stage == "scope")
+            .order_by(ResearchRunEvent.seq.desc())
+            .limit(1)
+        )
+        raw_types = (scope.payload_json or {}).get("allowed_source_types", []) if scope else []
+        return {str(value).strip() for value in raw_types if str(value).strip()}
+
+    def _pending_versions_in_run_scope(
+        self,
+        run,
+        *,
+        allowed_source_types: set[str],
+    ) -> list:
+        """Select extractable documents and record exclusions from frozen scope."""
+        candidates = _pending_versions(self.session, run.research_case_id)
+        if not allowed_source_types:
+            return candidates
+        contracts = {
+            item.document_version_id: item
+            for item in self.session.scalars(
+                select(SourceContract).where(
+                    SourceContract.document_version_id.in_([item.id for item in candidates])
+                )
+            )
+        }
+        included = []
+        excluded_by_reason: dict[str, int] = {}
+        for document in candidates:
+            contract = contracts.get(document.id)
+            if contract is None:
+                reason = "missing_source_contract"
+            elif contract.source_type not in allowed_source_types:
+                reason = "source_type_not_in_frozen_scope"
+            elif not contract.allow_ai_processing or not source_contract_is_active(contract):
+                reason = "source_contract_not_usable"
+            else:
+                included.append(document)
+                continue
+            excluded_by_reason[reason] = excluded_by_reason.get(reason, 0) + 1
+        if excluded_by_reason:
+            ResearchRunEventRepository(self.session).append(
+                run.id,
+                stage="source_scope",
+                status="completed",
+                message="已按本次冻结的允许来源排除不在范围内的待处理资料",
+                payload_json={
+                    "allowed_source_types": sorted(allowed_source_types),
+                    "excluded_count": sum(excluded_by_reason.values()),
+                    "excluded_by_reason": excluded_by_reason,
+                },
+            )
+        return included
+
+    def _pending_atomic_claims(
+        self,
+        case_id: uuid.UUID,
+        *,
+        allowed_source_types: set[str] | None = None,
+    ) -> list[AtomicClaimCandidate]:
         """Return only candidates from this Case that have no human decision."""
         reviewed = (
             select(AtomicClaimReview.id)
             .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
             .exists()
         )
-        return list(self.session.scalars(
+        candidates = list(self.session.scalars(
             select(AtomicClaimCandidate)
             .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
             .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == SourceSpan.document_version_id)
@@ -818,6 +893,32 @@ class AutoResearchService:
             .where(~reviewed)
             .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
         ))
+        if not allowed_source_types:
+            return candidates
+        document_ids = {
+            candidate.source_span_id: document_id
+            for candidate, document_id in self.session.execute(
+                select(AtomicClaimCandidate, SourceSpan.document_version_id)
+                .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+                .where(AtomicClaimCandidate.id.in_([candidate.id for candidate in candidates]))
+            )
+        }
+        contracts = {
+            contract.document_version_id: contract
+            for contract in self.session.scalars(
+                select(SourceContract).where(
+                    SourceContract.document_version_id.in_(list(document_ids.values()))
+                )
+            )
+        }
+        return [
+            candidate
+            for candidate in candidates
+            if (contract := contracts.get(document_ids.get(candidate.source_span_id))) is not None
+            and contract.source_type in allowed_source_types
+            and contract.allow_ai_processing
+            and source_contract_is_active(contract)
+        ]
 
     def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
         """Persist an explicit, replayable stop before any propose/assess work."""
@@ -851,7 +952,12 @@ class AutoResearchService:
         )
 
     def _propose_for_task(
-        self, proposer: EvidenceProposer, task, run
+        self,
+        proposer: EvidenceProposer,
+        task,
+        run,
+        *,
+        allowed_source_types: set[str],
     ) -> list[uuid.UUID]:
         """Call proposer once per task and avoid duplicate pending proposal hashes."""
         existing_before = self.repo.pending_proposal_hashes_for_thesis(task.thesis_id)
@@ -859,6 +965,7 @@ class AutoResearchService:
             task.thesis_id,
             self.session,
             before_persist=lambda: self._claim_task_output_slot(run, task),
+            allowed_source_types=allowed_source_types or None,
         )
         unique: list[uuid.UUID] = []
         seen: set[str] = set()

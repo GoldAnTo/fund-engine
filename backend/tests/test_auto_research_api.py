@@ -25,6 +25,7 @@ from app.repositories.auto_research import AutoResearchRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
+from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.models.research_monitor import ResearchRunEvent
 
 
@@ -116,6 +117,70 @@ def test_pending_documents_exclude_a_frozen_contract_that_forbids_ai_processing(
     session.commit()
 
     assert _pending_versions(session, case.id) == []
+
+
+def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monkeypatch):
+    """A company-disclosure run must not extract an in-Case pasted snapshot."""
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="source-scoped run", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="订单增长将改善收入", created_by="u", created_at=now)
+    session.add(thesis)
+    session.flush()
+    disclosure = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://issuer.example.com/report", available_at=now, acquired_at=now, parser_version="test")
+    pasted = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="event://pasted", available_at=now, acquired_at=now, parser_version="test")
+    session.add_all([disclosure, pasted])
+    session.flush()
+    disclosure_text = "公司披露订单同比增长20%，并说明收入确认进度、客户验收节奏、产能准备情况及下一季度收入确认安排，相关指标均可回到本页公告原文核对。"
+    pasted_text = "研究员粘贴的事件摘要，不属于本次公司披露补证范围；它只用于记录最初的问题和背景，不能替代有明确主体、期间、来源许可及原文定位的公司披露材料。"
+    disclosure_span = SourceSpan(document_version_id=disclosure.id, locator={"page": 1}, verbatim_text=disclosure_text)
+    pasted_span = SourceSpan(document_version_id=pasted.id, locator={"paragraph": 1}, verbatim_text=pasted_text)
+    session.add_all([
+        disclosure_span,
+        pasted_span,
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=disclosure.id, linked_at=now),
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=pasted.id, linked_at=now),
+        SourceContract(document_version_id=disclosure.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+        SourceContract(document_version_id=pasted.id, source_type="pasted_snapshot", provider_or_tenant="researcher", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+    ])
+    session.flush()
+    AtomicClaimService(session).admit(
+        AtomicClaimDraft(source_span_id=disclosure_span.id, quote="订单同比增长20%", quote_start=4, quote_end=13, normalized_text="公司披露订单同比增长20%", claim_type="reported_claim", assertion_actor="公司", subject="订单", predicate="同比增长", object_text="20%", numeric_value="20", unit="%", observed_period=None, scope={}),
+        authority_level="primary_disclosure",
+        run_ref="extract:existing-company-candidate",
+    )
+    CaseMonitorService(session).save(
+        case.id,
+        actor="human:researcher",
+        config=CaseMonitorConfig(frequency="daily_20_00", factor_ids=[thesis.id], allowed_source_types=["company_disclosure"], next_verification_event="下一次财报", budget=20, change_reason="仅用公司披露补证"),
+    )
+    session.commit()
+    extracted: list[uuid.UUID] = []
+
+    class FakeExtractor:
+        def __init__(self, _client):
+            pass
+
+        def extract(self, document_id, _session):
+            extracted.append(document_id)
+            return []
+
+    import app.services.auto_research as auto_research_module
+
+    monkeypatch.setattr(auto_research_module, "StatementExtractor", FakeExtractor)
+    monkeypatch.setattr(AutoResearchService, "client", property(lambda _self: object()))
+    service = AutoResearchService(session)
+    run = service.start_from_monitor(case.id)
+
+    service.execute(run)
+
+    assert extracted == [disclosure.id]
+    events = list(session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id).order_by(ResearchRunEvent.seq)))
+    assert any(
+        event.stage == "source_scope" and event.payload_json["excluded_count"] == 1
+        for event in events
+    )
 
 
 def test_start_and_get_run(session):

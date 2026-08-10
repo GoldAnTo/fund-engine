@@ -13,6 +13,7 @@ const RUN_STAGE_LABELS: Record<string, string> = {
   review: "等待审核",
   claim_review: "等待原子陈述审核",
   resume_after_claim_review: "审核完成，等待继续执行",
+  source_scope: "核对资料来源范围",
   stopped: "运行已停止",
   failed: "运行失败",
   complete: "运行完成",
@@ -76,6 +77,8 @@ const RUN_EVENT_DETAIL_LABELS: Record<string, string> = {
   factor_ids: "范围因素",
   factor_statements: "范围因素说明",
   allowed_source_types: "允许来源",
+  excluded_count: "已排除资料",
+  excluded_by_reason: "排除原因",
   budget: "资料预算",
   stop_reason: "停止原因",
 };
@@ -120,6 +123,10 @@ export function formatRunEventDetails(details: Record<string, unknown>): string 
             ? runTriggerLabel(typeof value === "string" ? value : null)
             : key === "stop_reason"
               ? runStopReasonLabel(typeof value === "string" ? value : null)
+              : key === "excluded_by_reason" && typeof value === "object" && value !== null
+                ? Object.entries(value as Record<string, unknown>)
+                    .map(([reason, count]) => `${sourceScopeExclusionReasonLabel(reason)}：${count}`)
+                    .join("、")
               : Array.isArray(value)
                 ? value.join("、")
                 : typeof value === "object" && value !== null
@@ -128,4 +135,12 @@ export function formatRunEventDetails(details: Record<string, unknown>): string 
       return `${RUN_EVENT_DETAIL_LABELS[key] || key}：${rendered}`;
     })
     .join(" · ");
+}
+
+function sourceScopeExclusionReasonLabel(value: string): string {
+  return {
+    missing_source_contract: "资料未记录来源合同",
+    source_type_not_in_frozen_scope: "来源类型不在本次冻结范围内",
+    source_contract_not_usable: "来源合同当前不可用于 AI 处理",
+  }[value] ?? value;
 }

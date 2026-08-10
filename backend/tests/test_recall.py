@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.ai.client import LLMClient
 from app.ai.proposal import EvidenceProposer
 from app.models.ledger import EvidenceLink
+from app.models.source_governance import SourceContract
 from app.repositories.documents import DocumentRepository
 from app.services.recall import (
     RecallService,
@@ -268,6 +269,46 @@ def test_recall_only_uses_documents_attached_to_thesis_case(
     recalled_ids = {statement.id for statement in recalled}
     assert own_statement.id in recalled_ids
     assert other_statement.id not in recalled_ids
+
+
+def test_recall_obeys_the_run_frozen_source_types(
+    session, document_service, research_service, thesis, document
+):
+    """A source-scoped run must not propose from a pasted Case statement."""
+    _attach_document_to_thesis_case(document_service, thesis, document)
+    disclosure_statement = _add_statement_with_text(
+        document_service,
+        research_service,
+        document,
+        "公司披露 GPU 订单增长，交付节奏和收入确认均有明确的期间说明。",
+    )
+    pasted = document_service.freeze(
+        raw=b"researcher pasted event summary with background only",
+        source_url="event://pasted-scope-test",
+    )
+    _attach_document_to_thesis_case(document_service, thesis, pasted)
+    pasted_statement = _add_statement_with_text(
+        document_service,
+        research_service,
+        pasted,
+        "研究员粘贴的订单背景说明不能替代公司公告，也不属于本次允许来源。",
+    )
+    now = datetime.now(UTC)
+    session.add_all([
+        SourceContract(document_version_id=document.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+        SourceContract(document_version_id=pasted.id, source_type="pasted_snapshot", provider_or_tenant="researcher", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+    ])
+    session.commit()
+
+    recalled = RecallService(session).for_thesis(
+        thesis,
+        cutoff=datetime.now(UTC),
+        allowed_source_types={"company_disclosure"},
+    )
+
+    recalled_ids = {item.id for item in recalled}
+    assert disclosure_statement.id in recalled_ids
+    assert pasted_statement.id not in recalled_ids
 
 
 def test_recall_invalid_mode_rejected(session, thesis):

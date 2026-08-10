@@ -47,6 +47,7 @@ class EvidenceProposer:
         session: Session,
         *,
         before_persist: Callable[[], bool] | None = None,
+        allowed_source_types: set[str] | None = None,
     ) -> list[uuid.UUID]:
         started_at = datetime.now(timezone.utc)
         research = ResearchService(ResearchRepository(session))
@@ -59,12 +60,17 @@ class EvidenceProposer:
         # Retrieval-scoped recall: only statements visible at the proposal
         # cutoff and relevant to this thesis reach the LLM.
         cutoff = started_at
-        statements = RecallService(session).for_thesis(thesis, cutoff=cutoff)
+        statements = RecallService(session).for_thesis(
+            thesis,
+            cutoff=cutoff,
+            allowed_source_types=allowed_source_types,
+        )
 
         input_ref = {
             "thesis_id": str(thesis_id),
             "cutoff": cutoff.isoformat(),
             "statement_ids": [str(s.id) for s in statements],
+            "allowed_source_types": sorted(allowed_source_types or []),
         }
 
         if not statements:
