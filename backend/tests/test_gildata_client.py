@@ -38,12 +38,13 @@ class _FakeClient:
     """Fake client returning canned ``call_tool`` text strings, no network."""
 
     def __init__(self, research_results, announcement_results, quote_results,
-                 news_results=()):
+                 news_results=(), fund_holding_results=()):
         # research_results: queue of result-lists (one per FinancialResearchReport call)
         self._research = list(research_results)
         self._announcement = announcement_results
         self._quote = quote_results
         self._news = list(news_results)
+        self._fund_holdings = list(fund_holding_results)
         self.calls: list[tuple[str, dict]] = []
 
     def call_tool(self, name, arguments, timeout=60):
@@ -56,7 +57,8 @@ class _FakeClient:
         if name == "NewsDataQuery":
             return json.dumps({"code": "0", "results": self._news}, ensure_ascii=False)
         if name == "FinQuery":
-            return json.dumps({"code": "0", "results": self._quote}, ensure_ascii=False)
+            results = self._fund_holdings if "持仓" in arguments.get("query", "") else self._quote
+            return json.dumps({"code": "0", "results": results}, ensure_ascii=False)
         raise AssertionError(f"unexpected tool {name!r}")
 
 
@@ -79,6 +81,19 @@ ANNOUNCEMENT_MD = (
     "|公告标题|公告日期|股票代码|公告内容|\n"
     "|---|---|---|---|\n"
     "|寒武纪定增预案|2026-03-15|688256|本次定增募资49.8亿元投向算力芯片项目。|"
+)
+
+FUND_REPORT_ANNOUNCEMENT_MD = (
+    "公告标题：易方达蓝筹精选混合型证券投资基金2025年第2季度报告；\n"
+    "发布时间：2025-07-21；\n"
+    "原文地址：https://fund.example/005827/2025q2.pdf；\n"
+    "原文：本基金2025年第2季度报告。"
+)
+
+FUND_HOLDING_MD = (
+    "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
+    "|---|---|---|---|---|---|\n"
+    "|易方达蓝筹精选混合|005827.OF|2025-06-30|腾讯控股|00700.HK|9.50|"
 )
 
 NEWS_MD = (
@@ -242,6 +257,41 @@ def test_fetch_quote():
 def test_fetch_quote_empty_when_no_results():
     client = _FakeClient([], [], [])
     assert adapters.fetch_quote(client, "x") == []
+
+
+def test_fetch_fund_holdings_preserves_report_period_without_inventing_publish_date():
+    client = _FakeClient(
+        [], [], [], fund_holding_results=[{"table_markdown": FUND_HOLDING_MD}]
+    )
+
+    holdings = adapters.fetch_fund_stock_holdings(client, "查询基金005827最近一期公开披露的股票持仓明细")
+
+    assert holdings == [{
+        "fund_name": "易方达蓝筹精选混合",
+        "fund_code": "005827.OF",
+        "report_period": "2025-06-30",
+        "stock_name": "腾讯控股",
+        "stock_code": "00700.HK",
+        "weight": "9.50",
+    }]
+    assert client.calls[0][0] == "FinQuery"
+
+
+def test_fetch_fund_report_announcement_preserves_exact_publication_locator():
+    client = _FakeClient(
+        [], [{"table_markdown": FUND_REPORT_ANNOUNCEMENT_MD}], []
+    )
+
+    announcements = adapters.fetch_announcement(client, "易方达蓝筹精选混合 005827 2025年第二季度报告")
+
+    assert announcements == [{
+        "title": "易方达蓝筹精选混合型证券投资基金2025年第2季度报告",
+        "publish_date": "2025-07-21",
+        "stock_code": "",
+        "sec_name": "",
+        "content": "本基金2025年第2季度报告。",
+        "source_url": "https://fund.example/005827/2025q2.pdf",
+    }]
 
 
 # ---------------------------------------------------------------------------
