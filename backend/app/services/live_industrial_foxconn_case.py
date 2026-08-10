@@ -16,10 +16,13 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import DocumentVersion, ResearchCase, SourceSpan, SourceStatement
+from app.models.ledger import DocumentVersion, EvidenceLink, ResearchCase, SourceSpan, SourceStatement, Thesis
+from app.models.operational import EventResearchLifecycle
 from app.repositories.documents import DocumentRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.event_research import EventResearchService
+from app.services.event_conclusion import EventConclusionService
+from app.services.event_research_scope_evidence import append_current_scope_evidence_assignment
 from app.services.forecast_verdicts import (
     ActualObservationInput,
     ForecastTargetInput,
@@ -144,6 +147,90 @@ def _statement(
     session.add(statement)
     session.flush()
     return statement
+
+
+def _publish_bounded_conclusion(
+    session: Session,
+    *,
+    case_id: uuid.UUID,
+    actual_statement: SourceStatement,
+    driver_statement: SourceStatement,
+    actual_available_at: datetime,
+) -> None:
+    """Map reviewed evidence to every active factor, then publish a narrow verdict.
+
+    The generic event workbench only permits publication after every current
+    scope factor has a reviewed, mapped link.  This case therefore enters the
+    same lifecycle rather than flipping its status around the conclusion gate.
+    """
+    theses = {
+        thesis.statement: thesis
+        for thesis in session.scalars(
+            select(Thesis).where(Thesis.research_case_id == case_id)
+        )
+    }
+    evidence_inputs = (
+        (
+            "2024 年归母净利润预测",
+            actual_statement,
+            "年度报告实际归母净利润用于核验预设10%容差内的预测兑现情况。",
+        ),
+        (
+            "AI 服务器收入",
+            driver_statement,
+            "年度报告披露AI服务器收入同比超过150%，支持该业务因素。",
+        ),
+        (
+            "800G 高速交换机",
+            driver_statement,
+            "年度报告披露400G、800G高速交换机同比增长数倍，支持该业务因素。",
+        ),
+    )
+    for factor_statement, statement, reason in evidence_inputs:
+        thesis = theses.get(factor_statement)
+        if thesis is None:
+            raise ValueError(f"live case is missing active thesis: {factor_statement}")
+        link = EvidenceLink(
+            thesis_id=thesis.id,
+            source_statement_id=statement.id,
+            role="supports",
+            reason=reason,
+            scope={"case": "industrial-foxconn-forecast-v1", "factor": factor_statement},
+            available_at=actual_available_at,
+            creator_type="human",
+            review_state="reviewed",
+            created_at=_now(),
+        )
+        session.add(link)
+        session.flush()
+        append_current_scope_evidence_assignment(
+            session,
+            case_id=case_id,
+            evidence_link_id=link.id,
+            factor_statement=factor_statement,
+            created_at=_now(),
+        )
+
+    conclusion_service = EventConclusionService(session)
+    conclusion_service.create_draft(case_id)
+    lifecycle = session.get(EventResearchLifecycle, case_id)
+    if lifecycle is None:
+        raise ValueError("live case lifecycle is missing")
+    lifecycle.status = "draft_ready"
+    lifecycle.status_summary = "历史预测验证资料已映射，等待演示人审发布范围受限结论"
+    lifecycle.current_gap = None
+    lifecycle.next_human_action = "发布范围受限的历史预测验证结论"
+    lifecycle.updated_at = _now()
+    conclusion_service.publish(
+        case_id,
+        reviewer=ACTOR,
+        text=(
+            "在本 Case 的冻结资料范围内，海通证券对工业富联2024年归母净利润251.49亿元的预测"
+            "得到支持：公司年报实际为232.16亿元，较预测偏差约7.69%，处于预设10%容差内。"
+            "年报同时支持AI服务器和高速交换机增长因素。该结论不评估股票事件窗口，"
+            "不据此推断股票价格因果或构成投资建议；基金515050仅为截至2024-12-31的部分历史持仓披露。"
+        ),
+    )
 
 
 def materialize_live_industrial_foxconn_case(
@@ -317,6 +404,13 @@ def materialize_live_industrial_foxconn_case(
         reason="演示人审确认：实际值232.16亿元相对预测251.49亿元偏差约7.69%，处于10%容差内；不据此推断股票价格因果。",
         reviewed_by=ACTOR,
     ))
+    _publish_bounded_conclusion(
+        session,
+        case_id=case_id,
+        actual_statement=actual_statement,
+        driver_statement=driver_statement,
+        actual_available_at=bundle.annual_report.published_at,
+    )
     session.commit()
     return LiveCaseResult(
         case_id=case_id, verdict_id=verdict.id, expected_value=str(bundle.expected_profit),

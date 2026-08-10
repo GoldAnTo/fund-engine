@@ -79,3 +79,35 @@ def test_rejects_a_provider_response_without_the_approved_numeric_prediction() -
 
     with pytest.raises(SourceSelectionError, match="251.49"):
         load_industrial_foxconn_sources(FakeGildataClient(report_text="预测不可解析"))
+
+
+def test_materialized_case_publishes_a_bounded_human_conclusion(cmd_session) -> None:
+    """A verified single-case verdict must not remain in the generic pending state."""
+    from sqlalchemy import select
+
+    from app.models.event_research import EventResearchConclusion
+    from app.models.operational import EventResearchLifecycle
+    from app.services.industrial_foxconn_forecast_case import (
+        load_industrial_foxconn_sources,
+    )
+    from app.services.live_industrial_foxconn_case import (
+        materialize_live_industrial_foxconn_case,
+    )
+
+    result = materialize_live_industrial_foxconn_case(
+        cmd_session,
+        bundle=load_industrial_foxconn_sources(FakeGildataClient()),
+        tenant_id="test-team",
+    )
+
+    lifecycle = cmd_session.get(EventResearchLifecycle, result.case_id)
+    published = cmd_session.scalar(
+        select(EventResearchConclusion)
+        .where(EventResearchConclusion.research_case_id == result.case_id)
+        .where(EventResearchConclusion.state == "published")
+    )
+
+    assert lifecycle is not None and lifecycle.status == "published"
+    assert published is not None
+    assert "251.49" in published.text
+    assert "不据此推断股票价格因果" in published.text
