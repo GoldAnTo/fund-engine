@@ -360,6 +360,8 @@ export interface SourceDocumentView {
     };
     status: "admitted" | "restricted";
     region: string;
+    effective_from?: string | null;
+    effective_until?: string | null;
     retention_policy: string;
     deletion_policy: string;
     downstream_restrictions: string[];

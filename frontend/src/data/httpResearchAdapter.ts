@@ -761,6 +761,8 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         },
         status: dto.source_contract.status,
         region: dto.source_contract.region,
+        effective_from: dto.source_contract.effective_from,
+        effective_until: dto.source_contract.effective_until,
         retention_policy: dto.source_contract.retention_policy,
         deletion_policy: dto.source_contract.deletion_policy,
         downstream_restrictions: dto.source_contract.downstream_restrictions,

@@ -626,12 +626,13 @@ function PublishedMaterialDecisionForm({
   const [sourceGovernance, setSourceGovernance] = useState(DEFAULT_SOURCE_GOVERNANCE);
   const [providerName, setProviderName] = useState("");
   const [providerRecordId, setProviderRecordId] = useState("");
+  const [providerRequestScope, setProviderRequestScope] = useState("");
   const [decision, setDecision] = useState<"reopen" | "no_change">("reopen");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const sourceReady = sourceType === "licensed_provider"
-    ? Boolean(providerName.trim() && providerRecordId.trim())
+    ? Boolean(providerName.trim() && providerRecordId.trim() && providerRequestScope.trim())
     : sourceType === "public_url"
       ? Boolean(sourceUrl.trim())
       : true;
@@ -649,7 +650,7 @@ function PublishedMaterialDecisionForm({
           ...sourceMetadata,
           ...sourceGovernanceMetadata(sourceGovernance),
           permissions: sourcePermissions,
-          ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), retrieval_reference: sourceUrl.trim() || undefined } : {}),
+          ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), request_scope: { declared_scope: providerRequestScope.trim() }, retrieval_reference: sourceUrl.trim() || undefined } : {}),
           ...(sourceType === "public_url" ? { intake_note: "公开网页 URL 仅作为可复查线索；已冻结内容尚未完成原文核验。" } : {}),
           authority_level:
             sourceType === "licensed_provider"
@@ -757,7 +758,11 @@ function PublishedMaterialDecisionForm({
             新增材料供应商记录 ID
             <input aria-label="新增材料供应商记录 ID" value={providerRecordId} onChange={(event) => setProviderRecordId(event.target.value)} placeholder="可重取的报告或公告记录 ID" />
           </label>
-          <small>授权来源必须固定供应商和具体记录；否则不能作为此决定的已冻结材料。</small>
+          <label>
+            新增材料供应商查询口径
+            <textarea aria-label="新增材料供应商查询口径" value={providerRequestScope} onChange={(event) => setProviderRequestScope(event.target.value)} placeholder="例如：研报 / 标的 000001 / 2026H1" />
+          </label>
+          <small>授权来源必须固定供应商、具体记录和查询口径；否则不能作为此决定的已冻结材料。</small>
         </section>
       )}
       <fieldset className="ros-source-governance">
@@ -1069,6 +1074,16 @@ function DocumentReader({
         </div>
         {contract && (
           <>
+            <div>
+              <dt>授权有效期</dt>
+              <dd>
+                {contract.effective_from || "未记录"} 至 {contract.effective_until || "未记录"}
+              </dd>
+            </div>
+            <div>
+              <dt>合同 / 许可版本</dt>
+              <dd>{contract.contract_version || "未记录"}</dd>
+            </div>
             <div>
               <dt>保留策略</dt>
               <dd>

@@ -922,6 +922,8 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("当前已发布结论")).toBeVisible();
     expect(screen.getByText("待冻结的新材料")).toBeVisible();
     expect(screen.getByLabelText("资料适用地域")).toHaveValue("CN");
+    expect(screen.getByLabelText("授权生效日")).toHaveValue("");
+    expect(screen.getByLabelText("授权失效日")).toHaveValue("");
     expect(screen.getByLabelText("保留策略")).toHaveValue("case_retained");
     expect(screen.getByLabelText("删除策略")).toHaveValue("not_recorded");
     expect(screen.getByLabelText("下游使用限制")).toHaveValue(
@@ -968,10 +970,13 @@ describe("Research OS event entry", () => {
     });
     await user.clear(screen.getByLabelText("资料适用地域"));
     await user.type(screen.getByLabelText("资料适用地域"), "US");
+    await user.type(screen.getByLabelText("授权生效日"), "2026-01-01");
+    await user.type(screen.getByLabelText("授权失效日"), "2026-12-31");
     await user.clear(screen.getByLabelText("保留策略"));
     await user.type(screen.getByLabelText("保留策略"), "contract_2026");
     await user.clear(screen.getByLabelText("删除策略"));
     await user.type(screen.getByLabelText("删除策略"), "delete_after_2027");
+    await user.type(screen.getByLabelText("合同或许可版本"), "juyuan-research-v4");
     await user.clear(screen.getByLabelText("下游使用限制"));
     await user.type(
       screen.getByLabelText("下游使用限制"),
@@ -989,13 +994,24 @@ describe("Research OS event entry", () => {
         expect.objectContaining({
           sourceMetadata: expect.objectContaining({
             region: "US",
+            effective_from: "2026-01-01",
+            effective_until: "2026-12-31",
             retention_policy: "contract_2026",
             deletion_policy: "delete_after_2027",
+            contract_version: "juyuan-research-v4",
             downstream_restrictions: ["仅限投研团队", "禁止外部导出"],
           }),
         }),
       ),
     );
+    await screen.findByText(/记录“不改变当前判断”的人工决定/);
+    await user.click(
+      await screen.findByRole("button", { name: /新增待比较材料/ }),
+    );
+    expect(await screen.findByText("授权有效期")).toBeVisible();
+    expect(screen.getByText("2026-01-01 至 2026-12-31")).toBeVisible();
+    expect(screen.getByText("合同 / 许可版本")).toBeVisible();
+    expect(screen.getByText("juyuan-research-v4")).toBeVisible();
   });
 
   it("reads a published-Case text upload as a snapshot without calling it the original file", async () => {

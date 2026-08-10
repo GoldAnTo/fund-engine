@@ -22,6 +22,7 @@
 .ros-source-governance input[type="checkbox"] { width: auto; padding: 0; }
 .ros-source-governance input:not([type="checkbox"]), .ros-source-governance textarea { width: 100%; padding: .5rem; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); font: inherit; }
 .ros-source-governance textarea { min-height: 4.5rem; resize: vertical; }
+.ros-source-governance__dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
 .ros-source-governance small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible
@@ -122,6 +123,7 @@
 @media (max-width: 720px) {
   .ros-run-strip { align-items: flex-start; }
   .ros-run-strip__actions button { min-width: 84px; min-height: 44px; }
+  .ros-source-governance__dates { grid-template-columns: 1fr; }
 }
 
 /* Historical Case admission is an operations decision, not a dashboard. The

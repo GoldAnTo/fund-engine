@@ -263,7 +263,11 @@ def create_event_research(
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ) -> CreateEventResearchResponse:
-    created = EventResearchService(db).create(payload, tenant_id=tenant_id)
+    try:
+        created = EventResearchService(db).create(payload, tenant_id=tenant_id)
+    except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
     lifecycle = created.lifecycle
     return CreateEventResearchResponse(
         case_id=created.case_id,

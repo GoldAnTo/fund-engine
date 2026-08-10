@@ -224,6 +224,7 @@ test.describe("Event-first Research OS", () => {
 
     await page.getByLabel("供应商名称").fill("聚源");
     await page.getByLabel("供应商记录 ID").fill("report-2026-001");
+    await page.getByLabel("供应商查询口径").fill("研报 / 标的 000001 / 2026H1");
     await page.getByLabel("允许 AI 处理").check();
     await page.getByLabel("允许团队展示").check();
     await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
@@ -528,6 +529,7 @@ test.describe("Event-first Research OS", () => {
 
     await page.getByLabel("新增材料供应商名称").fill("聚源");
     await page.getByLabel("新增材料供应商记录 ID").fill("report-2026-002");
+    await page.getByLabel("新增材料供应商查询口径").fill("研报 / 标的 000001 / 2026H1");
     await expect(page.getByRole("button", { name: "冻结材料并纳入重新复核" })).toBeEnabled();
   });
 

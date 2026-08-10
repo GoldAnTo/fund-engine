@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select, update
 
@@ -113,6 +113,69 @@ def test_licensed_provider_intake_preserves_provider_record_and_contract_version
     assert provider.request_scope == {"dataset": "research_report", "symbol": "000001"}
     assert provider.retrieval_reference == "juyuan://research-report/JRPT-20260809-001"
     assert provider.content_sha256 == cmd_session.get(DocumentVersion, document_id).content_sha256
+
+
+def test_event_intake_preserves_declared_contract_validity_window(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="licensed_provider",
+            source_metadata={
+                "provider_name": "聚源",
+                "provider_record_id": "JRPT-20260810-002",
+                "request_scope": {"declared_scope": "研报 / 标的 000001 / 2026H1"},
+                "effective_from": "2026-01-01",
+                "effective_until": "2026-12-31",
+                "contract_version": "juyuan-research-v4",
+                "permissions": {"ai_processing": True, "display": True},
+            },
+        ),
+    )
+
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    contract = cmd_session.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document_id)
+    )
+
+    assert contract is not None
+    assert contract.effective_from is not None
+    assert contract.effective_until is not None
+    assert contract.effective_from.date() == date(2026, 1, 1)
+    assert contract.effective_until.date() == date(2026, 12, 31)
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+    assert detail.status_code == 200
+    source = detail.json()["document"]["source_contract"]
+    assert source["effective_from"].startswith("2026-01-01T00:00:00")
+    assert source["effective_until"].startswith("2026-12-31T00:00:00")
+
+
+def test_event_intake_rejects_a_contract_window_that_ends_before_it_starts(
+    cmd_client,
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={
+                "effective_from": "2026-12-31",
+                "effective_until": "2026-01-01",
+            },
+        ),
+    )
+
+    assert created.status_code == 422
+    assert (
+        created.json()["error"]["message"]
+        == "effective_until must not be before effective_from"
+    )
 
 
 def test_event_intake_freezes_declared_source_authority_and_exposes_it_to_readers(

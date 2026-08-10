@@ -257,6 +257,10 @@ describe("HttpResearchAdapter", () => {
       request_scope: { report_type: "industry" },
       retrieval_reference: "provider://report-2026-003",
     });
+    expect(out.document.source_contract).toMatchObject({
+      effective_from: null,
+      effective_until: null,
+    });
   });
 
   it("search returns empty for queries shorter than the backend minimum", async () => {

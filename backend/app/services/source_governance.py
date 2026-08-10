@@ -24,6 +24,25 @@ def _permission(metadata: dict[str, Any], name: str, *, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
+def _effective_at(metadata: dict[str, Any], name: str) -> datetime | None:
+    """Read an explicit source-contract date without silently inventing one."""
+    raw = metadata.get(name)
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime):
+        value = raw
+    elif isinstance(raw, str):
+        try:
+            value = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an ISO-8601 date or timestamp") from exc
+    else:
+        raise ValueError(f"{name} must be an ISO-8601 date or timestamp")
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class SourceGovernanceService:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -46,6 +65,14 @@ class SourceGovernanceService:
         metadata = dict(source_metadata or {})
         user_controlled = source_type in USER_CONTROLLED_TYPES
         now = _utcnow()
+        effective_from = _effective_at(metadata, "effective_from")
+        effective_until = _effective_at(metadata, "effective_until")
+        if (
+            effective_from is not None
+            and effective_until is not None
+            and effective_until < effective_from
+        ):
+            raise ValueError("effective_until must not be before effective_from")
         contract = SourceContract(
             document_version_id=document.id,
             source_type=source_type,
@@ -59,8 +86,8 @@ class SourceGovernanceService:
             allow_export=_permission(metadata, "export", default=False),
             allow_api=_permission(metadata, "api", default=False),
             region=str(metadata.get("region") or "not_recorded"),
-            effective_from=None,
-            effective_until=None,
+            effective_from=effective_from,
+            effective_until=effective_until,
             retention_policy=str(metadata.get("retention_policy") or "case_retained"),
             deletion_policy=str(metadata.get("deletion_policy") or "not_recorded"),
             downstream_restrictions=list(metadata.get("downstream_restrictions") or (["仅限当前 Case 研究与人工审核"] if user_controlled else ["权限未完整记录；不得作为正式证据"])),

@@ -1,22 +1,33 @@
 export type SourceGovernance = {
   region: string;
+  effectiveFrom: string;
+  effectiveUntil: string;
   retentionPolicy: string;
   deletionPolicy: string;
+  contractVersion: string;
   downstreamRestrictions: string;
 };
 
 export const DEFAULT_SOURCE_GOVERNANCE: SourceGovernance = {
   region: "CN",
+  effectiveFrom: "",
+  effectiveUntil: "",
   retentionPolicy: "case_retained",
   deletionPolicy: "not_recorded",
+  contractVersion: "",
   downstreamRestrictions: "仅限当前 Case 研究与人工审核",
 };
 
 export function sourceGovernanceMetadata(value: SourceGovernance): Record<string, unknown> {
   return {
     region: value.region.trim() || "not_recorded",
+    ...(value.effectiveFrom ? { effective_from: value.effectiveFrom } : {}),
+    ...(value.effectiveUntil ? { effective_until: value.effectiveUntil } : {}),
     retention_policy: value.retentionPolicy.trim() || "case_retained",
     deletion_policy: value.deletionPolicy.trim() || "not_recorded",
+    ...(value.contractVersion.trim()
+      ? { contract_version: value.contractVersion.trim() }
+      : {}),
     downstream_restrictions: value.downstreamRestrictions
       .split(/[\n；]/)
       .map((item) => item.trim())
@@ -49,6 +60,26 @@ export function SourceGovernanceFields({
           placeholder="例如：CN"
         />
       </label>
+      <div className="ros-source-governance__dates">
+        <label>
+          授权生效日
+          <input
+            aria-label="授权生效日"
+            type="date"
+            value={value.effectiveFrom}
+            onChange={(event) => update("effectiveFrom", event.target.value)}
+          />
+        </label>
+        <label>
+          授权失效日
+          <input
+            aria-label="授权失效日"
+            type="date"
+            value={value.effectiveUntil}
+            onChange={(event) => update("effectiveUntil", event.target.value)}
+          />
+        </label>
+      </div>
       <label>
         保留策略
         <input
@@ -65,6 +96,15 @@ export function SourceGovernanceFields({
           value={value.deletionPolicy}
           onChange={(event) => update("deletionPolicy", event.target.value)}
           placeholder="例如：not_recorded"
+        />
+      </label>
+      <label>
+        合同或许可版本
+        <input
+          aria-label="合同或许可版本"
+          value={value.contractVersion}
+          onChange={(event) => update("contractVersion", event.target.value)}
+          placeholder="例如：juyuan-research-v4"
         />
       </label>
       <label>
