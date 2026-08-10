@@ -48,12 +48,6 @@ def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
 def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
     from app.models.research_expression import KeyFactor, ReportClaim
-    from app.services.forecast_verdicts import (
-        ActualObservationInput,
-        ForecastTargetInput,
-        ForecastVerdictInput,
-        ForecastVerdictService,
-    )
     from app.services.source_governance import SourceGovernanceService
 
     case_response = cmd_client.post("/api/v1/event-research", json={
@@ -141,46 +135,42 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     cmd_session.add(factor)
     cmd_session.commit()
 
-    service = ForecastVerdictService(cmd_session)
-    target = service.create_target(case_id, ForecastTargetInput(
-        key_factor_id=factor.id,
-        report_claim_id=claim.id,
-        forecast_source_statement_id=forecast_statement.id,
-        baseline_source_statement_id=forecast_statement.id,
-        metric_name="归母净利润",
-        entity_key="300894.SZ",
-        baseline_value=Decimal("315000000"),
-        expected_value=Decimal("455000000"),
-        unit="CNY",
-        forecast_period_start=date(2023, 1, 1),
-        forecast_period_end=date(2023, 12, 31),
-        comparator="within_tolerance",
-        relative_tolerance=Decimal("0.10"),
-        reviewed_by="human:reviewer",
-        review_reason="冻结研报表格数值。",
-    ))
-    actual = service.record_actual(target.id, ActualObservationInput(
-        source_statement_id=actual_statement.id,
-        entity_key="300894.SZ",
-        observed_value=Decimal("247245713.03"),
-        unit="CNY",
-        observed_period_start=date(2023, 1, 1),
-        observed_period_end=date(2023, 12, 31),
-        available_at=actual_at,
-        recorded_by="human:reviewer",
-        record_reason="年报第123页审计口径。",
-    ))
-    candidate = service.evaluate(target.id, actual.id, cutoff=datetime(2024, 4, 22, 23, 59, tzinfo=timezone.utc))
-    verdict = service.create_verdict(candidate.id, ForecastVerdictInput(
-        decision="confirmed",
-        outcome=None,
-        reason="实际值显著低于冻结预测，确认未兑现。",
-        reviewed_by="human:reviewer",
-    ))
+    target_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/forecast-targets", json={
+        "key_factor_id": str(factor.id), "report_claim_id": str(claim.id),
+        "forecast_source_statement_id": str(forecast_statement.id),
+        "baseline_source_statement_id": str(forecast_statement.id),
+        "metric_name": "归母净利润", "entity_key": "300894.SZ",
+        "baseline_value": 315000000, "expected_value": 455000000, "unit": "CNY",
+        "forecast_period_start": "2023-01-01", "forecast_period_end": "2023-12-31",
+        "comparator": "within_tolerance", "relative_tolerance": 0.10,
+        "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
+    })
+    assert target_response.status_code == 201, target_response.text
+    target_id = target_response.json()["id"]
+    actual_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/actual-metric-observations", json={
+        "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
+        "entity_key": "300894.SZ", "observed_value": 247245713.03, "unit": "CNY",
+        "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31",
+        "available_at": actual_at.isoformat(), "recorded_by": "human:reviewer",
+        "record_reason": "年报第123页审计口径。",
+    })
+    assert actual_response.status_code == 201, actual_response.text
+    candidate_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
+        "actual_observation_id": actual_response.json()["id"],
+        "cutoff": "2024-04-22T23:59:00Z",
+    })
+    assert candidate_response.status_code == 201, candidate_response.text
+    candidate = candidate_response.json()
+    verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
+        "decision": "confirmed", "outcome": None,
+        "reason": "实际值显著低于冻结预测，确认未兑现。",
+        "reviewed_by": "human:reviewer",
+    })
+    assert verdict_response.status_code == 201, verdict_response.text
 
-    assert candidate.outcome == "contradicted"
-    assert candidate.review_state == "machine_generated"
-    assert verdict.outcome == "contradicted"
+    assert candidate["outcome"] == "contradicted"
+    assert candidate["review_state"] == "machine_generated"
+    assert verdict_response.json()["outcome"] == "contradicted"
 
     response = cmd_client.get(
         f"/api/v1/research-cases/{case_id}/forecast-verdicts",
