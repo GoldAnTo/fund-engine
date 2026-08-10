@@ -1466,6 +1466,7 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("option", { name: "公司或发行人一手披露" }),
     ).toBeVisible();
+    expect(screen.getByText(/权威性为 未知，待核验/)).toBeVisible();
     expect(screen.getByText(/不会直接把二手转述写成已披露事实/)).toBeVisible();
   });
 
