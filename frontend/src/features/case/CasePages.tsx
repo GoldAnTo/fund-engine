@@ -2263,7 +2263,7 @@ function AtomicClaimItem({
         >
           定位到冻结原文
         </Link>
-        {claim.document_source_url ? (
+        {claim.document_source_url?.match(/^https?:\/\//i) ? (
           <a
             className="ros-button ros-button--secondary"
             href={claim.document_source_url}

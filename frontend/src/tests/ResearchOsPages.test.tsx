@@ -1623,13 +1623,13 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
   });
 
-  it("does not expose a dead original-source action when an extracted claim has no source URL", async () => {
+  it("does not expose a dead original-source action when an extracted claim has no web source URL", async () => {
     const user = userEvent.setup();
     const atomicClaim = {
       id: "atomic-1",
       source_span_id: "sp-tsm-capex",
       document_version_id: "doc-event-tsm-q2",
-      document_source_url: "",
+      document_source_url: "event://pasted-news",
       locator: { page: 2, paragraph: 3 },
       quote: "订单同比增长20%",
       quote_start: 14,
