@@ -1137,8 +1137,9 @@ export class MockResearchOsApi implements ResearchOsApi {
       created_at: now,
       events: [
         { seq: 1, stage: "scope", status: "completed", message: "已冻结基金与当前 Case 股票范围", payload: { fund_codes: config.fund_codes, stock_codes: config.stock_codes, allow_display: config.allow_display }, created_at: now },
-        { seq: 2, stage: "match_report", status: "completed", message: "已按同基金、同报告期季报规则核验来源", payload: { holding_rows_seen: 1, matched_reports: 1, pending_match_rows: 0, pending_permission_rows: 0 }, created_at: now },
-        { seq: 3, stage: "finished", status: "completed", message: "本次基金披露补充已完成；结果仅代表历史披露", payload: { holding_disclosures_written: 1, holding_disclosures_skipped_duplicate: 0, invalid_rows: 0 }, created_at: now },
+        { seq: 2, stage: "provider_capability", status: "completed", message: "已冻结本次实际可用的数据工具、字段与未验证边界", payload: { provider: "gildata", used_tools: ["FinQuery", "AnnouncementData"], required_fields: ["fund_code", "stock_code", "report_period", "publish_date"], unverified_capabilities: ["实时持仓", "基金筛选/推荐"] }, created_at: now },
+        { seq: 3, stage: "match_report", status: "completed", message: "已按同基金、同报告期季报规则核验来源", payload: { holding_rows_seen: 1, matched_reports: 1, pending_match_rows: 0, pending_permission_rows: 0 }, created_at: now },
+        { seq: 4, stage: "finished", status: "completed", message: "本次基金披露补充已完成；结果仅代表历史披露", payload: { holding_disclosures_written: 1, holding_disclosures_skipped_duplicate: 0, invalid_rows: 0 }, created_at: now },
       ],
     };
     this.fundDisclosureSyncRuns.set(caseId, [run, ...(this.fundDisclosureSyncRuns.get(caseId) ?? [])]);

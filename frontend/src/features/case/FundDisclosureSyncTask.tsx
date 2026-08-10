@@ -197,6 +197,12 @@ export function FundDisclosureSyncTask({
           <article key={run.id}>
             <header><strong>{run.trigger === "scheduled" ? "定时补充" : run.trigger === "retry" ? "失败重试" : "立即补充"}</strong><span className={`ros-pill ros-pill--${run.status === "failed" ? "risk" : "system"}`}>{run.status === "failed" ? "失败" : run.status === "queued" ? "等待执行" : "已完成"}</span></header>
             <small>基金 {run.fund_codes.join("、")} · 股票 {run.stock_codes.join("、") || "未绑定"} · {new Date(run.created_at).toLocaleString("zh-CN")}</small>
+            {run.events.filter((event) => event.stage === "provider_capability").map((event) => {
+              const payload = event.payload as Record<string, unknown>;
+              const tools = Array.isArray(payload.used_tools) ? payload.used_tools.join("、") : "未确认";
+              const fields = Array.isArray(payload.required_fields) ? payload.required_fields.join("、") : "未确认";
+              return <section className="ros-fund-sync__capability" key={`${event.seq}-capability`}><strong>本次数据能力与字段</strong><p>供应商：{String(payload.provider || "未确认")} · 已使用：{tools}</p><p>必需字段：{fields}</p><small>未验证能力不会被当作基金持仓、实时仓位或推荐：{Array.isArray(payload.unverified_capabilities) ? payload.unverified_capabilities.join("、") : "未确认"}</small></section>;
+            })}
             <ol>{run.events.map((event) => <li key={event.seq}><b>{event.stage}</b><span>{event.message}</span>{summaryText(event.payload) && <small>{summaryText(event.payload)}</small>}</li>)}</ol>
             {run.status === "failed" && <button className="ros-button ros-button--secondary" type="button" disabled={isBusy} onClick={() => void retry(run.id)}>按冻结范围重试</button>}
           </article>

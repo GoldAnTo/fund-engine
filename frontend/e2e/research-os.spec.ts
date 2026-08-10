@@ -44,6 +44,9 @@ test.describe("Event-first Research OS", () => {
     const record = page.getByRole("heading", { name: "本次补充记录" }).locator("..");
     await expect(record).toContainText("同基金、同报告期季报规则核验来源");
     await expect(record).toContainText("写入披露 1");
+    await expect(record).toContainText("本次数据能力与字段");
+    await expect(record).toContainText("已使用：FinQuery、AnnouncementData");
+    await expect(record).toContainText("未验证能力不会被当作基金持仓");
   });
 
   test("researcher can create a review-only candidate from one frozen paragraph", async ({ page }) => {

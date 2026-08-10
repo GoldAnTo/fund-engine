@@ -930,6 +930,9 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("本次补充记录")).toBeVisible();
     expect(await screen.findByText("已完成")).toBeVisible();
     expect(screen.getAllByText(/同基金、同报告期季报/).length).toBeGreaterThan(1);
+    expect(screen.getByText("本次数据能力与字段")).toBeVisible();
+    expect(screen.getByText(/已使用：FinQuery、AnnouncementData/)).toBeVisible();
+    expect(screen.getByText(/未验证能力不会被当作基金持仓/)).toBeVisible();
   });
 
   it("keeps historical forecast verification as an explicit human publication workflow", async () => {
