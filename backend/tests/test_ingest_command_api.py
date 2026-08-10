@@ -31,13 +31,15 @@ def fake_gildata(cmd_client):
 
 
 def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
-    from app.models.ledger import DocumentVersion, ValuationSnapshot
+    from app.models.ledger import DocumentVersion, ResearchCase, ValuationSnapshot
 
     seeded_vals = cmd_seeded.scalar(
         select(func.count()).select_from(ValuationSnapshot)
     )
 
-    resp = fake_gildata.post("/api/v1/documents/ingest", json={})
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    resp = fake_gildata.post("/api/v1/documents/ingest", json={"case_id": str(case.id)})
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["research_reports"] == 2
@@ -57,10 +59,15 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
 
 
 def test_ingest_is_idempotent_via_api(fake_gildata, cmd_seeded):
-    first = fake_gildata.post("/api/v1/documents/ingest", json={})
+    from app.models.ledger import ResearchCase
+
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    payload = {"case_id": str(case.id)}
+    first = fake_gildata.post("/api/v1/documents/ingest", json=payload)
     assert first.status_code == 201
 
-    second = fake_gildata.post("/api/v1/documents/ingest", json={})
+    second = fake_gildata.post("/api/v1/documents/ingest", json=payload)
     assert second.status_code == 201, second.text
     body = second.json()
     # Valuation guard: all three metrics skipped on the second run.
@@ -75,10 +82,42 @@ def test_ingest_unknown_case_returns_404(fake_gildata, cmd_seeded):
     assert resp.status_code == 404
 
 
+def test_ingest_requires_an_explicit_case(fake_gildata, cmd_seeded):
+    resp = fake_gildata.post("/api/v1/documents/ingest", json={})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "validation_failed"
+
+
+def test_ingest_cannot_attach_to_another_tenants_case(
+    fake_gildata, cmd_seeded, monkeypatch
+):
+    from app.models.ledger import ResearchCase
+
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"test-tenant-token":"test-team","other-tenant-token":"other-team"}',
+    )
+
+    response = fake_gildata.post(
+        "/api/v1/documents/ingest",
+        json={"case_id": str(case.id)},
+        headers={"Authorization": "Bearer other-tenant-token"},
+    )
+
+    assert response.status_code == 404
+
+
 def test_ingest_without_token_returns_503(cmd_client, cmd_seeded, monkeypatch):
     """No dependency override and no GILDATA_TOKEN -> 503 envelope."""
     monkeypatch.delenv("GILDATA_TOKEN", raising=False)
-    resp = cmd_client.post("/api/v1/documents/ingest", json={})
+    from app.models.ledger import ResearchCase
+
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+    resp = cmd_client.post("/api/v1/documents/ingest", json={"case_id": str(case.id)})
     assert resp.status_code == 503
     body = resp.json()
     assert body["error"]["code"] == "upstream_unavailable"

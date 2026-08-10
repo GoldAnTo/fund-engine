@@ -7,6 +7,7 @@ canned ``call_tool`` text strings.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
@@ -339,6 +340,28 @@ def test_ingest_freezes_documents_and_valuations(session):
     stock = session.scalar(select(Stock).where(Stock.code == "688256.SH"))
     assert stock is not None
     assert stock.name == "寒武纪"
+
+
+def test_ingest_without_case_does_not_adopt_the_first_global_case(session):
+    from sqlalchemy import select
+
+    from app.models.ledger import CaseDocumentVersion, ResearchCase
+    from app.scripts.ingest_real_data import ingest
+
+    session.add(
+        ResearchCase(
+            title="不应被自动归入的 Case",
+            industry_topic="test",
+            created_by="test",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
+
+    summary = ingest(session, _make_client())
+
+    assert summary["case_id"] is None
+    assert list(session.scalars(select(CaseDocumentVersion))) == []
 
 
 def test_ingest_is_idempotent(session):

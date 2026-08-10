@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.datasources.gildata import adapters
 from app.datasources.gildata.client import GildataMCPClient
 from app.env import load_local_env
-from app.models.ledger import Base, ResearchCase, Stock, ValuationSnapshot
+from app.models.ledger import Base, Stock, ValuationSnapshot
 from app.repositories.documents import DocumentRepository
 from app.repositories.instruments import InstrumentRepository
 from app.services.ingest import DocumentService
@@ -197,13 +197,14 @@ def _valuation_exists(
 
 
 def _resolve_case_id(session: Session, case_id: uuid.UUID | None) -> uuid.UUID | None:
-    """Return the explicit case id, else the first ResearchCase, else None."""
-    if case_id is not None:
-        return case_id
-    first = session.scalar(
-        select(ResearchCase).order_by(ResearchCase.created_at).limit(1)
-    )
-    return first.id if first is not None else None
+    """Return only the explicitly selected Case.
+
+    Frozen provider material must never be silently attached to whichever Case
+    happens to be first in a shared ledger.  Callers that want Case-scoped
+    ingestion must supply the ID after their own tenant access check.
+    """
+    del session
+    return case_id
 
 
 def ingest(
@@ -494,17 +495,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--case-id",
-        default=None,
-        help="optional ResearchCase UUID to tag ingested spans against "
-        "(defaults to the first existing case)",
+        required=True,
+        help="ResearchCase UUID to tag ingested spans against; this must be "
+        "explicit so a shared ledger never adopts a global default Case.",
     )
     args = parser.parse_args()
 
     load_local_env()  # backend/.env (gitignored); shell env still wins
 
-    case_id: uuid.UUID | None = None
-    if args.case_id:
-        case_id = uuid.UUID(args.case_id)
+    case_id = uuid.UUID(args.case_id)
 
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_seed.db")
     engine = create_engine(url, future=True)

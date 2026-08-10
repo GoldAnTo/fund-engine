@@ -349,12 +349,12 @@ class ProposeResponse(V1Model):
 class IngestRequest(V1Model):
     """Trigger a Gildata ingest run.
 
-    All fields optional: omitted queries fall back to the AI-compute
-    defaults.  ``case_id`` tags ingested span locators against a case;
-    when omitted the first existing case is used (or none).
+    Query fields are optional and fall back to the AI-compute defaults.
+    ``case_id`` is required: an ingest may attach frozen provider material only
+    to the current tenant's explicitly selected Case.
     """
 
-    case_id: str | None = None
+    case_id: str
     research_queries: list[str] | None = None
     announcement_query: str | None = None
     news_query: str | None = None

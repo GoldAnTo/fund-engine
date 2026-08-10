@@ -2248,15 +2248,33 @@
         ],
         "summary": "Ingest Documents",
         "operationId": "ingest_documents_api_v1_documents_ingest_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/IngestRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
@@ -13924,14 +13942,7 @@
       "IngestRequest": {
         "properties": {
           "case_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Case Id"
           },
           "research_queries": {
@@ -14009,8 +14020,11 @@
         },
         "additionalProperties": false,
         "type": "object",
+        "required": [
+          "case_id"
+        ],
         "title": "IngestRequest",
-        "description": "Trigger a Gildata ingest run.\n\nAll fields optional: omitted queries fall back to the AI-compute\ndefaults.  ``case_id`` tags ingested span locators against a case;\nwhen omitted the first existing case is used (or none)."
+        "description": "Trigger a Gildata ingest run.\n\nQuery fields are optional and fall back to the AI-compute defaults.\n``case_id`` is required: an ingest may attach frozen provider material only\nto the current tenant's explicitly selected Case."
       },
       "IngestResponse": {
         "properties": {

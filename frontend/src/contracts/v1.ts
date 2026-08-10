@@ -4187,13 +4187,13 @@ export interface components {
          * IngestRequest
          * @description Trigger a Gildata ingest run.
          *
-         *     All fields optional: omitted queries fall back to the AI-compute
-         *     defaults.  ``case_id`` tags ingested span locators against a case;
-         *     when omitted the first existing case is used (or none).
+         *     Query fields are optional and fall back to the AI-compute defaults.
+         *     ``case_id`` is required: an ingest may attach frozen provider material only
+         *     to the current tenant's explicitly selected Case.
          */
         IngestRequest: {
             /** Case Id */
-            case_id?: string | null;
+            case_id: string;
             /** Research Queries */
             research_queries?: string[] | null;
             /** Announcement Query */
@@ -7999,7 +7999,9 @@ export interface operations {
     ingest_documents_api_v1_documents_ingest_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

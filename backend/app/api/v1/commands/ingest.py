@@ -23,6 +23,8 @@ from app.errors import NotFoundError, UpstreamUnavailableError
 from app.models.ledger import ResearchCase
 from app.schemas.v1.commands import IngestRequest, IngestResponse
 from app.scripts.ingest_real_data import ingest
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
 
 router = APIRouter(prefix="/documents", tags=["ingest-commands-v1"])
 
@@ -48,15 +50,15 @@ def ingest_documents(
     payload: IngestRequest,
     db: Session = Depends(get_db),
     client: GildataMCPClient = Depends(get_gildata_client),
+    tenant_id: str = Depends(require_research_tenant),
 ):
-    case_id: uuid.UUID | None = None
-    if payload.case_id is not None:
-        try:
-            case_id = uuid.UUID(payload.case_id)
-        except ValueError as exc:
-            raise NotFoundError(f"case {payload.case_id} not found") from exc
-        if db.get(ResearchCase, case_id) is None:
-            raise NotFoundError(f"case {payload.case_id} not found")
+    try:
+        case_id = uuid.UUID(payload.case_id)
+    except ValueError as exc:
+        raise NotFoundError(f"case {payload.case_id} not found") from exc
+    if db.get(ResearchCase, case_id) is None:
+        raise NotFoundError(f"case {payload.case_id} not found")
+    CaseTenantAccess(db).require_case(case_id, tenant_id)
     try:
         summary = ingest(
             db,
