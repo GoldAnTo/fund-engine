@@ -1663,9 +1663,10 @@ async function assertCaseWorkbenchProductContract(page, marker) {
   assert.doesNotMatch(await factorRegion.innerText(), /candidate|under_review|key_factor|confidence|置信度|成熟度|评分|得分/iu, "factor comparison must not expose raw enums or synthetic scoring");
 
   const mechanism = marker.locator("[data-factor-detail]");
-  for (const label of ["机制", "直接证据", "反例", "替代解释", "影响对象", "适用范围", "证伪条件"]) {
+  for (const label of ["机制", "直接证据", "反例", "替代解释", "适用范围", "证伪条件"]) {
     assert.ok((await mechanism.innerText()).includes(label), `selected factor explanation must include ${label}`);
   }
+  assert.doesNotMatch(await mechanism.innerText(), /影响对象/u, "selected factor explanation must not expose the retired impact object field");
 
   const citations = marker.locator("[data-source-citation]");
   assert.equal(await marker.locator('[data-source-citation][data-evidence-role="support"]').count(), 2, "source list must expose two explicit support relations");

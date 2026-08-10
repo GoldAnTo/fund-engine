@@ -2083,7 +2083,6 @@
       ["直接证据", detail.directEvidence],
       ["反例", detail.counterexample],
       ["替代解释", detail.alternatives],
-      ["影响对象", detail.impactObject],
       ["适用范围", detail.scope],
       ["证伪条件", detail.falsifier],
     ];
