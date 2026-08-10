@@ -31,6 +31,9 @@ test.describe("Event-first Research OS", () => {
 
     await expect(page.getByRole("heading", { name: "建议补充的基金披露" })).toBeVisible();
     await expect(page.getByLabel("建议基金：演示成长基金（000001）")).toBeChecked();
+    await expect(
+      page.getByLabel("允许在当前 Case 展示匹配季报来源"),
+    ).toHaveCount(0);
     await page.getByLabel("补充频率").selectOption("monthly");
     await page.getByLabel("配置调整理由").fill("按月补充当前股票相关的基金季报披露");
     await page.getByRole("button", { name: "保存基金披露配置" }).click();

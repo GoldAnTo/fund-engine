@@ -35,7 +35,6 @@ export function FundDisclosureSyncTask({
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [manualCodes, setManualCodes] = useState("");
   const [frequency, setFrequency] = useState<"weekly" | "monthly">("monthly");
-  const [allowDisplay, setAllowDisplay] = useState(true);
   const [reason, setReason] = useState("");
   const [state, setState] = useState<"loading" | "saving" | "running" | "idle">("loading");
   const [notice, setNotice] = useState<string | null>(null);
@@ -59,7 +58,6 @@ export function FundDisclosureSyncTask({
       const configured = next.effective_config;
       setSelectedCodes(configured?.fund_codes ?? next.suggestions.map((item) => item.fund_code));
       setFrequency(configured?.frequency ?? "monthly");
-      setAllowDisplay(configured?.allow_display ?? true);
     } catch {
       if (sequence !== reloadSequence.current) return;
       setError("暂时无法读取基金披露补充记录。不会以空白记录替代，请重试读取。");
@@ -103,7 +101,7 @@ export function FundDisclosureSyncTask({
         actor: "human:researcher",
         fund_codes: fundCodes,
         frequency,
-        allow_display: allowDisplay,
+        allow_display: true,
         change_reason: reason.trim(),
       });
       setNotice(`已保存配置版本 ${config.version}，后续运行将冻结这组基金与股票范围。`);
@@ -186,7 +184,6 @@ export function FundDisclosureSyncTask({
       <div className="ros-fund-sync__config">
         <label>手动补充基金代码<textarea value={manualCodes} onChange={(event) => setManualCodes(event.target.value)} placeholder="例如 005827, 110011" /></label>
         <label>补充频率<select value={frequency} onChange={(event) => setFrequency(event.target.value as "weekly" | "monthly")}><option value="weekly">每周一 09:00</option><option value="monthly">每月首日 09:00</option></select></label>
-        <label className="ros-fund-sync__permission"><input type="checkbox" checked={allowDisplay} onChange={(event) => setAllowDisplay(event.target.checked)} /> 允许在当前 Case 展示匹配季报来源</label>
         <label>配置调整理由<textarea aria-label="配置调整理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何增减基金或调整周期" /></label>
         <div className="ros-fund-sync__actions"><button className="ros-button ros-button--secondary" type="button" disabled={isBusy} onClick={() => void save()}>{state === "saving" ? "正在保存配置…" : "保存基金披露配置"}</button><button className="ros-button ros-button--primary" type="button" disabled={isBusy || !detail.effective_config} onClick={() => void start()}>{state === "running" ? "正在补充…" : "立即补充一次"}</button></div>
       </div>
