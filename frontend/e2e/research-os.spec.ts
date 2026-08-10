@@ -184,6 +184,18 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
   });
 
+  test("narrow screens keep the active-run action as a readable touch target", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/events/event-tsm/documents?document=doc-event-tsm-q2&client=mock");
+
+    const action = page.getByRole("button", { name: "展开运行详情" });
+    await expect(action).toBeVisible();
+    const box = await action.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(84);
+    expect(box!.height).toBeLessThanOrEqual(48);
+  });
+
   test("event intake keeps the scope confirmation unavailable until the source is read", async ({ page }) => {
     await page.goto("/events/new?client=mock");
 

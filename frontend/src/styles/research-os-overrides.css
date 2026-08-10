@@ -115,6 +115,12 @@
 .ros-inline-form label { display: grid; gap: .35rem; color: var(--ros-soft, #59615d); font-size: .76rem; }
 .ros-inline-form textarea, .ros-inline-form select { width: 100%; border: 1px solid var(--ros-strong, #c9c3b8); border-radius: .3rem; background: var(--ros-surface, #fff); color: var(--ros-ink, #202520); padding: .5rem; font: inherit; }
 .ros-inline-form textarea { min-height: 5rem; resize: vertical; }
+.ros-run-strip__actions { display: flex; flex: 0 0 auto; align-items: center; gap: .65rem; }
+.ros-run-strip__actions button { min-height: 34px; white-space: nowrap; }
+@media (max-width: 720px) {
+  .ros-run-strip { align-items: flex-start; }
+  .ros-run-strip__actions button { min-width: 84px; min-height: 44px; }
+}
 
 /* Historical Case admission is an operations decision, not a dashboard. The
    source choice and the written rationale share one working surface so the
