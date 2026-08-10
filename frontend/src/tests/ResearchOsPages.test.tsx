@@ -929,6 +929,38 @@ describe("Research OS event entry", () => {
     expect(screen.getAllByText(/同基金、同报告期季报/).length).toBeGreaterThan(1);
   });
 
+  it("keeps historical forecast verification as an explicit human publication workflow", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "历史预测验证" });
+    await user.click(screen.getByRole("button", { name: "登记历史预测验证" }));
+    expect(await screen.findByLabelText("冻结预测值")).toBeVisible();
+    expect(screen.getByText(/机器只会生成候选/)).toBeVisible();
+    await user.type(screen.getByLabelText("冻结预测值"), "100");
+    await user.type(screen.getByLabelText("实体标识"), "TSM");
+    await user.type(screen.getByLabelText("单位"), "%");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "已核对研报表格、原文定位和期间口径。");
+    await user.click(screen.getByRole("button", { name: "冻结预测目标" }));
+    expect(await screen.findByText(/已冻结预测目标/)).toBeVisible();
+    await user.type(screen.getByLabelText("后续实际值"), "80");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "年报实际值与预测的实体、单位和期间一致。");
+    await user.click(screen.getByRole("button", { name: "冻结后续实际值" }));
+    expect(await screen.findByText(/已冻结后续实际值/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "生成机器候选" }));
+    expect(await screen.findByText(/机器候选：出现反证/)).toBeVisible();
+    await user.type(screen.getByLabelText("人工裁决理由"), "确认实际值未达到冻结预测。 ");
+    await user.click(screen.getByRole("button", { name: "发布人工裁决" }));
+    expect(await screen.findByText(/已追加人工发布裁决/)).toBeVisible();
+  });
+
   it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));

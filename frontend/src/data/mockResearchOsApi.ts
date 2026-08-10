@@ -212,6 +212,10 @@ export class MockResearchOsApi implements ResearchOsApi {
   >();
   private fundDisclosureSyncConfigs = new Map<string, FundDisclosureSyncConfig[]>();
   private fundDisclosureSyncRuns = new Map<string, FundDisclosureSyncRun[]>();
+  private forecastTargets = new Map<string, Schemas["ForecastTargetDTO"]>();
+  private forecastActuals = new Map<string, Schemas["ActualMetricObservationDTO"]>();
+  private forecastCandidates = new Map<string, Schemas["ForecastEvaluationCandidateDTO"]>();
+  private forecastVerdictRecords = new Map<string, Schemas["ForecastVerdictDTO"]>();
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
@@ -1006,8 +1010,93 @@ export class MockResearchOsApi implements ResearchOsApi {
           forecast_source: source,
           actual_source: actualSource,
         },
+        ...Array.from(this.forecastVerdictRecords.values()).filter((item) => item.target.case_id === caseId),
       ],
     } satisfies ForecastVerdictHistory;
+  }
+
+  async createForecastTarget(
+    caseId: string,
+    input: Parameters<ResearchOsApi["createForecastTarget"]>[1],
+  ): ReturnType<ResearchOsApi["createForecastTarget"]> {
+    const id = `forecast-target-${Date.now()}`;
+    const record: Schemas["ForecastTargetDTO"] = {
+      id, case_id: caseId, key_factor_id: input.key_factor_id,
+      report_claim_id: input.report_claim_id, metric_name: input.metric_name,
+      entity_key: input.entity_key, baseline_value: input.baseline_value ?? null,
+      expected_value: input.expected_value, unit: input.unit,
+      forecast_period_start: input.forecast_period_start, forecast_period_end: input.forecast_period_end,
+      comparator: input.comparator, relative_tolerance: input.relative_tolerance ?? null,
+      reviewed_by: input.reviewed_by, review_reason: input.review_reason, reviewed_at: now,
+      forecast_source: source, baseline_source: input.baseline_source_statement_id ? source : null,
+    };
+    this.forecastTargets.set(id, record);
+    return record;
+  }
+
+  async recordActualMetricObservation(
+    _caseId: string,
+    input: Parameters<ResearchOsApi["recordActualMetricObservation"]>[1],
+  ): ReturnType<ResearchOsApi["recordActualMetricObservation"]> {
+    const id = `forecast-actual-${Date.now()}`;
+    const record: Schemas["ActualMetricObservationDTO"] = {
+      id, forecast_target_id: input.forecast_target_id, entity_key: input.entity_key,
+      observed_value: input.observed_value, unit: input.unit,
+      observed_period_start: input.observed_period_start, observed_period_end: input.observed_period_end,
+      available_at: input.available_at, recorded_by: input.recorded_by,
+      record_reason: input.record_reason, source,
+    };
+    this.forecastActuals.set(id, record);
+    return record;
+  }
+
+  async evaluateForecastTarget(
+    targetId: string,
+    input: Parameters<ResearchOsApi["evaluateForecastTarget"]>[1],
+  ): ReturnType<ResearchOsApi["evaluateForecastTarget"]> {
+    const target = this.forecastTargets.get(targetId);
+    const actual = this.forecastActuals.get(input.actual_observation_id);
+    if (!target || !actual) throw new Error("forecast target or actual not found");
+    const delta = Math.abs(actual.observed_value - target.expected_value);
+    const withinTolerance = target.relative_tolerance !== null
+      && target.expected_value !== 0
+      && delta <= Math.abs(target.expected_value) * target.relative_tolerance;
+    const outcome = target.comparator === "at_least"
+      ? actual.observed_value >= target.expected_value ? "supported" : "contradicted"
+      : target.comparator === "at_most"
+        ? actual.observed_value <= target.expected_value ? "supported" : "contradicted"
+        : withinTolerance ? "supported" : "contradicted";
+    const record: Schemas["ForecastEvaluationCandidateDTO"] = {
+      id: `forecast-candidate-${Date.now()}`, forecast_target_id: targetId,
+      actual_observation_id: actual.id, cutoff: input.cutoff, outcome,
+      rule_version: "forecast-numeric-v1",
+      inputs: { expected_value: String(target.expected_value), actual_value: String(actual.observed_value), comparator: target.comparator, relative_tolerance: String(target.relative_tolerance ?? "") },
+      rationale: outcome === "supported" ? "实际值满足冻结的数值比较规则。" : "实际值不满足冻结的数值比较规则。",
+      review_state: "machine_generated", created_at: now,
+    };
+    this.forecastCandidates.set(record.id, record);
+    return record;
+  }
+
+  async createForecastVerdict(
+    candidateId: string,
+    input: Parameters<ResearchOsApi["createForecastVerdict"]>[1],
+  ): ReturnType<ResearchOsApi["createForecastVerdict"]> {
+    const candidate = this.forecastCandidates.get(candidateId);
+    const target = candidate ? this.forecastTargets.get(candidate.forecast_target_id) : undefined;
+    const actual = candidate ? this.forecastActuals.get(candidate.actual_observation_id) : undefined;
+    if (!candidate || !target || !actual) throw new Error("forecast candidate not found");
+    const record: Schemas["ForecastVerdictDTO"] = {
+      id: `forecast-verdict-${Date.now()}`, candidate_id: candidateId,
+      supersedes_id: input.supersedes_id ?? null, decision: input.decision,
+      outcome: input.decision === "modified" ? input.outcome ?? candidate.outcome : candidate.outcome,
+      reason: input.reason, reviewed_by: input.reviewed_by, reviewed_at: now,
+      target, actual, rule_version: candidate.rule_version, inputs: candidate.inputs,
+      candidate_rationale: candidate.rationale,
+      forecast_source: target.forecast_source, actual_source: actual.source,
+    };
+    this.forecastVerdictRecords.set(record.id, record);
+    return record;
   }
 
   async saveFundDisclosureSync(

@@ -94,6 +94,28 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("status")).toContainText("已追加已审核市场观测");
   });
 
+  test("market expression publishes a historical forecast only after a human review step", async ({ page }) => {
+    await page.goto("/events/event-tsm/market?client=mock");
+
+    await page.getByRole("button", { name: "登记历史预测验证" }).click();
+    await page.getByLabel("冻结预测值").fill("100");
+    await page.getByLabel("实体标识").fill("TSM");
+    await page.getByLabel("单位").fill("%");
+    await page.getByLabel("本阶段审核理由").fill("已回到冻结研报原文核对数值、单位与期间。");
+    await page.getByRole("button", { name: "冻结预测目标" }).click();
+    await expect(page.getByRole("status")).toContainText("已冻结预测目标");
+
+    await page.getByRole("textbox", { name: "后续实际值" }).fill("80");
+    await page.getByLabel("本阶段审核理由").fill("已回到年报原文核对实际值的口径与可得时间。");
+    await page.getByRole("button", { name: "冻结后续实际值" }).click();
+    await page.getByRole("button", { name: "生成机器候选" }).click();
+    await expect(page.getByText(/机器候选：出现反证/)).toBeVisible();
+
+    await page.getByLabel("人工裁决理由").fill("研究员确认：实际值未达到冻结预测。 ");
+    await page.getByRole("button", { name: "发布人工裁决" }).click();
+    await expect(page.getByRole("status")).toContainText("已追加人工发布裁决");
+  });
+
   test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {
     await page.goto("/workspace?client=mock");
 

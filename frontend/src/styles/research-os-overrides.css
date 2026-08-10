@@ -390,6 +390,15 @@
 .ros-forecast-verdict summary { color: var(--ros-ink); cursor: pointer; font-weight: 700; }
 .ros-forecast-verdict details p { margin: .38rem 0 0; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .ros-forecast-verdict dl { grid-template-columns: 1fr; } }
+.ros-forecast-workflow { display: grid; gap: .5rem; margin: 1rem 0; padding: .85rem 0; border-bottom: 1px solid var(--ros-rule); }
+.ros-forecast-workflow h3 { margin: -.22rem 0 0; font-size: .94rem; }
+.ros-forecast-workflow > p:not(.ros-eyebrow) { margin: 0; color: var(--ros-soft); font-size: .72rem; line-height: 1.5; }
+.ros-forecast-workflow__body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem .7rem; padding: .75rem; border: 1px solid var(--ros-strong); border-radius: .42rem; background: var(--ros-deep); }
+.ros-forecast-workflow__body > p, .ros-forecast-workflow__body > button, .ros-forecast-workflow__body > label:last-of-type { grid-column: 1 / -1; }
+.ros-forecast-workflow__body label { display: grid; gap: .25rem; color: var(--ros-soft); font-size: .68rem; }
+.ros-forecast-workflow__body input, .ros-forecast-workflow__body select, .ros-forecast-workflow__body textarea { width: 100%; min-width: 0; padding: .42rem .5rem; border: 1px solid var(--ros-strong); border-radius: .32rem; background: var(--ros-surface); color: var(--ros-ink); font: inherit; }
+.ros-forecast-workflow__body textarea { min-height: 3.6rem; resize: vertical; }
+@media (max-width: 720px) { .ros-forecast-workflow__body { grid-template-columns: 1fr; } }
 
 .ros-fund-sync { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--ros-rule); container-type: inline-size; }
 .ros-fund-sync h3 { margin: 0; font-size: 15px; }

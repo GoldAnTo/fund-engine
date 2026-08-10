@@ -557,6 +557,12 @@ export function MarketExpressionContent({
             caseId={caseId}
             verdicts={selectedForecastVerdicts}
           />
+          <ForecastVerificationWorkflow
+            caseId={caseId}
+            factor={selectedFactor}
+            claim={selectedClaim}
+            onPublished={() => void reloadExpression()}
+          />
           {relatedFunds.length ? (
             relatedFunds.map((fund) => {
               const disclosedExposure = fund.disclosed_exposure;
@@ -694,6 +700,154 @@ function ForecastVerdictPanel({
             </article>
           );
         })
+      )}
+    </section>
+  );
+}
+
+function ForecastVerificationWorkflow({
+  caseId,
+  factor,
+  claim,
+  onPublished,
+}: {
+  caseId: string;
+  factor: MarketExpression["factors"][number] | null;
+  claim: MarketExpression["claims"][number] | null;
+  onPublished: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sources, setSources] = useState<SourceStatementOptions["items"]>([]);
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [actualId, setActualId] = useState<string | null>(null);
+  const [candidate, setCandidate] = useState<Awaited<ReturnType<typeof researchOsApi.evaluateForecastTarget>> | null>(null);
+  const [expectedValue, setExpectedValue] = useState("");
+  const [baselineValue, setBaselineValue] = useState("");
+  const [entityKey, setEntityKey] = useState("");
+  const [unit, setUnit] = useState("");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
+  const [comparator, setComparator] = useState<"at_least" | "at_most" | "within_tolerance">("within_tolerance");
+  const [tolerance, setTolerance] = useState("0.1");
+  const [actualSourceId, setActualSourceId] = useState("");
+  const [actualValue, setActualValue] = useState("");
+  const [decision, setDecision] = useState<"confirmed" | "modified" | "rejected">("confirmed");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function begin() {
+    setOpen(true);
+    setMessage(null);
+    if (!factor || !claim) return;
+    setExpectedValue("");
+    setBaselineValue("");
+    setEntityKey("");
+    setUnit("");
+    setPeriodStart(factor.verification_window_start ?? "");
+    setPeriodEnd(factor.verification_window_end ?? "");
+    try {
+      const options = await researchOsApi.sourceStatements(caseId);
+      setSources(options.items);
+      setActualSourceId(options.items.find((item) => item.id !== claim.source.source_statement_id)?.id ?? options.items[0]?.id ?? "");
+    } catch {
+      setMessage("无法读取当前 Case 已准入的冻结原文，不能用摘要或行情替代实际值来源。");
+    }
+  }
+
+  async function saveTarget() {
+    if (!factor || !claim || !claim.source.source_statement_id || !expectedValue || !entityKey || !unit || !periodStart || !periodEnd || !reason.trim()) return;
+    setBusy(true); setMessage(null);
+    try {
+      const target = await researchOsApi.createForecastTarget(caseId, {
+        key_factor_id: factor.id, report_claim_id: claim.id,
+        forecast_source_statement_id: claim.source.source_statement_id,
+        metric_name: factor.metric_name, entity_key: entityKey.trim(),
+        baseline_value: baselineValue ? Number(baselineValue) : null,
+        expected_value: Number(expectedValue), unit: unit.trim(),
+        forecast_period_start: periodStart, forecast_period_end: periodEnd,
+        comparator, relative_tolerance: comparator === "within_tolerance" ? Number(tolerance) : null,
+        reviewed_by: "human:researcher", review_reason: reason.trim(),
+      });
+      setTargetId(target.id); setReason("");
+      setMessage("已冻结预测目标。接下来需要录入同实体、同单位、同期间的后续实际值。");
+    } catch { setMessage("预测目标未登记。请核对主张、因素、原文、期间、数值和审核理由。"); }
+    finally { setBusy(false); }
+  }
+
+  async function saveActual() {
+    const actualSource = sources.find((item) => item.id === actualSourceId);
+    if (!targetId || !actualSource || !actualValue || !entityKey || !unit || !periodStart || !periodEnd || !reason.trim()) return;
+    setBusy(true); setMessage(null);
+    try {
+      const actual = await researchOsApi.recordActualMetricObservation(caseId, {
+        forecast_target_id: targetId, source_statement_id: actualSource.id,
+        entity_key: entityKey.trim(), observed_value: Number(actualValue), unit: unit.trim(),
+        observed_period_start: periodStart, observed_period_end: periodEnd,
+        available_at: actualSource.available_at, recorded_by: "human:researcher", record_reason: reason.trim(),
+      });
+      setActualId(actual.id); setReason("");
+      setMessage("已冻结后续实际值。它尚未是研究结论，需要先生成机器候选。");
+    } catch { setMessage("实际值未登记。它必须与冻结预测的实体、单位、期间和可得时间精确匹配。"); }
+    finally { setBusy(false); }
+  }
+
+  async function evaluate() {
+    if (!targetId || !actualId) return;
+    setBusy(true); setMessage(null);
+    try {
+      const next = await researchOsApi.evaluateForecastTarget(targetId, { actual_observation_id: actualId, cutoff: new Date().toISOString() });
+      setCandidate(next); setMessage(`已生成${verificationLabels[next.outcome] ?? next.outcome}候选；仍须人工发布。`);
+    } catch { setMessage("无法生成候选。系统没有改写任何已冻结记录。"); }
+    finally { setBusy(false); }
+  }
+
+  async function publish() {
+    if (!candidate || !reason.trim()) return;
+    setBusy(true); setMessage(null);
+    try {
+      await researchOsApi.createForecastVerdict(candidate.id, {
+        decision,
+        outcome: decision === "modified"
+          ? candidate.outcome as "supported" | "contradicted" | "insufficient_evidence" | "not_due"
+          : null,
+        reason: reason.trim(), reviewed_by: "human:researcher",
+      });
+      setMessage(decision === "rejected" ? "已记录否决，候选不会作为正式结论展示。" : "已追加人工发布裁决；历史预测验证将更新。 ");
+      onPublished();
+    } catch { setMessage("裁决未发布。请记录明确的人工作出理由。 "); }
+    finally { setBusy(false); }
+  }
+
+  if (!factor || !claim) return null;
+  return (
+    <section className="ros-forecast-workflow">
+      <p className="ros-eyebrow">人工操作 · 追加式账本</p>
+      <h3>登记历史预测验证</h3>
+      <p>机器只会生成候选；只有人工确认或修订才会进入上方的历史预测验证。</p>
+      {!open ? <button className="ros-button ros-button--secondary" type="button" onClick={() => void begin()}>登记历史预测验证</button> : (
+        <div className="ros-forecast-workflow__body">
+          <p>当前因素：{factor.metric_name} · 上游主张已审核。每一阶段都写入独立不可变记录。</p>
+          {!targetId && <>
+            <label>冻结预测值<input aria-label="冻结预测值" inputMode="decimal" value={expectedValue} onChange={(event) => setExpectedValue(event.target.value)} /></label>
+            <label>预测基线（可选）<input inputMode="decimal" value={baselineValue} onChange={(event) => setBaselineValue(event.target.value)} /></label>
+            <label>实体标识<input value={entityKey} onChange={(event) => setEntityKey(event.target.value)} placeholder="例如 300894.SZ" /></label>
+            <label>单位<input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="例如 CNY、%" /></label>
+            <label>预测期间开始<input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label>
+            <label>预测期间结束<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label>
+            <label>比较规则<select value={comparator} onChange={(event) => setComparator(event.target.value as typeof comparator)}><option value="within_tolerance">容差内</option><option value="at_least">不低于预测</option><option value="at_most">不高于预测</option></select></label>
+            {comparator === "within_tolerance" && <label>相对容差<input inputMode="decimal" value={tolerance} onChange={(event) => setTolerance(event.target.value)} /></label>}
+          </>}
+          {targetId && !actualId && <>
+            <label>后续实际值来源<select value={actualSourceId} onChange={(event) => setActualSourceId(event.target.value)}>{sources.map((item) => <option value={item.id} key={item.id}>{item.document_title} · {JSON.stringify(item.locator)}</option>)}</select></label>
+            <label>后续实际值<input inputMode="decimal" value={actualValue} onChange={(event) => setActualValue(event.target.value)} /></label>
+          </>}
+          {candidate && <p className="ros-market-warning">机器候选：{verificationLabels[candidate.outcome] ?? candidate.outcome} · {candidate.rationale}</p>}
+          {candidate && <label>发布方式<select value={decision} onChange={(event) => setDecision(event.target.value as typeof decision)}><option value="confirmed">确认候选</option><option value="modified">修订结果</option><option value="rejected">否决候选</option></select></label>}
+          <label>{candidate ? "人工裁决理由" : "本阶段审核理由"}<textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明数值、口径、来源定位或人工判断" /></label>
+          {!targetId ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void saveTarget()}>冻结预测目标</button> : !actualId ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void saveActual()}>冻结后续实际值</button> : !candidate ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void evaluate()}>生成机器候选</button> : <button className="ros-button ros-button--primary" type="button" disabled={busy} onClick={() => void publish()}>发布人工裁决</button>}
+          {message && <p className="ros-note" role="status">{message}</p>}
+        </div>
       )}
     </section>
   );
