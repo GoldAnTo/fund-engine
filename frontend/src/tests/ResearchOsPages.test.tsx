@@ -1014,7 +1014,7 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("juyuan-research-v4")).toBeVisible();
   });
 
-  it("reads a published-Case text upload as a snapshot without calling it the original file", async () => {
+  it("freezes a published-Case text upload as an original before the human decision", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter initialEntries={["/events/event-published/documents"]}>
@@ -1035,7 +1035,7 @@ describe("Research OS event entry", () => {
       "uploaded_file",
     );
     await user.upload(
-      screen.getByLabelText("上传新增材料正文文件"),
+      screen.getByLabelText("上传新增材料原件"),
       new File(["公司补充披露订单交付节奏。"], "published-note.txt", {
         type: "text/plain",
       }),
@@ -1046,7 +1046,45 @@ describe("Research OS event entry", () => {
         "公司补充披露订单交付节奏。",
       ),
     );
-    expect(screen.getByText(/只读取并冻结文本正文快照/)).toBeVisible();
+    expect(screen.getByText(/冻结原始 PDF、TXT、Markdown 或 CSV/)).toBeVisible();
+  });
+
+  it("does not invent PDF text before a published-Case original is frozen", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const decide = vi.spyOn(adapter, "decidePublishedUploadedMaterial");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-published/documents"]}>
+        <Routes>
+          <Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "新材料是否需要改变复核范围？" });
+    await user.selectOptions(screen.getByLabelText("新增材料来源接入方式"), "uploaded_file");
+    await user.upload(
+      screen.getByLabelText("上传新增材料原件"),
+      new File(["%PDF-not-a-real-pdf"], "late-report.pdf", { type: "application/pdf" }),
+    );
+    expect(screen.getByText(/PDF 原件将由服务端冻结并解析/)).toBeVisible();
+    expect(screen.getByLabelText("新增材料正文")).toHaveValue("");
+    expect(screen.getByLabelText("已发布结论与新材料对照")).toHaveTextContent("late-report.pdf");
+    expect(screen.getByLabelText("已发布结论与新材料对照")).toHaveTextContent("本页不伪造正文预览");
+
+    await user.type(screen.getByPlaceholderText("https://…"), "https://provider.example/report/42");
+    await user.type(screen.getByLabelText("新材料决定理由"), "解析结果不改变当前人工判断。");
+    await user.click(screen.getByRole("button", { name: "冻结材料并纳入重新复核" }));
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith(expect.objectContaining({
+        file: expect.objectContaining({ name: "late-report.pdf", type: "application/pdf" }),
+        sourceMetadata: expect.objectContaining({
+          retrieval_reference: "https://provider.example/report/42",
+        }),
+      })),
+    );
+    expect(await screen.findByText(/解析尚未完成；未创建后继运行/)).toBeVisible();
   });
 
   it("keeps the research question and three factors editable before a Case is created", async () => {

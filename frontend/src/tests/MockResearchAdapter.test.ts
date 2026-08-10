@@ -153,6 +153,37 @@ describe("MockResearchAdapter scenarios", () => {
     ).rejects.toThrow("source contract does not permit research");
   });
 
+  it("preserves a published PDF original without fabricating parsed spans", async () => {
+    const adapter = new MockResearchAdapter();
+    const decision = await adapter.decidePublishedUploadedMaterial({
+      caseId: "event-published",
+      file: new File(["%PDF-not-a-real-pdf"], "late-report.pdf", {
+        type: "application/pdf",
+      }),
+      sourceMetadata: { retention_policy: "case_retained" },
+      decision: "reopen",
+      reason: "原件解析失败，仍需保留以便后续补充。",
+      actor: "human:researcher",
+    });
+
+    expect(decision).toMatchObject({
+      decision: "reopen",
+      recoveryRequired: true,
+      runId: null,
+      lifecycle: { status: "published" },
+    });
+    const detail = await adapter.getDocumentDetail(decision.documentVersionId);
+    expect(detail.document).toMatchObject({
+      parse_quality: "failed",
+      original_file: {
+        file_name: "late-report.pdf",
+        mime_type: "application/pdf",
+        retention_policy: "case_retained",
+      },
+    });
+    expect(detail.spans).toEqual([]);
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);

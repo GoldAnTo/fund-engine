@@ -1361,6 +1361,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/{case_id}/published-uploaded-material-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Published Uploaded Material */
+        post: operations["decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/monitor": {
         parameters: {
             query?: never;
@@ -2102,6 +2119,25 @@ export interface components {
              * @enum {string}
              */
             source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
+        };
+        /** Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post */
+        Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post: {
+            /** File */
+            file: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "reopen" | "no_change";
+            /** Reason */
+            reason: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Source Metadata
+             * @default {}
+             */
+            source_metadata: string;
         };
         /** Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post */
         Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
@@ -5112,6 +5148,11 @@ export interface components {
             decision_event_id: string;
             /** Run Id */
             run_id?: string | null;
+            /**
+             * Recovery Required
+             * @default false
+             */
+            recovery_required: boolean;
             lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
         };
         /** PublishedSourceStatementDTO */
@@ -9596,6 +9637,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PublishedMaterialDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedMaterialDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post"];
             };
         };
         responses: {

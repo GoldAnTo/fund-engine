@@ -401,6 +401,7 @@ class PublishedMaterialDecisionResponse(V1Model):
     decision: Literal["reopen", "no_change"]
     decision_event_id: str
     run_id: str | None = None
+    recovery_required: bool = False
     lifecycle: EventResearchLifecycleDTO
 
 

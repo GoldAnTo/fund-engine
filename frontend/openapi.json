@@ -5271,6 +5271,75 @@
         }
       }
     },
+    "/api/v1/event-research/{case_id}/published-uploaded-material-decisions": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Decide Published Uploaded Material",
+        "operationId": "decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedMaterialDecisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/monitor": {
       "get": {
         "tags": [
@@ -7900,6 +7969,44 @@
           "source_type"
         ],
         "title": "AttachEventMaterialResponse"
+      },
+      "Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "reopen",
+              "no_change"
+            ],
+            "title": "Decision"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "source_metadata": {
+            "type": "string",
+            "title": "Source Metadata",
+            "default": "{}"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "decision",
+          "reason",
+          "actor"
+        ],
+        "title": "Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post"
       },
       "Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post": {
         "properties": {
@@ -16483,6 +16590,11 @@
               }
             ],
             "title": "Run Id"
+          },
+          "recovery_required": {
+            "type": "boolean",
+            "title": "Recovery Required",
+            "default": false
           },
           "lifecycle": {
             "$ref": "#/components/schemas/EventResearchLifecycleDTO"

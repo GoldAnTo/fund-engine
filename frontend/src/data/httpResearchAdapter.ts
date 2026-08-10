@@ -2780,8 +2780,33 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   }
 
   async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
-    const dto = await this.post<{ document_version_id: string; decision: "reopen" | "no_change"; decision_event_id: string; run_id?: string | null; lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null; } }>(`/event-research/${encodeURIComponent(input.caseId)}/published-material-decisions`, { raw_input: input.rawInput, source_url: input.sourceUrl, source_type: input.sourceType, source_metadata: input.sourceMetadata, decision: input.decision, reason: input.reason, actor: input.actor });
-    return { documentVersionId: dto.document_version_id, decision: dto.decision, decisionEventId: dto.decision_event_id, runId: dto.run_id ?? null, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+    const dto = await this.post<{ document_version_id: string; decision: "reopen" | "no_change"; decision_event_id: string; run_id?: string | null; recovery_required?: boolean; lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null; } }>(`/event-research/${encodeURIComponent(input.caseId)}/published-material-decisions`, { raw_input: input.rawInput, source_url: input.sourceUrl, source_type: input.sourceType, source_metadata: input.sourceMetadata, decision: input.decision, reason: input.reason, actor: input.actor });
+    return { documentVersionId: dto.document_version_id, decision: dto.decision, decisionEventId: dto.decision_event_id, runId: dto.run_id ?? null, recoveryRequired: dto.recovery_required ?? false, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
+  async decidePublishedUploadedMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    const form = new FormData();
+    form.set("file", input.file);
+    form.set("decision", input.decision);
+    form.set("reason", input.reason);
+    form.set("actor", input.actor);
+    form.set("source_metadata", JSON.stringify(input.sourceMetadata));
+    const dto = await this.postForm<{
+      document_version_id: string;
+      decision: "reopen" | "no_change";
+      decision_event_id: string;
+      run_id?: string | null;
+      recovery_required?: boolean;
+      lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
+    }>(`/event-research/${encodeURIComponent(input.caseId)}/published-uploaded-material-decisions`, form);
+    return {
+      documentVersionId: dto.document_version_id,
+      decision: dto.decision,
+      decisionEventId: dto.decision_event_id,
+      runId: dto.run_id ?? null,
+      recoveryRequired: dto.recovery_required ?? false,
+      lifecycle: this.mapEventLifecycle(dto.lifecycle),
+    };
   }
 
   async updateEventResearchScope(input: { caseId: string; factors: Array<EventResearchScope["factors"][number] | string>; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }> {

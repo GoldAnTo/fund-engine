@@ -36,6 +36,8 @@ export const researchClient: ActiveResearchClient = {
   getEventConclusionHistory: (caseId) => _client.getEventConclusionHistory(caseId),
   continueEventResearch: (input) => _client.continueEventResearch(input),
   decidePublishedMaterial: (input) => _client.decidePublishedMaterial(input),
+  decidePublishedUploadedMaterial: (input) =>
+    _client.decidePublishedUploadedMaterial(input),
   updateEventResearchScope: (input) => _client.updateEventResearchScope(input),
   getEventReviewQueue: (caseId) => _client.getEventReviewQueue(caseId),
   publishEventConclusion: (input) => _client.publishEventConclusion(input),

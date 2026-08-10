@@ -45,6 +45,13 @@ def _upload(cmd_client, case_id: uuid.UUID, *, name: str, raw: bytes, mime: str)
     )
 
 
+def _publish(case_id: uuid.UUID, cmd_session) -> None:
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "published"
+    cmd_session.commit()
+
+
 def test_uploaded_text_original_is_frozen_attached_and_readable_without_a_run(
     cmd_client, cmd_session
 ) -> None:
@@ -128,10 +135,7 @@ def test_upload_command_rejects_published_case_without_creating_an_artifact(
     cmd_client, cmd_session
 ) -> None:
     case_id = _create_event(cmd_client)
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.status = "published"
-    cmd_session.commit()
+    _publish(case_id, cmd_session)
 
     response = _upload(
         cmd_client,
@@ -143,3 +147,125 @@ def test_upload_command_rejects_published_case_without_creating_an_artifact(
 
     assert response.status_code == 422
     assert cmd_session.scalars(select(DocumentUploadArtifact)).all() == []
+
+
+def test_published_case_freezes_pdf_original_before_recording_no_change_decision(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_event(cmd_client)
+    _publish(case_id, cmd_session)
+    raw = b"%PDF-not-a-real-pdf"
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-uploaded-material-decisions",
+        files={"file": ("late-report.pdf", raw, "application/pdf")},
+        data={
+            "actor": "human:lin",
+            "decision": "no_change",
+            "reason": "该报告未提供改变已发布判断的新证据。",
+            "source_metadata": json.dumps(
+                {
+                    "authority_level": "licensed_research",
+                    "permissions": {"ai_processing": True, "display": True},
+                    "retention_policy": "case_retained",
+                }
+            ),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["decision"] == "no_change"
+    assert payload["run_id"] is None
+    assert payload["lifecycle"]["status"] == "published"
+    document_id = uuid.UUID(payload["document_version_id"])
+    artifact = cmd_session.scalar(
+        select(DocumentUploadArtifact).where(
+            DocumentUploadArtifact.document_version_id == document_id
+        )
+    )
+    assert artifact is not None
+    assert artifact.raw_bytes == raw
+    assert artifact.file_name == "late-report.pdf"
+    assert artifact.mime_type == "application/pdf"
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["document"]["parse_state"] == "failed"
+    assert detail.json()["document"]["original_file"]["file_name"] == "late-report.pdf"
+
+
+def test_published_case_keeps_unparseable_pdf_when_reopen_requires_recovery(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_event(cmd_client)
+    _publish(case_id, cmd_session)
+    raw = b"%PDF-not-a-real-pdf"
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-uploaded-material-decisions",
+        files={"file": ("needs-recovery.pdf", raw, "application/pdf")},
+        data={
+            "actor": "human:lin",
+            "decision": "reopen",
+            "reason": "新报告可能改变结论，先进入补证流程。",
+            "source_metadata": json.dumps(
+                {"permissions": {"ai_processing": True, "display": True}}
+            ),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["decision"] == "reopen"
+    assert payload["recovery_required"] is True
+    assert payload["run_id"] is None
+    assert payload["lifecycle"]["status"] == "published"
+    document_id = uuid.UUID(payload["document_version_id"])
+    assert cmd_session.scalar(
+        select(DocumentUploadArtifact.raw_bytes).where(
+            DocumentUploadArtifact.document_version_id == document_id
+        )
+    ) == raw
+    assert cmd_session.scalars(
+        select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+    ).all() == []
+
+
+def test_published_material_rejects_deduplicated_original_with_restrictive_new_declaration(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_event(cmd_client)
+    _publish(case_id, cmd_session)
+    raw = b"%PDF-not-a-real-pdf"
+    endpoint = f"/api/v1/event-research/{case_id}/published-uploaded-material-decisions"
+
+    first = cmd_client.post(
+        endpoint,
+        files={"file": ("report.pdf", raw, "application/pdf")},
+        data={
+            "actor": "human:lin",
+            "decision": "no_change",
+            "reason": "先冻结以便人工比较。",
+            "source_metadata": json.dumps(
+                {"permissions": {"ai_processing": True, "display": True}}
+            ),
+        },
+    )
+    assert first.status_code == 201, first.text
+
+    restricted = cmd_client.post(
+        endpoint,
+        files={"file": ("report.pdf", raw, "application/pdf")},
+        data={
+            "actor": "human:lin",
+            "decision": "no_change",
+            "reason": "不应借用首次上传的宽松许可。",
+            "source_metadata": json.dumps(
+                {"permissions": {"ai_processing": False, "display": False}}
+            ),
+        },
+    )
+
+    assert restricted.status_code == 422
+    assert "deduplicated original has a different source contract" in restricted.json()["error"]["message"]
+    assert len(cmd_session.scalars(select(DocumentUploadArtifact)).all()) == 1

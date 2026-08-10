@@ -193,6 +193,7 @@ export interface PublishedMaterialDecision {
   decision: "reopen" | "no_change";
   decisionEventId: string;
   runId: string | null;
+  recoveryRequired: boolean;
   lifecycle: EventLifecycle;
 }
 
@@ -206,6 +207,7 @@ export interface EventResearchClient {
   getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;
   continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<EventResearchContinuation>;
   decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<PublishedMaterialDecision>;
+  decidePublishedUploadedMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<PublishedMaterialDecision>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;

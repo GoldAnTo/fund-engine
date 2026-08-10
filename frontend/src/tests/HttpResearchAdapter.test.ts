@@ -58,6 +58,47 @@ describe("HttpResearchAdapter", () => {
     expect(result).toEqual({ documentVersionId: "document-upload-1", parseState: "partial", nextAction: "review_original" });
   });
 
+  it("freezes a published-Case PDF original and records the explicit decision in one multipart request", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return jsonResponse({
+        document_version_id: "document-published-upload-1",
+        decision: "no_change",
+        decision_event_id: "decision-1",
+        run_id: null,
+        lifecycle: { status: "published", active_run_id: null, current_round: 2, status_summary: "发布结论保持有效", current_gap: null, next_human_action: null },
+      }, true, 201);
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const result = await adapter.decidePublishedUploadedMaterial({
+      caseId: "event-published",
+      file: new File(["%PDF-not-a-real-pdf"], "late-report.pdf", { type: "application/pdf" }),
+      sourceMetadata: { authority_level: "licensed_research" },
+      decision: "no_change",
+      reason: "没有新增改变判断的可核验证据。",
+      actor: "human:researcher",
+    });
+
+    expect(requestUrl).toBe("http://api.test/api/v1/event-research/event-published/published-uploaded-material-decisions");
+    expect(requestInit?.headers).toEqual({ Accept: "application/json" });
+    const form = requestInit?.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get("decision")).toBe("no_change");
+    expect(form.get("reason")).toBe("没有新增改变判断的可核验证据。");
+    expect((form.get("file") as File).name).toBe("late-report.pdf");
+    expect(result).toMatchObject({
+      documentVersionId: "document-published-upload-1",
+      decision: "no_change",
+      decisionEventId: "decision-1",
+      runId: null,
+      lifecycle: { status: "published" },
+    });
+  });
+
   it("creates new event Cases with the strict research protocol by default", async () => {
     let requestBody: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

@@ -268,29 +268,35 @@ def test_event_intake_freezes_declared_source_authority_and_exposes_it_to_reader
     assert detail.json()["document"]["source_authority"] == "primary_disclosure"
 
 
-def test_reusing_the_same_frozen_snapshot_reuses_its_original_contract(
+def test_reusing_the_same_frozen_snapshot_rejects_an_incompatible_contract(
     cmd_client, cmd_session
 ) -> None:
     first = cmd_client.post(
         "/api/v1/event-research",
-        json=_event_payload(source_type="pasted_snapshot", source_metadata={"tenant": "team-a"}),
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"tenant": "team-a", "provider_name": "shared-provider"},
+        ),
     )
     second_payload = _event_payload(
-        source_type="pasted_snapshot", source_metadata={"tenant": "team-b", "permissions": {"export": True}}
+        source_type="pasted_snapshot",
+        source_metadata={
+            "tenant": "team-b",
+            "provider_name": "shared-provider",
+            "permissions": {"export": True},
+        },
     )
     second_payload["event_title"] = "复用同一内容的后续验证事件"
     second = cmd_client.post("/api/v1/event-research", json=second_payload)
 
     assert first.status_code == 201
-    assert second.status_code == 201
+    assert second.status_code == 422
+    assert "deduplicated original has a different source contract" in second.json()[
+        "error"
+    ]["message"]
     first_document_id = cmd_session.scalar(
         select(CaseDocumentVersion.document_version_id).where(
             CaseDocumentVersion.research_case_id == uuid.UUID(first.json()["case_id"])
-        )
-    )
-    second_document_id = cmd_session.scalar(
-        select(CaseDocumentVersion.document_version_id).where(
-            CaseDocumentVersion.research_case_id == uuid.UUID(second.json()["case_id"])
         )
     )
     contracts = list(
@@ -299,7 +305,6 @@ def test_reusing_the_same_frozen_snapshot_reuses_its_original_contract(
         )
     )
 
-    assert first_document_id == second_document_id
     assert len(contracts) == 1
     assert contracts[0].provider_or_tenant == "team-a"
     assert contracts[0].allow_export is False

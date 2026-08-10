@@ -4306,11 +4306,59 @@ export class MockResearchAdapter implements ResearchClient {
     });
     if (input.decision === "reopen") {
       const next = await this.continueEventResearch({ caseId: input.caseId, documentVersionId, reason: input.reason, triggeredBy: input.actor });
-      return { documentVersionId, decision: "reopen", decisionEventId: `decision-${input.caseId}`, runId: next.runId, lifecycle: next.lifecycle };
+      return { documentVersionId, decision: "reopen", decisionEventId: `decision-${input.caseId}`, runId: next.runId, recoveryRequired: false, lifecycle: next.lifecycle };
     }
     const current = (await this.getEventWorkbench(input.caseId)).lifecycle;
     void input.sourceUrl;
-    return simulateLatency({ documentVersionId, decision: "no_change", decisionEventId: `decision-${input.caseId}`, runId: null, lifecycle: current });
+    return simulateLatency({ documentVersionId, decision: "no_change", decisionEventId: `decision-${input.caseId}`, runId: null, recoveryRequired: false, lifecycle: current });
+  }
+
+  async decidePublishedUploadedMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+    this.throwIfOffline();
+    const isPdf = input.file.type === "application/pdf";
+    const rawInput = isPdf
+      ? "[PDF 原件已冻结；浏览器未解析正文，等待服务端解析结果]"
+      : await input.file.text();
+    const recoveryRequired = isPdf && input.decision === "reopen";
+    const result = await this.decidePublishedMaterial({
+      caseId: input.caseId,
+      rawInput,
+      sourceUrl: `upload://mock-published-${input.file.name}`,
+      sourceType: "uploaded_file",
+      sourceMetadata: {
+        ...input.sourceMetadata,
+        file_name: input.file.name,
+        mime_type: input.file.type || "text/plain",
+        byte_size: input.file.size,
+      },
+      decision: recoveryRequired ? "no_change" : input.decision,
+      reason: input.reason,
+      actor: input.actor,
+    });
+    const created = this.createdDocuments.get(result.documentVersionId);
+    if (created) {
+      created.document.original_file = {
+        file_name: input.file.name,
+        mime_type: input.file.type || "text/plain",
+        byte_size: input.file.size,
+        object_version: `sha256:mock-${result.documentVersionId}`,
+        uploaded_by: input.actor,
+        retention_policy: typeof input.sourceMetadata.retention_policy === "string"
+          ? input.sourceMetadata.retention_policy
+          : "case_retained",
+      };
+      if (isPdf) {
+        created.document.parser_version = "pypdf-v1";
+        created.document.parse_quality = "failed";
+        created.document.span_count = 0;
+        created.spans = [];
+      }
+    }
+    return {
+      ...result,
+      decision: input.decision,
+      recoveryRequired,
+    };
   }
 
   async updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<{ version: number; factors: EventResearchScopeFactor[]; reclassifiedEvidenceCount: number; unmappedEvidenceCount: number }> {

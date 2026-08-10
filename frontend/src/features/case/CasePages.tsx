@@ -620,6 +620,7 @@ function PublishedMaterialDecisionForm({
 }) {
   const navigate = useNavigate();
   const [rawInput, setRawInput] = useState("");
+  const [originalFile, setOriginalFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceType, setSourceType] = useState<EventSourceType>("pasted_snapshot");
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
@@ -638,38 +639,56 @@ function PublishedMaterialDecisionForm({
     : sourceType === "public_url"
       ? Boolean(sourceUrl.trim())
       : true;
+  const materialReady = sourceType === "uploaded_file"
+    ? Boolean(originalFile)
+    : Boolean(rawInput.trim());
   async function submit() {
-    if (!rawInput.trim() || !reason.trim() || !sourceReady || governanceError) return;
+    if (!materialReady || !reason.trim() || !sourceReady || governanceError) return;
     setBusy(true);
     setMessage(null);
     try {
-      const result = await researchClient.decidePublishedMaterial({
-        caseId,
-        rawInput: rawInput.trim(),
-        sourceUrl: sourceUrl.trim() || undefined,
-        sourceType,
-        sourceMetadata: {
+      const materialMetadata = {
           ...sourceMetadata,
           ...sourceGovernanceMetadata(sourceGovernance),
           permissions: sourcePermissions,
           ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), request_scope: { declared_scope: providerRequestScope.trim() }, retrieval_reference: sourceUrl.trim() || undefined } : {}),
+          ...(sourceType === "uploaded_file" && sourceUrl.trim()
+            ? { retrieval_reference: sourceUrl.trim() }
+            : {}),
           ...(sourceType === "public_url" ? { intake_note: "公开网页 URL 仅作为可复查线索；已冻结内容尚未完成原文核验。" } : {}),
           authority_level:
             sourceType === "licensed_provider"
               ? "licensed_research"
               : "user_supplied",
-        },
-        decision,
-        reason: reason.trim(),
-        actor: "human:researcher",
-      });
+        };
+      const result = sourceType === "uploaded_file" && originalFile
+        ? await researchClient.decidePublishedUploadedMaterial({
+            caseId,
+            file: originalFile,
+            sourceMetadata: materialMetadata,
+            decision,
+            reason: reason.trim(),
+            actor: "human:researcher",
+          })
+        : await researchClient.decidePublishedMaterial({
+            caseId,
+            rawInput: rawInput.trim(),
+            sourceUrl: sourceUrl.trim() || undefined,
+            sourceType,
+            sourceMetadata: materialMetadata,
+            decision,
+            reason: reason.trim(),
+            actor: "human:researcher",
+          });
       onFrozen(result.documentVersionId);
       setMessage(
-        result.decision === "reopen"
+        result.recoveryRequired
+          ? `已冻结原件 ${result.documentVersionId}，但解析尚未完成；未创建后继运行，请从原文资料恢复后再决定是否重新复核。`
+          : result.decision === "reopen"
           ? `已冻结新材料并创建后继运行 ${result.runId}；此前发布结论未被改写。`
           : `已冻结新材料并记录“不改变当前判断”的人工决定 ${result.decisionEventId}；发布结论保持有效。`,
       );
-      if (result.decision === "reopen") navigate(`/events/${caseId}/monitor`);
+      if (result.decision === "reopen" && !result.recoveryRequired) navigate(`/events/${caseId}/monitor`);
     } catch {
       setMessage(
         "新材料或人工决定未保存；此前发布结论保持不变。请检查必填信息后重试。",
@@ -678,30 +697,37 @@ function PublishedMaterialDecisionForm({
       setBusy(false);
     }
   }
-  async function loadTextFile(event: ChangeEvent<HTMLInputElement>) {
+  async function loadOriginalFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    setOriginalFile(file);
+    setSourceMetadata((current) => ({
+      ...current,
+      file_name: file.name,
+      mime_type: file.type || "text/plain",
+      byte_size: file.size,
+    }));
+    if (file.type === "application/pdf") {
+      setRawInput("");
+      setMessage("PDF 原件将由服务端冻结并解析；浏览器不会把它伪装成可读正文。");
+      return;
+    }
     try {
       const text =
         typeof file.text === "function"
           ? await file.text()
           : await readTextSnapshot(file);
       setRawInput(text);
-      setSourceMetadata((current) => ({
-        ...current,
-        file_name: file.name,
-        mime_type: file.type || "text/plain",
-        byte_size: file.size,
-      }));
       setMessage(null);
     } catch {
       setMessage(
-        "无法读取该文件。当前入口仅支持可直接读取正文的文本文件，原件未被伪装为已解析资料。",
+        "无法预览该文件；提交后仍会冻结原件，并由服务端记录可恢复的解析结果。",
       );
     }
   }
   function changeSourceType(next: EventSourceType) {
     setSourceType(next);
+    if (next !== "uploaded_file") setOriginalFile(null);
     setSourcePermissions(next === "licensed_provider"
       ? { ai_processing: false, display: false, export: false, api: false }
       : next === "public_url"
@@ -722,7 +748,9 @@ function PublishedMaterialDecisionForm({
         </article>
         <article>
           <p className="ros-eyebrow">待冻结的新材料</p>
-          <blockquote>{rawInput.trim() || "输入新材料后在此逐字对照；系统不会自动判断差异或改写结论。"}</blockquote>
+          <blockquote>{originalFile
+            ? `${originalFile.name} · ${originalFile.type || "未知类型"} · ${originalFile.size.toLocaleString()} 字节${originalFile.type === "application/pdf" ? "。PDF 原件将在服务端冻结并解析；本页不伪造正文预览。" : rawInput.trim() ? `\n\n${rawInput.trim()}` : "。原件将被完整冻结后进入人工复核。"}`
+            : rawInput.trim() || "输入新材料后在此逐字对照；系统不会自动判断差异或改写结论。"}</blockquote>
         </article>
       </section>
       <p className="ros-note">请在决定理由中说明它影响的判断、关键因素或反证条件；并列对照只帮助人工复核，不构成自动差异结论。</p>
@@ -745,7 +773,7 @@ function PublishedMaterialDecisionForm({
           }
         >
           <option value="pasted_snapshot">粘贴快照</option>
-          <option value="uploaded_file">上传文本快照</option>
+          <option value="uploaded_file">上传原件（PDF/TXT/MD/CSV）</option>
           <option value="licensed_provider">授权数据源快照</option>
           <option value="public_url">公开网页快照</option>
         </select>
@@ -777,15 +805,15 @@ function PublishedMaterialDecisionForm({
       <SourceGovernanceFields value={sourceGovernance} onChange={setSourceGovernance} />
       {sourceType === "uploaded_file" && (
         <label>
-          上传新增材料正文文件
+          上传新增材料原件
           <input
-            aria-label="上传新增材料正文文件"
+            aria-label="上传新增材料原件"
             type="file"
-            accept="text/plain,text/markdown,.txt,.md,.csv"
-            onChange={loadTextFile}
+            accept="application/pdf,text/plain,text/markdown,.txt,.md,.csv"
+            onChange={loadOriginalFile}
           />
           <small>
-            当前 V1 只读取并冻结文本正文快照；不保存或冒充原件 PDF/Office 文件。
+            冻结原始 PDF、TXT、Markdown 或 CSV。PDF 正文只在服务端解析；解析失败也会保留原件、许可与恢复入口。
           </small>
         </label>
       )}
@@ -830,7 +858,7 @@ function PublishedMaterialDecisionForm({
       <button
         className="ros-button ros-button--primary"
         type="button"
-        disabled={!rawInput.trim() || !reason.trim() || !sourceReady || Boolean(governanceError) || busy}
+        disabled={!materialReady || !reason.trim() || !sourceReady || Boolean(governanceError) || busy}
         onClick={() => void submit()}
       >
         {busy
@@ -841,7 +869,11 @@ function PublishedMaterialDecisionForm({
       </button>
       {message && (
         <p
-          className={message.startsWith("已冻结") ? "ros-success" : "ros-error"}
+          className={message.startsWith("已冻结")
+            ? "ros-success"
+            : message.startsWith("无法") || message.startsWith("新材料")
+              ? "ros-error"
+              : "ros-note"}
         >
           {message}
         </p>

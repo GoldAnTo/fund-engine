@@ -481,18 +481,18 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "新增待比较材料" })).toBeVisible();
   });
 
-  test("published Case reads an uploaded text snapshot before the human change decision", async ({ page }) => {
+  test("published Case freezes an uploaded text original before the human change decision", async ({ page }) => {
     await page.goto("/events/event-published/documents?client=mock");
 
     await page.getByLabel("新增材料来源接入方式").selectOption("uploaded_file");
-    await page.getByLabel("上传新增材料正文文件").setInputFiles({
+    await page.getByLabel("上传新增材料原件").setInputFiles({
       name: "published-note.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("公司补充披露订单交付节奏。"),
     });
 
     await expect(page.getByRole("textbox", { name: "新增材料正文", exact: true })).toHaveValue("公司补充披露订单交付节奏。");
-    await expect(page.getByText(/只读取并冻结文本正文快照/)).toBeVisible();
+    await expect(page.getByText(/冻结原始 PDF、TXT、Markdown 或 CSV/)).toBeVisible();
     await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("公司补充披露订单交付节奏。");
   });
 

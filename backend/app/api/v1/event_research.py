@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy import select
@@ -45,6 +46,7 @@ from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import EventExtractionService
 from app.services.event_research import EventResearchService
 from app.services.document_uploads import DocumentUploadService
+from app.services.source_governance import SourceGovernanceService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
@@ -81,6 +83,53 @@ router = APIRouter(
 
 def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
     CaseTenantAccess(db).require_case(case_id, tenant_id)
+
+
+def _record_published_material_decision(
+    db: Session,
+    *,
+    case_id: uuid.UUID,
+    document_id: uuid.UUID,
+    decision: str,
+    reason: str,
+    actor: str,
+    recovery_required: bool = False,
+    source_metadata: dict | None = None,
+) -> tuple[str | None, object, bool]:
+    """Record the human decision after material was frozen.
+
+    Freezing and deciding are kept separate in the domain but committed by the
+    API atomically, for both text snapshots and uploaded originals.
+    """
+    run_id = None
+    if decision == "reopen" and not recovery_required:
+        run = AutoResearchService(db).continue_published_event(
+            case_id,
+            document_version_id=document_id,
+            reason=reason,
+            triggered_by=actor,
+        )
+        run_id = str(run.id)
+    event = emit_event(
+        db,
+        type="review_decision_recorded",
+        aggregate_type="published_material_decision",
+        aggregate_id=document_id,
+        ref_type="research_case",
+        ref_id=case_id,
+        origin="operational",
+        actor=actor,
+        payload={
+            "decision": decision,
+            "reason": reason,
+            "document_version_id": str(document_id),
+            "case_id": str(case_id),
+            "run_id": run_id,
+            "recovery_required": recovery_required,
+            "source_metadata": source_metadata or {},
+        },
+    )
+    return run_id, event, recovery_required
 
 
 @router.get("", response_model=EventResearchListResponse)
@@ -489,6 +538,7 @@ async def upload_event_material(
         metadata = json.loads(source_metadata)
         if not isinstance(metadata, dict):
             raise ValidationFailedError("source_metadata must be a JSON object")
+        metadata = {**metadata, "tenant": tenant_id}
         if not actor.strip():
             raise ValidationFailedError("actor must not be empty")
         raw = await file.read(20 * 1024 * 1024 + 1)
@@ -548,28 +598,17 @@ def decide_published_material(
             raw_input=payload.raw_input,
             source_url=payload.source_url,
             source_type=payload.source_type,
-            source_metadata=payload.source_metadata,
+            source_metadata={**payload.source_metadata, "tenant": tenant_id},
             actor=payload.actor,
         )
-        run_id = None
-        if payload.decision == "reopen":
-            run = AutoResearchService(db).continue_published_event(
-                case_id,
-                document_version_id=document.id,
-                reason=payload.reason,
-                triggered_by=payload.actor,
-            )
-            run_id = str(run.id)
-        event = emit_event(
+        run_id, event, recovery_required = _record_published_material_decision(
             db,
-            type="review_decision_recorded",
-            aggregate_type="published_material_decision",
-            aggregate_id=document.id,
-            ref_type="research_case",
-            ref_id=case_id,
-            origin="operational",
+            case_id=case_id,
+            document_id=document.id,
+            decision=payload.decision,
+            reason=payload.reason,
             actor=payload.actor,
-            payload={"decision": payload.decision, "reason": payload.reason, "document_version_id": str(document.id), "case_id": str(case_id), "run_id": run_id},
+            source_metadata={**payload.source_metadata, "tenant": tenant_id},
         )
         db.commit()
     except (ValueError, ValidationFailedError) as exc:
@@ -580,5 +619,87 @@ def decide_published_material(
     return PublishedMaterialDecisionResponse(
         document_version_id=str(document.id), decision=payload.decision,
         decision_event_id=str(event.id), run_id=run_id,
+        recovery_required=recovery_required,
         lifecycle=EventResearchLifecycleDTO(status=lifecycle.status, active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None, current_round=lifecycle.current_round, status_summary=lifecycle.status_summary, current_gap=lifecycle.current_gap, next_human_action=lifecycle.next_human_action),
+    )
+
+
+@router.post(
+    "/{case_id}/published-uploaded-material-decisions",
+    response_model=PublishedMaterialDecisionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def decide_published_uploaded_material(
+    case_id: uuid.UUID,
+    file: UploadFile = File(...),
+    decision: Literal["reopen", "no_change"] = Form(...),
+    reason: str = Form(...),
+    actor: str = Form(...),
+    source_metadata: str = Form("{}"),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> PublishedMaterialDecisionResponse:
+    try:
+        _require_case(db, case_id, tenant_id)
+        metadata = json.loads(source_metadata)
+        if not isinstance(metadata, dict):
+            raise ValidationFailedError("source_metadata must be a JSON object")
+        metadata = {**metadata, "tenant": tenant_id}
+        if not actor.strip():
+            raise ValidationFailedError("actor must not be empty")
+        if not reason.strip():
+            raise ValidationFailedError("reason must not be empty")
+        if decision == "reopen" and not SourceGovernanceService(
+            db
+        ).declared_event_intake_allows_research(
+            source_type="uploaded_file", source_metadata=metadata
+        ):
+            raise ValidationFailedError(
+                "current source declaration does not permit research"
+            )
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
+            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
+        frozen = DocumentUploadService(db).freeze_published_case_material(
+            case_id=case_id,
+            raw=raw,
+            file_name=file.filename or "",
+            mime_type=file.content_type or "application/octet-stream",
+            actor=actor.strip(),
+            source_metadata=metadata,
+        )
+        run_id, event, recovery_required = _record_published_material_decision(
+            db,
+            case_id=case_id,
+            document_id=frozen.document.id,
+            decision=decision,
+            reason=reason.strip(),
+            actor=actor.strip(),
+            recovery_required=(
+                decision == "reopen" and frozen.document.parse_state == "failed"
+            ),
+            source_metadata=metadata,
+        )
+        db.commit()
+    except (ValueError, json.JSONDecodeError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = EventResearchLifecycleRepository(db).get(case_id)
+    assert lifecycle is not None
+    return PublishedMaterialDecisionResponse(
+        document_version_id=str(frozen.document.id),
+        decision=decision,
+        decision_event_id=str(event.id),
+        run_id=run_id,
+        recovery_required=recovery_required,
+        lifecycle=EventResearchLifecycleDTO(
+            status=lifecycle.status,
+            active_run_id=str(lifecycle.active_run_id)
+            if lifecycle.active_run_id
+            else None,
+            current_round=lifecycle.current_round,
+            status_summary=lifecycle.status_summary,
+            current_gap=lifecycle.current_gap,
+            next_human_action=lifecycle.next_human_action,
+        ),
     )

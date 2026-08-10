@@ -47,6 +47,113 @@ class SourceGovernanceService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def declared_event_intake_allows_research(
+        self,
+        *,
+        source_type: str,
+        source_metadata: dict[str, Any] | None,
+        at: datetime | None = None,
+    ) -> bool:
+        """Evaluate this intake declaration without borrowing another Case's terms.
+
+        Content-addressed documents can be deduplicated, but a later Case's
+        explicit declaration must never be widened by a prior document-level
+        contract.  Callers use this as an additional continuation gate; the
+        stored contract remains the durable audit record for the original
+        document version.
+        """
+        metadata = dict(source_metadata or {})
+        user_controlled = source_type in USER_CONTROLLED_TYPES
+        if not _permission(metadata, "ai_processing", default=user_controlled):
+            return False
+        if not _permission(metadata, "display", default=user_controlled):
+            return False
+        effective_from = _effective_at(metadata, "effective_from")
+        effective_until = _effective_at(metadata, "effective_until")
+        if (
+            effective_from is not None
+            and effective_until is not None
+            and effective_until < effective_from
+        ):
+            raise ValueError("effective_until must not be before effective_from")
+        now = at or _utcnow()
+        return not (
+            (effective_from is not None and now < effective_from)
+            or (effective_until is not None and now > effective_until)
+        )
+
+    @staticmethod
+    def _assert_existing_contract_compatible(
+        *,
+        existing: SourceContract,
+        source_type: str,
+        source_metadata: dict[str, Any] | None,
+    ) -> None:
+        """Fail closed when deduplicated bytes arrive under different terms.
+
+        A document version has one immutable source contract.  Until contracts
+        are modelled per Case admission, attaching the same bytes under a
+        different declaration would make the read path display the first
+        declaration's terms.  Reject that attachment instead of silently
+        widening the later Case's stated permission.
+        """
+        metadata = dict(source_metadata or {})
+        user_controlled = source_type in USER_CONTROLLED_TYPES
+        # Tenant ownership is an independent boundary from a provider name.
+        # Event routes inject the authenticated tenant, so it must win the
+        # compatibility key rather than be masked by client-supplied provider
+        # metadata.
+        incoming_provider = metadata.get("tenant") or metadata.get("provider_name")
+        incoming_restrictions = list(
+            metadata.get("downstream_restrictions")
+            or (
+                ["仅限当前 Case 研究与人工审核"]
+                if user_controlled
+                else ["权限未完整记录；不得作为正式证据"]
+            )
+        )
+        incoming = {
+            "source_type": source_type,
+            "provider_or_tenant": str(incoming_provider)
+            if incoming_provider is not None
+            else None,
+            "allow_ai_processing": _permission(
+                metadata, "ai_processing", default=user_controlled
+            ),
+            "allow_display": _permission(
+                metadata, "display", default=user_controlled
+            ),
+            "allow_export": _permission(metadata, "export", default=False),
+            "allow_api": _permission(metadata, "api", default=False),
+            "region": str(metadata.get("region") or "not_recorded"),
+            "effective_from": _effective_at(metadata, "effective_from"),
+            "effective_until": _effective_at(metadata, "effective_until"),
+            "retention_policy": str(
+                metadata.get("retention_policy") or "case_retained"
+            ),
+            "deletion_policy": str(
+                metadata.get("deletion_policy") or "not_recorded"
+            ),
+            "downstream_restrictions": incoming_restrictions,
+            "contract_version": str(metadata["contract_version"])
+            if metadata.get("contract_version")
+            else None,
+        }
+        if (
+            incoming["effective_from"] is not None
+            and incoming["effective_until"] is not None
+            and incoming["effective_until"] < incoming["effective_from"]
+        ):
+            raise ValueError("effective_until must not be before effective_from")
+        for field, value in incoming.items():
+            if value is None and field == "provider_or_tenant":
+                continue
+            if getattr(existing, field) != value:
+                raise ValueError(
+                    "deduplicated original has a different source contract; "
+                    "do not reuse it under incompatible permissions"
+                )
+
     def record_event_intake(
         self,
         *,
@@ -61,6 +168,11 @@ class SourceGovernanceService:
             )
         )
         if existing is not None:
+            self._assert_existing_contract_compatible(
+                existing=existing,
+                source_type=source_type,
+                source_metadata=source_metadata,
+            )
             return existing
         metadata = dict(source_metadata or {})
         user_controlled = source_type in USER_CONTROLLED_TYPES
@@ -77,8 +189,8 @@ class SourceGovernanceService:
             document_version_id=document.id,
             source_type=source_type,
             provider_or_tenant=str(
-                metadata.get("provider_name")
-                or metadata.get("tenant")
+                metadata.get("tenant")
+                or metadata.get("provider_name")
                 or declared_by
             ),
             allow_ai_processing=_permission(metadata, "ai_processing", default=user_controlled),
