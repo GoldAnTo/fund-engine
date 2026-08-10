@@ -518,6 +518,41 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
+  it("does not present unreadable baseline sources as an empty protocol selection", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getDocuments").mockRejectedValueOnce(
+      new Error("Baseline documents unavailable"),
+    );
+    setResearchClient(adapter);
+    setResearchOsApi(new MockResearchOsApi(adapter));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/protocol"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/protocol"
+            element={<CaseProtocolPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "设定结果指标与验证窗口" }),
+    );
+    expect(
+      await screen.findByText("无法读取当前 Case 的冻结资料，不能据此判断为空。"),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "重试读取冻结资料" }),
+    );
+    expect(
+      await screen.findByRole("option", {
+        name: /台积电 2026 年第二季度法说会摘要/,
+      }),
+    ).toBeVisible();
+  });
+
   it("does not call an unavailable Case Wiki an empty graph", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "graph").mockRejectedValue(new Error("Wiki unavailable"));

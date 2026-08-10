@@ -2449,6 +2449,8 @@ function ProtocolContent({
   const [baselineDocuments, setBaselineDocuments] = useState<
     SourceDocumentView[] | null
   >(null);
+  const [baselineDocumentsError, setBaselineDocumentsError] = useState(false);
+  const [baselineDocumentsReload, setBaselineDocumentsReload] = useState(0);
   const [showForm, setShowForm] = useState(false);
   const [metricId, setMetricId] = useState("");
   const [companyId, setCompanyId] = useState("");
@@ -2497,6 +2499,7 @@ function ProtocolContent({
   useEffect(() => {
     let active = true;
     setBaselineDocuments(null);
+    setBaselineDocumentsError(false);
     researchClient
       .getDocuments({ caseId })
       .then((items) => {
@@ -2509,11 +2512,11 @@ function ProtocolContent({
             ),
           );
       })
-      .catch(() => active && setBaselineDocuments([]));
+      .catch(() => active && setBaselineDocumentsError(true));
     return () => {
       active = false;
     };
-  }, [caseId]);
+  }, [caseId, baselineDocumentsReload]);
   async function saveBinding() {
     if (
       !selected?.thesisId ||
@@ -2530,6 +2533,12 @@ function ProtocolContent({
     ) {
       setNotice(
         "请完整填写指标、实体范围、可回溯基线、时间窗和记录原因。系统不会补写缺失字段。",
+      );
+      return;
+    }
+    if (baselineDocumentsError) {
+      setNotice(
+        "无法读取当前 Case 的冻结资料，不能据此登记结果基线；请重试读取后再继续。",
       );
       return;
     }
@@ -2742,6 +2751,11 @@ function ProtocolContent({
                   setReason={setReason}
                   busy={busy}
                   onSave={saveBinding}
+                  documents={baselineDocuments}
+                  documentsError={baselineDocumentsError}
+                  onRetryDocuments={() =>
+                    setBaselineDocumentsReload((value) => value + 1)
+                  }
                 />
               )}
             </>
@@ -2805,31 +2819,13 @@ function ProtocolBindingForm(props: {
   setReason: (value: string) => void;
   busy: boolean;
   onSave: () => void;
+  documents: SourceDocumentView[] | null;
+  documentsError: boolean;
+  onRetryDocuments: () => void;
 }) {
-  const { caseId = "" } = useParams();
   const metric = props.metrics.find((item) => item.id === props.metricId);
-  const [documents, setDocuments] = useState<SourceDocumentView[] | null>(null);
-  useEffect(() => {
-    let active = true;
-    researchClient
-      .getDocuments({ caseId })
-      .then((items) => {
-        if (active)
-          setDocuments(
-            items.filter(
-              (item) =>
-                item.source_contract?.status === "admitted" &&
-                item.source_contract.permissions.display,
-            ),
-          );
-      })
-      .catch(() => active && setDocuments([]));
-    return () => {
-      active = false;
-    };
-  }, [caseId]);
   function selectBaseline(documentId: string) {
-    const document = documents?.find((item) => item.id === documentId);
+    const document = props.documents?.find((item) => item.id === documentId);
     if (!document) return;
     props.setBaselineSource(`document:${document.id}`);
     props.setAvailableAt(document.available_at);
@@ -2884,22 +2880,40 @@ function ProtocolBindingForm(props: {
             <select
               value={props.baselineSource.replace("document:", "")}
               onChange={(event) => selectBaseline(event.target.value)}
-              disabled={documents === null || documents.length === 0}
+              disabled={
+                props.documentsError ||
+                props.documents === null ||
+                props.documents.length === 0
+              }
             >
               <option value="">
-                {documents === null
+                {props.documentsError
+                  ? "无法读取当前 Case 的冻结资料"
+                  : props.documents === null
                   ? "正在核对当前 Case 的资料…"
-                  : documents.length === 0
+                  : props.documents.length === 0
                     ? "当前没有可用的已准入资料"
                     : "选择一份已准入冻结资料"}
               </option>
-              {documents?.map((document) => (
+              {props.documents?.map((document) => (
                 <option key={document.id} value={document.id}>
                   {document.title || "未命名资料"} · {document.available_at}
                 </option>
               ))}
             </select>
           </label>
+          {props.documentsError && (
+            <div className="ros-empty ros-empty--compact" role="alert">
+              <strong>无法读取当前 Case 的冻结资料，不能据此判断为空。</strong>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                onClick={props.onRetryDocuments}
+              >
+                重试读取冻结资料
+              </button>
+            </div>
+          )}
           <div className="ros-protocol-form__two">
             <label>
               基线来源引用
