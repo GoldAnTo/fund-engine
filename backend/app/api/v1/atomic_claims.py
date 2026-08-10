@@ -27,6 +27,7 @@ from app.schemas.v1.commands import (
 )
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
+from app.services.auto_research import AutoResearchService
 from app.repositories.operational import TaskRepository
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
@@ -269,6 +270,10 @@ def review_atomic_claim(
         "review_atomic_claim",
         "atomic_claim_candidate",
         candidate_id,
+    )
+    AutoResearchService(db).resume_after_atomic_claim_review(
+        candidate_id,
+        reviewer=payload.reviewer,
     )
     commit_or_rollback(db)
     return _review_dto(db, review)

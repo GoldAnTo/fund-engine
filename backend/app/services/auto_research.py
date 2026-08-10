@@ -49,7 +49,20 @@ class AutoResearchService:
         self.session = session
         self.repo = AutoResearchRepository(session)
         self.task_repo = TaskRepository(session)
-        self.client = LLMClient.from_env()
+        self._client: LLMClient | None = None
+
+    @property
+    def client(self) -> LLMClient:
+        """Create the model client only in the worker execution path.
+
+        Queueing a run must remain durable and inspectable even when the
+        worker's model endpoint or proxy is temporarily unavailable.  The
+        worker records that execution-time failure on the run/job instead of
+        making the researcher-facing command endpoint look like a no-op.
+        """
+        if self._client is None:
+            self._client = LLMClient.from_env()
+        return self._client
 
     def start(
         self,
@@ -217,6 +230,62 @@ class AutoResearchService:
             allowed_source_types=source_types,
             scope_context={"requested_key_factor_id": str(factor.id)},
         )
+
+    def resume_after_atomic_claim_review(
+        self,
+        candidate_id: uuid.UUID,
+        *,
+        reviewer: str,
+    ) -> list[uuid.UUID]:
+        """Resume affected runs only once every Case candidate has a verdict.
+
+        Atomic claims may be deduplicated at document level, while run state is
+        Case-scoped.  A human decision therefore checks every admitted Case
+        using the candidate's frozen document and requeues only its runs that
+        were paused specifically at the atomic-claim gate.
+        """
+        document_id = self.session.scalar(
+            select(SourceSpan.document_version_id)
+            .where(SourceSpan.id == AtomicClaimCandidate.source_span_id)
+            .where(AtomicClaimCandidate.id == candidate_id)
+        )
+        if document_id is None:
+            return []
+        case_ids = list(
+            self.session.scalars(
+                select(CaseDocumentVersion.research_case_id)
+                .where(CaseDocumentVersion.document_version_id == document_id)
+                .distinct()
+            )
+        )
+        resumed: list[uuid.UUID] = []
+        for case_id in case_ids:
+            if self._pending_atomic_claims(case_id):
+                continue
+            runs = list(
+                self.session.scalars(
+                    select(ResearchRun)
+                    .where(ResearchRun.research_case_id == case_id)
+                    .where(ResearchRun.status == "waiting_for_review")
+                    .where(ResearchRun.stop_reason == "pending_atomic_claim_review")
+                )
+            )
+            for run in runs:
+                if not self.repo.resume_after_claim_review(run):
+                    continue
+                ResearchRunEventRepository(self.session).append(
+                    run.id,
+                    stage="claim_review",
+                    status="completed",
+                    message="原子陈述审核已完成；原冻结范围已重新入队继续执行",
+                    payload_json={
+                        "candidate_id": str(candidate_id),
+                        "reviewer": reviewer.strip(),
+                        "resume_from_round": run.round + 1,
+                    },
+                )
+                resumed.append(run.id)
+        return resumed
 
     def continue_published_event(
         self,

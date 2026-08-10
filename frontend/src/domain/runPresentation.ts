@@ -12,6 +12,7 @@ const RUN_STAGE_LABELS: Record<string, string> = {
   planning: "准备研究范围",
   review: "等待审核",
   claim_review: "等待原子陈述审核",
+  resume_after_claim_review: "审核完成，等待继续执行",
   stopped: "运行已停止",
   failed: "运行失败",
   complete: "运行完成",

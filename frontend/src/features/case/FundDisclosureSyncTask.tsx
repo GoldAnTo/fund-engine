@@ -26,6 +26,15 @@ function summaryText(payload: Record<string, unknown>): string {
     .join(" · ");
 }
 
+function failureText(payload: Record<string, unknown>): string | null {
+  const errorType = typeof payload.error_type === "string" ? payload.error_type : null;
+  const error = typeof payload.error === "string" ? payload.error : null;
+  if (!errorType && !error) return null;
+  return [errorType ? `失败类型：${errorType}` : null, error ? `原因：${error}` : null]
+    .filter(Boolean)
+    .join("；");
+}
+
 export function FundDisclosureSyncTask({
   caseId,
   scopeRevision,
@@ -226,7 +235,7 @@ export function FundDisclosureSyncTask({
               const fields = Array.isArray(payload.required_fields) ? payload.required_fields.join("、") : "未确认";
               return <section className="ros-fund-sync__capability" key={`${event.seq}-capability`}><strong>本次数据能力与字段</strong><p>供应商：{String(payload.provider || "未确认")} · 已使用：{tools}</p><p>必需字段：{fields}</p><small>未验证能力不会被当作基金持仓、实时仓位或推荐：{Array.isArray(payload.unverified_capabilities) ? payload.unverified_capabilities.join("、") : "未确认"}</small></section>;
             })}
-            <ol>{run.events.map((event) => <li key={event.seq}><b>{event.stage}</b><span>{event.message}</span>{summaryText(event.payload) && <small>{summaryText(event.payload)}</small>}</li>)}</ol>
+            <ol>{run.events.map((event) => <li key={event.seq}><b>{event.stage}</b><span>{event.message}</span>{summaryText(event.payload) && <small>{summaryText(event.payload)}</small>}{failureText(event.payload) && <small>{failureText(event.payload)}</small>}</li>)}</ol>
             {run.status === "failed" && <button className="ros-button ros-button--secondary" type="button" disabled={isBusy} onClick={() => void retry(run.id)}>按冻结范围重试</button>}
           </article>
         )) : <p className="ros-note">还没有补充记录。保存配置后可立即执行，或由周/月任务在对应时间运行。</p>}

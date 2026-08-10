@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import {
   sourceTypeLabel,
@@ -64,7 +64,6 @@ export function MarketExpressionContent({
   caseId: string;
   theses?: ThesisOption[];
 }) {
-  const navigate = useNavigate();
   const [expression, setExpression] = useState<MarketExpression | null>(null);
   const [forecastHistory, setForecastHistory] =
     useState<ForecastVerdictHistory | null>(null);
@@ -73,6 +72,7 @@ export function MarketExpressionContent({
   const [starting, setStarting] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [startedRunId, setStartedRunId] = useState<string | null>(null);
   const [fundDisclosureScopeRevision, setFundDisclosureScopeRevision] = useState(0);
 
   async function reloadExpression() {
@@ -167,8 +167,11 @@ export function MarketExpressionContent({
     setStarting(true);
     setRunError(null);
     try {
-      await researchOsApi.startFactorMonitorRun(caseId, selectedFactor.id);
-      navigate(`/events/${caseId}/monitor`);
+      const run = await researchOsApi.startFactorMonitorRun(caseId, selectedFactor.id);
+      setStartedRunId(run.id);
+      setActionNotice(
+        `已创建单因素补证运行 ${run.id.slice(0, 8)}；范围、配置版本和允许来源已冻结，等待研究 worker 领取后继续执行。`,
+      );
     } catch {
       setRunError(
         "无法按该因素的已审核关联与许可范围创建补证运行；没有创建部分运行。",
@@ -210,6 +213,12 @@ export function MarketExpressionContent({
       {actionNotice && (
         <p className="ros-success" role="status">
           {actionNotice}
+          {startedRunId && (
+            <>
+              {" "}
+              <Link to={`/events/${caseId}/monitor`}>查看运行记录</Link>
+            </>
+          )}
         </p>
       )}
       <div className="ros-market-workbench">

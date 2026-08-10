@@ -217,6 +217,28 @@ def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) ->
     assert response.json()["error"]["code"] == "validation_failed"
 
 
+def test_monitor_prefers_an_active_run_over_a_later_cancelled_run(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    saved = cmd_client.put(f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(factor.id))
+    assert saved.status_code == 200
+    first = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+    second = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+    assert first.status_code == 201 and second.status_code == 201
+
+    cancelled = cmd_client.post(
+        f"/api/v1/research-runs/{first.json()['id']}/cancel",
+        json={"actor": "human:lin", "change_reason": "取消重复测试运行"},
+    )
+    assert cancelled.status_code == 200
+
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+    assert detail.status_code == 200
+    assert detail.json()["latest_run"]["id"] == second.json()["id"]
+    assert detail.json()["latest_run"]["status"] == "queued"
+
+
 def test_monitor_rejects_unsupported_source_type(cmd_client, cmd_session) -> None:
     case, factor = _case_with_confirmed_factor(cmd_session)
 

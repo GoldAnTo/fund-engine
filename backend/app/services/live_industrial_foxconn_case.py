@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import DocumentVersion, EvidenceLink, ResearchCase, SourceSpan, SourceStatement, Thesis
 from app.models.operational import EventResearchLifecycle
+from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion
 from app.repositories.documents import DocumentRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.event_research import EventResearchService
@@ -39,6 +40,14 @@ from app.services.market_expression import (
     MarketExpressionService,
     MarketInstrumentBindingInput,
     ReportClaimInput,
+)
+from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
+from app.services.mechanism_templates import seed_ai_capex_template
+from app.services.research_protocol import (
+    MetricDefinitionInput,
+    OutcomeBindingInput,
+    ResearchProtocolService,
+    VerificationRuleInput,
 )
 from app.services.source_governance import SourceGovernanceService
 
@@ -233,6 +242,139 @@ def _publish_bounded_conclusion(
     )
 
 
+def _configure_demo_research_protocol(
+    session: Session,
+    *,
+    case_id: uuid.UUID,
+    forecast_thesis_id: uuid.UUID,
+    report_document: DocumentVersion,
+    company_id: uuid.UUID,
+) -> None:
+    """Freeze the protocol that makes the demo's manual replenishment runnable.
+
+    The historical verdict remains a narrow result.  This protocol only
+    governs a later, explicitly requested evidence-refresh run: metric,
+    baseline source, mechanism path, counter-hypothesis rule and time window
+    all remain inspectable on the Case.
+    """
+    service = ResearchProtocolService(session)
+    metrics = [
+        service.add_metric_version(
+            MetricDefinitionInput(
+                metric_id="industrial_foxconn_profit",
+                display_name="归母净利润",
+                canonical_definition="工业富联归属于上市公司股东的年度净利润。",
+                entity_scope="company",
+                unit="CNY",
+                frequency="annual",
+                period_semantics="fiscal_year",
+                allowed_source_roles=["company_disclosure"],
+                role_eligibility=["outcome", "driver"],
+            ),
+            approved_by=ACTOR,
+            reason="演示人审：预测兑现以公司年报归母净利润为结果指标。",
+        ),
+        service.add_metric_version(
+            MetricDefinitionInput(
+                metric_id="industrial_foxconn_ai_order_delivery",
+                display_name="AI服务器订单与交付",
+                canonical_definition="工业富联AI服务器相关订单、交付或出货的公司披露指标。",
+                entity_scope="company",
+                unit="disclosed_value",
+                frequency="annual",
+                period_semantics="fiscal_year",
+                allowed_source_roles=["company_disclosure"],
+                role_eligibility=["driver"],
+            ),
+            approved_by=ACTOR,
+            reason="演示人审：订单和交付需与收入结果分开观察。",
+        ),
+        service.add_metric_version(
+            MetricDefinitionInput(
+                metric_id="industrial_foxconn_ai_revenue",
+                display_name="AI服务器及高速交换机业务收入",
+                canonical_definition="工业富联披露的AI服务器及高速交换机业务收入或同比变化。",
+                entity_scope="company",
+                unit="disclosed_value",
+                frequency="annual",
+                period_semantics="fiscal_year",
+                allowed_source_roles=["company_disclosure"],
+                role_eligibility=["driver"],
+            ),
+            approved_by=ACTOR,
+            reason="演示人审：AI业务因素以公司披露的收入和同比变化核验。",
+        ),
+    ]
+    template = seed_ai_capex_template(session)
+    service.select_template(
+        case_id,
+        template.id,
+        reviewer=ACTOR,
+        reason="演示人审：采用已审核AI硬件机制模板，且不把模板本身当作案例结论。",
+    )
+    nodes = {
+        node.id: node
+        for node in session.scalars(
+            select(MechanismNodeVersion).where(
+                MechanismNodeVersion.template_version_id == template.id
+            )
+        )
+    }
+    required_edges = [
+        edge
+        for edge in session.scalars(
+            select(MechanismEdgeVersion)
+            .where(MechanismEdgeVersion.template_version_id == template.id)
+            .order_by(MechanismEdgeVersion.edge_key)
+        )
+        if nodes[edge.target_node_id].role in {"required_for_outcome", "required_for_attribution"}
+    ]
+    for index, edge in enumerate(required_edges):
+        metric = metrics[min(index, len(metrics) - 1)]
+        service.add_verification_rule(
+            case_id,
+            edge.id,
+            VerificationRuleInput(
+                metric_definition_id=metric.id,
+                expected_direction="increase",
+                support_predicate="公司披露在冻结观察期内出现与该机制边一致的正向指标。",
+                contradiction_predicate="公司披露与该机制边预期相反，或无法支持该传导。",
+                allowed_source_roles=["company_disclosure"],
+                observed_period_start=date(2024, 1, 1),
+                observed_period_end=date(2025, 12, 31),
+                available_at_deadline=date(2026, 4, 30),
+                next_verification_event="工业富联后续定期报告与AI业务披露",
+                reviewer=ACTOR,
+                reason="演示人审：每条必要机制边都有支持与反证条件。",
+            ),
+        )
+    baseline = {
+        "source_ref": f"document:{report_document.id}",
+        "value": "21040000000",
+        "unit": "CNY",
+        "observed_period": "2023-12-31",
+        "available_at": report_document.available_at.isoformat(),
+    }
+    binding = service.create_outcome_binding(
+        forecast_thesis_id,
+        OutcomeBindingInput(
+            metric_definition_id=metrics[0].id,
+            entity_scope={"company_id": str(company_id), "company": "601138"},
+            direction="increase",
+            baseline=baseline,
+            horizon_start=date(2024, 1, 1),
+            horizon_end=date(2024, 12, 31),
+            reviewer=ACTOR,
+            reason="演示人审：冻结2023年基线、2024年预测窗口及年报可得时点。",
+        ),
+    )
+    service.approve_outcome_binding(
+        binding.id,
+        reviewer=ACTOR,
+        reason="演示人审：确认结果指标、来源、公司范围与观察期。",
+    )
+
+
 def materialize_live_industrial_foxconn_case(
     session: Session,
     *,
@@ -314,6 +456,17 @@ def materialize_live_industrial_foxconn_case(
         kind="holding_disclosure", observed_period=bundle.fund.report_period,
     )
 
+    case_theses = {
+        thesis.statement: thesis.id
+        for thesis in session.scalars(
+            select(Thesis).where(Thesis.research_case_id == case_id)
+        )
+    }
+    forecast_thesis_id = case_theses.get("2024 年归母净利润预测")
+    driver_thesis_id = case_theses.get("AI 服务器收入")
+    if forecast_thesis_id is None or driver_thesis_id is None:
+        raise ValueError("live case is missing a reviewed scope thesis for a registered key factor")
+
     expression = MarketExpressionService(session)
     claim = expression.register_report_claim(case_id, ReportClaimInput(
         source_statement_id=forecast_statement.id,
@@ -322,7 +475,7 @@ def materialize_live_industrial_foxconn_case(
         reviewed_by=ACTOR, review_reason="演示人审：将研报预测与公司实际值分开冻结。",
     ))
     forecast_factor = expression.register_key_factor(case_id, KeyFactorInput(
-        report_claim_id=claim.id, thesis_id=None, name="2024 年归母净利润预测兑现",
+        report_claim_id=claim.id, thesis_id=forecast_thesis_id, name="2024 年归母净利润预测兑现",
         expected_direction="positive", metric_name="归母净利润", allowed_source_types=["company_disclosure"],
         verification_window_start=date(2024, 1, 1), verification_window_end=date(2024, 12, 31),
         support_condition="年度报告实际归母净利润与预测值的相对差异不超过 10%。",
@@ -337,7 +490,7 @@ def materialize_live_industrial_foxconn_case(
         reviewed_by=ACTOR, review_reason="演示人审：保留为研报观点，不升级为已证实事实。",
     ))
     driver_factor = expression.register_key_factor(case_id, KeyFactorInput(
-        report_claim_id=driver_claim.id, thesis_id=None, name="AI 服务器与高速交换机增长",
+        report_claim_id=driver_claim.id, thesis_id=driver_thesis_id, name="AI 服务器与高速交换机增长",
         expected_direction="positive", metric_name="AI服务器收入及高速交换机业务", allowed_source_types=["company_disclosure"],
         verification_window_start=date(2024, 1, 1), verification_window_end=date(2024, 12, 31),
         support_condition="年报披露 AI 服务器收入和高速交换机业务同比增长。",
@@ -345,6 +498,18 @@ def materialize_live_industrial_foxconn_case(
         next_verification_event="工业富联 2024 年年度报告", reviewed_by=ACTOR,
         review_reason="演示人审：因素以可被年报核验的业务指标表达。",
     ))
+    CaseMonitorService(session).save(
+        case_id,
+        actor=ACTOR,
+        config=CaseMonitorConfig(
+            frequency="daily_20_00",
+            factor_ids=[forecast_thesis_id, driver_thesis_id],
+            allowed_source_types=["company_disclosure"],
+            next_verification_event="工业富联后续定期报告与AI业务披露",
+            budget=20,
+            change_reason="演示 Case 初始配置：仅按已审核关键因素补充公司披露。",
+        ),
+    )
     expression.register_claim_verification(case_id, forecast_factor.id, ClaimVerificationInput(
         source_statement_id=actual_statement.id, outcome="supported",
         rationale="年度报告披露归母净利润232.16亿元；相对冻结预测251.49亿元偏差约7.69%，落在预设10%容差内。",
@@ -359,6 +524,13 @@ def materialize_live_industrial_foxconn_case(
     instruments = InstrumentService(session)
     company = instruments.create_company(code="601138", name="工业富联", type="listed_company")
     stock = instruments.add_stock(company=company, code="601138.SH", name="工业富联", market="SSE")
+    _configure_demo_research_protocol(
+        session,
+        case_id=case_id,
+        forecast_thesis_id=forecast_thesis_id,
+        report_document=report_doc,
+        company_id=company.id,
+    )
     binding = expression.register_market_instrument_binding(case_id, MarketInstrumentBindingInput(
         company_id=company.id, stock_id=stock.id, source_statement_id=forecast_statement.id,
         relationship_role="directly_affected", reviewed_by=ACTOR,

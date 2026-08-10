@@ -420,6 +420,8 @@ async function main() {
     await page.getByRole("button", { name: "保存已审核市场观测" }).click();
     await page.getByText("已追加已审核市场观测").first().waitFor();
     await page.getByRole("button", { name: "立即补证此因素" }).click();
+    await page.getByText("已创建单因素补证运行", { exact: false }).waitFor();
+    await page.getByRole("link", { name: "查看运行记录" }).click();
     await page.waitForURL(new RegExp(`/events/${caseId}/monitor$`));
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
 

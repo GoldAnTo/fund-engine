@@ -233,7 +233,11 @@ function CaseFrame({
           <span>待审核 {data.progress.pending}</span>
           <span>无效来源 {data.progress.invalidSource}</span>
           <span>
-            {data.lifecycle.activeRunId ? "运行记录可查看" : "无后台运行"}
+            {data.lifecycle.activeRunId
+              ? "主研究运行可查看"
+              : data.lifecycle.status === "published"
+                ? "结论已发布；补证见监测"
+                : "尚未创建主研究运行"}
           </span>
         </div>
       </header>
@@ -1644,12 +1648,16 @@ export function CaseConclusionPage() {
               <h2>
                 {data.lifecycle.activeRunId
                   ? "系统正在受控补证"
-                  : "尚未授权后台运行"}
+                  : data.lifecycle.status === "published"
+                    ? "主研究已发布；后续补证独立记录"
+                    : "尚未授权后台运行"}
               </h2>
               <p>
                 {data.lifecycle.activeRunId
                   ? `范围版本 v${data.scope.version} · 仅允许来源内的材料可进入后续审核。`
-                  : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
+                  : data.lifecycle.status === "published"
+                    ? "发布的结论保持不变；后续单因素补证和定时任务会在“监测与运行”中独立显示。"
+                    : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
               </p>
               <Link to={`/events/${caseId}/monitor`}>查看运行记录 →</Link>
             </section>
@@ -3873,12 +3881,16 @@ function MonitorContent({
           </header>
           <div className="ros-run-summary">
             <strong>
-              {events.length
+              {run?.status === "queued"
+                ? "已入队，等待研究 worker 领取"
+                : events.length
                 ? "系统的每一步都在记录"
                 : "运行将从范围冻结开始记录"}
             </strong>
             <p>
-              {events.length
+              {run?.status === "queued"
+                ? "范围冻结已完成。worker 尚未领取前，页面会持续显示等待状态；不会假装已经采集、审核或改写结论。"
+                : events.length
                 ? "查看每个阶段的输入、允许来源、排除理由和输出；系统不会在后台悄悄改写结论。"
                 : "立即运行或定时任务都会绑定有效的 CaseMonitor 配置版本。"}
             </p>

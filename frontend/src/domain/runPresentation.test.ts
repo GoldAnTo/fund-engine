@@ -13,6 +13,7 @@ import {
 describe("run presentation", () => {
   it("translates frozen run metadata without changing its scope", () => {
     expect(runStageLabel("retrieve")).toBe("采集资料");
+    expect(runStageLabel("resume_after_claim_review")).toBe("审核完成，等待继续执行");
     expect(runStatusLabel("waiting_for_review")).toBe("等待人工审核");
     expect(runStatusLabel("awaiting_review")).toBe("等待人工审核");
     expect(runTriggerLabel("schedule")).toBe("定时任务");

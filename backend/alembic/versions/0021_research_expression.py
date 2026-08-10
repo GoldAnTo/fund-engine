@@ -21,24 +21,101 @@ def _immutable(table: str) -> None:
         op.execute(f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();")
 
 
-def upgrade() -> None:
-    op.create_table(
-        "report_claims",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("research_case_id", sa.Uuid(), sa.ForeignKey("research_cases.id"), nullable=False),
-        sa.Column("source_statement_id", sa.Uuid(), sa.ForeignKey("source_statements.id"), nullable=True),
-        sa.Column("text", sa.Text(), nullable=False),
-        sa.Column("claim_kind", sa.String(length=32), nullable=False),
-        sa.Column("asserted_period", sa.Date(), nullable=True),
-        sa.Column("asserted_by", sa.Text(), nullable=False),
-        sa.Column("review_state", sa.String(length=32), nullable=False),
-        sa.Column("reviewed_by", sa.String(length=128), nullable=True),
-        sa.Column("review_reason", sa.Text(), nullable=True),
-        sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint("claim_kind IN ('disclosed_fact', 'forecast', 'research_opinion')", name="ck_report_claims_kind"),
-        sa.CheckConstraint("review_state IN ('machine_generated', 'reviewed', 'rejected')", name="ck_report_claims_review_state"),
+def _table_columns(table: str) -> set[str]:
+    """Return the columns visible to this migration on every supported dialect."""
+    return {
+        column["name"]
+        for column in sa.inspect(op.get_bind()).get_columns(table)
+    }
+
+
+def _prepare_legacy_report_claims() -> str | None:
+    """Make a pre-migration report_claims table safe to upgrade without loss.
+
+    Early local databases could be bootstrapped from ORM metadata before this
+    migration existed.  Those tables use ``statement``/``kind`` rather than
+    the reviewed market-expression fields below.  Preserve every legacy row
+    in an explicitly named table, then copy it into the new reviewed schema.
+    """
+    inspector = sa.inspect(op.get_bind())
+    if "report_claims" not in inspector.get_table_names():
+        return None
+
+    required = {
+        "id",
+        "research_case_id",
+        "source_statement_id",
+        "text",
+        "claim_kind",
+        "asserted_by",
+        "review_state",
+        "created_at",
+    }
+    if required.issubset(_table_columns("report_claims")):
+        return "already_current"
+
+    legacy_table = "report_claims_legacy_pre_0021"
+    if legacy_table in inspector.get_table_names():
+        raise RuntimeError(
+            "Cannot reconcile report_claims: preserved legacy table already exists. "
+            "Resolve it explicitly before retrying the migration."
+        )
+    op.rename_table("report_claims", legacy_table)
+    return legacy_table
+
+
+def _copy_legacy_report_claims(legacy_table: str | None) -> None:
+    if legacy_table is None or legacy_table == "already_current":
+        return
+    op.execute(
+        f"""
+        INSERT INTO report_claims (
+            id, research_case_id, source_statement_id, text, claim_kind,
+            asserted_period, asserted_by, review_state, reviewed_by,
+            review_reason, reviewed_at, created_at
+        )
+        SELECT
+            id,
+            research_case_id,
+            source_statement_id,
+            statement,
+            CASE
+                WHEN kind IN ('disclosed_fact', 'forecast', 'research_opinion') THEN kind
+                ELSE 'research_opinion'
+            END,
+            NULL,
+            'legacy-schema-reconciliation',
+            'machine_generated',
+            NULL,
+            'Migrated from immutable pre-0021 report_claims record.',
+            NULL,
+            created_at
+        FROM {legacy_table}
+        """
     )
+
+
+def upgrade() -> None:
+    legacy_report_claims = _prepare_legacy_report_claims()
+    if legacy_report_claims != "already_current":
+        op.create_table(
+            "report_claims",
+            sa.Column("id", sa.Uuid(), primary_key=True),
+            sa.Column("research_case_id", sa.Uuid(), sa.ForeignKey("research_cases.id"), nullable=False),
+            sa.Column("source_statement_id", sa.Uuid(), sa.ForeignKey("source_statements.id"), nullable=True),
+            sa.Column("text", sa.Text(), nullable=False),
+            sa.Column("claim_kind", sa.String(length=32), nullable=False),
+            sa.Column("asserted_period", sa.Date(), nullable=True),
+            sa.Column("asserted_by", sa.Text(), nullable=False),
+            sa.Column("review_state", sa.String(length=32), nullable=False),
+            sa.Column("reviewed_by", sa.String(length=128), nullable=True),
+            sa.Column("review_reason", sa.Text(), nullable=True),
+            sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.CheckConstraint("claim_kind IN ('disclosed_fact', 'forecast', 'research_opinion')", name="ck_report_claims_kind"),
+            sa.CheckConstraint("review_state IN ('machine_generated', 'reviewed', 'rejected')", name="ck_report_claims_review_state"),
+        )
+        _copy_legacy_report_claims(legacy_report_claims)
     op.create_index("ix_report_claims_case", "report_claims", ["research_case_id"])
     op.create_table(
         "key_factors",

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import case as sql_case, select
 from sqlalchemy.orm import Session
 
 from app.models.operational import ResearchRun
@@ -27,10 +27,17 @@ class CaseMonitorQuery:
         return list(self._session.scalars(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc())))
 
     def latest_run(self, case_id: uuid.UUID) -> ResearchRun | None:
+        # A cancellation updates its historical row.  Do not let that write
+        # hide a newer queued/running run that the researcher still needs to
+        # monitor in real time.
+        active_first = sql_case(
+            (ResearchRun.status.in_(("queued", "running", "waiting_for_review")), 0),
+            else_=1,
+        )
         return self._session.scalar(
             select(ResearchRun)
             .where(ResearchRun.research_case_id == case_id)
-            .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
+            .order_by(active_first, ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(1)
         )
 

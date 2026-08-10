@@ -111,3 +111,58 @@ def test_materialized_case_publishes_a_bounded_human_conclusion(cmd_session) -> 
     assert published is not None
     assert "251.49" in published.text
     assert "不据此推断股票价格因果" in published.text
+
+
+def test_materialized_key_factors_are_linked_to_reviewed_case_theses(cmd_session, monkeypatch) -> None:
+    """The market page may only start a factor run when its scope link is explicit."""
+    from sqlalchemy import select
+
+    from app.models.ledger import Thesis
+    from app.models.research_monitor import CaseMonitorVersion
+    from app.models.research_expression import KeyFactor
+    from app.services.auto_research import AutoResearchService
+    from app.services.industrial_foxconn_forecast_case import (
+        load_industrial_foxconn_sources,
+    )
+    from app.services.live_industrial_foxconn_case import (
+        materialize_live_industrial_foxconn_case,
+    )
+
+    result = materialize_live_industrial_foxconn_case(
+        cmd_session,
+        bundle=load_industrial_foxconn_sources(FakeGildataClient()),
+        tenant_id="test-team",
+    )
+    thesis_ids = set(
+        cmd_session.scalars(
+            select(Thesis.id).where(Thesis.research_case_id == result.case_id)
+        )
+    )
+    factors = list(
+        cmd_session.scalars(
+            select(KeyFactor).where(KeyFactor.research_case_id == result.case_id)
+        )
+    )
+
+    assert factors
+    assert all(factor.thesis_id in thesis_ids for factor in factors)
+    monitor = cmd_session.scalar(
+        select(CaseMonitorVersion)
+        .where(CaseMonitorVersion.research_case_id == result.case_id)
+        .order_by(CaseMonitorVersion.version.desc())
+    )
+    assert monitor is not None
+    assert set(monitor.factor_ids) == {str(factor.thesis_id) for factor in factors}
+
+    def unavailable_client():
+        raise RuntimeError("worker model client is unavailable")
+
+    from app.ai.client import LLMClient
+
+    monkeypatch.setattr(LLMClient, "from_env", unavailable_client)
+    run = AutoResearchService(cmd_session).start_from_key_factor(
+        case_id=result.case_id,
+        key_factor_id=factors[0].id,
+    )
+    assert run.status == "queued"
+    assert run.monitor_version_id == monitor.id

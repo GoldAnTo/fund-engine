@@ -10,9 +10,12 @@ from app.models.ledger import (
     DocumentVersion,
     ResearchCase,
     SourceSpan,
+    Thesis,
 )
+from app.models.operational import ResearchTask
 from app.models.source_governance import SourceContract
 from app.services.atomic_claims import AtomicClaimService
+from app.services.auto_research import AutoResearchService
 
 
 def _candidate_for_case(session):
@@ -118,6 +121,56 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
     assert item["review_state"] == "modified"
     assert item["review_history"][0]["reason"] == "已复核原文、主体和期间"
     assert item["published_source_statement"]["id"] == body["published_source_statement"]["id"]
+
+
+def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_session) -> None:
+    case, candidate = _candidate_for_case(cmd_session)
+    cmd_session.add(
+        Thesis(
+            research_case_id=case.id,
+            statement="订单增长将改善收入",
+            created_by="human:owner",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_session.flush()
+    service = AutoResearchService(cmd_session)
+    run = service.start(case.id)
+    for task in service.repo.tasks_for_run(run.id):
+        task.status = "blocked"
+        task.stage = "claim_review"
+    service.repo.update_run(
+        run,
+        status="waiting_for_review",
+        stage="claim_review",
+        stop_reason="pending_atomic_claim_review",
+    )
+    job = service.repo.job_for_run(run.id)
+    assert job is not None
+    job.status = "waiting_for_review"
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/atomic-claims/{candidate.id}/reviews",
+        json={
+            "outcome": "rejected",
+            "reviewer": "human:reviewer",
+            "reason": "不属于本次可用来源范围",
+            "idempotency_key": "atomic-review-requeue-1",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_session.expire_all()
+    resumed = service.repo.get_run(run.id)
+    assert resumed is not None
+    assert resumed.status == "queued"
+    assert resumed.stage == "resume_after_claim_review"
+    assert resumed.stop_reason is None
+    assert all(task.status == "queued" for task in service.repo.tasks_for_run(run.id))
+    resumed_job = service.repo.job_for_run(run.id)
+    assert resumed_job is not None
+    assert resumed_job.status == "queued"
 
 
 def test_researcher_can_propose_one_frozen_source_span_for_review(

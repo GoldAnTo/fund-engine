@@ -153,6 +153,55 @@ class AutoResearchRepository:
         job.finished_at = _utcnow()
         self._append_job_event(job, status=status, step=step, message=error or "worker finished")
 
+    def resume_after_claim_review(self, run: ResearchRun) -> bool:
+        """Requeue the same frozen run after its atomic-claim gate is cleared.
+
+        The previous pause remains in ``research_run_events`` and ``job_events``.
+        We only reopen operational work that was explicitly blocked by that gate;
+        a budget stop or any other review state must not be silently resumed.
+        """
+        if not (
+            run.status == "waiting_for_review"
+            and run.stop_reason == "pending_atomic_claim_review"
+        ):
+            return False
+        run.status = "queued"
+        run.stage = "resume_after_claim_review"
+        run.stop_reason = None
+        # Resume the interrupted round so its blocked support/contradict/result
+        # tasks are actually eligible for the worker again.
+        run.round = max(0, (run.round or 1) - 1)
+        run.updated_at = _utcnow()
+        for task in self._session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.status == "blocked")
+            .where(ResearchTask.stage == "claim_review")
+        ):
+            task.status = "queued"
+            task.stage = "planning"
+            task.updated_at = _utcnow()
+        job = self.job_for_run(run.id)
+        if job is None:
+            self.enqueue_run_job(run)
+        elif job.status == "waiting_for_review":
+            job.status = "queued"
+            job.step = "resume_after_claim_review"
+            job.error = None
+            job.finished_at = None
+            job.attempt += 1
+            self._append_job_event(
+                job,
+                status="queued",
+                step="resume_after_claim_review",
+                message="atomic claim review completed; run requeued",
+            )
+        else:
+            # A concurrent worker/administrator action won the state change;
+            # do not overwrite it or create a duplicate job.
+            return False
+        return True
+
     def _append_job_event(self, job: Job, *, status: str, step: str, message: str) -> None:
         previous = self._session.scalar(
             select(func.max(JobEvent.seq)).where(JobEvent.job_id == job.id)
