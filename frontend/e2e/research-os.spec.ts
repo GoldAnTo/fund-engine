@@ -30,6 +30,8 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/event-tsm/documents?document=doc-event-tsm-q2&client=mock");
 
     await expect(page.getByRole("heading", { name: "台积电 2026 年第二季度法说会摘要" })).toBeVisible();
+    await expect(page.getByText("权威性尚未记录")).toBeVisible();
+    await expect(page.getByText(/解析完成 · 解析器 docling-v1.2.3/)).toBeVisible();
     await page.getByRole("button", { name: "将此段纳入待审候选" }).first().click();
     await page.getByLabel("候选表述").fill("管理层上调全年资本开支指引。 ");
     await page.getByRole("button", { name: "创建待审候选" }).click();

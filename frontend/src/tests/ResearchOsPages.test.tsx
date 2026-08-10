@@ -2511,6 +2511,9 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("来源已准入")).toBeVisible();
     expect(screen.getByText("公司披露")).toBeVisible();
     expect(screen.queryByText("company_disclosure")).not.toBeInTheDocument();
+    expect(screen.getByText("权威性尚未记录")).toBeVisible();
+    expect(screen.getByText(/解析完成 · 解析器 docling-v1.2.3/)).toBeVisible();
+    expect(screen.getByText("按 Case 保留 · 删除规则未记录")).toBeVisible();
     expect(
       screen.getByText("AI 允许 · 展示 允许 · 导出 禁止 · API 禁止"),
     ).toBeVisible();

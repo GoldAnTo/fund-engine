@@ -35,7 +35,13 @@ import {
   runStatusLabel,
   runTriggerLabel,
 } from "../../domain/runPresentation";
-import { sourceTypeLabel, sourceTypeListLabel } from "../../domain/sourcePresentation";
+import {
+  parseQualityLabel,
+  sourceAuthorityLabel,
+  sourceRetentionLabel,
+  sourceTypeLabel,
+  sourceTypeListLabel,
+} from "../../domain/sourcePresentation";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
 import {
@@ -991,7 +997,7 @@ function DocumentReader({
         </div>
         <div>
           <dt>来源权威性</dt>
-          <dd>{document.source_authority || "unknown"}</dd>
+          <dd>{sourceAuthorityLabel(document.source_authority)}</dd>
         </div>
         <div>
           <dt>发布方</dt>
@@ -1030,7 +1036,7 @@ function DocumentReader({
         <div>
           <dt>解析版本</dt>
           <dd>
-            {document.parser_version} · {document.parse_quality}
+            {parseQualityLabel(document.parse_quality)} · 解析器 {document.parser_version}
           </dd>
         </div>
         {originalFile && (
@@ -1058,7 +1064,7 @@ function DocumentReader({
             <div>
               <dt>保留策略</dt>
               <dd>
-                {contract.retention_policy} · {contract.deletion_policy}
+                {sourceRetentionLabel(contract.retention_policy)} · {sourceRetentionLabel(contract.deletion_policy)}
               </dd>
             </div>
             <div>
