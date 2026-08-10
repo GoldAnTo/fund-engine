@@ -3212,6 +3212,7 @@ function MonitorContent({
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [monitorLoadError, setMonitorLoadError] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(
     activeRunId,
   );
@@ -3219,14 +3220,16 @@ function MonitorContent({
   const [protocolStates, setProtocolStates] = useState<
     Record<string, Researchability>
   >({});
-  const loadMonitor = () =>
-    researchOsApi
+  const loadMonitor = () => {
+    setMonitorLoadError(false);
+    return researchOsApi
       .monitor(caseId)
       .then((value) => {
         setDetail(value);
         setSelectedRunId(value.latest_run?.id ?? null);
       })
-      .catch(() => setError("监控配置尚不可用。"));
+      .catch(() => setMonitorLoadError(true));
+  };
   const loadEvents = (runId: string) =>
     researchOsApi
       .runEvents(runId)
@@ -3376,6 +3379,21 @@ function MonitorContent({
           >
             补齐研究协议
           </Link>
+        </section>
+      )}
+      {monitorLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>监控配置暂不可用</strong>
+          <p>
+            当前无法确认此 Case 的监控范围、配置版本或最近运行；不会以旧页面状态代替真实记录。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => void loadMonitor()}
+          >
+            重新读取监控配置
+          </button>
         </section>
       )}
       {error && <p className="ros-error">{error}</p>}

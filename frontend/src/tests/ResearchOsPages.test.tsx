@@ -319,6 +319,32 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("makes an unreadable Case monitor explicit and lets the researcher retry it", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "monitor").mockRejectedValueOnce(
+      new Error("Monitor unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "监控配置暂不可用",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "重新读取监控配置" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "用于未来运行的配置" }),
+    ).toBeVisible();
+  });
+
   it("keeps an unavailable Case-scoped stock profile explicit and retryable", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "marketExpression").mockRejectedValue(
