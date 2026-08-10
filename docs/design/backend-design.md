@@ -52,9 +52,9 @@
 | AI 判断 | EvidenceSnapshot、AIAssessment、ReviewDecision | 可复用，ReviewDecision 当前只覆盖 assessment |
 | AI 引擎 | extract → propose → assess，AIRun 审计 | 可复用，当前是同步脚本而非可恢复作业 |
 | 历史截点 | EvidenceLink 与持仓按 cutoff 过滤 | 部分完成，未统一覆盖全部对象 |
-| 股票/基金穿透 | Company、Stock、Fund、ValuationSnapshot、HoldingDisclosure、ThemeRole | 底座存在，来源回链与身份对齐不足 |
+| 股票/基金穿透 | Company、Stock、Fund、ValuationSnapshot、HoldingDisclosure、ThemeRole | 聚源基金披露可按基金、报告期和季报原文精确匹配后写入；仍缺用户工作台入口、调度与更广身份治理 |
 | 图投影 | Neo4j 全量重建；工作台可直接从账本组图 | 可复用，缺增量水位与完整连接边 |
-| 数据源 | 聚源 MCP：研报、公告、行情 | 已有只读适配器，仍是固定查询 CLI |
+| 数据源 | 聚源 MCP：研报、公告、新闻、行情、宏观与受限基金持仓 | 基金持仓先由 `FinQuery` 取得报告期和权重，再以 `AnnouncementData` 的同基金、同季度季报确认实际披露日；仅在展示许可明确、原文与 provider 记录已冻结时写入 `HoldingDisclosure`，覆盖率固定为部分，CLI 仅接受显式基金清单并支持 dry-run |
 | 测试 | 后端 `51 passed, 2 skipped` | SQLite 聚焦测试通过；PG/Neo4j 集成测试未在本轮运行 |
 | 真实切片 | evidence_gate.db：7 文档、34 span、15 statement/link、3 thesis、3 公司、2 基金 | 是冻结样例/种子，不等同持续运营数据 |
 
