@@ -211,6 +211,53 @@ async function prepareReviewedSourceStatement({ apiBase, token, caseId }) {
   if (!review.published_source_statement?.id) {
     throw new Error(`atomic source review did not publish a SourceStatement: ${JSON.stringify(review)}`);
   }
+  return {
+    documentVersionId: baseline.id,
+    sourceSpanId: span.id,
+  };
+}
+
+async function prepareMarketCatalogAndHistoricalFundDisclosure({ apiBase, token, source }) {
+  // Instrument and fund records enter through the public ledger command API.
+  // The browser still creates every Case-specific mapping and observation.
+  const company = await apiJson(apiBase, "/companies", token, {
+    method: "POST",
+    body: JSON.stringify({
+      code: "LIVE-MARKET-001",
+      name: "验收映射公司",
+      type: "listed",
+    }),
+  });
+  const stock = await apiJson(apiBase, `/companies/${company.id}/stocks`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      code: "LIVE001.SZ",
+      name: "验收映射股票",
+      market: "SZSE",
+    }),
+  });
+  const fund = await apiJson(apiBase, "/funds", token, {
+    method: "POST",
+    body: JSON.stringify({
+      code: "LIVE-FUND-001",
+      name: "验收历史披露基金",
+      fund_type: "equity",
+    }),
+  });
+  await apiJson(apiBase, `/funds/${fund.id}/holding-disclosures`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      stock_id: stock.id,
+      weight: "0.035",
+      report_period: "2026-06-30",
+      published_at: "2026-07-20T00:00:00Z",
+      source: "licensed_provider",
+      source_document_version_id: source.documentVersionId,
+      source_span_id: source.sourceSpanId,
+      coverage_status: "complete",
+    }),
+  });
+  return { company, stock, fund };
 }
 
 async function main() {
@@ -304,7 +351,12 @@ async function main() {
       if (!disabled) throw new Error("strict protocol gate unexpectedly enabled a monitor run");
     });
     const { thesisId } = await prepareReadyProtocol({ apiBase, token, caseId });
-    await prepareReviewedSourceStatement({ apiBase, token, caseId });
+    const reviewedSource = await prepareReviewedSourceStatement({ apiBase, token, caseId });
+    const marketCatalog = await prepareMarketCatalogAndHistoricalFundDisclosure({
+      apiBase,
+      token,
+      source: reviewedSource,
+    });
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "立即补证一次" }).isEnabled().then((enabled) => {
       if (!enabled) throw new Error("ready research protocol did not enable a monitor run");
@@ -332,6 +384,24 @@ async function main() {
     await page.getByLabel("因素审核理由").fill("指标、窗口、来源和反证条件均已人工确认。 ");
     await page.getByRole("button", { name: "登记已审核关键因素" }).click();
     await page.getByText("已登记已审核关键因素").waitFor();
+    await page.getByRole("button", { name: "关联公司与股票" }).click();
+    await page.getByLabel("新增关联标的").selectOption(marketCatalog.company.id);
+    await page.getByLabel("标的审核理由").fill("冻结原文已明确这家公司处于订单传导范围。 ");
+    await page.getByRole("button", { name: "保存已审核标的关联" }).click();
+    await page.getByText("已追加已审核标的关联").first().waitFor();
+    await page.getByRole("button", { name: "登记基本面传导" }).click();
+    await page.getByLabel("传导标的").waitFor();
+    await page.getByLabel("传导机制").fill("订单增长通过履约和确认节奏传导至收入。 ");
+    await page.getByLabel("传导审核理由").fill("已核对标的关系、指标口径和原文定位。 ");
+    await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
+    await page.getByText("已追加已审核基本面传导").first().waitFor();
+    await page.getByText("验收历史披露基金").first().waitFor();
+    await page.getByRole("button", { name: "登记市场观测" }).click();
+    await page.getByLabel("观测标的").waitFor();
+    await page.getByLabel("相对表现").fill("0.012");
+    await page.getByLabel("市场观测审核理由").fill("已核对窗口、基准、可得时间与价格来源。 ");
+    await page.getByRole("button", { name: "保存已审核市场观测" }).click();
+    await page.getByText("已追加已审核市场观测").first().waitFor();
     await page.getByRole("button", { name: "立即补证此因素" }).click();
     await page.waitForURL(new RegExp(`/events/${caseId}/monitor$`));
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
@@ -363,6 +433,9 @@ async function main() {
       ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
       ["POST /research-cases/:caseId/report-claims", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/report-claims`)],
       ["POST /research-cases/:caseId/key-factors", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/key-factors`)],
+      ["POST /research-cases/:caseId/market-instruments", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/market-instruments`)],
+      ["POST /research-cases/:caseId/key-factors/:factorId/fundamental-impacts", (request) => request.startsWith("POST ") && request.includes(`/research-cases/${caseId}/key-factors/`) && request.endsWith("/fundamental-impacts")],
+      ["POST /research-cases/:caseId/key-factors/:factorId/market-observations", (request) => request.startsWith("POST ") && request.includes(`/research-cases/${caseId}/key-factors/`) && request.endsWith("/market-observations")],
       ["POST /research-cases/:caseId/monitor/factor-runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/factor-runs`)],
       ["POST /research-cases/:caseId/monitor/paused", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/paused`)],
       ["GET /event-research", (request) => request.startsWith("GET ") && request.endsWith("/event-research")],
@@ -374,7 +447,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured, registered a market factor, ran, paused its future schedule, and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, ran, paused its future schedule, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)
