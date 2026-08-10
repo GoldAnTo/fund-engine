@@ -257,6 +257,28 @@ function CaseFrame({
           );
         })}
       </nav>
+      <details className="ros-case-nav-more">
+        <summary>更多研究内容</summary>
+        <div role="group" aria-label="更多研究内容">
+          {caseSections
+            .filter((section) => section.id !== navigation.section.id)
+            .map((section) => {
+              const pendingLabel = section.id === "evidence" && data.progress.pending > 0
+                ? `，待审核 ${data.progress.pending}`
+                : "";
+              return (
+                <Link
+                  aria-label={`${section.label}${pendingLabel}`}
+                  key={section.id}
+                  to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+                >
+                  {section.label}
+                  {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
+                </Link>
+              );
+            })}
+        </div>
+      </details>
       {navigation.section.pages.length > 0 && (
         <nav
           aria-label={`${navigation.section.label}页面`}

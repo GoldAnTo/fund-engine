@@ -67,6 +67,26 @@ describe("Research OS event entry", () => {
     expect(within(screen.getByLabelText("证据工作台页面")).getByRole("link", { name: "原文资料" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("reveals the remaining research stages from a compact Case menu", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText("Case 研究阶段");
+    await user.click(screen.getByText("更多研究内容"));
+    const more = screen.getByRole("group", { name: "更多研究内容" });
+    expect(more).toHaveTextContent("研究结论");
+    expect(more).toHaveTextContent("证据工作台");
+    expect(more).toHaveTextContent("监测与运行");
+    expect(more).toHaveTextContent("关系与图谱");
+    expect(more).not.toHaveTextContent("市场与表达");
+  });
+
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
   afterEach(() => {
     resetResearchClient();

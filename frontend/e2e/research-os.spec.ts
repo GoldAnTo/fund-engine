@@ -207,7 +207,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
 
-  test("Case conclusion has one explicit next action on a narrow workbench", async ({ page }) => {
+  test("Case navigation groups contextual pages on a narrow workbench", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/events/event-tsm?client=mock");
 
@@ -221,20 +221,21 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-tsm\/review/);
     await expect(page.getByRole("heading", { name: /条待审核关系/ })).toBeVisible();
 
-    const wikiTab = page
-      .getByRole("navigation", { name: "Case 页面" })
-      .getByRole("link", { name: "Wiki 图谱" });
-    await wikiTab.focus();
-    await expect(wikiTab).toBeFocused();
-    await wikiTab.press("Enter");
+    const evidencePages = page.getByRole("navigation", { name: "证据工作台页面" });
+    await expect(evidencePages.getByRole("link", { name: "命题与证据" })).toBeVisible();
+    await expect(evidencePages.getByRole("link", { name: "原文资料" })).toBeVisible();
+    await expect(evidencePages.getByRole("link", { name: "证据审核" })).toHaveAttribute("aria-current", "page");
+
+    await page.getByText("更多研究内容").click();
+    const more = page.getByRole("group", { name: "更多研究内容" });
+    const wikiTab = more.getByRole("link", { name: "关系与图谱" });
+    await wikiTab.click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/wiki/);
     await expect(page.getByRole("heading", { name: "从关系回到冻结原文与审核边界" })).toBeVisible();
 
-    const relationsTab = page
-      .getByRole("navigation", { name: "Case 页面" })
-      .getByRole("link", { name: "关联研究" });
-    await relationsTab.focus();
-    await relationsTab.press("Enter");
+    const relationPages = page.getByRole("navigation", { name: "关系与图谱页面" });
+    const relationsTab = relationPages.getByRole("link", { name: "关联研究" });
+    await relationsTab.click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/relations/);
     await expect(page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" })).toBeVisible();
   });
