@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { sourceTypeListLabel } from "../../domain/sourcePresentation";
+import {
+  sourceTypeLabel,
+  sourceTypeListLabel,
+} from "../../domain/sourcePresentation";
 import {
   researchOsApi,
   type MarketExpression,
@@ -428,7 +431,7 @@ export function MarketExpressionContent({
                       </small>
                       <small>
                         相对 {observation.benchmark} · 价格源{" "}
-                        {observation.price_source}
+                        {sourceTypeLabel(observation.price_source)}
                       </small>
                       <small>
                         盘后处理：
@@ -569,7 +572,7 @@ export function MarketExpressionContent({
                         "zh-CN",
                       )}
                       <br />
-                      来源 {position.source} · 覆盖：
+                      来源 {sourceTypeLabel(position.source)} · 覆盖：
                       {fundCoverageLabels[position.coverage_status] ??
                         "未记录"}{" "}
                       · 时效：

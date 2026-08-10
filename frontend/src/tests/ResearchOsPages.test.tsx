@@ -3130,6 +3130,8 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("因素审核").nextElementSibling).toHaveTextContent(
       "human:researcher",
     );
+    expect(screen.getByText(/价格源/)).toHaveTextContent("授权供应商资料");
+    expect(screen.getByText(/来源 授权供应商资料/)).toBeVisible();
     expect(screen.getByText(/事件窗口观测/)).toBeVisible();
     expect(
       screen.getByText("这是市场观测，不自动表述为研报或因素造成。"),
