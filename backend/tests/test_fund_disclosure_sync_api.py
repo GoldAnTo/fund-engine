@@ -124,6 +124,38 @@ class _CapabilityUnavailableClient(_UnmatchedFundClient):
         raise RuntimeError("provider tool catalog unavailable")
 
 
+class _MatchedFundClient(_UnmatchedFundClient):
+    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
+        table = (
+            "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
+            "|---|---|---|---|---|---|\n"
+            "|易方达蓝筹精选混合|005827.OF|2025-06-30|腾讯控股|00700.HK|9.50|"
+            if name == "FinQuery"
+            else "公告标题：易方达蓝筹精选混合型证券投资基金2025年第2季度报告；\n发布时间：2025-07-21；"
+        )
+        return json.dumps({"code": "0", "results": [{"table_markdown": table}]}, ensure_ascii=False)
+
+
+def test_fund_disclosure_sync_ignores_display_permission_toggle_in_v1(session) -> None:
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    config = service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        change_reason="第一版统一展示已核验的历史披露",
+        allow_display=False,
+    )
+
+    run = service.run_now(case.id, client=_MatchedFundClient())
+
+    assert config.allow_display is True
+    assert run.events[-1].payload_json["pending_permission_rows"] == 0
+    assert run.events[-1].payload_json["holding_disclosures_written"] == 1
+    assert session.query(HoldingDisclosure).count() == 1
+
+
 def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(session) -> None:
     case = _case(session)
     service = FundDisclosureSyncService(session)

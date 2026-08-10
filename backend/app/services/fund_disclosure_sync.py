@@ -84,7 +84,11 @@ class FundDisclosureSyncService:
             frequency=frequency.strip().lower(),
             fund_codes=normalized_codes,
             stock_codes=self._case_stock_codes(case_id),
-            allow_display=allow_display,
+            # V1 deliberately does not gate Case-scoped historical disclosure
+            # on a user-entered display-permission toggle.  Once the exact
+            # report-period match succeeds, researchers may inspect and
+            # configure it; source provenance remains frozen separately.
+            allow_display=True,
             changed_by=actor.strip(),
             change_reason=change_reason.strip(),
             created_at=_utcnow(),
