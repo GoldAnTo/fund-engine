@@ -2263,14 +2263,18 @@ function AtomicClaimItem({
         >
           定位到冻结原文
         </Link>
-        <a
-          className="ros-button ros-button--secondary"
-          href={claim.document_source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          打开原始链接
-        </a>
+        {claim.document_source_url ? (
+          <a
+            className="ros-button ros-button--secondary"
+            href={claim.document_source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            打开原始链接
+          </a>
+        ) : (
+          <span>原始链接未记录</span>
+        )}
         <span>候选 ID · {claim.id}</span>
       </div>
       {sourceDetail && (
@@ -4155,18 +4159,28 @@ function RunDrawer({
 }
 
 export function MonitorConfigPage() {
+  const [historyReload, setHistoryReload] = useState(0);
   return (
     <CaseFrame>
       {(_data, caseId) => (
         <>
-          <MonitorConfigForm caseId={caseId} />
-          <MonitorHistory caseId={caseId} />
+          <MonitorConfigForm
+            caseId={caseId}
+            onSaved={() => setHistoryReload((value) => value + 1)}
+          />
+          <MonitorHistory caseId={caseId} reloadToken={historyReload} />
         </>
       )}
     </CaseFrame>
   );
 }
-function MonitorHistory({ caseId }: { caseId: string }) {
+function MonitorHistory({
+  caseId,
+  reloadToken,
+}: {
+  caseId: string;
+  reloadToken: number;
+}) {
   const [history, setHistory] = useState<Monitor[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
@@ -4184,7 +4198,7 @@ function MonitorHistory({ caseId }: { caseId: string }) {
     return () => {
       active = false;
     };
-  }, [caseId, reload]);
+  }, [caseId, reload, reloadToken]);
   return (
     <section className="ros-rule-history">
       <p className="ros-eyebrow">CaseMonitor 版本历史</p>
@@ -4227,7 +4241,13 @@ function MonitorHistory({ caseId }: { caseId: string }) {
     </section>
   );
 }
-function MonitorConfigForm({ caseId }: { caseId: string }) {
+function MonitorConfigForm({
+  caseId,
+  onSaved,
+}: {
+  caseId: string;
+  onSaved: () => void;
+}) {
   const [detail, setDetail] = useState<MonitorDetail | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [frequency, setFrequency] = useState("weekday_08_30");
@@ -4303,6 +4323,7 @@ function MonitorConfigForm({ caseId }: { caseId: string }) {
       setBudget(saved.budget);
       setReason(saved.change_reason);
       setMessage(`已保存监控版本 v${saved.version}；此前版本保持不变。`);
+      onSaved();
     } catch {
       setMessage("保存失败，未写入任何配置版本。");
     }
@@ -4394,6 +4415,7 @@ function MonitorConfigForm({ caseId }: { caseId: string }) {
               onChanged={(monitor) => {
                 setDetail({ ...detail, monitor });
                 setMessage(`已保存监控版本 v${monitor.version}。`);
+                onSaved();
               }}
             />
           </fieldset>

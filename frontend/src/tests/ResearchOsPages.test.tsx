@@ -1623,13 +1623,13 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
   });
 
-  it("keeps extracted atomic claims visible until a reviewer publishes them", async () => {
+  it("does not expose a dead original-source action when an extracted claim has no source URL", async () => {
     const user = userEvent.setup();
     const atomicClaim = {
       id: "atomic-1",
       source_span_id: "sp-tsm-capex",
       document_version_id: "doc-event-tsm-q2",
-      document_source_url: "https://disclosure.example/1",
+      document_source_url: "",
       locator: { page: 2, paragraph: 3 },
       quote: "订单同比增长20%",
       quote_start: 14,
@@ -1694,12 +1694,14 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("原子陈述审核")).toBeVisible();
     expect(screen.getByText("订单同比增长20%")).toBeVisible();
     expect(screen.getByText(/extract:run-1/)).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: "定位到冻结原文" }),
-    ).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "定位到冻结原文" })).toHaveAttribute(
       "href",
       "/events/event-tsm/documents?document=doc-event-tsm-q2&span=sp-tsm-capex",
     );
+    expect(
+      screen.queryByRole("link", { name: "打开原始链接" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("原始链接未记录")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "在此页核对原文" }));
     expect(await screen.findByText("在此页核对的冻结原文")).toBeVisible();
     expect(
@@ -2900,13 +2902,16 @@ describe("Research OS event entry", () => {
       next_verification_event: "下一次财报后补证",
       change_reason: "补充授权来源",
     };
+    let current = { ...initial, history: [initial.monitor] };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      const payload =
+      const isSave =
         url.endsWith("/research-cases/event-tsm/monitor") &&
-        init?.method === "PUT"
-          ? saved
-          : initial;
+        init?.method === "PUT";
+      if (isSave) {
+        current = { ...initial, monitor: saved, history: [saved, initial.monitor] };
+      }
+      const payload = isSave ? saved : current;
       return Promise.resolve(
         new Response(JSON.stringify(payload), {
           status: 200,
@@ -2936,6 +2941,7 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByText("当前生效版本 v2")).toBeVisible();
     expect(screen.getByText(/已保存监控版本 v2/)).toBeVisible();
+    expect(await screen.findByText("v2 · 已启用")).toBeVisible();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/v1/research-cases/event-tsm/monitor",
