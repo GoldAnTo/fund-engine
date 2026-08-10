@@ -74,6 +74,7 @@ class EventResearchService:
             raw=payload.raw_input.encode("utf-8"),
             source_url=document_url,
             parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[payload.source_type],
+            title=payload.event_title,
             parse_state="partial",
             source_authority=payload.source_metadata.get("authority_level", "unknown"),
         )

@@ -658,10 +658,10 @@ function CaseDocumentsContent({
                       ? "解析不完整"
                       : "解析失败"}
                 </span>
-                <strong>{document.title || "未命名资料"}</strong>
+                <strong>{document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")}</strong>
                 <small>
                   {document.publisher || "发布方未记录"} ·{" "}
-                  {document.document_type || "类型未记录"}
+                  {document.document_type || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "类型未记录")}
                 </small>
                 <small>
                   {document.version_label || "版本未记录"} ·{" "}
@@ -1120,7 +1120,7 @@ function DocumentReader({
               ? "来源当前受限"
               : "许可未完整记录"}
         </span>
-        <h3>{document.title || "未命名资料"}</h3>
+        <h3>{document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")}</h3>
         <p>
           {!contentDisplayAllowed
             ? "资料正文与原件信息不予展示；仅保留审计元数据。"
@@ -2277,7 +2277,7 @@ function AtomicClaimItem({
         <section className="ros-atomic-source-check">
           <div>
             <p className="ros-eyebrow">在此页核对的冻结原文</p>
-            <strong>{sourceDetail.document.title || "未命名资料"}</strong>
+            <strong>{sourceDetail.document.title || (sourceDetail.document.source_contract ? sourceTypeLabel(sourceDetail.document.source_contract.source_type) : "未命名资料")}</strong>
             <small>
               {sourceDetail.document.publisher || "发布方未记录"} ·{" "}
               {sourceDetail.document.available_at}
@@ -3004,7 +3004,7 @@ function ProtocolBindingForm(props: {
               </option>
               {props.documents?.map((document) => (
                 <option key={document.id} value={document.id}>
-                  {document.title || "未命名资料"} · {document.available_at}
+                  {document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")} · {document.available_at}
                 </option>
               ))}
             </select>

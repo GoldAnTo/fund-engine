@@ -674,6 +674,7 @@ def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_sess
     assert len(documents) == 1
     document = documents[0]
     assert document.source_url == payload["source_url"]
+    assert document.title == payload["event_title"]
     assert document.parser_version == "user-pasted-v1"
     assert document.parse_state == "partial"
     spans = cmd_session.scalars(
