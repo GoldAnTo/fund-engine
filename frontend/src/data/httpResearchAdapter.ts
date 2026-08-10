@@ -36,6 +36,7 @@ import type {
   EventReviewQueue,
   EventReviewQueueItem,
   EventSourceStatus,
+  EventSourceType,
   EventWorkbench,
 } from "../domain/eventResearch";
 import type { ActiveResearchClient } from "../domain/prototypeTypes";
@@ -2635,7 +2636,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     await this.post(`/review-proposals/${encodeURIComponent(proposalId)}/decisions`, payload);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: EventSourceType; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     const dto = await this.post<{
       event_title: string | null; company_name: string | null; ticker: string | null;
       event_at: string | null; market_reaction: string | null; summary: string | null;
@@ -2664,7 +2665,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
-  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
+  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
     const dto = await this.post<{ document_version_id: string }>(
       `/event-research/${encodeURIComponent(input.caseId)}/materials`,
       {
@@ -2777,7 +2778,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return { runId: dto.run_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
-  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
     const dto = await this.post<{ document_version_id: string; decision: "reopen" | "no_change"; decision_event_id: string; run_id?: string | null; lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null; } }>(`/event-research/${encodeURIComponent(input.caseId)}/published-material-decisions`, { raw_input: input.rawInput, source_url: input.sourceUrl, source_type: input.sourceType, source_metadata: input.sourceMetadata, decision: input.decision, reason: input.reason, actor: input.actor });
     return { documentVersionId: dto.document_version_id, decision: dto.decision, decisionEventId: dto.decision_event_id, runId: dto.run_id ?? null, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }

@@ -22,6 +22,7 @@ import {
 import { researchClient } from "../../data/researchClient";
 import type {
   EventResearchClient,
+  EventSourceType,
   EventWorkbench,
 } from "../../domain/eventResearch";
 import {
@@ -601,9 +602,7 @@ function PublishedMaterialDecisionForm({
   const navigate = useNavigate();
   const [rawInput, setRawInput] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [sourceType, setSourceType] = useState<
-    "pasted_snapshot" | "uploaded_file" | "licensed_provider"
-  >("pasted_snapshot");
+  const [sourceType, setSourceType] = useState<EventSourceType>("pasted_snapshot");
   const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
   const [sourcePermissions, setSourcePermissions] = useState({ ai_processing: true, display: true, export: false, api: false });
   const [providerName, setProviderName] = useState("");
@@ -612,7 +611,11 @@ function PublishedMaterialDecisionForm({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const sourceReady = sourceType !== "licensed_provider" || Boolean(providerName.trim() && providerRecordId.trim());
+  const sourceReady = sourceType === "licensed_provider"
+    ? Boolean(providerName.trim() && providerRecordId.trim())
+    : sourceType === "public_url"
+      ? Boolean(sourceUrl.trim())
+      : true;
   async function submit() {
     if (!rawInput.trim() || !reason.trim() || !sourceReady) return;
     setBusy(true);
@@ -627,6 +630,7 @@ function PublishedMaterialDecisionForm({
           ...sourceMetadata,
           permissions: sourcePermissions,
           ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), retrieval_reference: sourceUrl.trim() || undefined } : {}),
+          ...(sourceType === "public_url" ? { intake_note: "公开网页 URL 仅作为可复查线索；已冻结内容尚未完成原文核验。" } : {}),
           authority_level:
             sourceType === "licensed_provider"
               ? "licensed_research"
@@ -673,11 +677,13 @@ function PublishedMaterialDecisionForm({
       );
     }
   }
-  function changeSourceType(next: "pasted_snapshot" | "uploaded_file" | "licensed_provider") {
+  function changeSourceType(next: EventSourceType) {
     setSourceType(next);
     setSourcePermissions(next === "licensed_provider"
       ? { ai_processing: false, display: false, export: false, api: false }
-      : { ai_processing: true, display: true, export: false, api: false });
+      : next === "public_url"
+        ? { ai_processing: false, display: true, export: false, api: false }
+        : { ai_processing: true, display: true, export: false, api: false });
   }
   return (
     <section className="ros-material-continuation">
@@ -718,6 +724,7 @@ function PublishedMaterialDecisionForm({
           <option value="pasted_snapshot">粘贴快照</option>
           <option value="uploaded_file">上传文本快照</option>
           <option value="licensed_provider">授权数据源快照</option>
+          <option value="public_url">公开网页快照</option>
         </select>
       </label>
       {sourceType === "licensed_provider" && (
@@ -755,13 +762,15 @@ function PublishedMaterialDecisionForm({
         </label>
       )}
       <label>
-        来源链接（可选）
+        {sourceType === "public_url" ? "公开网页链接（必填）" : "来源链接（可选）"}
         <input
+          aria-label={sourceType === "public_url" ? "公开网页链接（必填）" : undefined}
           value={sourceUrl}
           onChange={(event) => setSourceUrl(event.target.value)}
           placeholder="https://…"
         />
       </label>
+      {sourceType === "public_url" && <p className="ros-note">系统只冻结你提交的正文快照，不会抓取网页或将 URL 视为已核验内容；它仍需人工核对后才能进入正式复核。</p>}
       <fieldset>
         <legend>人工决定</legend>
         <label>

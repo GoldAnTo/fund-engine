@@ -56,11 +56,12 @@ class EventResearchService:
             "pasted_snapshot": "event://pasted-news",
             "uploaded_file": "upload://event-text-snapshot",
             "licensed_provider": "provider://unresolved-record",
+            "public_url": "https://invalid.example/public-url-required",
         }[payload.source_type]
         document = document_service.freeze(
             raw=payload.raw_input.encode("utf-8"),
             source_url=document_url,
-            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1"}[payload.source_type],
+            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[payload.source_type],
             parse_state="partial",
             source_authority=payload.source_metadata.get("authority_level", "unknown"),
         )
@@ -182,11 +183,12 @@ class EventResearchService:
             "pasted_snapshot": "event://published-material-snapshot",
             "uploaded_file": "upload://published-material-text-snapshot",
             "licensed_provider": "provider://unresolved-record",
+            "public_url": "https://invalid.example/public-url-required",
         }[source_type]
         document = document_service.freeze(
             raw=raw_input.encode("utf-8"),
             source_url=document_url,
-            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1"}[source_type],
+            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[source_type],
             title="已发布 Case 的新增材料",
             parse_state="partial",
             source_authority=source_metadata.get("authority_level", "unknown"),
@@ -232,6 +234,7 @@ class EventResearchService:
             "pasted_snapshot": "event://inbox-material-snapshot",
             "uploaded_file": "upload://inbox-material-text-snapshot",
             "licensed_provider": "provider://unresolved-record",
+            "public_url": "https://invalid.example/public-url-required",
         }[source_type]
         document = document_service.freeze(
             raw=raw_input.encode("utf-8"),
@@ -240,6 +243,7 @@ class EventResearchService:
                 "pasted_snapshot": "user-pasted-v1",
                 "uploaded_file": "uploaded-text-v1",
                 "licensed_provider": "provider-snapshot-v1",
+                "public_url": "user-pasted-public-url-v1",
             }[source_type],
             title=source_metadata.get("file_name", "收件箱新增材料"),
             parse_state="partial",

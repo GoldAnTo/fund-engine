@@ -1108,6 +1108,34 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/不会直接把二手转述写成已披露事实/)).toBeVisible();
   });
 
+  it("keeps a public web page as a URL-bound, unverified frozen snapshot", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes>
+          <Route path="/events/new" element={<EventCreatePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      screen.getByLabelText("事件原始输入"),
+      "公司发布公告后，市场开始重新评估订单节奏。",
+    );
+    await user.selectOptions(screen.getByLabelText("来源接入方式"), "public_url");
+
+    expect(screen.getByLabelText("公开网页链接（必填）")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "允许 AI 处理" })).not.toBeChecked();
+    expect(screen.getByText(/系统只冻结你提交的正文快照，不会抓取网页/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "识别事件与研究问题" })).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("公开网页链接（必填）"),
+      "https://www.szse.cn/disclosure/listed/notice/index.html",
+    );
+    expect(screen.getByRole("button", { name: "识别事件与研究问题" })).toBeEnabled();
+  });
+
   it("lets a researcher request review-gated extraction from a frozen Case document", async () => {
     const user = userEvent.setup();
     render(

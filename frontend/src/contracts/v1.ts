@@ -2077,7 +2077,7 @@ export interface components {
              * @default pasted_snapshot
              * @enum {string}
              */
-            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
             /** Source Metadata */
             source_metadata?: {
                 [key: string]: unknown;
@@ -2093,7 +2093,7 @@ export interface components {
              * Source Type
              * @enum {string}
              */
-            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
         };
         /** Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post */
         Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
@@ -2807,7 +2807,7 @@ export interface components {
              * @default pasted_snapshot
              * @enum {string}
              */
-            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
             /** Source Metadata */
             source_metadata?: {
                 [key: string]: unknown;
@@ -3628,7 +3628,7 @@ export interface components {
              * @default pasted_snapshot
              * @enum {string}
              */
-            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
             /** Source Metadata */
             source_metadata?: {
                 [key: string]: unknown;
@@ -5034,7 +5034,7 @@ export interface components {
              * @default pasted_snapshot
              * @enum {string}
              */
-            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+            source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
             /** Source Metadata */
             source_metadata?: {
                 [key: string]: unknown;

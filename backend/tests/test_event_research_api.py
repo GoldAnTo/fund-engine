@@ -192,6 +192,49 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
     ) == _confirmed_event()["candidate_factors"]
 
 
+def test_public_url_intake_keeps_the_url_type_and_unverified_snapshot_boundary(
+    cmd_client, cmd_session
+) -> None:
+    payload = _confirmed_event()
+    payload.update(
+        {
+            "source_type": "public_url",
+            "source_url": "https://www.szse.cn/disclosure/listed/notice/index.html",
+            "source_metadata": {"permissions": {"ai_processing": False, "display": True}},
+        }
+    )
+
+    response = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert response.status_code == 201
+    case_id = uuid.UUID(response.json()["case_id"])
+    brief = cmd_session.get(EventResearchBrief, uuid.UUID(response.json()["brief_id"]))
+    assert brief is not None
+    assert brief.source_type == "public_url"
+    document = cmd_session.scalar(
+        select(DocumentVersion)
+        .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
+        .where(CaseDocumentVersion.research_case_id == case_id)
+    )
+    assert document is not None
+    assert document.source_url == payload["source_url"]
+    assert document.parser_version == "user-pasted-public-url-v1"
+    documents = cmd_client.get("/api/v1/documents", params={"case_id": str(case_id)})
+    item = documents.json()["items"][0]
+    assert item["source_contract"]["source_type"] == "public_url"
+    assert item["source_contract"]["permissions"]["ai_processing"] is False
+    assert "不得作为正式证据" in item["source_contract"]["downstream_restrictions"][0]
+
+
+def test_public_url_intake_requires_a_public_url(cmd_client) -> None:
+    payload = _confirmed_event()
+    payload.update({"source_type": "public_url", "source_url": None})
+
+    response = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert response.status_code == 422
+
+
 def test_protocol_required_event_cannot_start_a_research_run_before_its_gate_is_ready(cmd_client) -> None:
     payload = _confirmed_event()
     payload["research_protocol_required"] = True

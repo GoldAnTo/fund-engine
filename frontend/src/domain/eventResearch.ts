@@ -8,10 +8,16 @@ export type EventLifecycleStatus =
   | "published"
   | "exhausted";
 
+export type EventSourceType =
+  | "pasted_snapshot"
+  | "uploaded_file"
+  | "licensed_provider"
+  | "public_url";
+
 export interface EventExtractionInput {
   rawInput: string;
   sourceUrl?: string;
-  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceType?: EventSourceType;
   sourceMetadata?: Record<string, unknown>;
 }
 
@@ -30,7 +36,7 @@ export interface EventExtraction {
 export interface CreateEventResearchInput extends EventExtraction {
   rawInput: string;
   sourceUrl?: string;
-  sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider";
+  sourceType?: EventSourceType;
   sourceMetadata?: Record<string, unknown>;
   eventTitle: string;
   researchProtocolRequired?: boolean;
@@ -193,13 +199,13 @@ export interface PublishedMaterialDecision {
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
-  attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }>;
+  attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }>;
   uploadEventMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string; parseState: "parsed" | "partial" | "failed"; nextAction: "review_original" | "supplement_original" }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
   getEventWorkbench(caseId: string): Promise<EventWorkbench>;
   getEventConclusionHistory(caseId: string): Promise<EventConclusionVersion[]>;
   continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<EventResearchContinuation>;
-  decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<PublishedMaterialDecision>;
+  decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<PublishedMaterialDecision>;
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;

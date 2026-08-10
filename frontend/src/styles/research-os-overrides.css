@@ -19,6 +19,7 @@
 .ros-source-governance legend { padding: 0 .3rem; color: var(--ros-muted, #73766f); font-size: .76rem; font-weight: 700; }
 .ros-source-governance label { display: grid; gap: .3rem; margin: 0; color: var(--ros-ink, #30332f); font-size: .8rem; }
 .ros-source-governance label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: .45rem; }
+.ros-source-governance input[type="checkbox"] { width: auto; padding: 0; }
 .ros-source-governance small { color: var(--ros-soft, #59615d); font-size: .74rem; line-height: 1.5; }
 
 /* Keyboard focus is a first-class review affordance: it must remain visible

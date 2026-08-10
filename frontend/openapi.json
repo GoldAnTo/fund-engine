@@ -7782,7 +7782,8 @@
             "enum": [
               "pasted_snapshot",
               "uploaded_file",
-              "licensed_provider"
+              "licensed_provider",
+              "public_url"
             ],
             "title": "Source Type",
             "default": "pasted_snapshot"
@@ -7818,7 +7819,8 @@
             "enum": [
               "pasted_snapshot",
               "uploaded_file",
-              "licensed_provider"
+              "licensed_provider",
+              "public_url"
             ],
             "title": "Source Type"
           }
@@ -9748,7 +9750,8 @@
             "enum": [
               "pasted_snapshot",
               "uploaded_file",
-              "licensed_provider"
+              "licensed_provider",
+              "public_url"
             ],
             "title": "Source Type",
             "default": "pasted_snapshot"
@@ -12335,7 +12338,8 @@
             "enum": [
               "pasted_snapshot",
               "uploaded_file",
-              "licensed_provider"
+              "licensed_provider",
+              "public_url"
             ],
             "title": "Source Type",
             "default": "pasted_snapshot"
@@ -16202,7 +16206,8 @@
             "enum": [
               "pasted_snapshot",
               "uploaded_file",
-              "licensed_provider"
+              "licensed_provider",
+              "public_url"
             ],
             "title": "Source Type",
             "default": "pasted_snapshot"

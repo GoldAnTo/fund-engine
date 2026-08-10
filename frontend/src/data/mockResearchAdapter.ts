@@ -38,6 +38,7 @@ import type {
   EventResearchScopeFactor,
   EventResearchScopeFactorInput,
   EventReviewQueue,
+  EventSourceType,
   EventWorkbench,
 } from "../domain/eventResearch";
 import type {
@@ -3884,7 +3885,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency(undefined);
   }
 
-  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
+  async extractEventResearch(input: { rawInput: string; sourceUrl?: string; sourceType?: EventSourceType; sourceMetadata?: Record<string, unknown> }): Promise<EventExtraction> {
     this.throwIfOffline();
     return simulateLatency({
       eventTitle: input.rawInput.trim().slice(0, 80) || null,
@@ -3915,7 +3916,7 @@ export class MockResearchAdapter implements ResearchClient {
       publish_date: input.eventAt?.slice(0, 10) ?? null,
       available_at: "2026-08-09T12:00:00Z",
       acquired_at: "2026-08-09T12:00:00Z",
-      parser_version: sourceType === "pasted_snapshot" ? "user-pasted-v1" : sourceType === "uploaded_file" ? "uploaded-text-v1" : "provider-snapshot-v1",
+      parser_version: sourceType === "pasted_snapshot" ? "user-pasted-v1" : sourceType === "uploaded_file" ? "uploaded-text-v1" : sourceType === "public_url" ? "user-pasted-public-url-v1" : "provider-snapshot-v1",
       source_authority: typeof sourceMetadata.authority_level === "string" ? sourceMetadata.authority_level : "unknown",
       parse_quality: "partial",
       linked_cases: [{ id: caseId, title: input.eventTitle }],
@@ -3983,7 +3984,7 @@ export class MockResearchAdapter implements ResearchClient {
     });
   }
 
-  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
+  async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
     this.throwIfOffline();
     const caseItem = this.eventResearchItems().find((item) => item.id === input.caseId);
     if (!caseItem) throw new Error("event research case not found");
@@ -3991,6 +3992,11 @@ export class MockResearchAdapter implements ResearchClient {
     const sequence = this.createdDocuments.size + 1;
     const documentVersionId = `document-attached-${sequence}`;
     const userControlled = input.sourceType === "pasted_snapshot" || input.sourceType === "uploaded_file";
+    const permissions = input.sourceMetadata.permissions && typeof input.sourceMetadata.permissions === "object"
+      ? input.sourceMetadata.permissions as Record<string, unknown>
+      : {};
+    const aiProcessing = typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled;
+    const display = typeof permissions.display === "boolean" ? permissions.display : userControlled;
     this.createdDocuments.set(documentVersionId, {
       document: {
         id: documentVersionId,
@@ -4000,7 +4006,7 @@ export class MockResearchAdapter implements ResearchClient {
         publish_date: null,
         available_at: "2026-08-09T12:00:00Z",
         acquired_at: "2026-08-09T12:00:00Z",
-        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : "user-pasted-v1",
+        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : input.sourceType === "public_url" ? "user-pasted-public-url-v1" : "user-pasted-v1",
         source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "unknown",
         parse_quality: "partial",
         linked_cases: [{ id: input.caseId, title: caseItem.eventTitle }],
@@ -4010,12 +4016,12 @@ export class MockResearchAdapter implements ResearchClient {
         source_contract: {
           source_type: input.sourceType,
           provider_or_tenant: input.actor,
-          permissions: { ai_processing: userControlled, display: userControlled, export: false, api: false },
-          status: userControlled ? "admitted" : "restricted",
+          permissions: { ai_processing: aiProcessing, display, export: typeof permissions.export === "boolean" ? permissions.export : false, api: typeof permissions.api === "boolean" ? permissions.api : false },
+          status: aiProcessing && display ? "admitted" : "restricted",
           region: "not_recorded",
           retention_policy: "case_retained",
           deletion_policy: "not_recorded",
-          downstream_restrictions: ["仅限当前 Case 研究与人工审核"],
+          downstream_restrictions: userControlled ? ["仅限当前 Case 研究与人工审核"] : ["权限未完整记录；不得作为正式证据"],
           contract_version: null,
         },
       },
@@ -4199,7 +4205,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({ runId, lifecycle });
   }
 
-  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: "pasted_snapshot" | "uploaded_file" | "licensed_provider"; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
+  async decidePublishedMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; decision: "reopen" | "no_change"; reason: string; actor: string }): Promise<import("../domain/eventResearch").PublishedMaterialDecision> {
     this.throwIfOffline();
     if (!input.rawInput.trim() || !input.reason.trim()) throw new Error("material and decision reason are required");
     const sequence = this.createdDocuments.size + 1;
@@ -4217,7 +4223,7 @@ export class MockResearchAdapter implements ResearchClient {
         publish_date: null,
         available_at: "2026-08-09T12:00:00Z",
         acquired_at: "2026-08-09T12:00:00Z",
-        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : "user-pasted-v1",
+        parser_version: input.sourceType === "uploaded_file" ? "uploaded-text-v1" : input.sourceType === "licensed_provider" ? "provider-snapshot-v1" : input.sourceType === "public_url" ? "user-pasted-public-url-v1" : "user-pasted-v1",
         source_authority: typeof input.sourceMetadata.authority_level === "string" ? input.sourceMetadata.authority_level : "unknown",
         parse_quality: "partial",
         linked_cases: [{ id: input.caseId, title: (await this.getEventWorkbench(input.caseId)).event.eventTitle }],
