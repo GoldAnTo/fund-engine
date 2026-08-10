@@ -114,10 +114,34 @@ describe("Research OS event entry", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("does not call active Case work running when the execution worker is unavailable", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "workerStatus").mockResolvedValue({
+      status: "unavailable",
+      last_seen_at: null,
+      mode: null,
+      state: null,
+    });
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route path="/events" element={<EventDeskPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("执行器未启动；已排队研究不会自动推进")).toBeVisible();
+    expect(screen.getByText(/范围和排队记录已保存/)).toBeVisible();
+  });
+
   it("keeps the research dispatch structure visible while Cases are loading", () => {
     const adapter = new MockResearchAdapter();
     vi.spyOn(adapter, "listEventResearch").mockReturnValue(new Promise(() => {}));
+    const api = new MockResearchOsApi(adapter);
+    vi.spyOn(api, "workerStatus").mockReturnValue(new Promise(() => {}));
     setResearchClient(adapter);
+    setResearchOsApi(api);
     render(
       <MemoryRouter initialEntries={["/events"]}>
         <Routes>
