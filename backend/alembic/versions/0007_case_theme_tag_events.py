@@ -31,6 +31,11 @@ def upgrade() -> None:
         sa.Column("op", sa.String(8), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
+    # Defence-in-depth, same convention as migration 0001. SQLite does not
+    # provide the PostgreSQL trigger function used below.
+    if op.get_bind().dialect.name != "postgresql":
+        return
+
     # Defence-in-depth, same convention as migration 0001.
     for table in IMMUTABLE_TABLES:
         op.execute(

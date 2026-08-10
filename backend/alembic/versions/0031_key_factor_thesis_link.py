@@ -12,7 +12,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("key_factors", sa.Column("thesis_id", sa.Uuid(), sa.ForeignKey("theses.id"), nullable=True))
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("key_factors") as batch:
+            batch.add_column(sa.Column("thesis_id", sa.Uuid(), nullable=True))
+            batch.create_foreign_key(
+                "fk_key_factors_thesis_id", "theses", ["thesis_id"], ["id"]
+            )
+    else:
+        op.add_column(
+            "key_factors",
+            sa.Column("thesis_id", sa.Uuid(), sa.ForeignKey("theses.id"), nullable=True),
+        )
     op.create_index("ix_key_factors_thesis", "key_factors", ["thesis_id"])
 
 

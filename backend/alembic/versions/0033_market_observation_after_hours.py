@@ -20,7 +20,10 @@ def upgrade() -> None:
         "market_observations",
         sa.Column("after_hours_treatment", sa.Text(), nullable=False, server_default="not_recorded"),
     )
-    op.alter_column("market_observations", "after_hours_treatment", server_default=None)
+    # SQLite cannot drop a column default in place. Keeping this compatibility
+    # default is equivalent for existing and future local-demo rows.
+    if op.get_bind().dialect.name != "sqlite":
+        op.alter_column("market_observations", "after_hours_treatment", server_default=None)
 
 
 def downgrade() -> None:

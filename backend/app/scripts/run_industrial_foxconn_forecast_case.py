@@ -17,8 +17,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.datasources.gildata.client import GildataMCPClient, GildataMCPError
+from app.db_migrations import upgrade_database_to_head
 from app.env import load_local_env
-from app.models.ledger import Base
 from app.services.industrial_foxconn_forecast_case import load_industrial_foxconn_sources
 from app.services.live_industrial_foxconn_case import materialize_live_industrial_foxconn_case
 
@@ -30,8 +30,8 @@ def main() -> int:
     args = parser.parse_args()
 
     load_local_env()
+    upgrade_database_to_head(args.database_url)
     engine = create_engine(args.database_url)
-    Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     try:
         bundle = load_industrial_foxconn_sources(GildataMCPClient.from_env())

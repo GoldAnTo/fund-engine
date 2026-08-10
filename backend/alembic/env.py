@@ -16,7 +16,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# CLI callers can provide DATABASE_URL, while application bootstrap passes an
+# explicit Config URL. The latter must win so a demo runner never upgrades the
+# process-wide default database by accident.
+config.set_main_option("sqlalchemy.url", config.get_main_option("sqlalchemy.url") or DATABASE_URL)
 
 target_metadata = Base.metadata
 
