@@ -20,6 +20,17 @@ NEO4J_URL = os.getenv("NEO4J_URL")
 USE_NEO4J = bool(NEO4J_URL)
 
 
+def _truncate_postgresql_tables(engine, base) -> None:
+    """Reset test rows without dropping Alembic-managed append-only triggers."""
+    table_names = ", ".join(
+        f'"{table.name}"' for table in reversed(base.metadata.sorted_tables)
+    )
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+        )
+
+
 @pytest.fixture(scope="session")
 def engine():
     from app.models.ledger import Base
@@ -28,13 +39,7 @@ def engine():
         eng = create_engine(PG_URL, future=True)
         # 表与 append-only 触发器由 Alembic migration 管理；测试前 TRUNCATE
         # 清残留数据，保留结构与触发器（drop_all 会删触发器，故不用）。
-        with eng.begin() as conn:
-            table_names = ", ".join(
-                f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables)
-            )
-            conn.exec_driver_sql(
-                f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
-            )
+        _truncate_postgresql_tables(eng, Base)
     else:
         eng = create_engine(
             "sqlite://",
@@ -64,7 +69,9 @@ def session(engine) -> Session:
         # StaticPool, so rebuild its disposable schema between tests.  The
         # PostgreSQL fixture deliberately keeps Alembic-managed tables and
         # append-only triggers intact.
-        if not USE_PG:
+        if USE_PG:
+            _truncate_postgresql_tables(engine, Base)
+        else:
             Base.metadata.drop_all(engine)
             Base.metadata.create_all(engine)
 

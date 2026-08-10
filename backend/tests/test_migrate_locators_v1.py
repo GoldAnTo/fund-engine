@@ -48,8 +48,9 @@ def _isolate_db(engine):
     """
     from app.models.ledger import Base
 
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    if engine.dialect.name == "sqlite":
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
     yield
     # No teardown needed; the next test's setup will re-create.
 

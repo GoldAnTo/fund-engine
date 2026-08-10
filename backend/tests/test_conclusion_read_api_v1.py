@@ -64,7 +64,7 @@ def _seed_minimal_case(session, sha256_suffix):
 
     # Document → span → statement → reviewed link (T1)
     doc = DocumentVersion(
-        content_sha256=f"{sha256_suffix}" * 64,
+        content_sha256=f"{sha256_suffix}" * 4,
         source_url="u",
         published_at=datetime(2025, 2, 1, tzinfo=UTC),
         available_at=datetime(2025, 2, 1, tzinfo=UTC),
