@@ -44,7 +44,15 @@ def _request(url: str, *, method: str = "GET", body: dict | None = None) -> tupl
         with urllib.request.urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        # A server can return an empty, non-JSON response while Uvicorn is
+        # still starting.  The readiness loop needs the status to continue
+        # probing; it must not turn that transient response into a JSON error.
+        raw = exc.read()
+        try:
+            decoded = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            decoded = {}
+        return exc.code, decoded if isinstance(decoded, dict) else {}
 
 
 def main() -> int:
