@@ -3427,19 +3427,23 @@ function MechanismRuleConfig({ caseId }: { caseId: string }) {
 
 function MechanismRuleHistory({ caseId }: { caseId: string }) {
   const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
+    setLoading(true);
     setError(false);
     researchOsApi
       .caseMechanismProtocol(caseId)
       .then((value) => {
         setProtocol(value);
         setError(false);
+        setLoading(false);
       })
       .catch(() => {
         setProtocol(null);
         setError(true);
+        setLoading(false);
       });
   }, [caseId, reload]);
   if (error) {
@@ -3461,6 +3465,9 @@ function MechanismRuleHistory({ caseId }: { caseId: string }) {
         </div>
       </section>
     );
+  }
+  if (loading) {
+    return <section className="ros-rule-history"><p className="ros-eyebrow">验证规则版本记录</p><h2>每次调整都可回放</h2><div className="ros-empty ros-empty--compact">正在读取当前 Case 的验证规则版本；未返回前不会把它当作没有历史。</div></section>;
   }
   const history = protocol?.rule_history ?? [];
   if (!protocol?.template) return null;
