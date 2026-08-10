@@ -34,6 +34,25 @@ import { ResearchOsRoutes } from "../app/routes";
 import type { EventWorkbench } from "../domain/eventResearch";
 
 describe("Research OS event entry", () => {
+  it("keeps every Case workbench tab discoverable on narrow screens", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const tabs = await screen.findByLabelText("Case 页面，可横向滚动查看全部入口");
+    expect(tabs).toHaveTextContent("研究结论");
+    expect(tabs).toHaveTextContent("市场与表达");
+    expect(tabs).toHaveTextContent("监测与运行");
+    expect(tabs).toHaveTextContent("关联研究");
+    expect(
+      screen.getByText("向右滑动查看市场、运行和关联研究"),
+    ).toBeInTheDocument();
+  });
+
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
   afterEach(() => {
     resetResearchClient();
@@ -500,7 +519,7 @@ describe("Research OS event entry", () => {
     );
 
     const navigation = await screen.findByRole("navigation", {
-      name: "Case 页面",
+      name: "Case 页面，可横向滚动查看全部入口",
     });
     expect(navigation.textContent).toContain("研究结论");
     expect(navigation.textContent).toContain("命题与证据");

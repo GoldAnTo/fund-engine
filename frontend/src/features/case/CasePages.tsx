@@ -192,7 +192,10 @@ function CaseFrame({
           </span>
         </div>
       </header>
-      <nav className="ros-case-tabs" aria-label="Case 页面">
+      <nav
+        className="ros-case-tabs"
+        aria-label="Case 页面，可横向滚动查看全部入口"
+      >
         {tabs.map(([suffix, label]) => (
           <NavLink
             key={suffix}
@@ -203,6 +206,9 @@ function CaseFrame({
           </NavLink>
         ))}
       </nav>
+      <p className="ros-case-tabs__hint">
+        向右滑动查看市场、运行和关联研究
+      </p>
       {children(data, caseId)}
     </main>
   );

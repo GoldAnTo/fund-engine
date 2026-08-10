@@ -1,6 +1,7 @@
 /* Safeguards for the compact event-first workbench. */
 .ros-run-strip__left > div { min-width: 0; }
 .ros-case-tabs { min-width: 0; max-width: 100%; }
+.ros-case-tabs__hint { display: none; }
 .ros-case-relation-rail ul { display: grid; gap: .55rem; margin: .7rem 0; padding: 0; list-style: none; }
 .ros-case-relation-rail li { display: grid; gap: .14rem; }
 .ros-case-relation-rail li a { margin-top: 0; }
@@ -124,6 +125,9 @@
   .ros-run-strip { align-items: flex-start; }
   .ros-run-strip__actions button { min-width: 84px; min-height: 44px; }
   .ros-source-governance__dates { grid-template-columns: 1fr; }
+  .ros-case-tabs { scrollbar-width: auto; }
+  .ros-case-tabs::-webkit-scrollbar { display: block; height: 3px; }
+  .ros-case-tabs__hint { display: block; margin: .45rem 0 0; color: var(--ros-muted); font-size: .72rem; }
 }
 
 /* Historical Case admission is an operations decision, not a dashboard. The
