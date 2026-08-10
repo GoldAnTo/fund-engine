@@ -1143,6 +1143,11 @@ export type ActiveResearchClient = Omit<
   | "getWorkspaceOverviewScreen"
   | "getNewResearchView"
   | "getResearchPlanView"
+  | "getLibraryView"
+  | "getDataCenterView"
+  | "getVersionsView"
+  | "getThemeIndexView"
+  | "getThemeWorkbenchView"
 >;
 // ── Review queue (screen 6 · live API slice) ─────────────────────────────
 

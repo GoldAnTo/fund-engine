@@ -60,13 +60,6 @@ export const researchClient: ActiveResearchClient = {
     _client.getCaseWorkbenchView(id, options),
   getRelationshipGraphView: (id, thesisId) =>
     _client.getRelationshipGraphView(id, thesisId),
-  getLibraryView: () => _client.getLibraryView(),
-  getDataCenterView: () => _client.getDataCenterView(),
-  getVersionsView: (caseId, options) =>
-    _client.getVersionsView(caseId, options),
-  getThemeIndexView: () => _client.getThemeIndexView(),
-  getThemeWorkbenchView: (themeId: string) =>
-    _client.getThemeWorkbenchView(themeId),
   getReviewQueueView: (caseId) => _client.getReviewQueueView(caseId),
   submitLinkReview: (linkId, payload) =>
     _client.submitLinkReview(linkId, payload),

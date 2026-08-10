@@ -47,6 +47,11 @@ describe("research OS API selection", () => {
       "getWorkspaceOverviewScreen",
       "getNewResearchView",
       "getResearchPlanView",
+      "getLibraryView",
+      "getDataCenterView",
+      "getVersionsView",
+      "getThemeIndexView",
+      "getThemeWorkbenchView",
     ]) {
       expect(researchClient).not.toHaveProperty(retiredMethod);
     }
