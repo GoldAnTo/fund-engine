@@ -7132,6 +7132,56 @@
         }
       }
     },
+    "/api/v1/fund-disclosure-sync-runs/active": {
+      "get": {
+        "tags": [
+          "fund-disclosure-sync-v1"
+        ],
+        "summary": "List Active Fund Disclosure Sync Runs",
+        "description": "Expose in-flight fund replenishment beside ResearchRun without merging models.\n\nA fund task remains a historical-disclosure workflow, not a research\nconclusion.  Its latest append-only event is enough to identify whether\nwork is currently in progress and to tell the global shell what it is\ndoing without leaking source content.",
+        "operationId": "list_active_fund_disclosure_sync_runs_api_v1_fund_disclosure_sync_runs_active_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveFundDisclosureSyncRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/fund-disclosure-sync": {
       "get": {
         "tags": [
@@ -7758,6 +7808,94 @@
   },
   "components": {
     "schemas": {
+      "ActiveFundDisclosureSyncRunDTO": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled",
+              "retry"
+            ],
+            "title": "Trigger"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "fund_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fund Codes"
+          },
+          "stock_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stock Codes"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "case_id",
+          "case_title",
+          "trigger",
+          "status",
+          "stage",
+          "message",
+          "fund_codes",
+          "stock_codes",
+          "updated_at"
+        ],
+        "title": "ActiveFundDisclosureSyncRunDTO"
+      },
+      "ActiveFundDisclosureSyncRunsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActiveFundDisclosureSyncRunDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ActiveFundDisclosureSyncRunsResponse"
+      },
       "ActiveResearchRunDTO": {
         "properties": {
           "run_id": {

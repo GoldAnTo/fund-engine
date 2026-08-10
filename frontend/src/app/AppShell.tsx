@@ -15,6 +15,7 @@ import { sourceTypeListLabel } from "../domain/sourcePresentation";
 import type { SearchHit } from "../domain/types";
 import {
   researchOsApi,
+  type ActiveFundDisclosureSyncRun,
   type ActiveResearchRun,
   type ResearchSession,
 } from "./researchOsApi";
@@ -47,6 +48,7 @@ export function AppShell() {
   );
   const [globalSearchError, setGlobalSearchError] = useState(false);
   const [activeRuns, setActiveRuns] = useState<ActiveResearchRun[]>([]);
+  const [activeFundRuns, setActiveFundRuns] = useState<ActiveFundDisclosureSyncRun[]>([]);
   const [activeRunEvents, setActiveRunEvents] = useState<
     Record<string, RunStageEvent[]>
   >({});
@@ -54,6 +56,7 @@ export function AppShell() {
     Record<string, boolean>
   >({});
   const [runLoadError, setRunLoadError] = useState(false);
+  const [fundRunLoadError, setFundRunLoadError] = useState(false);
   const [runReload, setRunReload] = useState(0);
   const [drawerRun, setDrawerRun] = useState<ActiveResearchRun | null>(null);
   const [drawerEvents, setDrawerEvents] = useState<Array<{
@@ -127,9 +130,55 @@ export function AppShell() {
         });
     load();
     const refresh = window.setInterval(load, 15_000);
+    const refreshAfterRunStart = () => {
+      void load();
+      // The route commits the frozen scope before it calls the provider. A
+      // short second read crosses that transaction boundary, rather than
+      // making researchers wait for the normal background poll.
+      window.setTimeout(load, 350);
+    };
+    window.addEventListener("research-os-run-refresh", refreshAfterRunStart);
     return () => {
       live = false;
       window.clearInterval(refresh);
+      window.removeEventListener("research-os-run-refresh", refreshAfterRunStart);
+    };
+  }, [runReload]);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      researchOsApi
+        .activeFundDisclosureSyncRuns()
+        .then((response) => {
+          if (!live) return;
+          // Older fixtures can answer every endpoint with the ResearchRun
+          // shape. Do not misrepresent one of those responses as a fund run.
+          setActiveFundRuns(
+            response.items.filter(
+              (item) => Array.isArray(item.fund_codes) && Array.isArray(item.stock_codes),
+            ),
+          );
+          setFundRunLoadError(false);
+        })
+        .catch(() => {
+          if (live) {
+            setActiveFundRuns([]);
+            setFundRunLoadError(true);
+          }
+        });
+    load();
+    const refresh = window.setInterval(load, 15_000);
+    const refreshAfterFundRunChange = () => {
+      void load();
+      // The request commits its frozen scope before reaching the provider.
+      // Re-read once just after that boundary instead of waiting 15 seconds.
+      window.setTimeout(load, 350);
+    };
+    window.addEventListener("research-os-run-refresh", refreshAfterFundRunChange);
+    return () => {
+      live = false;
+      window.clearInterval(refresh);
+      window.removeEventListener("research-os-run-refresh", refreshAfterFundRunChange);
     };
   }, [runReload]);
   useEffect(() => {
@@ -368,6 +417,26 @@ export function AppShell() {
             </div>
           </section>
         )}
+        {fundRunLoadError && (
+          <section
+            className="ros-run-strip ros-run-strip--error"
+            aria-label="基金披露运行状态不可用"
+          >
+            <div className="ros-run-strip__left">
+              <div>
+                <strong>基金披露运行状态暂不可确认</strong>
+                <span>
+                  无法读取基金披露补充的实时阶段；不会用旧披露或当前配置替代运行记录。
+                </span>
+              </div>
+            </div>
+            <div className="ros-run-strip__actions">
+              <button type="button" onClick={() => setRunReload((value) => value + 1)}>
+                重新读取基金披露运行
+              </button>
+            </div>
+          </section>
+        )}
         {activeRuns.map((run) => {
           const runEvents = activeRunEvents[run.run_id];
           const latestActiveEvent = runEvents?.[runEvents.length - 1];
@@ -406,6 +475,31 @@ export function AppShell() {
             </section>
           );
         })}
+        {activeFundRuns.map((run) => (
+          <section
+            className="ros-run-strip"
+            aria-label="系统正在运行"
+            key={`fund-disclosure-${run.run_id}`}
+          >
+            <div className="ros-run-strip__left">
+              <i className="ros-run-strip__pulse" />
+              <div>
+                <strong>
+                  基金披露补充 · {runTriggerLabel(run.trigger)}
+                </strong>
+                <span>
+                  基金 {run.fund_codes.join("、")} · 股票 {run.stock_codes.join("、") || "未绑定"}
+                  {` · ${run.case_title} · ${runStageLabel(run.stage)} · ${run.message}`}
+                </span>
+              </div>
+            </div>
+            <div className="ros-run-strip__actions">
+              <Link to={`/events/${run.case_id}/market`}>
+                查看基金披露运行 →
+              </Link>
+            </div>
+          </section>
+        ))}
         <Outlet />
       </div>
       {drawerRun && (

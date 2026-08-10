@@ -176,6 +176,10 @@ class FundDisclosureSyncService:
             message="开始查询指定基金的历史股票持仓披露",
             payload_json={"fund_codes": list(run.fund_codes)},
         )
+        # Provider calls can take tens of seconds.  Publish the frozen scope
+        # and the explicit in-progress stage before crossing that boundary so
+        # every page can explain the work while it is still running.
+        self._session.commit()
         try:
             stats = ingest(
                 self._session,

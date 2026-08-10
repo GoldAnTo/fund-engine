@@ -533,6 +533,13 @@ export class MockResearchOsApi implements ResearchOsApi {
     };
   }
 
+  async activeFundDisclosureSyncRuns(): ReturnType<ResearchOsApi["activeFundDisclosureSyncRuns"]> {
+    // Demo mode never pretends a historical-disclosure request is executing
+    // in the background. The live client is responsible for reporting the
+    // durable run events that the global shell displays.
+    return { items: [] };
+  }
+
   async runs(): ReturnType<ResearchOsApi["runs"]> {
     const active = (await this.activeRuns()).items[0];
     return {

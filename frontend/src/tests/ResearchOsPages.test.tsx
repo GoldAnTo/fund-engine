@@ -964,7 +964,11 @@ describe("Research OS event entry", () => {
     ).parentElement;
     expect(configHistory).toHaveTextContent("本周补充当前股票相关基金披露");
     expect(configHistory).toHaveTextContent("版本 1 · 每周一 09:00");
+    const runRefresh = vi.fn();
+    window.addEventListener("research-os-run-refresh", runRefresh);
     await user.click(screen.getByRole("button", { name: "立即补充一次" }));
+    expect(runRefresh).toHaveBeenCalledTimes(2);
+    window.removeEventListener("research-os-run-refresh", runRefresh);
     expect(await screen.findByText("本次补充记录")).toBeVisible();
     expect(await screen.findByText("已完成")).toBeVisible();
     expect(screen.getAllByText(/同基金、同报告期季报/).length).toBeGreaterThan(1);
@@ -1772,6 +1776,55 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("台积电上调 CoWoS 指引后下跌");
     expect(strip).toHaveTextContent("公司披露");
     expect(strip).toHaveTextContent("已处理 3");
+  });
+
+  it("keeps an active fund-disclosure replenishment visible outside the market page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/fund-disclosure-sync-runs/active")
+          ? {
+              items: [{
+                run_id: "fund-run-1",
+                case_id: "event-tsm",
+                case_title: "台积电上调 CoWoS 指引后下跌",
+                trigger: "scheduled",
+                status: "started",
+                stage: "query_holdings",
+                message: "开始查询指定基金的历史股票持仓披露",
+                fund_codes: ["515050"],
+                stock_codes: ["601138.SH"],
+                updated_at: "2026-08-11T01:00:00Z",
+              }],
+            }
+          : { items: [], next_cursor: null, has_more: false };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("基金披露补充 · 定时任务");
+    expect(strip).toHaveTextContent("515050");
+    expect(strip).toHaveTextContent("开始查询指定基金的历史股票持仓披露");
+    expect(screen.getByRole("link", { name: "查看基金披露运行 →" })).toHaveAttribute(
+      "href",
+      "/events/event-tsm/market",
+    );
   });
 
   it("labels a review-blocked run as waiting instead of claiming it is still executing", async () => {

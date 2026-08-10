@@ -57,6 +57,23 @@ class FundDisclosureSyncRunDTO(V1Model):
     events: list[FundDisclosureSyncRunEventDTO]
 
 
+class ActiveFundDisclosureSyncRunDTO(V1Model):
+    run_id: str
+    case_id: str
+    case_title: str
+    trigger: Literal["manual", "scheduled", "retry"]
+    status: str
+    stage: str
+    message: str
+    fund_codes: list[str]
+    stock_codes: list[str]
+    updated_at: datetime
+
+
+class ActiveFundDisclosureSyncRunsResponse(V1Model):
+    items: list[ActiveFundDisclosureSyncRunDTO]
+
+
 class FundDisclosureSyncDetailResponse(V1Model):
     suggestions: list[FundDisclosureSyncSuggestionDTO]
     manual_code_fallback: bool

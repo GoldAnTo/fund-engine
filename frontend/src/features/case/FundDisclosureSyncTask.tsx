@@ -35,6 +35,10 @@ function failureText(payload: Record<string, unknown>): string | null {
     .join("；");
 }
 
+function announceRunRefresh(): void {
+  window.dispatchEvent(new Event("research-os-run-refresh"));
+}
+
 export function FundDisclosureSyncTask({
   caseId,
   scopeRevision,
@@ -128,6 +132,7 @@ export function FundDisclosureSyncTask({
   async function start() {
     setState("running");
     setError(null);
+    announceRunRefresh();
     try {
       const run = await researchOsApi.startFundDisclosureSync(caseId);
       // A just-created run is authoritative even when an earlier background
@@ -143,12 +148,15 @@ export function FundDisclosureSyncTask({
     } catch {
       setState("idle");
       setError("无法创建本次补充记录。请先保存配置，或稍后重试。");
+    } finally {
+      announceRunRefresh();
     }
   }
 
   async function retry(runId: string) {
     setState("running");
     setError(null);
+    announceRunRefresh();
     try {
       const run = await researchOsApi.retryFundDisclosureSync(caseId, runId);
       setDetail((current) => current
@@ -161,6 +169,8 @@ export function FundDisclosureSyncTask({
     } catch {
       setState("idle");
       setError("重试未能创建。原失败记录仍保留，可稍后再次操作。");
+    } finally {
+      announceRunRefresh();
     }
   }
 

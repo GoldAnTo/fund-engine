@@ -5,16 +5,21 @@ import uuid
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.tenant_context import require_research_tenant
 from app.datasources.gildata.client import GildataMCPClient, GildataMCPError
 from app.db import get_db
 from app.errors import ValidationFailedError
+from app.models.fund_disclosure_sync import FundDisclosureSyncRun, FundDisclosureSyncRunEvent
+from app.models.ledger import ResearchCase
 from app.queries.fund_disclosure_sync import FundDisclosureSyncDetail, FundDisclosureSyncRunView
 from app.schemas.v1.fund_disclosure_sync import (
     FundDisclosureSyncConfigDTO,
     FundDisclosureSyncDetailResponse,
+    ActiveFundDisclosureSyncRunDTO,
+    ActiveFundDisclosureSyncRunsResponse,
     FundDisclosureSyncRunDTO,
     FundDisclosureSyncRunEventDTO,
     FundDisclosureSyncSuggestionDTO,
@@ -104,6 +109,64 @@ def _detail_dto(detail: FundDisclosureSyncDetail) -> FundDisclosureSyncDetailRes
 
 
 @router.get(
+    "/fund-disclosure-sync-runs/active",
+    response_model=ActiveFundDisclosureSyncRunsResponse,
+)
+def list_active_fund_disclosure_sync_runs(
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> ActiveFundDisclosureSyncRunsResponse:
+    """Expose in-flight fund replenishment beside ResearchRun without merging models.
+
+    A fund task remains a historical-disclosure workflow, not a research
+    conclusion.  Its latest append-only event is enough to identify whether
+    work is currently in progress and to tell the global shell what it is
+    doing without leaking source content.
+    """
+    latest_seq = (
+        select(func.max(FundDisclosureSyncRunEvent.seq))
+        .where(FundDisclosureSyncRunEvent.run_id == FundDisclosureSyncRun.id)
+        .correlate(FundDisclosureSyncRun)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(FundDisclosureSyncRun, FundDisclosureSyncRunEvent, ResearchCase)
+        .join(
+            FundDisclosureSyncRunEvent,
+            and_(
+                FundDisclosureSyncRunEvent.run_id == FundDisclosureSyncRun.id,
+                FundDisclosureSyncRunEvent.seq == latest_seq,
+            ),
+        )
+        .join(ResearchCase, ResearchCase.id == FundDisclosureSyncRun.research_case_id)
+        .where(
+            FundDisclosureSyncRun.research_case_id.in_(
+                CaseTenantAccess(db).case_ids(tenant_id)
+            )
+        )
+        .where(FundDisclosureSyncRunEvent.status.in_(("queued", "started", "running")))
+        .order_by(FundDisclosureSyncRunEvent.created_at.desc(), FundDisclosureSyncRun.id.desc())
+    ).all()
+    return ActiveFundDisclosureSyncRunsResponse(
+        items=[
+            ActiveFundDisclosureSyncRunDTO(
+                run_id=str(run.id),
+                case_id=str(run.research_case_id),
+                case_title=case.title,
+                trigger=run.trigger,
+                status=event.status,
+                stage=event.stage,
+                message=event.message,
+                fund_codes=list(run.fund_codes),
+                stock_codes=list(run.stock_codes),
+                updated_at=event.created_at,
+            )
+            for run, event, case in rows
+        ]
+    )
+
+
+@router.get(
     "/research-cases/{case_id}/fund-disclosure-sync",
     response_model=FundDisclosureSyncDetailResponse,
 )
@@ -173,6 +236,7 @@ def start_fund_disclosure_sync(
     service = FundDisclosureSyncService(db)
     try:
         run = service.start_manual_run(case_id)
+        db.commit()  # make the frozen manual scope visible before provider work
         execution = _execute_run(service, run.id, client_factory=get_fund_disclosure_client)
         db.commit()
     except (ValueError, TypeError) as exc:
@@ -196,6 +260,7 @@ def retry_fund_disclosure_sync(
     service = FundDisclosureSyncService(db)
     try:
         run = service.start_retry(case_id, run_id)
+        db.commit()  # preserve the retry's frozen scope even if provider setup fails
         execution = _execute_run(service, run.id, client_factory=get_fund_disclosure_client)
         db.commit()
     except (ValueError, TypeError) as exc:

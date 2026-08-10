@@ -17,6 +17,11 @@ const RUN_STAGE_LABELS: Record<string, string> = {
   stopped: "运行已停止",
   failed: "运行失败",
   complete: "运行完成",
+  provider_capability: "核验数据能力",
+  query_holdings: "查询历史持仓披露",
+  match_report: "核验基金报告期",
+  write_disclosure: "写入历史披露",
+  finished: "运行完成",
 };
 
 const RUN_STATUS_LABELS: Record<string, string> = {
@@ -40,6 +45,8 @@ const RUN_STATUS_LABELS: Record<string, string> = {
 const RUN_TRIGGER_LABELS: Record<string, string> = {
   manual: "立即补证",
   schedule: "定时任务",
+  scheduled: "定时任务",
+  retry: "按冻结范围重试",
   factor_manual: "立即补证此因素",
   material_continuation: "新增材料重新复核",
 };

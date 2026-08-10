@@ -257,6 +257,47 @@ def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_
     assert foreign.status_code == 404
 
 
+def test_active_fund_disclosure_runs_are_visible_across_the_research_workspace(
+    cmd_client, cmd_session
+) -> None:
+    case = _admitted_case(cmd_session)
+    service = FundDisclosureSyncService(cmd_session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        change_reason="展示正在进行的基金披露补充",
+    )
+    run = service.start_manual_run(case.id)
+    service._append_event(
+        run.id,
+        stage="query_holdings",
+        status="started",
+        message="开始查询指定基金的历史股票持仓披露",
+        payload_json={"fund_codes": ["005827"]},
+    )
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/fund-disclosure-sync-runs/active")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [
+        {
+            "run_id": str(run.id),
+            "case_id": str(case.id),
+            "case_title": case.title,
+            "trigger": "manual",
+            "status": "started",
+            "stage": "query_holdings",
+            "message": "开始查询指定基金的历史股票持仓披露",
+            "fund_codes": ["005827"],
+            "stock_codes": [],
+            "updated_at": response.json()["items"][0]["updated_at"],
+        }
+    ]
+
+
 def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scope(cmd_client, cmd_session, monkeypatch) -> None:
     from app.api.v1 import fund_disclosure_sync
 
