@@ -707,6 +707,22 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("heading", { name: "固定关键因素的验证口径" }),
     ).toBeVisible();
+    await user.type(screen.getByLabelText("验证指标"), "订单同比增速");
+    await user.type(
+      screen.getByLabelText("支持条件"),
+      "已准入资料显示订单同比增长。",
+    );
+    await user.type(
+      screen.getByLabelText("反证条件"),
+      "已准入资料显示订单同比下降。",
+    );
+    await user.type(screen.getByLabelText("下一验证事件"), "下一次订单披露");
+    await user.type(
+      screen.getByLabelText("因素审核理由"),
+      "指标、窗口、来源和反证条件均已人工确认。",
+    );
+    await user.click(screen.getByRole("button", { name: "登记已审核关键因素" }));
+    expect(await screen.findByText(/已登记已审核关键因素/)).toBeVisible();
   });
 
   it("makes a reviewed factor's verification an explicit source-backed decision", async () => {

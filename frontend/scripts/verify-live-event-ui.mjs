@@ -174,6 +174,43 @@ async function prepareReadyProtocol({ apiBase, token, caseId }) {
   if (gate.status !== "ready") {
     throw new Error(`governed protocol did not become ready: ${JSON.stringify(gate)}`);
   }
+  return { thesisId };
+}
+
+async function prepareReviewedSourceStatement({ apiBase, token, caseId }) {
+  // A market claim may only be registered from a reviewed SourceStatement.
+  // This setup creates that statement through the visible-source review API;
+  // the subsequent ReportClaim and KeyFactor are created by browser actions.
+  const documents = await apiJson(apiBase, `/event-research/${caseId}/documents`, token);
+  const baseline = documents.items.find(
+    (document) => document.source_contract?.status === "admitted" && document.source_contract.permissions?.display,
+  );
+  if (!baseline) throw new Error("created Case did not retain a displayable document for market registration");
+  const detail = await apiJson(apiBase, `/documents/${baseline.id}?research_mode=true`, token);
+  const span = detail.spans.find((item) => item.verbatim_text?.trim());
+  if (!span) throw new Error("created Case did not retain a source span for market registration");
+  const candidate = await apiJson(apiBase, `/research-cases/${caseId}/atomic-claims`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      source_span_id: span.id,
+      normalized_text: span.verbatim_text,
+      claim_type: "research_opinion",
+      assertion_actor: "human:researcher",
+      actor: "human:researcher",
+    }),
+  });
+  const review = await apiJson(apiBase, `/atomic-claims/${candidate.id}/reviews`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      outcome: "confirmed",
+      reviewer: "human:reviewer",
+      reason: "验收时已在冻结原文中逐句核对。",
+      idempotency_key: `live-market-source-${caseId}`,
+    }),
+  });
+  if (!review.published_source_statement?.id) {
+    throw new Error(`atomic source review did not publish a SourceStatement: ${JSON.stringify(review)}`);
+  }
 }
 
 async function main() {
@@ -266,13 +303,37 @@ async function main() {
     await page.getByRole("button", { name: "立即补证一次" }).isDisabled().then((disabled) => {
       if (!disabled) throw new Error("strict protocol gate unexpectedly enabled a monitor run");
     });
-    await prepareReadyProtocol({ apiBase, token, caseId });
+    const { thesisId } = await prepareReadyProtocol({ apiBase, token, caseId });
+    await prepareReviewedSourceStatement({ apiBase, token, caseId });
     await page.reload({ waitUntil: "networkidle" });
     await page.getByRole("button", { name: "立即补证一次" }).isEnabled().then((enabled) => {
       if (!enabled) throw new Error("ready research protocol did not enable a monitor run");
     });
     await page.getByRole("button", { name: "立即补证一次" }).click();
     await page.getByRole("heading", { name: "准备研究范围 · 排队中" }).first().waitFor();
+    await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
+
+    await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "选择冻结原文并登记主张" }).click();
+    await page.getByLabel("冻结原文陈述").waitFor();
+    await page.getByLabel("主张归属").fill("验收研究员");
+    await page.getByLabel("主张审核理由").fill("主张逐句回到当前 Case 冻结原文核对。 ");
+    await page.getByRole("button", { name: "登记已审核主张" }).click();
+    await page.getByText("已登记已审核主张").waitFor();
+    await page.getByLabel("关键因素名称").fill("验收主张的订单验证");
+    await page.getByLabel("验证指标").fill("订单同比增速");
+    await page.getByLabel("允许来源").fill("licensed_provider");
+    await page.getByLabel("验证开始日期").fill("2026-01-01");
+    await page.getByLabel("验证结束日期").fill("2026-12-31");
+    await page.getByLabel("关联已确认命题").selectOption(thesisId);
+    await page.getByLabel("支持条件").fill("已准入资料显示订单同比增长。 ");
+    await page.getByLabel("反证条件").fill("已准入资料显示订单同比下降。 ");
+    await page.getByLabel("下一验证事件").fill("下一次订单披露");
+    await page.getByLabel("因素审核理由").fill("指标、窗口、来源和反证条件均已人工确认。 ");
+    await page.getByRole("button", { name: "登记已审核关键因素" }).click();
+    await page.getByText("已登记已审核关键因素").waitFor();
+    await page.getByRole("button", { name: "立即补证此因素" }).click();
+    await page.waitForURL(new RegExp(`/events/${caseId}/monitor$`));
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
 
     await page.goto(`${uiBase}/events/${caseId}/monitor/config`, { waitUntil: "networkidle" });
@@ -300,6 +361,9 @@ async function main() {
       ["POST /event-research", (request) => request.startsWith("POST ") && request.endsWith("/event-research")],
       ["PUT /research-cases/:caseId/monitor", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/monitor`)],
       ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
+      ["POST /research-cases/:caseId/report-claims", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/report-claims`)],
+      ["POST /research-cases/:caseId/key-factors", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/key-factors`)],
+      ["POST /research-cases/:caseId/monitor/factor-runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/factor-runs`)],
       ["POST /research-cases/:caseId/monitor/paused", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/paused`)],
       ["GET /event-research", (request) => request.startsWith("GET ") && request.endsWith("/event-research")],
     ];
@@ -310,7 +374,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured, ran, paused its future schedule, and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured, registered a market factor, ran, paused its future schedule, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)

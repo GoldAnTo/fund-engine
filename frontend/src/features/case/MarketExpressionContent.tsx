@@ -71,7 +71,6 @@ export function MarketExpressionContent({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   async function reloadExpression() {
-    setExpression(null);
     setError(null);
     try {
       const value = await researchOsApi.marketExpression(caseId);

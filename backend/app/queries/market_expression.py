@@ -71,7 +71,8 @@ class MarketExpressionQueries:
         return SourceStatementOptionsResponse(items=[
             SourceStatementOptionDTO(
                 id=str(statement.id), kind=statement.kind, text=statement.normalized_text,
-                document_version_id=str(document.id), document_title=document.title,
+                document_version_id=str(document.id),
+                document_title=document.title or document.source_url or "未命名冻结资料",
                 source_url=document.source_url, locator=span.locator,
                 available_at=document.available_at, permission_status="admitted",
             )

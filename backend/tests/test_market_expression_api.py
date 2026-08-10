@@ -310,7 +310,7 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     document = DocumentVersion(
         content_sha256=hashlib.sha256(b"reviewed-source").hexdigest(),
         source_url="https://licensed.example/report/reviewed-source",
-        title="已准入研报",
+        title=None,
         available_at=now,
         acquired_at=now,
         parser_version="docling-v1",
@@ -339,6 +339,7 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     source = options.json()["items"][0]
     assert source["id"] == str(statement.id)
     assert source["document_version_id"] == str(document.id)
+    assert source["document_title"] == "https://licensed.example/report/reviewed-source"
     assert source["locator"] == {"page": 8, "paragraph": 2}
     assert source["available_at"].startswith("2026-08-09T09:00:00")
     assert source["permission_status"] == "admitted"
