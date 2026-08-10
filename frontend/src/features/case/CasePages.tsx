@@ -3549,14 +3549,7 @@ function MonitorContent({
   const run =
     selectedRunId && detail?.latest_run?.id === selectedRunId
       ? detail.latest_run
-      : selectedRunId
-        ? {
-            id: selectedRunId,
-            status: "queued",
-            stage: "queued",
-            updated_at: new Date().toISOString(),
-          }
-        : null;
+      : null;
   const protocolBlockers = Object.entries(protocolStates)
     .filter(([, state]) => state.status === "blocked")
     .flatMap(([id, state]) =>
@@ -3698,11 +3691,11 @@ function MonitorContent({
           <header className="ros-card-head">
             <div>
               <p className="ros-eyebrow">
-                {run ? "选中的运行" : "尚未开始运行"}
+                {run ? "选中的运行" : selectedRunId ? "运行状态待重读" : "尚未开始运行"}
               </p>
-              <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : "先配置持续研究"}</h2>
+              <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : selectedRunId ? "运行状态暂不可读取" : "先配置持续研究"}</h2>
             </div>
-            <span>{run ? `更新于 ${run.updated_at}` : ""}</span>
+            <span>{run ? `更新于 ${run.updated_at}` : selectedRunId ? "等待服务返回实际状态" : ""}</span>
           </header>
           <div className="ros-run-summary">
             <strong>
