@@ -3576,7 +3576,7 @@ function MonitorContent({
     try {
       const created = await researchOsApi.startMonitorRun(caseId);
       setSelectedRunId(created.id);
-      await loadEvents(created.id);
+      await Promise.all([loadMonitor(), loadEvents(created.id)]);
       setDrawer(true);
     } catch {
       setError(

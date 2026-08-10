@@ -2173,6 +2173,7 @@ describe("Research OS event entry", () => {
 
   it("starts immediate replenishment through the frozen-monitor endpoint", async () => {
     const user = userEvent.setup();
+    let monitorRunCreated = false;
     const monitor = {
       id: "monitor-v3",
       version: 3,
@@ -2196,7 +2197,7 @@ describe("Research OS event entry", () => {
             next_action: "可开始补证",
           }
         : url.endsWith("/monitor/runs")
-          ? {
+          ? (monitorRunCreated = true, {
               id: "run-monitor-v3",
               case_id: "event-tsm",
               status: "queued",
@@ -2218,7 +2219,7 @@ describe("Research OS event entry", () => {
               review_tasks: [],
               next_action: "查看运行详情",
               tasks: [],
-            }
+            })
           : url.endsWith("/research-runs/run-monitor-v3/events")
             ? {
                 run_id: "run-monitor-v3",
@@ -2255,7 +2256,14 @@ describe("Research OS event entry", () => {
               }
             : {
                 monitor,
-                latest_run: null,
+                latest_run: monitorRunCreated
+                  ? {
+                      id: "run-monitor-v3",
+                      status: "running",
+                      stage: "retrieve",
+                      updated_at: "2026-08-09T00:02:00Z",
+                    }
+                  : null,
                 confirmed_factors: [
                   { id: "event-tsm-factor-1", statement: "资本开支指引" },
                 ],
@@ -2285,6 +2293,11 @@ describe("Research OS event entry", () => {
         "/api/v1/research-cases/event-tsm/monitor/runs",
         expect.objectContaining({ method: "POST" }),
       ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("heading", { name: "采集资料 · 运行中" }),
+      ).toHaveLength(2),
     );
     expect(
       await screen.findByRole("complementary", { name: "运行详情" }),
