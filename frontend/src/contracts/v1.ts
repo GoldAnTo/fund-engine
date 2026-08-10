@@ -3696,6 +3696,14 @@ export interface components {
             allowed_source_types?: string[];
             /** Budget */
             budget?: number | null;
+            /** Frequency */
+            frequency?: string | null;
+            /** Next Verification Event */
+            next_verification_event?: string | null;
+            /** Configured By */
+            configured_by?: string | null;
+            /** Configuration Change Reason */
+            configuration_change_reason?: string | null;
         };
         /**
          * FundCompositionResponse

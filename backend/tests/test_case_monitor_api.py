@@ -140,6 +140,10 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
         "factor_statements": [factor.statement],
         "allowed_source_types": ["company_disclosure"],
         "budget": 7,
+        "frequency": "weekday_08_30",
+        "next_verification_event": "2026Q1 财报披露",
+        "configured_by": "human:lin",
+        "configuration_change_reason": "建立可复现的监控范围",
     }
 
     second = cmd_client.put(
@@ -249,6 +253,44 @@ def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
     assert item["scope"]["factor_statements"] == [factor.statement]
+
+
+def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_started_it(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    first = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(
+            factor.id,
+            frequency="weekday_08_30",
+            next_verification_event="2026Q1 财报披露",
+            change_reason="以晨间披露核验订单指引",
+        ),
+    )
+    assert first.status_code == 200, first.text
+    started = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
+    assert started.status_code == 201, started.text
+
+    changed = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor",
+        json=_monitor_payload(
+            factor.id,
+            frequency="weekly_monday",
+            next_verification_event="下一次行业会议",
+            change_reason="改为每周复核",
+        ),
+    )
+    assert changed.status_code == 200, changed.text
+
+    archived = cmd_client.get("/api/v1/research-runs")
+    assert archived.status_code == 200, archived.text
+    scope = archived.json()["items"][0]["scope"]
+    assert scope["monitor_version_id"] == first.json()["id"]
+    assert scope["frequency"] == "weekday_08_30"
+    assert scope["next_verification_event"] == "2026Q1 财报披露"
+    assert scope["configured_by"] == "human:lin"
+    assert scope["configuration_change_reason"] == "以晨间披露核验订单指引"
 
 
 def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(

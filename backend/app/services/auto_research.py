@@ -118,6 +118,10 @@ class AutoResearchService:
             "factor_statements": [thesis.statement for thesis in theses],
             "allowed_source_types": allowed_source_types if allowed_source_types is not None else (monitor.allowed_source_types if monitor is not None else []),
             "budget": run.budget,
+            "frequency": monitor.frequency if monitor is not None else None,
+            "next_verification_event": monitor.next_verification_event if monitor is not None else None,
+            "configured_by": monitor.changed_by if monitor is not None else None,
+            "configuration_change_reason": monitor.change_reason if monitor is not None else None,
         }
         for key, value in (scope_context or {}).items():
             if key not in scope_payload:

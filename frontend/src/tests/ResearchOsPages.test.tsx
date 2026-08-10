@@ -1720,6 +1720,10 @@ describe("Research OS event entry", () => {
                           factor_ids: ["factor-1"],
                           allowed_source_types: ["company_disclosure"],
                           budget: 12,
+                          frequency: "weekday_08_30",
+                          next_verification_event: "2026Q1 财报披露",
+                          configured_by: "human:lin",
+                          configuration_change_reason: "以晨间披露核验订单指引",
                         },
                       },
                     ],
@@ -1767,6 +1771,10 @@ describe("Research OS event entry", () => {
     });
     expect(drawer).toHaveTextContent("company_disclosure");
     expect(drawer).toHaveTextContent("冻结本次范围");
+    expect(drawer).toHaveTextContent("weekday_08_30");
+    expect(drawer).toHaveTextContent("2026Q1 财报披露");
+    expect(drawer).toHaveTextContent("human:lin");
+    expect(drawer).toHaveTextContent("以晨间披露核验订单指引");
     expect(screen.getByText("工作台内容")).toBeVisible();
   });
 
@@ -1798,6 +1806,10 @@ describe("Research OS event entry", () => {
                     factor_ids: ["factor-1"],
                     allowed_source_types: ["company_disclosure"],
                     budget: 12,
+                    frequency: "weekday_08_30",
+                    next_verification_event: "2026Q1 财报披露",
+                    configured_by: "human:lin",
+                    configuration_change_reason: "以晨间披露核验订单指引",
                   },
                 },
               ],
@@ -2588,6 +2600,10 @@ describe("Research OS event entry", () => {
                     factor_ids: ["factor-1"],
                     allowed_source_types: ["company_disclosure"],
                     budget: 12,
+                    frequency: "weekday_08_30",
+                    next_verification_event: "2026Q1 财报披露",
+                    configured_by: "human:lin",
+                    configuration_change_reason: "以晨间披露核验订单指引",
                   },
                 },
               ],
@@ -2619,9 +2635,14 @@ describe("Research OS event entry", () => {
       "/events/event-tsm/monitor",
     );
     await user.click(screen.getByRole("button", { name: "展开本次运行记录" }));
-    expect(
-      await screen.findByRole("complementary", { name: "全局运行记录" }),
-    ).toHaveTextContent("授权来源返回失败");
+    const drawer = await screen.findByRole("complementary", {
+      name: "全局运行记录",
+    });
+    expect(drawer).toHaveTextContent("授权来源返回失败");
+    expect(drawer).toHaveTextContent("weekday_08_30");
+    expect(drawer).toHaveTextContent("2026Q1 财报披露");
+    expect(drawer).toHaveTextContent("human:lin");
+    expect(drawer).toHaveTextContent("以晨间披露核验订单指引");
   });
 
   it("makes an unreadable global run ledger explicit and lets the researcher retry it", async () => {

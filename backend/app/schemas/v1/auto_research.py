@@ -32,6 +32,10 @@ class FrozenRunScopeDTO(V1Model):
     factor_statements: list[str] = Field(default_factory=list)
     allowed_source_types: list[str] = Field(default_factory=list)
     budget: int | None = None
+    frequency: str | None = None
+    next_verification_event: str | None = None
+    configured_by: str | None = None
+    configuration_change_reason: str | None = None
 
 
 class ActiveResearchRunDTO(V1Model):

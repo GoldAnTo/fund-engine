@@ -457,6 +457,10 @@ function GlobalRunDrawer({
     ],
     ["允许来源", (scope.allowed_source_types ?? []).join("、")],
     ["资料预算", scope.budget],
+    ["执行频率", scope.frequency],
+    ["下一验证事件", scope.next_verification_event],
+    ["配置人", scope.configured_by],
+    ["本次配置依据", scope.configuration_change_reason],
   ];
   return (
     <aside className="ros-run-drawer" aria-label="全局运行详情">
