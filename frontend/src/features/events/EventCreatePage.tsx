@@ -7,6 +7,7 @@ import {
   DEFAULT_SOURCE_GOVERNANCE,
   SourceGovernanceFields,
   sourceGovernanceMetadata,
+  sourceGovernanceValidationError,
 } from "../sources/SourceGovernanceFields";
 
 const EMPTY_FACTORS = ["", "", ""];
@@ -33,11 +34,13 @@ export function EventCreatePage() {
   const [selectedExistingCase, setSelectedExistingCase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const governanceError = sourceGovernanceValidationError(sourceGovernance);
   const sourceReady = sourceType === "licensed_provider"
     ? Boolean(providerName.trim() && providerRecordId.trim() && providerRequestScope.trim())
     : sourceType === "public_url"
       ? Boolean(sourceUrl.trim())
       : true;
+  const intakeReady = sourceReady && !governanceError;
   const frozenSourceMetadata = {
     ...sourceMetadata,
     ...sourceGovernanceMetadata(sourceGovernance),
@@ -184,11 +187,11 @@ export function EventCreatePage() {
           <label>{sourceType === "public_url" ? "网页原文或事件摘要" : "事件原始输入"}<textarea aria-label={sourceType === "public_url" ? "网页原文或事件摘要" : "事件原始输入"} value={rawInput} onChange={(event) => setRawInput(event.target.value)} placeholder="粘贴原文或清晰描述发生了什么…" /></label>
           <label>{sourceType === "licensed_provider" ? "供应商记录或可重取链接" : sourceType === "public_url" ? "公开网页链接（必填）" : "来源链接（可选）"}<input aria-label={sourceType === "public_url" ? "公开网页链接（必填）" : undefined} type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" /></label>
           {sourceType === "public_url" && <p className="ros-note">系统只冻结你提交的正文快照，不会抓取网页、绕过访问限制，或把 URL 视为已核验内容。它只能作为待人工核验的线索。</p>}
-          <button className="ros-button ros-button--secondary" type="button" disabled={!rawInput.trim() || !sourceReady || busy} onClick={extract}>{busy && !draft ? "正在识别…" : "识别事件与研究问题"}</button>
+          <button className="ros-button ros-button--secondary" type="button" disabled={!rawInput.trim() || !intakeReady || busy} onClick={extract}>{busy && !draft ? "正在识别…" : "识别事件与研究问题"}</button>
           <small className="ros-form-note">当前选择：{sourceType === "licensed_provider" ? sourceReady ? "授权数据源快照（供应商记录已填写）" : "授权数据源快照（仍缺供应商记录）" : sourceType === "uploaded_file" ? originalFile ? `原件待冻结 · ${originalFile.name}` : "上传原件文件（尚未选择）" : sourceType === "public_url" ? sourceReady ? "公开网页快照（URL 已冻结，正文待核验）" : "公开网页快照（仍缺公开 URL）" : "粘贴快照（需后续核验）"}；权威性为 {sourceAuthority}。来源类型、许可与输入元数据会随 Case 冻结。</small>
         </section>
         <section className={`ros-form-card ros-form-card--scope${draft ? " is-ready" : ""}`} aria-live="polite"><div className="ros-step"><span>02</span><div><h2>确认可验证的研究范围</h2><p>系统仅提出候选；研究员决定问题和要验证的因素。</p></div></div>
-          {!draft ? originalFile && sourceType === "uploaded_file" ? <section className="ros-existing-case-intake"><p>可直接把原件冻结到未发布 Case；PDF 无需先在浏览器解析。已发布 Case 仍须从原文资料页做变化比较和人工决定。</p><label>选择原件目标 Case<select aria-label="选择原件目标 Case" value={selectedExistingCase} onChange={(event) => setSelectedExistingCase(event.target.value)}><option value="" disabled>{existingCases.length ? "请选择 Case" : "暂无可归入的未发布 Case"}</option>{existingCases.map((item) => <option key={item.id} value={item.id}>{item.eventTitle} · {item.status}</option>)}</select></label><button className="ros-button ros-button--primary" type="button" disabled={busy || !sourceReady || !selectedExistingCase} onClick={attachToExistingCase}>{busy ? "正在冻结原件…" : "冻结原件并归入当前 Case"} <span aria-hidden>→</span></button></section> : <div className="ros-empty ros-empty--compact">先识别事件，才能决定它应创建新研究还是归入已有 Case。</div> : <>
+          {!draft ? originalFile && sourceType === "uploaded_file" ? <section className="ros-existing-case-intake"><p>可直接把原件冻结到未发布 Case；PDF 无需先在浏览器解析。已发布 Case 仍须从原文资料页做变化比较和人工决定。</p><label>选择原件目标 Case<select aria-label="选择原件目标 Case" value={selectedExistingCase} onChange={(event) => setSelectedExistingCase(event.target.value)}><option value="" disabled>{existingCases.length ? "请选择 Case" : "暂无可归入的未发布 Case"}</option>{existingCases.map((item) => <option key={item.id} value={item.id}>{item.eventTitle} · {item.status}</option>)}</select></label><button className="ros-button ros-button--primary" type="button" disabled={busy || !intakeReady || !selectedExistingCase} onClick={attachToExistingCase}>{busy ? "正在冻结原件…" : "冻结原件并归入当前 Case"} <span aria-hidden>→</span></button></section> : <div className="ros-empty ros-empty--compact">先识别事件，才能决定它应创建新研究还是归入已有 Case。</div> : <>
             <fieldset className="ros-material-destination">
               <legend>决定材料归属</legend>
               <label><input type="radio" name="material-destination" checked={destination === "new"} onChange={() => setDestination("new")} /> 创建新 Case</label>
@@ -200,12 +203,12 @@ export function EventCreatePage() {
             <label>研究问题<textarea aria-label="研究问题" value={draft.researchQuestion} onChange={(event) => setDraft({ ...draft, researchQuestion: event.target.value })} /></label>
             <div className="ros-factor-fields"><p className="ros-field-label">关键因素（至少 3 个）</p>{factors.map((factor, index) => <label key={index} className="ros-factor-input"><span>{String(index + 1).padStart(2, "0")}</span><input aria-label={`关键因素 ${index + 1}`} value={factor} onChange={(event) => updateFactor(index, event.target.value)} /></label>)}</div>
             <div className="ros-protocol-optin"><span><b>新建 Case 默认采用严格研究协议</b><small>必须固定结果指标、范围、基线、时间窗、机制与反证规则，才能进入正式验证。既有 Case 的历史标记不会被这里改写。</small></span></div>
-            <button className="ros-button ros-button--primary" type="button" disabled={busy || !sourceReady || factors.filter((factor) => factor.trim()).length < 3 || !draft.researchQuestion.trim()} onClick={create}>{busy ? "正在建立…" : "建立 Case，进入资料核验"} <span aria-hidden>→</span></button>
+            <button className="ros-button ros-button--primary" type="button" disabled={busy || !intakeReady || factors.filter((factor) => factor.trim()).length < 3 || !draft.researchQuestion.trim()} onClick={create}>{busy ? "正在建立…" : "建立 Case，进入资料核验"} <span aria-hidden>→</span></button>
             </> : <section className="ros-existing-case-intake">
               <p>这份材料将作为当前 Case 内的新冻结版本。研究员仍需在资料页核验原文，再决定是否提出或审核关系。</p>
               <label>选择目标 Case<select aria-label="选择目标 Case" value={selectedExistingCase} onChange={(event) => setSelectedExistingCase(event.target.value)}><option value="" disabled>{existingCases.length ? "请选择 Case" : "暂无可归入的未发布 Case"}</option>{existingCases.map((item) => <option key={item.id} value={item.id}>{item.eventTitle} · {item.status}</option>)}</select></label>
               <p className="ros-note">已发布 Case 必须走变化比较和人工决定，不能从收件箱直接归入。</p>
-              <button className="ros-button ros-button--primary" type="button" disabled={busy || !sourceReady || !selectedExistingCase} onClick={attachToExistingCase}>{busy ? "正在冻结材料…" : "冻结并归入当前 Case"} <span aria-hidden>→</span></button>
+              <button className="ros-button ros-button--primary" type="button" disabled={busy || !intakeReady || !selectedExistingCase} onClick={attachToExistingCase}>{busy ? "正在冻结材料…" : "冻结并归入当前 Case"} <span aria-hidden>→</span></button>
             </section>}
           </>}
           {error && <p className="ros-error" role="alert">{error}</p>}

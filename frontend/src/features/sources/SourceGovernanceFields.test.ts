@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { sourceGovernanceMetadata } from "./SourceGovernanceFields";
+import {
+  sourceGovernanceMetadata,
+  sourceGovernanceValidationError,
+} from "./SourceGovernanceFields";
 
 describe("sourceGovernanceMetadata", () => {
   it("preserves explicit governance fields and separates downstream restrictions", () => {
@@ -23,5 +26,19 @@ describe("sourceGovernanceMetadata", () => {
       contract_version: "juyuan-research-v4",
       downstream_restrictions: ["仅限投研团队", "禁止外部导出"],
     });
+  });
+
+  it("rejects an end date before the source contract becomes effective", () => {
+    expect(
+      sourceGovernanceValidationError({
+        region: "CN",
+        effectiveFrom: "2026-12-31",
+        effectiveUntil: "2026-01-01",
+        retentionPolicy: "case_retained",
+        deletionPolicy: "not_recorded",
+        contractVersion: "",
+        downstreamRestrictions: "仅限当前 Case 研究与人工审核",
+      }),
+    ).toBe("授权失效日不能早于授权生效日。");
   });
 });

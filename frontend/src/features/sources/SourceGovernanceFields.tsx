@@ -35,6 +35,19 @@ export function sourceGovernanceMetadata(value: SourceGovernance): Record<string
   };
 }
 
+export function sourceGovernanceValidationError(
+  value: SourceGovernance,
+): string | null {
+  if (
+    value.effectiveFrom
+    && value.effectiveUntil
+    && value.effectiveUntil < value.effectiveFrom
+  ) {
+    return "授权失效日不能早于授权生效日。";
+  }
+  return null;
+}
+
 export function SourceGovernanceFields({
   value,
   onChange,
@@ -42,6 +55,7 @@ export function SourceGovernanceFields({
   value: SourceGovernance;
   onChange: (next: SourceGovernance) => void;
 }) {
+  const validationError = sourceGovernanceValidationError(value);
   function update<K extends keyof SourceGovernance>(key: K, next: SourceGovernance[K]) {
     onChange({ ...value, [key]: next });
   }
@@ -116,6 +130,7 @@ export function SourceGovernanceFields({
           placeholder="用分号或换行分隔限制"
         />
       </label>
+      {validationError && <p className="ros-error" role="alert">{validationError}</p>}
     </fieldset>
   );
 }

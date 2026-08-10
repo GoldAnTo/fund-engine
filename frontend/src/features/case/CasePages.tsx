@@ -46,6 +46,7 @@ import {
   DEFAULT_SOURCE_GOVERNANCE,
   SourceGovernanceFields,
   sourceGovernanceMetadata,
+  sourceGovernanceValidationError,
 } from "../sources/SourceGovernanceFields";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
@@ -631,13 +632,14 @@ function PublishedMaterialDecisionForm({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const governanceError = sourceGovernanceValidationError(sourceGovernance);
   const sourceReady = sourceType === "licensed_provider"
     ? Boolean(providerName.trim() && providerRecordId.trim() && providerRequestScope.trim())
     : sourceType === "public_url"
       ? Boolean(sourceUrl.trim())
       : true;
   async function submit() {
-    if (!rawInput.trim() || !reason.trim() || !sourceReady) return;
+    if (!rawInput.trim() || !reason.trim() || !sourceReady || governanceError) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -828,7 +830,7 @@ function PublishedMaterialDecisionForm({
       <button
         className="ros-button ros-button--primary"
         type="button"
-        disabled={!rawInput.trim() || !reason.trim() || !sourceReady || busy}
+        disabled={!rawInput.trim() || !reason.trim() || !sourceReady || Boolean(governanceError) || busy}
         onClick={() => void submit()}
       >
         {busy
