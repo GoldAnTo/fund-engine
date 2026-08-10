@@ -214,6 +214,13 @@ class AutoResearchService:
         factor = self.session.get(KeyFactor, key_factor_id)
         if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed" or factor.thesis_id is None:
             raise ValueError("reviewed key factor is not explicitly linked to this Case research scope")
+        if (
+            factor.verification_window_start is None
+            or factor.verification_window_end is None
+        ):
+            raise ValueError(
+                "key factor must have a frozen verification window before starting replenishment"
+            )
         monitor = self.session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
         if monitor is None or str(factor.thesis_id) not in monitor.factor_ids:
             raise ValueError("linked key factor is not in the current CaseMonitor scope")

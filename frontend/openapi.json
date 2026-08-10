@@ -18323,27 +18323,13 @@
             "title": "Allowed Source Types"
           },
           "verification_window_start": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "format": "date",
             "title": "Verification Window Start"
           },
           "verification_window_end": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "format": "date",
             "title": "Verification Window End"
           },
           "support_condition": {
@@ -18380,6 +18366,8 @@
           "expected_direction",
           "metric_name",
           "allowed_source_types",
+          "verification_window_start",
+          "verification_window_end",
           "support_condition",
           "refutation_condition",
           "next_verification_event",

@@ -5778,10 +5778,16 @@ export interface components {
             metric_name: string;
             /** Allowed Source Types */
             allowed_source_types: string[];
-            /** Verification Window Start */
-            verification_window_start?: string | null;
-            /** Verification Window End */
-            verification_window_end?: string | null;
+            /**
+             * Verification Window Start
+             * Format: date
+             */
+            verification_window_start: string;
+            /**
+             * Verification Window End
+             * Format: date
+             */
+            verification_window_end: string;
             /** Support Condition */
             support_condition: string;
             /** Refutation Condition */

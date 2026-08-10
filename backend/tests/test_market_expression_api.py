@@ -379,6 +379,23 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     assert factor["allowed_source_types"] == ["company_disclosure", "licensed_provider"]
     assert factor["verification"] is None
 
+    missing_window = cmd_client.post(
+        f"/api/v1/research-cases/{case_id}/key-factors",
+        json={
+            "report_claim_id": claim["id"],
+            "name": "未固定窗口的订单增速",
+            "expected_direction": "positive",
+            "metric_name": "订单同比增速",
+            "allowed_source_types": ["company_disclosure"],
+            "support_condition": "公司定期报告披露订单同比增长。",
+            "refutation_condition": "订单增速未达预期或出现延后。",
+            "next_verification_event": "2026 年三季报",
+            "reviewed_by": "human:researcher",
+            "review_reason": "故意缺少观察窗口，用于验证门禁。",
+        },
+    )
+    assert missing_window.status_code == 422
+
 
 def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
     cmd_client, cmd_session

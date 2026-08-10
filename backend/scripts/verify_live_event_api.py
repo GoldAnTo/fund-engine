@@ -43,6 +43,11 @@ def _request(url: str, *, method: str = "GET", body: dict | None = None) -> tupl
     try:
         with urllib.request.urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read())
+    except TimeoutError:
+        # Uvicorn can accept a socket before the application is ready to
+        # respond. Treat that exactly like a not-yet-listening server so the
+        # bounded readiness loop retries the real API check.
+        return 0, {}
     except urllib.error.HTTPError as exc:
         # A server can return an empty, non-JSON response while Uvicorn is
         # still starting.  The readiness loop needs the status to continue

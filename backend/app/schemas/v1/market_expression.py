@@ -55,8 +55,8 @@ class RegisterKeyFactorRequest(V1Model):
     expected_direction: Literal["positive", "negative", "neutral"]
     metric_name: str = Field(min_length=1)
     allowed_source_types: list[str] = Field(min_length=1)
-    verification_window_start: date | None = None
-    verification_window_end: date | None = None
+    verification_window_start: date
+    verification_window_end: date
     support_condition: str = Field(min_length=1)
     refutation_condition: str = Field(min_length=1)
     next_verification_event: str = Field(min_length=1)

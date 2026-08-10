@@ -31,6 +31,20 @@ def test_live_event_api_readiness_probe_handles_empty_http_error_body(monkeypatc
     assert response == {}
 
 
+def test_live_event_api_readiness_probe_handles_timed_out_response(monkeypatch) -> None:
+    def raise_timeout(*_args, **_kwargs):
+        raise TimeoutError("server is still starting")
+
+    monkeypatch.setattr(verify_live_event_api.urllib.request, "urlopen", raise_timeout)
+
+    status, response = verify_live_event_api._request(
+        "http://127.0.0.1:9999/api/v1/event-research"
+    )
+
+    assert status == 0
+    assert response == {}
+
+
 def test_live_event_api_verifier_creates_and_reads_a_tenant_scoped_case() -> None:
     script = Path(__file__).parents[1] / "scripts" / "verify_live_event_api.py"
 

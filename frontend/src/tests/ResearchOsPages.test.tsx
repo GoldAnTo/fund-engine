@@ -498,6 +498,31 @@ describe("Research OS event entry", () => {
     ).toBeEnabled();
   });
 
+  it("blocks factor replenishment before a missing research protocol reaches the run API", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "researchability").mockResolvedValue({
+      status: "blocked",
+      reason_codes: ["missing_outcome_binding"],
+      effective_binding_id: null,
+      next_action: "确认结果指标、范围、基线和时间窗",
+    });
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(
+        "研究协议尚未通过，不能启动补证。下一步：确认结果指标、范围、基线和时间窗",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "立即补证此因素" })).toBeDisabled();
+  });
+
   it("does not present a provider record URI as a clickable source webpage", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     const originalMarketExpression = api.marketExpression.bind(api);
@@ -863,7 +888,12 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("heading", { name: "固定关键因素的验证口径" }),
     ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "登记已审核关键因素" }),
+    ).toBeDisabled();
     await user.type(screen.getByLabelText("验证指标"), "订单同比增速");
+    await user.type(screen.getByLabelText("验证开始日期"), "2026-07-01");
+    await user.type(screen.getByLabelText("验证结束日期"), "2026-09-30");
     await user.type(
       screen.getByLabelText("支持条件"),
       "已准入资料显示订单同比增长。",
@@ -877,8 +907,36 @@ describe("Research OS event entry", () => {
       screen.getByLabelText("因素审核理由"),
       "指标、窗口、来源和反证条件均已人工确认。",
     );
+    expect(
+      screen.getByRole("button", { name: "登记已审核关键因素" }),
+    ).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "登记已审核关键因素" }));
     expect(await screen.findByText(/已登记已审核关键因素/)).toBeVisible();
+  });
+
+  it("lets a researcher resume key-factor registration from an existing reviewed claim", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "选择冻结原文并登记主张" }),
+    );
+    const claims = await screen.findByLabelText("已审核主张");
+    await user.selectOptions(claims, "report-claim-demo");
+
+    expect(
+      screen.getByRole("heading", { name: "固定关键因素的验证口径" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("关键因素名称")).toHaveValue(
+      "公司预计资本开支将高于此前指引。",
+    );
   });
 
   it("makes a reviewed factor's verification an explicit source-backed decision", async () => {

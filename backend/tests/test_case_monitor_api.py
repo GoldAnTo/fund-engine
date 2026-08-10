@@ -171,7 +171,7 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
     assert replayed_first_scope == first_scope
 
 
-def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link(
+def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link_and_window(
     cmd_client, cmd_session
 ) -> None:
     case, factor = _case_with_confirmed_factor(cmd_session)
@@ -202,10 +202,8 @@ def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link(
         json={"key_factor_id": str(key_factor.id)},
     )
 
-    assert response.status_code == 201, response.text
-    events = cmd_client.get(f"/api/v1/research-runs/{response.json()['id']}/events").json()["items"]
-    assert events[0]["details"]["factor_ids"] == [str(factor.id)]
-    assert events[0]["details"]["requested_key_factor_id"] == str(key_factor.id)
+    assert response.status_code == 422
+    assert "verification window" in response.json()["error"]["message"]
 
 
 def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) -> None:

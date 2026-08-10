@@ -10,6 +10,7 @@ import {
   type MarketExpression,
   type MarketInstrumentBindings,
   type ForecastVerdictHistory,
+  type Researchability,
   type SourceStatementOptions,
 } from "../../app/researchOsApi";
 import { FundDisclosureSyncTask } from "./FundDisclosureSyncTask";
@@ -78,6 +79,16 @@ export function MarketExpressionContent({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [startedRunId, setStartedRunId] = useState<string | null>(null);
   const [fundDisclosureScopeRevision, setFundDisclosureScopeRevision] = useState(0);
+  const [factorResearchability, setFactorResearchability] =
+    useState<Researchability | null>(null);
+  const [factorResearchabilityLoading, setFactorResearchabilityLoading] =
+    useState(false);
+  const [factorResearchabilityError, setFactorResearchabilityError] =
+    useState(false);
+  const selectedFactor =
+    expression?.factors.find((factor) => factor.id === selectedFactorId) ??
+    expression?.factors[0] ??
+    null;
 
   async function reloadExpression() {
     setError(null);
@@ -99,6 +110,34 @@ export function MarketExpressionContent({
   useEffect(() => {
     void reloadExpression();
   }, [caseId]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedFactor?.thesis_id) {
+      setFactorResearchability(null);
+      setFactorResearchabilityLoading(false);
+      setFactorResearchabilityError(false);
+      return () => {
+        active = false;
+      };
+    }
+    setFactorResearchability(null);
+    setFactorResearchabilityLoading(true);
+    setFactorResearchabilityError(false);
+    researchOsApi
+      .researchability(selectedFactor.thesis_id)
+      .then((value) => {
+        if (active) setFactorResearchability(value);
+      })
+      .catch(() => {
+        if (active) setFactorResearchabilityError(true);
+      })
+      .finally(() => {
+        if (active) setFactorResearchabilityLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedFactor?.thesis_id]);
 
   if (error)
     return (
@@ -118,10 +157,6 @@ export function MarketExpressionContent({
     return (
       <div className="ros-empty ros-page-gap">正在读取已审核的市场表达…</div>
     );
-  const selectedFactor =
-    expression.factors.find((factor) => factor.id === selectedFactorId) ??
-    expression.factors[0] ??
-    null;
   const selectedClaim = selectedFactor?.report_claim_id
     ? (expression.claims.find(
         (claim) => claim.id === selectedFactor.report_claim_id,
@@ -205,6 +240,7 @@ export function MarketExpressionContent({
       <MarketExpressionRegistration
         caseId={caseId}
         theses={theses}
+        claims={expression.claims}
         onRegistered={() => void reloadExpression()}
       />
       <MarketInstrumentWorkspace
@@ -555,7 +591,16 @@ export function MarketExpressionContent({
               <button
                 className="ros-button ros-button--primary"
                 type="button"
-                disabled={!selectedFactor.thesis_id || starting}
+                disabled={
+                  !selectedFactor.thesis_id ||
+                  !selectedFactor.verification_window_start ||
+                  !selectedFactor.verification_window_end ||
+                  factorResearchabilityLoading ||
+                  factorResearchabilityError ||
+                  !factorResearchability ||
+                  factorResearchability.status === "blocked" ||
+                  starting
+                }
                 onClick={() => void startFactorRun()}
               >
                 {starting ? "正在创建单因素补证…" : "立即补证此因素"}
@@ -564,6 +609,26 @@ export function MarketExpressionContent({
                 <p className="ros-note">
                   尚未审核登记此关键因素与 Case
                   研究范围的关联，不能按名称猜测后启动运行。
+                </p>
+              )}
+              {(!selectedFactor.verification_window_start ||
+                !selectedFactor.verification_window_end) && (
+                <p className="ros-note">
+                  此历史关键因素未记录验证观察窗口，不能启动补证；请新建一条带明确窗口的审核因素，不会改写旧记录。
+                </p>
+              )}
+              {selectedFactor.thesis_id && factorResearchabilityLoading && (
+                <p className="ros-note">正在读取此因素关联命题的研究协议状态…</p>
+              )}
+              {selectedFactor.thesis_id && factorResearchabilityError && (
+                <p className="ros-error">
+                  研究协议状态暂不可读取，不能创建补证运行；请恢复读取后重试。
+                </p>
+              )}
+              {factorResearchability?.status === "blocked" && (
+                <p className="ros-note">
+                  研究协议尚未通过，不能启动补证。下一步：
+                  {factorResearchability.next_action}
                 </p>
               )}
               {runError && <p className="ros-error">{runError}</p>}
@@ -1570,10 +1635,12 @@ function MarketObservationRegistration({
 function MarketExpressionRegistration({
   caseId,
   theses,
+  claims,
   onRegistered,
 }: {
   caseId: string;
   theses: ThesisOption[];
+  claims: MarketExpression["claims"];
   onRegistered: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1588,6 +1655,9 @@ function MarketExpressionRegistration({
   const [claimReviewer, setClaimReviewer] = useState("human:researcher");
   const [claimReason, setClaimReason] = useState("");
   const [claimId, setClaimId] = useState<string | null>(null);
+  const [savedClaim, setSavedClaim] = useState<
+    MarketExpression["claims"][number] | null
+  >(null);
   const [factorName, setFactorName] = useState("");
   const [direction, setDirection] = useState<
     "positive" | "negative" | "neutral"
@@ -1605,6 +1675,12 @@ function MarketExpressionRegistration({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedSource = sources.find((item) => item.id === sourceId) ?? null;
+  const availableClaims = savedClaim
+    ? [
+        ...claims.filter((claim) => claim.id !== savedClaim.id),
+        savedClaim,
+      ]
+    : claims;
 
   async function begin() {
     setOpen(true);
@@ -1654,6 +1730,7 @@ function MarketExpressionRegistration({
         review_reason: claimReason.trim(),
       });
       setClaimId(claim.id);
+      setSavedClaim(claim);
       setFactorName(claim.text);
       setMessage(
         "已登记已审核主张；它仍是研究观点或预测，不会自动变成事实或结论。",
@@ -1663,6 +1740,12 @@ function MarketExpressionRegistration({
     } finally {
       setBusy(false);
     }
+  }
+
+  function selectClaim(id: string) {
+    const claim = availableClaims.find((item) => item.id === id);
+    setClaimId(claim?.id ?? null);
+    if (claim) setFactorName(claim.text);
   }
 
   async function saveFactor() {
@@ -1675,6 +1758,8 @@ function MarketExpressionRegistration({
       !factorName.trim() ||
       !metricName.trim() ||
       !allowed.length ||
+      !windowStart ||
+      !windowEnd ||
       !support.trim() ||
       !refutation.trim() ||
       !nextEvent.trim() ||
@@ -1692,8 +1777,8 @@ function MarketExpressionRegistration({
         expected_direction: direction,
         metric_name: metricName.trim(),
         allowed_source_types: allowed,
-        verification_window_start: windowStart || null,
-        verification_window_end: windowEnd || null,
+        verification_window_start: windowStart,
+        verification_window_end: windowEnd,
         support_condition: support.trim(),
         refutation_condition: refutation.trim(),
         next_verification_event: nextEvent.trim(),
@@ -1863,6 +1948,23 @@ function MarketExpressionRegistration({
                     ? "已登记主张"
                     : "登记已审核主张"}
               </button>
+              {availableClaims.length > 0 && (
+                <label>
+                  已审核主张
+                  <select
+                    aria-label="已审核主张"
+                    value={claimId ?? ""}
+                    onChange={(event) => selectClaim(event.target.value)}
+                  >
+                    <option value="">请选择要拆解为因素的已审核主张</option>
+                    {availableClaims.map((claim) => (
+                      <option value={claim.id} key={claim.id}>
+                        {claim.text}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {claimId && (
                 <section className="ros-market-register__factor">
                   <p className="ros-eyebrow">
@@ -1995,6 +2097,8 @@ function MarketExpressionRegistration({
                       busy ||
                       !factorName.trim() ||
                       !metricName.trim() ||
+                      !windowStart ||
+                      !windowEnd ||
                       !support.trim() ||
                       !refutation.trim() ||
                       !nextEvent.trim() ||

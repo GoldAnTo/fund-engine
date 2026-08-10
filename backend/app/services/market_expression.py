@@ -38,8 +38,8 @@ class KeyFactorInput:
     expected_direction: str
     metric_name: str
     allowed_source_types: list[str]
-    verification_window_start: date | None
-    verification_window_end: date | None
+    verification_window_start: date
+    verification_window_end: date
     support_condition: str
     refutation_condition: str
     next_verification_event: str
@@ -128,7 +128,7 @@ class MarketExpressionService:
             thesis = self._session.get(Thesis, value.thesis_id)
             if thesis is None or thesis.research_case_id != case_id or thesis.review_state != "confirmed":
                 raise ValidationError("thesis must be a confirmed proposition in this research case")
-        if value.verification_window_start and value.verification_window_end and value.verification_window_start > value.verification_window_end:
+        if value.verification_window_start > value.verification_window_end:
             raise ValidationError("verification_window_start must not be after verification_window_end")
         for name in ("name", "metric_name", "support_condition", "refutation_condition", "next_verification_event", "reviewed_by", "review_reason"):
             self._require_text(getattr(value, name), name)
