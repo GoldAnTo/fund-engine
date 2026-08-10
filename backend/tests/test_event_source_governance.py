@@ -178,6 +178,34 @@ def test_event_intake_rejects_a_contract_window_that_ends_before_it_starts(
     )
 
 
+def test_expired_contract_is_visible_as_restricted_in_the_document_reader(
+    cmd_client,
+    cmd_session,
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={
+                "effective_from": "2025-01-01",
+                "effective_until": "2025-01-31",
+            },
+        ),
+    )
+
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+
+    assert detail.status_code == 200
+    assert detail.json()["document"]["source_contract"]["status"] == "restricted"
+
+
 def test_event_intake_freezes_declared_source_authority_and_exposes_it_to_readers(
     cmd_client, cmd_session
 ) -> None:

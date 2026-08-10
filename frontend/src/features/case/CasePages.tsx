@@ -896,7 +896,8 @@ function DocumentReader({
     : null;
   const extractionAllowed =
     document.parse_quality !== "failed" &&
-    contract?.permissions.ai_processing !== false;
+    contract?.permissions.ai_processing !== false &&
+    contract?.status === "admitted";
   const focused = focusSpanId && spans.some((span) => span.id === focusSpanId);
   const [reason, setReason] = useState("");
   const [continuing, setContinuing] = useState(false);
@@ -1169,7 +1170,7 @@ function DocumentReader({
             </button>
             {!extractionAllowed && (
               <small>
-                此版本解析失败或来源合同禁止 AI 处理，不能请求候选抽取。
+                此版本解析失败、来源合同禁止 AI 处理，或合同当前不在有效期内，不能请求候选抽取。
               </small>
             )}
           </section>
@@ -1216,7 +1217,7 @@ function DocumentReader({
                   <button
                     className="ros-button ros-button--secondary"
                     type="button"
-                    disabled={!contract?.permissions.display}
+                    disabled={contract?.status !== "admitted"}
                     onClick={() => beginCandidate(span)}
                   >
                     将此段纳入待审候选

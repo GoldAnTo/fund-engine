@@ -21,6 +21,7 @@ from app.models.ledger import (
     Stock,
 )
 from app.models.source_governance import ProviderRecord, SourceContract
+from app.services.source_admission import source_contract_is_active
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
@@ -405,7 +406,13 @@ class DocumentReadQueries:
             source_type=contract.source_type,
             provider_or_tenant=contract.provider_or_tenant,
             permissions=permissions,
-            status="admitted" if contract.allow_ai_processing and contract.allow_display else "restricted",
+            status=(
+                "admitted"
+                if contract.allow_ai_processing
+                and contract.allow_display
+                and source_contract_is_active(contract)
+                else "restricted"
+            ),
             region=contract.region,
             effective_from=contract.effective_from,
             effective_until=contract.effective_until,

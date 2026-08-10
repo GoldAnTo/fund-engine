@@ -109,6 +109,26 @@ import {
 //  • 设计原型2.png — ResearchCaseDossier
 //  • 设计原型.png  — RelationshipGraph
 
+function mockSourceContractStatus(
+  metadata: Record<string, unknown>,
+  allowAiProcessing: boolean,
+  allowDisplay: boolean,
+): "admitted" | "restricted" {
+  if (!allowAiProcessing || !allowDisplay) return "restricted";
+  const now = Date.now();
+  const effectiveFrom = typeof metadata.effective_from === "string"
+    ? Date.parse(metadata.effective_from)
+    : Number.NaN;
+  const effectiveUntil = typeof metadata.effective_until === "string"
+    ? Date.parse(metadata.effective_until)
+    : Number.NaN;
+  if ((!Number.isNaN(effectiveFrom) && now < effectiveFrom)
+    || (!Number.isNaN(effectiveUntil) && now > effectiveUntil)) {
+    return "restricted";
+  }
+  return "admitted";
+}
+
 const CASES: ResearchCaseSummary[] = [
   {
     id: "ai-compute",
@@ -3929,7 +3949,7 @@ export class MockResearchAdapter implements ResearchClient {
         source_type: sourceType,
         provider_or_tenant: typeof sourceMetadata.provider_name === "string" ? sourceMetadata.provider_name : input.createdBy,
         permissions: { ai_processing: aiProcessing, display, export: typeof permissions.export === "boolean" ? permissions.export : false, api: typeof permissions.api === "boolean" ? permissions.api : false },
-        status: display ? "admitted" : "restricted",
+        status: mockSourceContractStatus(sourceMetadata, aiProcessing, display),
         region: typeof sourceMetadata.region === "string" ? sourceMetadata.region : "not_recorded",
         effective_from: typeof sourceMetadata.effective_from === "string" ? sourceMetadata.effective_from : null,
         effective_until: typeof sourceMetadata.effective_until === "string" ? sourceMetadata.effective_until : null,
@@ -4022,7 +4042,7 @@ export class MockResearchAdapter implements ResearchClient {
           source_type: input.sourceType,
           provider_or_tenant: input.actor,
           permissions: { ai_processing: aiProcessing, display, export: typeof permissions.export === "boolean" ? permissions.export : false, api: typeof permissions.api === "boolean" ? permissions.api : false },
-          status: aiProcessing && display ? "admitted" : "restricted",
+          status: mockSourceContractStatus(input.sourceMetadata, aiProcessing, display),
           region: typeof input.sourceMetadata.region === "string" ? input.sourceMetadata.region : "not_recorded",
           effective_from: typeof input.sourceMetadata.effective_from === "string" ? input.sourceMetadata.effective_from : null,
           effective_until: typeof input.sourceMetadata.effective_until === "string" ? input.sourceMetadata.effective_until : null,
@@ -4081,7 +4101,11 @@ export class MockResearchAdapter implements ResearchClient {
             export: typeof permissions.export === "boolean" ? permissions.export : false,
             api: typeof permissions.api === "boolean" ? permissions.api : false,
           },
-          status: "admitted",
+          status: mockSourceContractStatus(
+            input.sourceMetadata,
+            typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : true,
+            typeof permissions.display === "boolean" ? permissions.display : true,
+          ),
           region: typeof input.sourceMetadata.region === "string" ? input.sourceMetadata.region : "not_recorded",
           effective_from: typeof input.sourceMetadata.effective_from === "string" ? input.sourceMetadata.effective_from : null,
           effective_until: typeof input.sourceMetadata.effective_until === "string" ? input.sourceMetadata.effective_until : null,
@@ -4249,7 +4273,11 @@ export class MockResearchAdapter implements ResearchClient {
             export: typeof permissions.export === "boolean" ? permissions.export : false,
             api: typeof permissions.api === "boolean" ? permissions.api : false,
           },
-          status: (typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled) && (typeof permissions.display === "boolean" ? permissions.display : userControlled) ? "admitted" : "restricted",
+          status: mockSourceContractStatus(
+            input.sourceMetadata,
+            typeof permissions.ai_processing === "boolean" ? permissions.ai_processing : userControlled,
+            typeof permissions.display === "boolean" ? permissions.display : userControlled,
+          ),
           region: typeof input.sourceMetadata.region === "string" ? input.sourceMetadata.region : "not_recorded",
           effective_from: typeof input.sourceMetadata.effective_from === "string" ? input.sourceMetadata.effective_from : null,
           effective_until: typeof input.sourceMetadata.effective_until === "string" ? input.sourceMetadata.effective_until : null,
