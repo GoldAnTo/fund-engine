@@ -44,6 +44,11 @@ const instrumentRoleLabels: Record<string, string> = {
   beneficiary: "受益方",
   risk_exposure: "风险暴露",
 };
+const expectedDirectionLabels: Record<string, string> = {
+  positive: "预期向上",
+  negative: "预期向下",
+  neutral: "方向中性",
+};
 
 type ThesisOption = { id: string; statement: string };
 
@@ -457,6 +462,30 @@ export function MarketExpressionContent({
             <>
               <dl className="ros-market-checks">
                 <div>
+                  <dt>验证指标</dt>
+                  <dd>{selectedFactor.metric_name}</dd>
+                </div>
+                <div>
+                  <dt>预期方向</dt>
+                  <dd>
+                    {expectedDirectionLabels[selectedFactor.expected_direction] ??
+                      selectedFactor.expected_direction}
+                  </dd>
+                </div>
+                <div>
+                  <dt>验证窗口</dt>
+                  <dd>
+                    {selectedFactor.verification_window_start || "未记录"} 至{" "}
+                    {selectedFactor.verification_window_end || "未记录"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>允许来源</dt>
+                  <dd>
+                    {sourceTypeListLabel(selectedFactor.allowed_source_types)}
+                  </dd>
+                </div>
+                <div>
                   <dt>支持条件</dt>
                   <dd>{selectedFactor.support_condition}</dd>
                 </div>
@@ -471,6 +500,13 @@ export function MarketExpressionContent({
                 <div>
                   <dt>审核理由</dt>
                   <dd>{selectedFactor.review_reason}</dd>
+                </div>
+                <div>
+                  <dt>因素审核</dt>
+                  <dd>
+                    {selectedFactor.reviewed_by} ·{" "}
+                    {new Date(selectedFactor.reviewed_at).toLocaleString("zh-CN")}
+                  </dd>
                 </div>
               </dl>
               <p className="ros-market-warning">

@@ -3121,6 +3121,15 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/定位 \{"page":12\} · 可得/)).toBeVisible();
     expect(screen.getByText("许可：未记录")).toBeVisible();
     expect(screen.getByText("得到支持")).toBeVisible();
+    expect(screen.getByText("验证指标").nextElementSibling).toHaveTextContent(
+      "订单金额",
+    );
+    expect(screen.getByText("验证窗口").nextElementSibling).toHaveTextContent(
+      "2026-07-01 至 2026-10-31",
+    );
+    expect(screen.getByText("因素审核").nextElementSibling).toHaveTextContent(
+      "human:researcher",
+    );
     expect(screen.getByText(/事件窗口观测/)).toBeVisible();
     expect(
       screen.getByText("这是市场观测，不自动表述为研报或因素造成。"),
