@@ -60,77 +60,82 @@ export function SourceGovernanceFields({
     onChange({ ...value, [key]: next });
   }
   return (
-    <fieldset className="ros-source-governance">
-      <legend>资料保留与下游边界</legend>
-      <small>
-        这些字段会随冻结版本保存。它们描述资料可如何被保留和使用，不会扩大来源许可或替代人工审核。
-      </small>
-      <label>
-        资料适用地域
-        <input
-          aria-label="资料适用地域"
-          value={value.region}
-          onChange={(event) => update("region", event.target.value)}
-          placeholder="例如：CN"
-        />
-      </label>
-      <div className="ros-source-governance__dates">
+    <details className="ros-source-governance-details" open={Boolean(validationError)}>
+      <summary>
+        <span>资料保留与下游边界</span>
+        <small>按需补充合同、保留与下游限制</small>
+      </summary>
+      <div className="ros-source-governance ros-source-governance--advanced">
+        <small>
+          这些字段会随冻结版本保存。它们描述资料可如何被保留和使用，不会扩大来源许可或替代人工审核。
+        </small>
         <label>
-          授权生效日
+          资料适用地域
           <input
-            aria-label="授权生效日"
-            type="date"
-            value={value.effectiveFrom}
-            onChange={(event) => update("effectiveFrom", event.target.value)}
+            aria-label="资料适用地域"
+            value={value.region}
+            onChange={(event) => update("region", event.target.value)}
+            placeholder="例如：CN"
+          />
+        </label>
+        <div className="ros-source-governance__dates">
+          <label>
+            授权生效日
+            <input
+              aria-label="授权生效日"
+              type="date"
+              value={value.effectiveFrom}
+              onChange={(event) => update("effectiveFrom", event.target.value)}
+            />
+          </label>
+          <label>
+            授权失效日
+            <input
+              aria-label="授权失效日"
+              type="date"
+              value={value.effectiveUntil}
+              onChange={(event) => update("effectiveUntil", event.target.value)}
+            />
+          </label>
+        </div>
+        <label>
+          保留策略
+          <input
+            aria-label="保留策略"
+            value={value.retentionPolicy}
+            onChange={(event) => update("retentionPolicy", event.target.value)}
+            placeholder="例如：case_retained"
           />
         </label>
         <label>
-          授权失效日
+          删除策略
           <input
-            aria-label="授权失效日"
-            type="date"
-            value={value.effectiveUntil}
-            onChange={(event) => update("effectiveUntil", event.target.value)}
+            aria-label="删除策略"
+            value={value.deletionPolicy}
+            onChange={(event) => update("deletionPolicy", event.target.value)}
+            placeholder="例如：not_recorded"
           />
         </label>
+        <label>
+          合同或许可版本
+          <input
+            aria-label="合同或许可版本"
+            value={value.contractVersion}
+            onChange={(event) => update("contractVersion", event.target.value)}
+            placeholder="例如：juyuan-research-v4"
+          />
+        </label>
+        <label>
+          下游使用限制
+          <textarea
+            aria-label="下游使用限制"
+            value={value.downstreamRestrictions}
+            onChange={(event) => update("downstreamRestrictions", event.target.value)}
+            placeholder="用分号或换行分隔限制"
+          />
+        </label>
+        {validationError && <p className="ros-error" role="alert">{validationError}</p>}
       </div>
-      <label>
-        保留策略
-        <input
-          aria-label="保留策略"
-          value={value.retentionPolicy}
-          onChange={(event) => update("retentionPolicy", event.target.value)}
-          placeholder="例如：case_retained"
-        />
-      </label>
-      <label>
-        删除策略
-        <input
-          aria-label="删除策略"
-          value={value.deletionPolicy}
-          onChange={(event) => update("deletionPolicy", event.target.value)}
-          placeholder="例如：not_recorded"
-        />
-      </label>
-      <label>
-        合同或许可版本
-        <input
-          aria-label="合同或许可版本"
-          value={value.contractVersion}
-          onChange={(event) => update("contractVersion", event.target.value)}
-          placeholder="例如：juyuan-research-v4"
-        />
-      </label>
-      <label>
-        下游使用限制
-        <textarea
-          aria-label="下游使用限制"
-          value={value.downstreamRestrictions}
-          onChange={(event) => update("downstreamRestrictions", event.target.value)}
-          placeholder="用分号或换行分隔限制"
-        />
-      </label>
-      {validationError && <p className="ros-error" role="alert">{validationError}</p>}
-    </fieldset>
+    </details>
   );
 }

@@ -2,6 +2,12 @@
 .ros-run-strip__left > div { min-width: 0; }
 .ros-case-tabs { min-width: 0; max-width: 100%; }
 .ros-case-tabs__hint { display: none; }
+.ros-source-governance-details { margin: .7rem 0; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .5rem; background: var(--ros-surface, #fffdf8); }
+.ros-source-governance-details > summary { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; padding: .75rem; color: var(--ros-ink, #30332f); cursor: pointer; }
+.ros-source-governance-details > summary span { font-size: .8rem; font-weight: 700; }
+.ros-source-governance-details > summary small { color: var(--ros-muted, #73766f); font-size: .7rem; }
+.ros-source-governance-details[open] > summary { border-bottom: 1px solid var(--ros-rule, #ded9ce); }
+.ros-source-governance-details .ros-source-governance--advanced { margin: 0; border: 0; border-radius: 0; background: transparent; }
 .ros-case-relation-rail ul { display: grid; gap: .55rem; margin: .7rem 0; padding: 0; list-style: none; }
 .ros-case-relation-rail li { display: grid; gap: .14rem; }
 .ros-case-relation-rail li a { margin-top: 0; }
