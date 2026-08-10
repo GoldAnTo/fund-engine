@@ -81,12 +81,24 @@ def doc_service(session) -> DocumentService:
     return DocumentService(DocumentRepository(session))
 
 
+def _require_sqlite_locator_backfill(session) -> None:
+    """The legacy in-place backfill is intentionally not a PG runtime path.
+
+    PostgreSQL preserves SourceSpan immutability with a database trigger.  A
+    production locator conversion must use the dedicated append-only successor
+    model, not disable that trigger from an application script.
+    """
+    if session.bind.dialect.name != "sqlite":
+        pytest.skip("legacy in-place locator backfill is SQLite-only")
+
+
 # ---------------------------------------------------------------------------
 # Migration script
 # ---------------------------------------------------------------------------
 
 
 def test_migrate_upgrades_legacy_pypdf_locator(session, doc_service):
+    _require_sqlite_locator_backfill(session)
     raw = _make_text_pdf(["营业收入 50 亿元"])
     version = doc_service.freeze(
         raw=raw,
@@ -122,6 +134,7 @@ def test_migrate_upgrades_legacy_pypdf_locator(session, doc_service):
 
 
 def test_migrate_is_idempotent(session, doc_service):
+    _require_sqlite_locator_backfill(session)
     raw = _make_text_pdf(["hello"])
     version = doc_service.freeze(
         raw=raw, source_url="https://example.test/migrate-2"

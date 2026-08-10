@@ -434,9 +434,16 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             tenant_id="test-team",
         )
         case_id = uuid.UUID(created.case_id)
-        old_run_id = uuid.UUID(created.lifecycle.active_run_id)
-        old_run = bootstrap.get(ResearchRun, old_run_id)
-        assert old_run is not None
+        # Intake only freezes source material. This concurrency test needs an
+        # explicitly authorized run to verify that a scope replacement stops
+        # late worker output from the superseded run.
+        old_run = AutoResearchService(bootstrap).start(
+            case_id, max_rounds=3, budget=100, commit=False
+        )
+        lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
+        assert lifecycle is not None
+        lifecycle.active_run_id = old_run.id
+        old_run_id = old_run.id
         old_run.max_rounds = 1
         tasks = list(
             bootstrap.scalars(
@@ -461,7 +468,14 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
     worker_errors: list[BaseException] = []
     scope_errors: list[BaseException] = []
 
-    def blocked_propose(self, thesis_id, session, *, before_persist=None):
+    def blocked_propose(
+        self,
+        thesis_id,
+        session,
+        *,
+        before_persist=None,
+        allowed_source_types=None,
+    ):
         provider_entered.set()
         if not allow_provider_return.wait(timeout=5):
             raise RuntimeError("test did not release blocked provider")
@@ -503,6 +517,10 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         monkeypatch.setattr(EvidenceProposer, "propose", blocked_propose)
     else:
         monkeypatch.setattr(AssessmentGenerator, "generate", blocked_assessment)
+    # The provider implementation is replaced above; the worker still builds
+    # its client before dispatching a task, so keep this concurrency test
+    # independent of a developer's provider credentials.
+    monkeypatch.setattr(AutoResearchService, "client", property(lambda _self: object()))
     monkeypatch.setattr("app.services.auto_research._pending_versions", lambda *_: [])
 
     def execute_old_run() -> None:
@@ -823,7 +841,9 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     try:
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
-        assert lifecycle.status == "draft_ready"
+        # A changed scope queues a successor; it cannot leave a stale draft
+        # lifecycle that a concurrent publisher could mistake for current.
+        assert lifecycle.status == "continuing"
         assert verify.scalar(
             select(EventResearchConclusion.id).where(
                 EventResearchConclusion.research_case_id == case_id,

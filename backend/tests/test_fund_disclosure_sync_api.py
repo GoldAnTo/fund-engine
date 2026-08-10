@@ -5,7 +5,14 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
+from app.models.ledger import (
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+)
 from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun
 from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
 from app.models.research_expression import MarketInstrumentBinding
@@ -60,11 +67,38 @@ def _bind_stock(session, case: ResearchCase, *, code: str) -> Stock:
     stock = Stock(company_id=company.id, code=code, name=f"股票 {code}", market="SZSE", created_at=now)
     session.add(stock)
     session.flush()
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url=f"https://example.test/{code}",
+        title=f"{code} 关联依据",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+        parse_state="success",
+    )
+    session.add(document)
+    session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"kind": "fixture"},
+        verbatim_text=f"{code} 是当前事件相关股票",
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="market_instrument_binding",
+        normalized_text=f"{code} 是当前事件相关股票",
+        observed_period=None,
+        created_at=now,
+    )
+    session.add(statement)
+    session.flush()
     session.add(MarketInstrumentBinding(
         research_case_id=case.id,
         company_id=company.id,
         stock_id=stock.id,
-        source_statement_id=uuid.uuid4(),
+        source_statement_id=statement.id,
         relationship_role="directly_affected",
         review_state="reviewed",
         reviewed_by="human:researcher",

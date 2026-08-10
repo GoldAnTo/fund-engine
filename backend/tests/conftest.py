@@ -640,8 +640,8 @@ class _SeededDatabase:
         cur.execute(
             "INSERT INTO holding_disclosures "
             "(id, fund_id, stock_id, weight, report_period, published_at, "
-            "acquired_at, source, created_at) "
-            f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
+            "acquired_at, source, coverage_status, created_at) "
+            f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
             (
                 new_id,
                 fund_id,
@@ -651,6 +651,7 @@ class _SeededDatabase:
                 None,
                 "2026-01-01 00:00:00.000000",
                 "test-undated",
+                "not_recorded",
                 "2026-01-01 00:00:00.000000",
             ),
         )
