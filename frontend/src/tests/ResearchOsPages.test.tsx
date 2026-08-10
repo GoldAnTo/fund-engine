@@ -345,6 +345,59 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
+  it("makes an unreadable run-event ledger explicit and lets the researcher retry it", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    const runEvents = vi.spyOn(api, "runEvents").mockRejectedValue(
+      new Error("Run events unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "本次运行事件暂不可读取",
+    );
+    runEvents.mockRestore();
+    await user.click(
+      screen.getByRole("button", { name: "重新读取本次运行事件" }),
+    );
+    expect(await screen.findByText("已冻结本次运行范围")).toBeVisible();
+  });
+
+  it("does not allow immediate replenishment while researchability is unreadable", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    const researchability = vi
+      .spyOn(api, "researchability")
+      .mockRejectedValue(new Error("Researchability unavailable"));
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "研究协议状态暂不可读取",
+    );
+    expect(screen.getByRole("button", { name: "立即补证一次" })).toBeDisabled();
+    researchability.mockRestore();
+    await user.click(
+      screen.getByRole("button", { name: "重新读取研究协议状态" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "立即补证一次" }),
+    ).toBeEnabled();
+  });
+
   it("keeps an unavailable Case-scoped stock profile explicit and retryable", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "marketExpression").mockRejectedValue(

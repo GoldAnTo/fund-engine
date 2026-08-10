@@ -3213,6 +3213,9 @@ function MonitorContent({
   const [drawer, setDrawer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [monitorLoadError, setMonitorLoadError] = useState(false);
+  const [runEventsLoadError, setRunEventsLoadError] = useState(false);
+  const [protocolLoadError, setProtocolLoadError] = useState(false);
+  const [protocolReload, setProtocolReload] = useState(0);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(
     activeRunId,
   );
@@ -3230,8 +3233,9 @@ function MonitorContent({
       })
       .catch(() => setMonitorLoadError(true));
   };
-  const loadEvents = (runId: string) =>
-    researchOsApi
+  const loadEvents = (runId: string) => {
+    setRunEventsLoadError(false);
+    return researchOsApi
       .runEvents(runId)
       .then((response) =>
         setEvents(
@@ -3245,7 +3249,11 @@ function MonitorContent({
           })),
         ),
       )
-      .catch(() => setError("该运行的事件记录暂不可读。"));
+      .catch(() => {
+        setEvents([]);
+        setRunEventsLoadError(true);
+      });
+  };
   useEffect(() => {
     void loadMonitor();
   }, [caseId]);
@@ -3264,6 +3272,7 @@ function MonitorContent({
   useEffect(() => {
     let active = true;
     const factors = detail?.confirmed_factors ?? [];
+    setProtocolLoadError(false);
     if (!factors.length) {
       setProtocolStates({});
       return () => {
@@ -3276,14 +3285,18 @@ function MonitorContent({
           [factor.id, await researchOsApi.researchability(factor.id)] as const,
       ),
     )
-      .then((items) => active && setProtocolStates(Object.fromEntries(items)))
-      .catch(
-        () => active && setError("研究协议状态暂不可读；无法据此放行运行。"),
-      );
+      .then((items) => {
+        if (active) setProtocolStates(Object.fromEntries(items));
+      })
+      .catch(() => {
+        if (!active) return;
+        setProtocolStates({});
+        setProtocolLoadError(true);
+      });
     return () => {
       active = false;
     };
-  }, [detail]);
+  }, [detail, protocolReload]);
   const run =
     selectedRunId && detail?.latest_run?.id === selectedRunId
       ? detail.latest_run
@@ -3348,7 +3361,10 @@ function MonitorContent({
             className="ros-button ros-button--primary"
             type="button"
             disabled={
-              starting || !detail?.monitor || protocolBlockers.length > 0
+              starting ||
+              !detail?.monitor ||
+              protocolLoadError ||
+              protocolBlockers.length > 0
             }
             onClick={startNow}
           >
@@ -3393,6 +3409,37 @@ function MonitorContent({
             onClick={() => void loadMonitor()}
           >
             重新读取监控配置
+          </button>
+        </section>
+      )}
+      {runEventsLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>本次运行事件暂不可读取</strong>
+          <p>
+            当前无法确认此运行的阶段、排除理由或候选输出；不会将上一次读取到的事件当作本次真实记录。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            disabled={!selectedRunId}
+            onClick={() => selectedRunId && void loadEvents(selectedRunId)}
+          >
+            重新读取本次运行事件
+          </button>
+        </section>
+      )}
+      {protocolLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>研究协议状态暂不可读取</strong>
+          <p>
+            系统无法确认当前因素是否满足结果指标、范围和验证规则，立即补证保持关闭，避免创建无法解释的运行。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setProtocolReload((value) => value + 1)}
+          >
+            重新读取研究协议状态
           </button>
         </section>
       )}
