@@ -3415,12 +3415,41 @@ function MechanismRuleConfig({ caseId }: { caseId: string }) {
 
 function MechanismRuleHistory({ caseId }: { caseId: string }) {
   const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [error, setError] = useState(false);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
+    setError(false);
     researchOsApi
       .caseMechanismProtocol(caseId)
-      .then(setProtocol)
-      .catch(() => setProtocol(null));
-  }, [caseId]);
+      .then((value) => {
+        setProtocol(value);
+        setError(false);
+      })
+      .catch(() => {
+        setProtocol(null);
+        setError(true);
+      });
+  }, [caseId, reload]);
+  if (error) {
+    return (
+      <section className="ros-rule-history">
+        <header>
+          <p className="ros-eyebrow">验证规则版本记录</p>
+          <h2>每次调整都可回放</h2>
+        </header>
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>验证规则版本暂不可读，不能将其当作没有历史记录。</strong>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重试读取验证规则版本
+          </button>
+        </div>
+      </section>
+    );
+  }
   const history = protocol?.rule_history ?? [];
   if (!protocol?.template) return null;
   const edgeById = new Map(

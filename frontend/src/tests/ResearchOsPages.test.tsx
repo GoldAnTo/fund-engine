@@ -553,6 +553,36 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
+  it("keeps an unavailable verification-rule history visible and retryable", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    vi.spyOn(api, "caseMechanismProtocol")
+      .mockRejectedValueOnce(new Error("Protocol unavailable"))
+      .mockRejectedValueOnce(new Error("Rule configuration unavailable"))
+      .mockRejectedValueOnce(new Error("Rule history unavailable"));
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/protocol"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/protocol"
+            element={<CaseProtocolPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("验证规则版本暂不可读，不能将其当作没有历史记录。"),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试读取验证规则版本" }));
+    expect(
+      await screen.findByRole("heading", { name: "每次调整都可回放" }),
+    ).toBeVisible();
+  });
+
   it("does not call an unavailable Case Wiki an empty graph", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "graph").mockRejectedValue(new Error("Wiki unavailable"));
