@@ -25,6 +25,7 @@ export function GlobalMonitoringPage() {
   const [selectedRun, setSelectedRun] = useState<ResearchRunArchive | null>(null);
   const [runEvents, setRunEvents] = useState<RunEvent[] | null>(null);
   const [runEventsError, setRunEventsError] = useState<string | null>(null);
+  const [openingRunId, setOpeningRunId] = useState<string | null>(null);
   const [lastReadAt, setLastReadAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -43,11 +44,14 @@ export function GlobalMonitoringPage() {
     setSelectedRun(run);
     setRunEvents(null);
     setRunEventsError(null);
+    setOpeningRunId(run.run_id);
     try {
       const response = await researchOsApi.runEvents(run.run_id);
       setRunEvents(response.items);
     } catch {
       setRunEventsError("无法读取本次运行的事件链；不会以当前配置或推测内容替代。 ");
+    } finally {
+      setOpeningRunId((current) => current === run.run_id ? null : current);
     }
   }
 
@@ -60,7 +64,7 @@ export function GlobalMonitoringPage() {
     {!runs ? !error && <GlobalRunArchiveSkeleton /> : runs.length === 0 ? <div className="ros-empty">尚无 ResearchRun。创建事件或在 Case 内启动一次受控补证后，范围和每一步都会保留在这里。</div> : <section className="ros-global-run-list" aria-label="全局研究运行档案">
       {runs.map((run) => <RunCard key={run.run_id} run={run} onOpen={() => void openRun(run)} />)}
     </section>}
-    {selectedRun && <RunArchiveDrawer run={selectedRun} events={runEvents} error={runEventsError} onClose={() => setSelectedRun(null)} />}
+    {selectedRun && <RunArchiveDrawer run={selectedRun} events={runEvents} error={runEventsError} loading={openingRunId === selectedRun.run_id} onRetry={() => void openRun(selectedRun)} onClose={() => setSelectedRun(null)} />}
   </main>;
 }
 
@@ -95,6 +99,6 @@ function RunCard({ run, onOpen }: { run: ResearchRunArchive; onOpen: () => void 
   </article>;
 }
 
-function RunArchiveDrawer({ run, events, error, onClose }: { run: ResearchRunArchive; events: RunEvent[] | null; error: string | null; onClose: () => void }) {
-  return <aside className="ros-run-drawer" aria-label="全局运行记录"><header><div><p className="ros-eyebrow">ResearchRun · {run.run_id}</p><h2>{run.case_title}</h2><p>每个阶段都来自本次运行的追加记录，当前 CaseMonitor 不会覆盖这里的范围或结果。</p></div><button aria-label="关闭全局运行记录" type="button" onClick={onClose}>×</button></header><div className="ros-drawer-body"><section className="ros-run-scope"><p className="ros-eyebrow">冻结范围</p><dl><div><dt>触发方式</dt><dd>{run.scope.trigger || "未记录"}</dd></div><div><dt>监控版本</dt><dd>{run.scope.monitor_version_id || "未记录"}</dd></div><div><dt>关键因素</dt><dd>{run.scope.factor_statements?.join("、") || run.scope.factor_ids?.join("、") || "未记录"}</dd></div><div><dt>允许来源</dt><dd>{run.scope.allowed_source_types?.join("、") || "未记录"}</dd></div><div><dt>停止原因</dt><dd>{run.stop_reason || "未记录"}</dd></div></dl></section>{error ? <p className="ros-error" role="alert">{error}</p> : events === null ? <div className="ros-empty ros-empty--compact">正在读取本次运行的事件链…</div> : <ol className="ros-run-log">{events.length ? events.map((event) => <li key={event.seq}><span>{event.seq}</span><div><strong>{event.stage || "阶段"} · {event.status || "已记录"}</strong><p>{event.message || "无文字摘要"}</p><small>{new Date(event.created_at).toLocaleString("zh-CN")} · {Object.entries(event.details || {}).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join("、") : String(value)}`).join(" · ") || "无额外字段"}</small></div></li>) : <li><span>—</span><div><strong>未返回阶段事件</strong><p>这次运行没有可展示的阶段记录，系统不会用推测内容填充。</p></div></li>}</ol>}</div></aside>;
+function RunArchiveDrawer({ run, events, error, loading, onRetry, onClose }: { run: ResearchRunArchive; events: RunEvent[] | null; error: string | null; loading: boolean; onRetry: () => void; onClose: () => void }) {
+  return <aside className="ros-run-drawer" aria-label="全局运行记录"><header><div><p className="ros-eyebrow">ResearchRun · {run.run_id}</p><h2>{run.case_title}</h2><p>每个阶段都来自本次运行的追加记录，当前 CaseMonitor 不会覆盖这里的范围或结果。</p></div><button aria-label="关闭全局运行记录" type="button" onClick={onClose}>×</button></header><div className="ros-drawer-body"><section className="ros-run-scope"><p className="ros-eyebrow">冻结范围</p><dl><div><dt>触发方式</dt><dd>{run.scope.trigger || "未记录"}</dd></div><div><dt>监控版本</dt><dd>{run.scope.monitor_version_id || "未记录"}</dd></div><div><dt>关键因素</dt><dd>{run.scope.factor_statements?.join("、") || run.scope.factor_ids?.join("、") || "未记录"}</dd></div><div><dt>允许来源</dt><dd>{run.scope.allowed_source_types?.join("、") || "未记录"}</dd></div><div><dt>停止原因</dt><dd>{run.stop_reason || "未记录"}</dd></div></dl></section>{error ? <section className="ros-empty ros-empty--compact" role="alert"><strong>本次运行事件暂不可读取</strong><p>冻结范围仍可查看；但阶段、排除理由和候选输出暂无法确认，不会用当前配置替代。</p><button className="ros-button ros-button--secondary" type="button" disabled={loading} onClick={onRetry}>{loading ? "正在重新读取…" : "重新读取本次运行事件"}</button></section> : events === null ? <div className="ros-empty ros-empty--compact">正在读取本次运行的事件链…</div> : <ol className="ros-run-log">{events.length ? events.map((event) => <li key={event.seq}><span>{event.seq}</span><div><strong>{event.stage || "阶段"} · {event.status || "已记录"}</strong><p>{event.message || "无文字摘要"}</p><small>{new Date(event.created_at).toLocaleString("zh-CN")} · {Object.entries(event.details || {}).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join("、") : String(value)}`).join(" · ") || "无额外字段"}</small></div></li>) : <li><span>—</span><div><strong>未返回阶段事件</strong><p>这次运行没有可展示的阶段记录，系统不会用推测内容填充。</p></div></li>}</ol>}</div></aside>;
 }

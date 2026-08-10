@@ -2538,6 +2538,92 @@ describe("Research OS event entry", () => {
     ).toHaveTextContent("授权来源返回失败");
   });
 
+  it("makes an unreadable global run ledger explicit and lets the researcher retry it", async () => {
+    const user = userEvent.setup();
+    let eventLedgerAvailable = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const isEventLedger = String(input).endsWith(
+          "/research-runs/run-global-retry/events",
+        );
+        if (isEventLedger && !eventLedgerAvailable) {
+          return Promise.resolve(new Response("temporarily unavailable", { status: 503 }));
+        }
+        const payload = isEventLedger
+          ? {
+              run_id: "run-global-retry",
+              items: [
+                {
+                  seq: 1,
+                  status: "recorded",
+                  stage: "scope",
+                  message: "已冻结范围",
+                  details: { allowed_source_types: ["company_disclosure"] },
+                  created_at: "2026-08-09T00:00:00Z",
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            }
+          : {
+              items: [
+                {
+                  run_id: "run-global-retry",
+                  case_id: "event-tsm",
+                  case_title: "台积电 Case",
+                  status: "failed",
+                  stage: "failed",
+                  created_at: "2026-08-09T00:00:00Z",
+                  updated_at: "2026-08-09T00:04:00Z",
+                  processed_count: 3,
+                  stop_reason: "task_failed",
+                  next_action: "查看失败原因",
+                  scope: {
+                    trigger: "schedule",
+                    monitor_version_id: "monitor-v2",
+                    factor_ids: ["factor-1"],
+                    allowed_source_types: ["company_disclosure"],
+                    budget: 12,
+                  },
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            };
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/monitoring"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "展开本次运行记录" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "本次运行事件暂不可读取",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "不会用当前配置替代",
+    );
+
+    eventLedgerAvailable = true;
+    await user.click(
+      screen.getByRole("button", { name: "重新读取本次运行事件" }),
+    );
+    expect(
+      await screen.findByRole("complementary", { name: "全局运行记录" }),
+    ).toHaveTextContent("已冻结范围");
+  });
+
   it("keeps reviewed claims, market observations and disclosed fund holdings in separate layers", async () => {
     vi.stubGlobal(
       "fetch",
