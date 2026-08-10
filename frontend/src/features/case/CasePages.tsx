@@ -31,6 +31,8 @@ import {
 } from "../../domain/recoveryRoute";
 import {
   formatRunEventDetails,
+  monitorStatusLabel,
+  runFrequencyLabel,
   runStageLabel,
   runStatusLabel,
   runTriggerLabel,
@@ -3752,7 +3754,7 @@ function MonitorContent({
               <dl className="ros-definition">
                 <div>
                   <dt>运行频率</dt>
-                  <dd>{detail.monitor.frequency} · 中国标准时间</dd>
+                  <dd>{runFrequencyLabel(detail.monitor.frequency)} · 中国标准时间</dd>
                 </div>
                 <div>
                   <dt>最近一次运行</dt>
@@ -4020,14 +4022,14 @@ function MonitorHistory({ caseId }: { caseId: string }) {
           {history.map((monitor) => (
             <li key={monitor.id}>
               <strong>
-                v{monitor.version} · {monitor.status}
+                v{monitor.version} · {monitorStatusLabel(monitor.status)}
               </strong>
               <span>
                 {monitor.changed_by} · {monitor.created_at}
               </span>
               <p>{monitor.change_reason}</p>
               <small>
-                {monitor.frequency} · {sourceTypeListLabel(monitor.allowed_source_types)}{" "}
+                {runFrequencyLabel(monitor.frequency)} · {sourceTypeListLabel(monitor.allowed_source_types)}{" "}
                 · 预算 {monitor.budget}
               </small>
             </li>

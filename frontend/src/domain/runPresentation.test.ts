@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatRunEventDetails,
+  monitorStatusLabel,
   runFrequencyLabel,
   runStageLabel,
   runStatusLabel,
@@ -13,10 +14,13 @@ describe("run presentation", () => {
   it("translates frozen run metadata without changing its scope", () => {
     expect(runStageLabel("retrieve")).toBe("采集资料");
     expect(runStatusLabel("waiting_for_review")).toBe("等待人工审核");
+    expect(runStatusLabel("awaiting_review")).toBe("等待人工审核");
     expect(runTriggerLabel("schedule")).toBe("定时任务");
     expect(runFrequencyLabel("weekday_08_30")).toBe("工作日 08:30");
     expect(runFrequencyLabel("weekday_12_30")).toBe("工作日 12:30");
     expect(runFrequencyLabel("daily_20_00")).toBe("每日 20:00");
+    expect(monitorStatusLabel("active")).toBe("已启用");
+    expect(monitorStatusLabel("paused")).toBe("已暂停");
     expect(runTriggerLabel("factor_manual")).toBe("立即补证此因素");
     expect(runTriggerLabel("material_continuation")).toBe("新增材料重新复核");
     expect(runStopReasonLabel("task_failed")).toBe("任务执行失败");

@@ -22,6 +22,7 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   recorded: "已记录",
   completed: "已完成",
   waiting_for_review: "等待人工审核",
+  awaiting_review: "等待人工审核",
   failed: "失败",
   cancelled: "已停止",
   blocked: "已阻塞",
@@ -51,6 +52,11 @@ const RUN_FREQUENCY_LABELS: Record<string, string> = {
   weekday_08_30: "工作日 08:30",
   weekday_12_30: "工作日 12:30",
   daily_20_00: "每日 20:00",
+};
+
+const MONITOR_STATUS_LABELS: Record<string, string> = {
+  active: "已启用",
+  paused: "已暂停",
 };
 
 const RUN_EVENT_DETAIL_LABELS: Record<string, string> = {
@@ -94,6 +100,11 @@ export function runStopReasonLabel(value: string | null | undefined): string {
 export function runFrequencyLabel(value: string | null | undefined): string {
   if (!value) return "未记录";
   return RUN_FREQUENCY_LABELS[value] ?? value;
+}
+
+export function monitorStatusLabel(value: string | null | undefined): string {
+  if (!value) return "未记录";
+  return MONITOR_STATUS_LABELS[value] ?? value;
 }
 
 export function formatRunEventDetails(details: Record<string, unknown>): string {

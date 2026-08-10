@@ -136,6 +136,21 @@ async function main() {
     await page.getByLabel("研究问题").waitFor();
     await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
     await page.waitForURL(/\/events\/[0-9a-f-]{36}$/u);
+    const caseId = new URL(page.url()).pathname.split("/").at(-1);
+    if (!caseId) throw new Error("created Case URL did not contain an id");
+
+    await page.goto(`${uiBase}/events/${caseId}/monitor/config`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "调整后会创建新的可复现版本" }).waitFor();
+    await page.getByLabel("下一验证事件").fill("下一次公司财报披露");
+    await page.getByLabel("新版本变更原因").fill("为新建事件设置受控补证范围");
+    await page.getByRole("button", { name: "保存为新监控版本" }).click();
+    await page.getByText("当前生效版本 v1").waitFor();
+
+    await page.goto(`${uiBase}/events/${caseId}/monitor`, { waitUntil: "networkidle" });
+    await page.getByText("研究协议尚未通过，不能启动补证。").waitFor();
+    await page.getByRole("button", { name: "立即补证一次" }).isDisabled().then((disabled) => {
+      if (!disabled) throw new Error("strict protocol gate unexpectedly enabled a monitor run");
+    });
 
     await page.goto(`${uiBase}/events`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "今天，先推进哪一个判断？" }).waitFor();
@@ -146,6 +161,7 @@ async function main() {
     const expectedRequests = [
       ["POST /event-research/extract", (request) => request.startsWith("POST ") && request.endsWith("/event-research/extract")],
       ["POST /event-research", (request) => request.startsWith("POST ") && request.endsWith("/event-research")],
+      ["PUT /research-cases/:caseId/monitor", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/monitor`)],
       ["GET /event-research", (request) => request.startsWith("GET ") && request.endsWith("/event-research")],
     ];
     for (const [expected, observed] of expectedRequests) {
@@ -155,7 +171,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured its monitor, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)

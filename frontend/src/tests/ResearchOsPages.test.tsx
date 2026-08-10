@@ -2392,6 +2392,10 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
+    expect(
+      await screen.findByText("工作日 08:30 · 中国标准时间"),
+    ).toBeVisible();
+    expect(screen.queryByText("weekday_08_30")).not.toBeInTheDocument();
     await user.click(
       await screen.findByRole("button", { name: "打开运行详情" }),
     );
