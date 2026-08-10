@@ -62,6 +62,28 @@ class AutoResearchRepository:
             .limit(1)
         )
 
+    def active_run_for_exact_thesis_scope(
+        self, *, research_case_id: uuid.UUID, thesis_id: uuid.UUID
+    ) -> ResearchRun | None:
+        """Return a queued/in-flight run for precisely one thesis.
+
+        A factor-level replenishment is intentionally a one-thesis run.  Do
+        the JSON comparison in Python so the rule is identical in SQLite and
+        PostgreSQL, then let callers reject a second click before it creates a
+        duplicate worker job.
+        """
+        target_scope = [str(thesis_id)]
+        runs = self._session.scalars(
+            select(ResearchRun)
+            .where(ResearchRun.research_case_id == research_case_id)
+            .where(ResearchRun.status.in_(["queued", "running", "waiting_for_review"]))
+            .order_by(ResearchRun.created_at.desc(), ResearchRun.id.desc())
+        )
+        return next(
+            (run for run in runs if run.scope_thesis_ids == target_scope),
+            None,
+        )
+
     def claim_next_run_job(self) -> Job | None:
         """Claim one queued job atomically; PostgreSQL workers skip each other."""
         stmt = (

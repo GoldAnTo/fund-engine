@@ -364,6 +364,12 @@ async function main() {
     await page.getByRole("button", { name: "立即补证一次" }).click();
     await page.getByRole("heading", { name: "准备研究范围 · 排队中" }).first().waitFor();
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
+    await page.getByLabel("停止原因").fill("验收继续验证单因素补证，停止此前同一范围的全 Case 运行。 ");
+    await page.getByRole("button", { name: "停止本次运行" }).click();
+    await page
+      .getByLabel("运行详情", { exact: true })
+      .getByRole("heading", { name: "运行已停止 · 已停止" })
+      .waitFor();
 
     await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "选择冻结原文并登记主张" }).click();
@@ -421,7 +427,11 @@ async function main() {
     await page.getByText("已追加已审核市场观测").first().waitFor();
     await page.getByRole("button", { name: "立即补证此因素" }).click();
     await page.getByText("已创建单因素补证运行", { exact: false }).waitFor();
-    await page.getByRole("link", { name: "查看运行记录" }).click();
+    await page
+      .getByRole("status")
+      .filter({ hasText: "已创建单因素补证运行" })
+      .getByRole("link", { name: "查看运行记录" })
+      .click();
     await page.waitForURL(new RegExp(`/events/${caseId}/monitor$`));
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
 

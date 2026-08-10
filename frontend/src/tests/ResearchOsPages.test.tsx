@@ -523,6 +523,48 @@ describe("Research OS event entry", () => {
     expect(screen.getByRole("button", { name: "立即补证此因素" })).toBeDisabled();
   });
 
+  it("does not offer a duplicate key-factor replenishment while its prior run is active", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "activeRuns").mockResolvedValue({
+      has_more: false,
+      items: [
+        {
+          run_id: "run-existing-factor",
+          case_id: "event-tsm",
+          case_title: "TSM 资本开支与自由现金流验证",
+          status: "queued",
+          stage: "planning",
+          updated_at: "2026-08-11T03:20:00Z",
+          processed_count: 0,
+          next_action: "查看本次运行",
+          scope: {
+            trigger: "factor_manual",
+            monitor_version_id: "monitor-event-tsm-v1",
+            factor_ids: ["factor-capex"],
+            factor_statements: ["资本开支增速是否高于此前指引"],
+            allowed_source_types: ["company_disclosure"],
+            budget: 20,
+          },
+        },
+      ],
+    });
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/该关键因素已有未结束的补证运行/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "立即补证此因素" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "查看运行记录" })).toHaveAttribute(
+      "href",
+      "/events/event-tsm/monitor",
+    );
+  });
+
   it("does not present a provider record URI as a clickable source webpage", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     const originalMarketExpression = api.marketExpression.bind(api);

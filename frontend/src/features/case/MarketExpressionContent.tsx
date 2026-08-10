@@ -10,6 +10,7 @@ import {
   type MarketExpression,
   type MarketInstrumentBindings,
   type ForecastVerdictHistory,
+  type ActiveResearchRun,
   type Researchability,
   type SourceStatementOptions,
 } from "../../app/researchOsApi";
@@ -85,6 +86,10 @@ export function MarketExpressionContent({
     useState(false);
   const [factorResearchabilityError, setFactorResearchabilityError] =
     useState(false);
+  const [activeFactorRun, setActiveFactorRun] =
+    useState<ActiveResearchRun | null>(null);
+  const [activeFactorRunLoading, setActiveFactorRunLoading] = useState(false);
+  const [factorRunRevision, setFactorRunRevision] = useState(0);
   const selectedFactor =
     expression?.factors.find((factor) => factor.id === selectedFactorId) ??
     expression?.factors[0] ??
@@ -138,6 +143,39 @@ export function MarketExpressionContent({
       active = false;
     };
   }, [selectedFactor?.thesis_id]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedFactor?.thesis_id) {
+      setActiveFactorRun(null);
+      setActiveFactorRunLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setActiveFactorRun(null);
+    setActiveFactorRunLoading(true);
+    researchOsApi
+      .activeRuns()
+      .then((response) => {
+        const matchingRun = response.items.find(
+          (run) =>
+            run.case_id === caseId &&
+            run.scope.trigger === "factor_manual" &&
+            run.scope.factor_ids?.length === 1 &&
+            run.scope.factor_ids[0] === selectedFactor.thesis_id,
+        );
+        if (active) setActiveFactorRun(matchingRun ?? null);
+      })
+      .catch(() => {
+        if (active) setActiveFactorRun(null);
+      })
+      .finally(() => {
+        if (active) setActiveFactorRunLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [caseId, selectedFactor?.thesis_id, factorRunRevision]);
 
   if (error)
     return (
@@ -211,6 +249,7 @@ export function MarketExpressionContent({
       setActionNotice(
         `已创建单因素补证运行 ${run.id.slice(0, 8)}；范围、配置版本和允许来源已冻结，等待研究 worker 领取后继续执行。`,
       );
+      setFactorRunRevision((revision) => revision + 1);
     } catch {
       setRunError(
         "无法按该因素的已审核关联与许可范围创建补证运行；没有创建部分运行。",
@@ -599,6 +638,8 @@ export function MarketExpressionContent({
                   factorResearchabilityError ||
                   !factorResearchability ||
                   factorResearchability.status === "blocked" ||
+                  activeFactorRunLoading ||
+                  Boolean(activeFactorRun) ||
                   starting
                 }
                 onClick={() => void startFactorRun()}
@@ -629,6 +670,16 @@ export function MarketExpressionContent({
                 <p className="ros-note">
                   研究协议尚未通过，不能启动补证。下一步：
                   {factorResearchability.next_action}
+                </p>
+              )}
+              {selectedFactor.thesis_id && activeFactorRunLoading && (
+                <p className="ros-note">正在核对该因素是否已有未结束的补证运行…</p>
+              )}
+              {activeFactorRun && (
+                <p className="ros-note">
+                  该关键因素已有未结束的补证运行。{" "}
+                  <Link to={`/events/${caseId}/monitor`}>查看运行记录</Link>
+                  {`（${activeFactorRun.run_id.slice(0, 8)} · ${activeFactorRun.status}）`}
                 </p>
               )}
               {runError && <p className="ros-error">{runError}</p>}

@@ -227,6 +227,12 @@ class AutoResearchService:
         source_types = [source for source in monitor.allowed_source_types if source in factor.allowed_source_types]
         if not source_types:
             raise ValueError("key factor has no allowed source shared with the current CaseMonitor")
+        if self.repo.active_run_for_exact_thesis_scope(
+            research_case_id=case_id, thesis_id=factor.thesis_id
+        ) is not None:
+            raise ValueError(
+                "this key factor already has an active replenishment run; inspect or stop it before starting another"
+            )
         return self.start(
             case_id,
             max_rounds=3,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.models.ledger import (
     CaseDocumentVersion,
@@ -204,6 +204,52 @@ def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link_
 
     assert response.status_code == 422
     assert "verification window" in response.json()["error"]["message"]
+
+
+def test_factor_monitor_run_rejects_a_duplicate_active_scope(
+    cmd_client, cmd_session
+) -> None:
+    case, factor = _case_with_confirmed_factor(cmd_session)
+    saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(factor.id)
+    )
+    assert saved.status_code == 200, saved.text
+    now = datetime.now(timezone.utc)
+    key_factor = KeyFactor(
+        research_case_id=case.id,
+        thesis_id=factor.id,
+        report_claim_id=None,
+        name="订单指引",
+        expected_direction="positive",
+        metric_name="订单金额",
+        allowed_source_types=["licensed_provider"],
+        verification_window_start=date(2026, 1, 1),
+        verification_window_end=date(2026, 3, 31),
+        support_condition="订单增长",
+        refutation_condition="订单下降",
+        next_verification_event="下一次财报",
+        review_state="reviewed",
+        reviewed_by="human:lin",
+        review_reason="已审核并绑定当前 Case 的研究范围因素",
+        reviewed_at=now,
+        created_at=now,
+    )
+    cmd_session.add(key_factor)
+    cmd_session.commit()
+
+    first = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/monitor/factor-runs",
+        json={"key_factor_id": str(key_factor.id)},
+    )
+    assert first.status_code == 201, first.text
+
+    duplicate = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/monitor/factor-runs",
+        json={"key_factor_id": str(key_factor.id)},
+    )
+
+    assert duplicate.status_code == 422
+    assert "already has an active replenishment run" in duplicate.json()["error"]["message"]
 
 
 def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) -> None:
