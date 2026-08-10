@@ -35,6 +35,8 @@ const RUN_STATUS_LABELS: Record<string, string> = {
 const RUN_TRIGGER_LABELS: Record<string, string> = {
   manual: "立即补证",
   schedule: "定时任务",
+  factor_manual: "立即补证此因素",
+  material_continuation: "新增材料重新复核",
 };
 
 const RUN_STOP_REASON_LABELS: Record<string, string> = {
@@ -47,6 +49,8 @@ const RUN_STOP_REASON_LABELS: Record<string, string> = {
 
 const RUN_FREQUENCY_LABELS: Record<string, string> = {
   weekday_08_30: "工作日 08:30",
+  weekday_12_30: "工作日 12:30",
+  daily_20_00: "每日 20:00",
 };
 
 const RUN_EVENT_DETAIL_LABELS: Record<string, string> = {
