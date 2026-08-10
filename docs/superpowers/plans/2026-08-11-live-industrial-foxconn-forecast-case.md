@@ -117,7 +117,7 @@ def run_industrial_foxconn_case(
 
 The runner must:
 
-1. Find or create the Case by exact title `工业富联 2024 年利润预测与 AI 产品验证`, scoped to 2024.
+1. Find or create the Case by exact title `工业富联 2024 年利润预测与 AI 产品验证`, scoped to 2024. After attaching the historical-report document, call `CaseTenantAccess.admit_initial_case` for the CLI-provided `tenant_id`; never infer the tenant from a document hash or provider.
 2. Freeze all four raw provider responses with `DocumentService`, attach them to the Case, record Gildata source governance with `allow_ai_processing=True` and `allow_display=True`, and create precise `SourceSpan` locators containing tool, query, returned title, metric and period.
 3. Append a reviewed forecast `ReportClaim`, a reviewed profit `KeyFactor`, and separate reviewed report claims/key factors for cloud-computing revenue, AI-server growth and 400G/800G switching. Record reviewed `ClaimVerification` entries for these factor metrics from the company annual-report source.
 4. Freeze a `ForecastTargetVersion` with `25149000000 CNY`, `within_tolerance`, `0.10`, `2024-01-01` through `2024-12-31`; freeze an `ActualMetricObservation` of `23216000000 CNY`; evaluate with a cutoff after 2025-04-30; append a `confirmed` human verdict with outcome `supported`.
@@ -125,7 +125,7 @@ The runner must:
 6. Create one `ResearchRun` and append ordered `ResearchRunEvent` rows for `provider_capability`, `freeze_source`, `key_factor_verification`, `forecast_evaluation`, `human_verdict`, and `fund_disclosure`. Each payload names tool/query, frozen document ID, written record ID or explicit coverage boundary. End the run as `succeeded`; do not fabricate a background task.
 7. Return existing records on rerun, append a short no-duplicate run trail, and never update an immutable target, observation, candidate, verdict or disclosure.
 
-The CLI must load `backend/.env`, require `GILDATA_TOKEN`, use `DATABASE_URL` or explicit `--database-url`, print JSON with `case_id`, `run_id`, verdict outcome, document IDs, fund coverage and `http://127.0.0.1:5173/events/<case_id>/market`.
+The CLI must load `backend/.env`, require `GILDATA_TOKEN`, use `DATABASE_URL` or explicit `--database-url`, require `--tenant-id`, and print JSON with `case_id`, `run_id`, verdict outcome, document IDs, fund coverage and `http://127.0.0.1:5173/events/<case_id>/market`.
 
 - [ ] **Step 4: Run focused tests to verify it passes**
 
@@ -200,13 +200,13 @@ git commit -m "feat: present live forecast verification chain"
 
 - [ ] **Step 1: Run the live command against the database served by the local API**
 
-Run: `cd backend && .venv/bin/python -m app.scripts.run_industrial_foxconn_forecast_case --actor human:researcher`
+Run: `cd backend && .venv/bin/python -m app.scripts.run_industrial_foxconn_forecast_case --database-url sqlite:///./.local/industrial-foxconn-case.db --tenant-id local-demo --actor human:researcher`
 
 Expected: JSON with a non-empty Case ID, run ID, `supported`, expected `25149000000`, actual `23216000000`, fund `515050`, weight `0.0533` and coverage `partial`.
 
 - [ ] **Step 2: Verify the live API and UI, without mock mode**
 
-Run: `cd backend && .venv/bin/python -m pytest tests/test_verify_live_event_ui.py -q && cd ../frontend && npm run e2e -- --grep "industrial foxconn live case"`
+Run: `cd backend && DATABASE_URL=sqlite:///./.local/industrial-foxconn-case.db RESEARCH_TENANT_TOKENS='{"local-demo-token":"local-demo"}' .venv/bin/python -m uvicorn app.main:app --port 8001` and, in a separate terminal, `cd frontend && VITE_BACKEND_URL=http://127.0.0.1:8001 VITE_RESEARCH_BEARER_TOKEN=local-demo-token npm run dev -- --port 5174`; then run the live browser test against port 5174.
 
 Expected: PASS against `/events/<case_id>/market` with no `?client=mock`; direct document links open only current-Case frozen sources and monitor shows each provider and ledger step.
 
