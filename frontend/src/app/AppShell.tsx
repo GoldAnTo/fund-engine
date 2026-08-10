@@ -54,6 +54,7 @@ export function AppShell() {
     Record<string, boolean>
   >({});
   const [runLoadError, setRunLoadError] = useState(false);
+  const [runReload, setRunReload] = useState(0);
   const [drawerRun, setDrawerRun] = useState<ActiveResearchRun | null>(null);
   const [drawerEvents, setDrawerEvents] = useState<Array<{
     seq: number;
@@ -130,7 +131,7 @@ export function AppShell() {
       live = false;
       window.clearInterval(refresh);
     };
-  }, []);
+  }, [runReload]);
   useEffect(() => {
     let live = true;
     researchOsApi
@@ -359,6 +360,11 @@ export function AppShell() {
                   无法读取统一运行记录；系统不会用旧 Case 状态替代真实运行详情。
                 </span>
               </div>
+            </div>
+            <div className="ros-run-strip__actions">
+              <button type="button" onClick={() => setRunReload((value) => value + 1)}>
+                重新读取统一运行记录
+              </button>
             </div>
           </section>
         )}

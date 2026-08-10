@@ -1765,9 +1765,54 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByRole("region", { name: "运行状态不可用" })).toBeVisible();
     expect(
+      screen.getByRole("button", { name: "重新读取统一运行记录" }),
+    ).toBeEnabled();
+    expect(
       screen.queryByRole("region", { name: "系统正在运行" }),
     ).not.toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it("lets a researcher retry the unified run status without waiting for the next poll", async () => {
+    let activeRunRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/research-runs/active")) {
+          activeRunRequests += 1;
+          if (activeRunRequests === 1) {
+            return Promise.resolve(new Response("unavailable", { status: 503 }));
+          }
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ items: [], next_cursor: null, has_more: false }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "重新读取统一运行记录" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "运行状态不可用" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(activeRunRequests).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps every concurrent active run visible and individually expandable", async () => {
