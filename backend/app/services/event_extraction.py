@@ -39,7 +39,16 @@ class EventExtractionService:
     """
 
     def __init__(self, client: Any | None = None) -> None:
-        self._client = client or LLMClient.from_env()
+        self._client = client
+        if self._client is None:
+            try:
+                self._client = LLMClient.from_env()
+            except Exception:
+                # A client can fail before its first request (for example, a
+                # missing proxy transport).  The intake remains safe because
+                # extraction below will produce only the source-bound title
+                # plus editable hypothesis fields, never a factual assertion.
+                self._client = None
 
     def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
         raw_input = raw_input.strip()
@@ -64,6 +73,8 @@ class EventExtractionService:
         )
 
     def _ask_model(self, raw_input: str, source_url: str | None) -> dict[str, Any]:
+        if self._client is None:
+            return {}
         messages = [
             {
                 "role": "system",

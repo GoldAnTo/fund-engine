@@ -39,6 +39,10 @@ app.add_middleware(
     # local live-read verification usable without granting access to nonlocal
     # origins or widening the deployed same-origin surface.
     allow_origin_regex=r"^https?://(?:localhost|127\.0\.0\.1):\d+$",
+    # Both authenticated browser adapters intentionally use credentials:
+    # include.  The local cross-origin Vite workflow therefore needs the
+    # explicit credential response header; origins remain restricted above.
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

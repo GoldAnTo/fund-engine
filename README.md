@@ -56,6 +56,9 @@ npm run e2e                                          # 32 条 Playwright（macOS
 
 # 真实 HTTP 闭环：临时 SQLite + Uvicorn + Bearer tenant，创建并读取事件 Case
 cd .. && python backend/scripts/verify_live_event_api.py
+
+# 默认前端真实闭环：临时 API + Vite + Chrome，浏览器创建事件后在事件台读回
+cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node scripts/with-project-node.mjs scripts/verify-live-event-ui.mjs
 ```
 
 本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API

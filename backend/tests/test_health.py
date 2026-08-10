@@ -10,6 +10,7 @@ def test_vite_dev_ports_can_read_the_v1_api_without_opening_nonlocal_origins(cli
         headers={
             "Origin": "http://127.0.0.1:5184",
             "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
         },
     )
     blocked = client.options(
@@ -21,4 +22,6 @@ def test_vite_dev_ports_can_read_the_v1_api_without_opening_nonlocal_origins(cli
     )
 
     assert allowed.headers["access-control-allow-origin"] == "http://127.0.0.1:5184"
+    assert allowed.headers["access-control-allow-credentials"] == "true"
+    assert "authorization" in allowed.headers["access-control-allow-headers"]
     assert "access-control-allow-origin" not in blocked.headers

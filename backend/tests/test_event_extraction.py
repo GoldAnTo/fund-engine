@@ -40,3 +40,22 @@ def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input()
     assert result.market_reaction is None
     assert result.event_title is not None
     assert result.research_question == "为什么下跌？"
+
+
+def test_extraction_falls_back_to_an_editable_safe_draft_when_llm_setup_fails(monkeypatch) -> None:
+    def unavailable_client():
+        raise RuntimeError("local proxy is unavailable")
+
+    monkeypatch.setattr(
+        "app.services.event_extraction.LLMClient.from_env",
+        unavailable_client,
+    )
+
+    result = EventExtractionService().extract(
+        raw_input="公司披露新的经营数据，等待人工核验。",
+        source_url=None,
+    )
+
+    assert result.event_title == "公司披露新的经营数据，等待人工核验"
+    assert result.research_question
+    assert len(result.candidate_factors) == 3
