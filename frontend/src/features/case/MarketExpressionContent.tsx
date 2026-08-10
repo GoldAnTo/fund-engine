@@ -55,6 +55,10 @@ const expectedDirectionLabels: Record<string, string> = {
   neutral: "方向中性",
 };
 
+function publicWebUrl(sourceUrl?: string | null): string | null {
+  return sourceUrl?.match(/^https?:\/\//i) ? sourceUrl : null;
+}
+
 type ThesisOption = { id: string; statement: string };
 
 export function MarketExpressionContent({
@@ -181,6 +185,7 @@ export function MarketExpressionContent({
     }
   }
   const sourceMetadata = selectedClaim?.source;
+  const sourceWebUrl = publicWebUrl(sourceMetadata?.source_url);
   return (
     <section className="ros-market ros-market-expression">
       <header className="ros-section-heading">
@@ -296,19 +301,21 @@ export function MarketExpressionContent({
                     ) : (
                       "冻结版本未记录"
                     )}
-                    {sourceMetadata.source_url ? (
+                    {sourceWebUrl ? (
                       <>
                         {" "}
                         ·{" "}
                         <a
                           className="ros-source-link"
-                          href={sourceMetadata.source_url}
+                          href={sourceWebUrl}
                           target="_blank"
                           rel="noreferrer"
                         >
                           查看来源地址
                         </a>
                       </>
+                    ) : sourceMetadata.source_url ? (
+                      <> · 来源地址不是可打开的网页链接</>
                     ) : (
                       ""
                     )}
@@ -1769,16 +1776,18 @@ function MarketExpressionRegistration({
                     )}{" "}
                     · 许可：已准入
                   </small>
-                  {selectedSource.source_url && (
+                  {publicWebUrl(selectedSource.source_url) ? (
                     <a
                       className="ros-source-link"
-                      href={selectedSource.source_url}
+                      href={publicWebUrl(selectedSource.source_url) ?? undefined}
                       target="_blank"
                       rel="noreferrer"
                     >
                       打开来源地址
                     </a>
-                  )}
+                  ) : selectedSource.source_url ? (
+                    <small>来源记录不是可打开的网页链接</small>
+                  ) : null}
                 </article>
               ) : (
                 <p className="ros-note">

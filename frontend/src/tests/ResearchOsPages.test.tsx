@@ -498,6 +498,35 @@ describe("Research OS event entry", () => {
     ).toBeEnabled();
   });
 
+  it("does not present a provider record URI as a clickable source webpage", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    const originalMarketExpression = api.marketExpression.bind(api);
+    vi.spyOn(api, "marketExpression").mockImplementation(async (caseId) => {
+      const expression = await originalMarketExpression(caseId);
+      return {
+        ...expression,
+        claims: expression.claims.map((claim) => ({
+          ...claim,
+          source: {
+            ...claim.source,
+            source_url: "gildata://FinancialResearchReport/fixture-record",
+          },
+        })),
+      };
+    });
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "研报主张、后续验证与基金披露分层呈现" });
+    expect(screen.queryByRole("link", { name: "查看来源地址" })).not.toBeInTheDocument();
+  });
+
   it("lets a researcher retry an unavailable Case relation read", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "caseRelations").mockRejectedValue(
