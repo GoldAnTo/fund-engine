@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -34,7 +34,7 @@ import { ResearchOsRoutes } from "../app/routes";
 import type { EventWorkbench } from "../domain/eventResearch";
 
 describe("Research OS event entry", () => {
-  it("keeps every Case workbench tab discoverable on narrow screens", async () => {
+  it("groups Case navigation into research stages", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
         <Routes>
@@ -43,14 +43,28 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    const tabs = await screen.findByLabelText("Case 页面，可横向滚动查看全部入口");
-    expect(tabs).toHaveTextContent("研究结论");
-    expect(tabs).toHaveTextContent("市场与表达");
-    expect(tabs).toHaveTextContent("监测与运行");
-    expect(tabs).toHaveTextContent("关联研究");
-    expect(
-      screen.getByText("向右滑动查看市场、运行和关联研究"),
-    ).toBeInTheDocument();
+    const stages = await screen.findByLabelText("Case 研究阶段");
+    expect(stages).toHaveTextContent("研究结论");
+    expect(stages).toHaveTextContent("证据工作台");
+    expect(stages).toHaveTextContent("市场与表达");
+    expect(stages).toHaveTextContent("监测与运行");
+    expect(stages).toHaveTextContent("关系与图谱");
+    expect(stages).not.toHaveTextContent("原文资料");
+    expect(screen.queryByLabelText("证据工作台页面")).not.toBeInTheDocument();
+  });
+
+  it("keeps an original-document deep link inside the evidence workbench", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <Routes>
+          <Route path="/events/:caseId/documents" element={<CaseDocumentsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText("证据工作台页面")).toHaveTextContent("命题与证据");
+    expect(screen.getByRole("link", { name: /证据工作台/ })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByLabelText("证据工作台页面")).getByRole("link", { name: "原文资料" })).toHaveAttribute("aria-current", "page");
   });
 
   beforeEach(() => setResearchClient(new MockResearchAdapter()));
@@ -603,7 +617,7 @@ describe("Research OS event entry", () => {
     ).toBeEnabled();
   });
 
-  it("keeps all eight stable Case research workbenches discoverable", async () => {
+  it("keeps every Case research stage reachable from the stable Case frame", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>
         <Routes>
@@ -613,19 +627,18 @@ describe("Research OS event entry", () => {
     );
 
     const navigation = await screen.findByRole("navigation", {
-      name: "Case 页面，可横向滚动查看全部入口",
+      name: "Case 研究阶段",
     });
-    expect(navigation.textContent).toContain("研究结论");
-    expect(navigation.textContent).toContain("命题与证据");
-    expect(navigation.textContent).toContain("原文资料");
-    expect(navigation.textContent).toContain("证据审核");
-    expect(navigation.textContent).toContain("Wiki 图谱");
-    expect(navigation.textContent).toContain("市场与表达");
-    expect(navigation.textContent).toContain("监测与运行");
-    expect(navigation.textContent).toContain("关联研究");
-    expect(navigation.textContent).not.toContain("研究范围");
-    expect(navigation.textContent).not.toContain("结论版本");
-    expect(navigation.textContent).not.toContain("研究协议");
+    expect(within(navigation).getByRole("link", { name: "研究结论" }))
+      .toHaveAttribute("href", "/events/event-tsm");
+    expect(within(navigation).getByRole("link", { name: /证据工作台/ }))
+      .toHaveAttribute("href", "/events/event-tsm/evidence");
+    expect(within(navigation).getByRole("link", { name: "市场与表达" }))
+      .toHaveAttribute("href", "/events/event-tsm/market");
+    expect(within(navigation).getByRole("link", { name: "监测与运行" }))
+      .toHaveAttribute("href", "/events/event-tsm/monitor");
+    expect(within(navigation).getByRole("link", { name: "关系与图谱" }))
+      .toHaveAttribute("href", "/events/event-tsm/wiki");
   });
 
   it("keeps a small reviewed Case-relation context beside the current conclusion", async () => {

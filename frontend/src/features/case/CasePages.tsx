@@ -1,7 +1,6 @@
 import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   Link,
-  NavLink,
   useLocation,
   useNavigate,
   useParams,
@@ -59,16 +58,61 @@ import {
 import { CaseRelationsContent } from "./CaseRelationsContent";
 import { WikiInspectorContent } from "./WikiInspectorContent";
 
-const tabs = [
-  ["", "研究结论"],
-  ["evidence", "命题与证据"],
-  ["documents", "原文资料"],
-  ["review", "证据审核"],
-  ["wiki", "Wiki 图谱"],
-  ["market", "市场与表达"],
-  ["monitor", "监测与运行"],
-  ["relations", "关联研究"],
+const caseSections = [
+  { id: "conclusion", label: "研究结论", to: "", pages: [] },
+  {
+    id: "evidence",
+    label: "证据工作台",
+    to: "evidence",
+    pages: [
+      { suffix: "evidence", label: "命题与证据" },
+      { suffix: "documents", label: "原文资料" },
+      { suffix: "review", label: "证据审核" },
+    ],
+  },
+  { id: "market", label: "市场与表达", to: "market", pages: [] },
+  { id: "monitor", label: "监测与运行", to: "monitor", pages: [] },
+  {
+    id: "relations",
+    label: "关系与图谱",
+    to: "wiki",
+    pages: [
+      { suffix: "wiki", label: "Wiki 图谱" },
+      { suffix: "relations", label: "关联研究" },
+    ],
+  },
 ] as const;
+
+type CaseSection = (typeof caseSections)[number];
+
+function caseNavigation(pathname: string, caseId: string): {
+  section: CaseSection;
+  currentSuffix: string | null;
+} {
+  const prefix = `/events/${caseId}`;
+  const suffix = pathname.startsWith(`${prefix}/`)
+    ? pathname.slice(prefix.length + 1).split("/")[0]
+    : "";
+  const sectionId = (
+    ["evidence", "documents", "review", "scope", "protocol"].includes(suffix)
+      ? "evidence"
+      : ["market", "stocks", "funds"].includes(suffix)
+        ? "market"
+        : ["monitor"].includes(suffix)
+          ? "monitor"
+          : ["wiki", "relations"].includes(suffix)
+            ? "relations"
+            : "conclusion"
+  ) as CaseSection["id"];
+  const section = caseSections.find((item) => item.id === sectionId)
+    ?? caseSections[0];
+  return {
+    section,
+    currentSuffix: section.pages.some((item) => item.suffix === suffix)
+      ? suffix
+      : null,
+  };
+}
 
 const relationLabels: Record<
   ResearchNetwork["reviewed_relations"][number]["relation_type"],
@@ -130,6 +174,7 @@ function CaseFrame({
       : "";
     navigate(`/events/${nextCaseId}${suffix}${location.search}`);
   }
+  const navigation = caseNavigation(location.pathname, caseId);
   if (!data)
     return (
       <main className="ros-page ros-case-page">
@@ -192,23 +237,43 @@ function CaseFrame({
           </span>
         </div>
       </header>
-      <nav
-        className="ros-case-tabs"
-        aria-label="Case 页面，可横向滚动查看全部入口"
-      >
-        {tabs.map(([suffix, label]) => (
-          <NavLink
-            key={suffix}
-            end={suffix === ""}
-            to={`/events/${caseId}${suffix ? `/${suffix}` : ""}`}
-          >
-            {label}
-          </NavLink>
-        ))}
+      <nav className="ros-case-primary-tabs" aria-label="Case 研究阶段">
+        {caseSections.map((section) => {
+          const isActive = section.id === navigation.section.id;
+          const pendingLabel = section.id === "evidence" && data.progress.pending > 0
+            ? `，待审核 ${data.progress.pending}`
+            : "";
+          return (
+            <Link
+              aria-current={isActive ? "page" : undefined}
+              aria-label={`${section.label}${pendingLabel}`}
+              className={isActive ? "active" : ""}
+              key={section.id}
+              to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+            >
+              {section.label}
+              {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
+            </Link>
+          );
+        })}
       </nav>
-      <p className="ros-case-tabs__hint">
-        向右滑动查看市场、运行和关联研究
-      </p>
+      {navigation.section.pages.length > 0 && (
+        <nav
+          aria-label={`${navigation.section.label}页面`}
+          className="ros-case-secondary-tabs"
+        >
+          {navigation.section.pages.map((page) => (
+            <Link
+              aria-current={navigation.currentSuffix === page.suffix ? "page" : undefined}
+              className={navigation.currentSuffix === page.suffix ? "active" : ""}
+              key={page.suffix}
+              to={`/events/${caseId}/${page.suffix}`}
+            >
+              {page.label}
+            </Link>
+          ))}
+        </nav>
+      )}
       {children(data, caseId)}
     </main>
   );
