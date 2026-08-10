@@ -1413,7 +1413,7 @@ describe("Research OS event entry", () => {
 
     const strip = await screen.findByRole("region", { name: "系统正在运行" });
     expect(strip).toHaveTextContent("台积电上调 CoWoS 指引后下跌");
-    expect(strip).toHaveTextContent("company_disclosure");
+    expect(strip).toHaveTextContent("公司披露");
     expect(strip).toHaveTextContent("已处理 3");
   });
 
@@ -2508,6 +2508,8 @@ describe("Research OS event entry", () => {
       await screen.findByText("内容快照（当前 V1 未提供原件文件）"),
     ).toBeVisible();
     expect(screen.getByText("来源已准入")).toBeVisible();
+    expect(screen.getByText("公司披露")).toBeVisible();
+    expect(screen.queryByText("company_disclosure")).not.toBeInTheDocument();
     expect(
       screen.getByText("AI 允许 · 展示 允许 · 导出 禁止 · API 禁止"),
     ).toBeVisible();
@@ -2673,7 +2675,7 @@ describe("Research OS event entry", () => {
       await screen.findByRole("heading", { name: "全局运行与监控" }),
     ).toBeVisible();
     expect(screen.getByText("台积电 Case")).toBeVisible();
-    expect(screen.getByText("company_disclosure")).toBeVisible();
+    expect(screen.getByText("公司披露")).toBeVisible();
     expect(screen.getByText("task_failed")).toBeVisible();
     expect(screen.getByRole("link", { name: "查看失败原因" })).toHaveAttribute(
       "href",

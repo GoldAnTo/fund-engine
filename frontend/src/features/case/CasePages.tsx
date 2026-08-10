@@ -29,6 +29,7 @@ import {
   decodeRecoveryRouteState,
   encodeRecoveryRouteState,
 } from "../../domain/recoveryRoute";
+import { sourceTypeLabel, sourceTypeListLabel } from "../../domain/sourcePresentation";
 import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
 import { MarketExpressionContent } from "./MarketExpressionContent";
 import {
@@ -925,7 +926,7 @@ function DocumentReader({
         </div>
         <div>
           <dt>来源类型</dt>
-          <dd>{contract?.source_type || document.document_type || "未记录"}</dd>
+          <dd>{sourceTypeLabel(contract?.source_type || document.document_type)}</dd>
         </div>
         <div>
           <dt>来源定位</dt>
@@ -3569,7 +3570,7 @@ function MonitorContent({
                 </div>
                 <div>
                   <dt>允许来源</dt>
-                  <dd>{detail.monitor.allowed_source_types.join("、")}</dd>
+                  <dd>{sourceTypeListLabel(detail.monitor.allowed_source_types)}</dd>
                 </div>
                 <div>
                   <dt>下一验证</dt>
@@ -3688,7 +3689,11 @@ function RunDrawer({
             </div>
             <div>
               <dt>允许来源</dt>
-              <dd>{list("allowed_source_types") || "未记录"}</dd>
+              <dd>
+                {sourceTypeListLabel(
+                  value("allowed_source_types") as string[] | null | undefined,
+                )}
+              </dd>
             </div>
             <div>
               <dt>检索预算</dt>
@@ -3836,7 +3841,7 @@ function MonitorHistory({ caseId }: { caseId: string }) {
               </span>
               <p>{monitor.change_reason}</p>
               <small>
-                {monitor.frequency} · {monitor.allowed_source_types.join("、")}{" "}
+                {monitor.frequency} · {sourceTypeListLabel(monitor.allowed_source_types)}{" "}
                 · 预算 {monitor.budget}
               </small>
             </li>
@@ -3944,7 +3949,7 @@ function MonitorConfigForm({ caseId }: { caseId: string }) {
             {detail.monitor.status === "paused"
               ? "定时任务已暂停"
               : "定时任务已启用"}{" "}
-            · {detail.monitor.allowed_source_types.join("、")} · 下一验证：
+            · {sourceTypeListLabel(detail.monitor.allowed_source_types)} · 下一验证：
             {detail.monitor.next_verification_event}
           </span>
         </div>

@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { researchClient } from "../data/researchClient";
 import type { EventResearchListItem } from "../domain/eventResearch";
+import { sourceTypeListLabel } from "../domain/sourcePresentation";
 import type { SearchHit } from "../domain/types";
 import {
   researchOsApi,
@@ -384,8 +385,7 @@ export function AppShell() {
                       : ""}
                   </strong>
                   <span>
-                    {(run.scope.allowed_source_types ?? []).join("、") ||
-                      "未记录允许来源"}{" "}
+                    {sourceTypeListLabel(run.scope.allowed_source_types)}{" "}
                     · {run.case_title} · 已处理 {run.processed_count}
                     {latestActiveEvent
                       ? ` · 最近记录 · ${runStageLabels[latestActiveEvent.stage ?? ""] ?? latestActiveEvent.stage ?? "阶段"} · ${latestActiveEvent.message || "已记录阶段事件"}`
@@ -455,7 +455,7 @@ function GlobalRunDrawer({
         : (scope.factor_ids ?? [])
       ).join("、"),
     ],
-    ["允许来源", (scope.allowed_source_types ?? []).join("、")],
+    ["允许来源", sourceTypeListLabel(scope.allowed_source_types)],
     ["资料预算", scope.budget],
     ["执行频率", scope.frequency],
     ["下一验证事件", scope.next_verification_event],

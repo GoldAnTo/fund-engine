@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { sourceTypeListLabel } from "../../domain/sourcePresentation";
 import {
   researchOsApi,
   type MarketExpression,
@@ -305,7 +306,7 @@ export function MarketExpressionContent({
               )}
               <small>
                 {selectedFactor
-                  ? `允许来源：${selectedFactor.allowed_source_types.join("、") || "未记录"}`
+                  ? `允许来源：${sourceTypeListLabel(selectedFactor.allowed_source_types)}`
                   : ""}
               </small>
             </article>

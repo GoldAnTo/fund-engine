@@ -133,7 +133,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByText("当前优先")).toBeVisible();
     await expect(page.getByRole("main").getByText("研究网络")).toBeVisible();
     await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("系统正在运行 · review");
-    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("licensed_provider");
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toContainText("授权供应商资料");
     await expect(page.locator(".ros-event-row").first()).toBeVisible();
   });
 
@@ -304,7 +304,7 @@ test.describe("Event-first Research OS", () => {
     await start.click();
     await expect(page.getByRole("complementary", { name: "运行详情" })).toBeVisible();
     await expect(page.getByText("monitor-event-tsm-v1", { exact: true })).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "运行详情" })).toContainText("company_disclosure");
+    await expect(page.getByRole("complementary", { name: "运行详情" })).toContainText("公司披露");
   });
 
   test("Case run detail makes exclusions and counts readable instead of hiding them in a worker log", async ({ page }) => {
@@ -331,7 +331,7 @@ test.describe("Event-first Research OS", () => {
 
     await expect(page.getByText("当前生效版本 v2")).toBeVisible();
     await expect(page.getByText(/已保存监控版本 v2/)).toBeVisible();
-    await expect(page.getByText(/licensed_provider/).last()).toBeVisible();
+    await expect(page.getByText("授权供应商资料").last()).toBeVisible();
   });
 
   test("global network keeps reviewed Case relations separate from AI candidates", async ({ page }) => {
@@ -360,7 +360,7 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("heading", { name: "全局运行与监控" })).toBeVisible();
     await expect(page.getByText(/每 15 秒自动刷新/)).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新运行档案" })).toBeVisible();
-    await expect(page.getByRole("main")).toContainText("company_disclosure");
+    await expect(page.getByRole("main")).toContainText("公司披露");
     await expect(page.getByRole("main")).toContainText("monitor-event-tsm-v1");
     await expect(page.getByRole("main")).toContainText("awaiting_review");
     await page.getByRole("main").getByRole("button", { name: "展开本次运行记录" }).click();
