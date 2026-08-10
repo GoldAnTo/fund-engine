@@ -1547,6 +1547,51 @@ describe("Research OS event entry", () => {
     expect(strip).toHaveTextContent("已处理 3");
   });
 
+  it("labels a review-blocked run as waiting instead of claiming it is still executing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              String(input).endsWith("/research-runs/active")
+                ? {
+                    items: [{
+                      run_id: "run-waiting",
+                      case_id: "event-tsm",
+                      case_title: "等待审核的 Case",
+                      status: "waiting_for_review",
+                      stage: "candidate",
+                      updated_at: "2026-08-09T00:00:00Z",
+                      processed_count: 2,
+                      next_action: "审核候选证据",
+                      scope: { allowed_source_types: ["company_disclosure"] },
+                    }],
+                    next_cursor: null,
+                    has_more: false,
+                  }
+                : { run_id: "run-waiting", items: [], next_cursor: null, has_more: false },
+            ),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核 · 提出候选");
+    expect(strip).not.toHaveTextContent("系统正在运行 ·");
+  });
+
   it("removes stale active-run strips when their live status can no longer be confirmed", async () => {
     vi.useFakeTimers();
     let activeRunRequests = 0;

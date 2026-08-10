@@ -376,7 +376,7 @@ export function AppShell() {
                 <i className="ros-run-strip__pulse" />
                 <div>
                   <strong>
-                    系统正在运行 · {runStageLabel(run.stage)}
+                    {runStatusLabel(run.status)} · {runStageLabel(run.stage)}
                   </strong>
                   <span>
                     {sourceTypeListLabel(run.scope.allowed_source_types)}{" "}
