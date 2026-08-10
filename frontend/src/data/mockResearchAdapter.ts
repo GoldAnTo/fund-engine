@@ -4229,6 +4229,16 @@ export class MockResearchAdapter implements ResearchClient {
   async continueEventResearch(input: { caseId: string; documentVersionId: string; reason: string; triggeredBy: string }): Promise<import("../domain/eventResearch").EventResearchContinuation> {
     this.throwIfOffline();
     if (!input.reason.trim()) throw new Error("continuation reason is required");
+    const document = this.createdDocuments.get(input.documentVersionId)?.document
+      ?? DOCUMENTS.find((item) => item.id === input.documentVersionId);
+    const contract = document?.source_contract;
+    if (
+      contract?.status !== "admitted"
+      || !contract.permissions.display
+      || !contract.permissions.ai_processing
+    ) {
+      throw new Error("continuation document source contract does not permit research");
+    }
     const runId = `run-continuation-${input.caseId}`;
     const lifecycle: EventLifecycle = { status: "researching", activeRunId: runId, currentRound: 0, summary: "已记录新材料触发原因，开始新的受控补证周期", currentGap: "新材料尚未经过原文与证据审核；此前发布结论保持不变", nextHumanAction: null };
     const previous = this.eventStates.get(input.caseId);

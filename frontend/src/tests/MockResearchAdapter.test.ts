@@ -129,6 +129,30 @@ describe("MockResearchAdapter scenarios", () => {
     expect((await adapter.getDocumentDetail(supplement.documentVersionId)).spans[0]).toMatchObject({ verbatim_text: "公司在第 3 页明确上调全年资本开支指引。", locator: { claimed_page_reference: "第 3 页" } });
   });
 
+  it("does not let a restricted published snapshot start a successor run", async () => {
+    const adapter = new MockResearchAdapter();
+    const restricted = await adapter.decidePublishedMaterial({
+      caseId: "event-published",
+      rawInput: "这份资料禁止展示和 AI 处理。",
+      sourceType: "pasted_snapshot",
+      sourceMetadata: {
+        permissions: { ai_processing: false, display: false },
+      },
+      decision: "no_change",
+      reason: "仅保留审计元数据。",
+      actor: "human:researcher",
+    });
+
+    await expect(
+      adapter.continueEventResearch({
+        caseId: "event-published",
+        documentVersionId: restricted.documentVersionId,
+        reason: "尝试继续研究。",
+        triggeredBy: "human:researcher",
+      }),
+    ).rejects.toThrow("source contract does not permit research");
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);
