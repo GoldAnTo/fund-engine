@@ -956,9 +956,20 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText(/已冻结后续实际值/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "生成机器候选" }));
     expect(await screen.findByText(/机器候选：出现反证/)).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("发布方式"), "modified");
+    expect(await screen.findByLabelText("修订后的结果")).toBeVisible();
+    await user.selectOptions(
+      screen.getByLabelText("修订后的结果"),
+      "insufficient_evidence",
+    );
     await user.type(screen.getByLabelText("人工裁决理由"), "确认实际值未达到冻结预测。 ");
     await user.click(screen.getByRole("button", { name: "发布人工裁决" }));
     expect(await screen.findByText(/已追加人工发布裁决/)).toBeVisible();
+    expect(
+      await screen.findByText("证据不足", {
+        selector: ".ros-forecast-verdict strong",
+      }),
+    ).toBeVisible();
   });
 
   it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {

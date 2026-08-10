@@ -111,9 +111,14 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("button", { name: "生成机器候选" }).click();
     await expect(page.getByText(/机器候选：出现反证/)).toBeVisible();
 
+    await page.getByLabel("发布方式").selectOption("modified");
+    await page.getByLabel("修订后的结果").selectOption("insufficient_evidence");
     await page.getByLabel("人工裁决理由").fill("研究员确认：实际值未达到冻结预测。 ");
     await page.getByRole("button", { name: "发布人工裁决" }).click();
     await expect(page.getByRole("status")).toContainText("已追加人工发布裁决");
+    await expect(
+      page.locator(".ros-forecast-verdict strong").filter({ hasText: "证据不足" }),
+    ).toBeVisible();
   });
 
   test("legacy page addresses cannot reopen the retired prototype UI", async ({ page }) => {

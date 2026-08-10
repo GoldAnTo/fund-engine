@@ -1010,7 +1010,9 @@ export class MockResearchOsApi implements ResearchOsApi {
           forecast_source: source,
           actual_source: actualSource,
         },
-        ...Array.from(this.forecastVerdictRecords.values()).filter((item) => item.target.case_id === caseId),
+        ...Array.from(this.forecastVerdictRecords.values()).filter(
+          (item) => item.target.case_id === caseId && item.decision !== "rejected",
+        ),
       ],
     } satisfies ForecastVerdictHistory;
   }

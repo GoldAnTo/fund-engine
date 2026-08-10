@@ -732,6 +732,9 @@ function ForecastVerificationWorkflow({
   const [actualSourceId, setActualSourceId] = useState("");
   const [actualValue, setActualValue] = useState("");
   const [decision, setDecision] = useState<"confirmed" | "modified" | "rejected">("confirmed");
+  const [modifiedOutcome, setModifiedOutcome] = useState<
+    "supported" | "contradicted" | "insufficient_evidence" | "not_due"
+  >("insufficient_evidence");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -809,7 +812,7 @@ function ForecastVerificationWorkflow({
       await researchOsApi.createForecastVerdict(candidate.id, {
         decision,
         outcome: decision === "modified"
-          ? candidate.outcome as "supported" | "contradicted" | "insufficient_evidence" | "not_due"
+          ? modifiedOutcome
           : null,
         reason: reason.trim(), reviewed_by: "human:researcher",
       });
@@ -844,6 +847,7 @@ function ForecastVerificationWorkflow({
           </>}
           {candidate && <p className="ros-market-warning">机器候选：{verificationLabels[candidate.outcome] ?? candidate.outcome} · {candidate.rationale}</p>}
           {candidate && <label>发布方式<select value={decision} onChange={(event) => setDecision(event.target.value as typeof decision)}><option value="confirmed">确认候选</option><option value="modified">修订结果</option><option value="rejected">否决候选</option></select></label>}
+          {candidate && decision === "modified" && <label>修订后的结果<select value={modifiedOutcome} onChange={(event) => setModifiedOutcome(event.target.value as typeof modifiedOutcome)}><option value="supported">得到支持</option><option value="contradicted">出现反证</option><option value="insufficient_evidence">证据不足</option><option value="not_due">尚未到验证时点</option></select></label>}
           <label>{candidate ? "人工裁决理由" : "本阶段审核理由"}<textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明数值、口径、来源定位或人工判断" /></label>
           {!targetId ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void saveTarget()}>冻结预测目标</button> : !actualId ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void saveActual()}>冻结后续实际值</button> : !candidate ? <button className="ros-button ros-button--secondary" type="button" disabled={busy} onClick={() => void evaluate()}>生成机器候选</button> : <button className="ros-button ros-button--primary" type="button" disabled={busy} onClick={() => void publish()}>发布人工裁决</button>}
           {message && <p className="ros-note" role="status">{message}</p>}

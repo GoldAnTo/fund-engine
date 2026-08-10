@@ -402,7 +402,7 @@ async function main() {
     await page.getByRole("button", { name: "保存基金披露配置" }).click();
     await page.getByText("已保存配置版本 1").waitFor();
     await page.getByRole("button", { name: "立即补充一次" }).click();
-    await page.getByRole("heading", { name: "本次补充记录" }).waitFor();
+    await page.getByText("本次补充未完成，失败原因已写入运行记录。").waitFor();
     const fundSync = await apiJson(apiBase, `/research-cases/${caseId}/fund-disclosure-sync`, token);
     const firstFundSyncRun = fundSync.runs?.[0];
     if (
