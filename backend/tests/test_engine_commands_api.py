@@ -6,7 +6,7 @@ These are WRITE endpoints (they commit), so they run against the private
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
@@ -375,3 +375,52 @@ def test_dossier_surfaces_fresh_assess_failure_and_hides_stale_one(
     dossier = cmd_client.get(dossier_url)
     assert dossier.status_code == 200
     assert dossier.json()["assess_failure"] is None
+
+
+def test_dossier_does_not_lose_its_own_fresh_failure_behind_other_cases_runs(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    """A Case's latest failed assessment must not depend on a global limit."""
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun, ResearchCase, Thesis
+
+    thesis = cmd_seeded.scalars(select(Thesis)).first()
+    case = cmd_seeded.scalars(select(ResearchCase)).first()
+
+    def _refused_chat_json(self, messages, schema_hint=""):
+        return {
+            "conclusion": "supported",
+            "rationale": "建议买入该标的",
+            "gaps": [],
+        }
+
+    monkeypatch.setattr(LLMClient, "chat_json", _refused_chat_json)
+    refused = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
+    assert refused.status_code == 422
+
+    later = datetime.now(timezone.utc) + timedelta(minutes=1)
+    cmd_seeded.add_all(
+        [
+            AIRun(
+                kind="assess",
+                model_version="other-case-model",
+                prompt_version="assess-v1",
+                input_ref={"thesis_id": str(uuid.uuid4())},
+                output_summary="other case failure",
+                status="failed",
+                error="other case failure",
+                started_at=later + timedelta(seconds=index),
+                finished_at=later + timedelta(seconds=index),
+            )
+            for index in range(51)
+        ]
+    )
+    cmd_seeded.commit()
+
+    dossier = cmd_client.get(
+        f"/api/v1/research-cases/{case.id}/dossier?thesis_id={thesis.id}"
+    )
+    assert dossier.status_code == 200
+    failure = dossier.json()["assess_failure"]
+    assert failure is not None
+    assert "compliance refused" in failure["error"]

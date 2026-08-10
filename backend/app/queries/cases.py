@@ -359,19 +359,12 @@ class CaseReadQueries:
         """
         from app.models.ledger import AIRun
 
-        failed_runs = self._session.scalars(
+        latest_failed = self._session.scalar(
             select(AIRun)
             .where(AIRun.kind == "assess", AIRun.status == "failed")
+            .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis.id))
             .order_by(AIRun.started_at.desc())
-            .limit(50)
-        )
-        latest_failed = next(
-            (
-                run
-                for run in failed_runs
-                if run.input_ref.get("thesis_id") == str(thesis.id)
-            ),
-            None,
+            .limit(1)
         )
         if latest_failed is None:
             return None
