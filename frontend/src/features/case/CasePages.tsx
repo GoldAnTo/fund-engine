@@ -1101,6 +1101,18 @@ function DocumentReader({
               <dt>可重取凭证</dt>
               <dd>{contract.provider_record.retrieval_reference || "未记录"}</dd>
             </div>
+            <div>
+              <dt>供应商获取时点</dt>
+              <dd>{contract.provider_record.retrieved_at}</dd>
+            </div>
+            <div>
+              <dt>供应商响应 hash</dt>
+              <dd><code>{contract.provider_record.content_sha256}</code></dd>
+            </div>
+            <div>
+              <dt>供应商合同版本</dt>
+              <dd>{contract.provider_record.contract_version || "未记录"}</dd>
+            </div>
           </>
         )}
         <div>

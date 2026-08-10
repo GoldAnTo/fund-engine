@@ -772,6 +772,9 @@ export class HttpResearchAdapter implements ActiveResearchClient {
           provider_record_id: dto.source_contract.provider_record.provider_record_id,
           request_scope: dto.source_contract.provider_record.request_scope,
           retrieval_reference: dto.source_contract.provider_record.retrieval_reference,
+          content_sha256: dto.source_contract.provider_record.content_sha256,
+          retrieved_at: dto.source_contract.provider_record.retrieved_at,
+          contract_version: dto.source_contract.provider_record.contract_version,
         } : null,
       } : null,
       original_file: dto.original_file ? {

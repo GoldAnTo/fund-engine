@@ -464,6 +464,9 @@ class DocumentReadQueries:
                     provider_record_id=provider_record.provider_record_id,
                     request_scope=dict(provider_record.request_scope or {}),
                     retrieval_reference=provider_record.retrieval_reference,
+                    content_sha256=provider_record.content_sha256,
+                    retrieved_at=provider_record.retrieved_at,
+                    contract_version=provider_record.contract_version,
                 )
                 if provider_record is not None
                 else None

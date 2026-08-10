@@ -371,6 +371,9 @@ export interface SourceDocumentView {
       provider_record_id: string;
       request_scope: Record<string, unknown>;
       retrieval_reference: string | null;
+      content_sha256: string;
+      retrieved_at: string;
+      contract_version: string | null;
     } | null;
   } | null;
   original_file?: {

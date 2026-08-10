@@ -19,6 +19,9 @@ class ProviderRecordDTO(V1Model):
     provider_record_id: str
     request_scope: dict[str, Any]
     retrieval_reference: str | None
+    content_sha256: str
+    retrieved_at: datetime
+    contract_version: str | None
 
 
 class OriginalFileDTO(V1Model):

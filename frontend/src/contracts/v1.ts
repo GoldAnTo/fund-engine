@@ -5530,6 +5530,15 @@ export interface components {
             };
             /** Retrieval Reference */
             retrieval_reference: string | null;
+            /** Content Sha256 */
+            content_sha256: string;
+            /**
+             * Retrieved At
+             * Format: date-time
+             */
+            retrieved_at: string;
+            /** Contract Version */
+            contract_version: string | null;
         };
         /** PublishEventConclusionRequest */
         PublishEventConclusionRequest: {

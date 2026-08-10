@@ -279,6 +279,9 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("link", { name: "核验冻结原文" }).click();
     await expect(page.getByText("供应商记录")).toBeVisible();
     await expect(page.getByText("聚源 · report-2026-001")).toBeVisible();
+    await expect(page.getByText("供应商获取时点")).toBeVisible();
+    await expect(page.getByText("供应商响应 hash")).toBeVisible();
+    await expect(page.getByText("供应商合同版本")).toBeVisible();
   });
 
   test("new strict Case opens its own intake workbench before any run starts", async ({ page }) => {

@@ -374,7 +374,10 @@ def test_existing_case_material_is_frozen_and_attached_without_starting_a_new_ca
 
 def test_document_read_exposes_the_frozen_provider_record_for_reproducibility(
     cmd_client,
+    cmd_session,
 ) -> None:
+    from app.models.source_governance import ProviderRecord
+
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     case_id = created["case_id"]
     attached = cmd_client.post(
@@ -402,11 +405,16 @@ def test_document_read_exposes_the_frozen_provider_record_for_reproducibility(
         for item in documents.json()["items"]
         if item["id"] == attached.json()["document_version_id"]
     )
+    provider_record = cmd_session.scalar(select(ProviderRecord))
+    assert provider_record is not None
     assert provider_document["source_contract"]["provider_record"] == {
         "provider_name": "聚源",
         "provider_record_id": "report-2026-003",
         "request_scope": {"report_type": "industry"},
         "retrieval_reference": "provider://report-2026-003",
+        "content_sha256": provider_record.content_sha256,
+        "retrieved_at": provider_record.retrieved_at.isoformat(),
+        "contract_version": None,
     }
 
 

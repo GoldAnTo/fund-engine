@@ -17740,6 +17740,26 @@
               }
             ],
             "title": "Retrieval Reference"
+          },
+          "content_sha256": {
+            "type": "string",
+            "title": "Content Sha256"
+          },
+          "retrieved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Retrieved At"
+          },
+          "contract_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Version"
           }
         },
         "additionalProperties": false,
@@ -17748,7 +17768,10 @@
           "provider_name",
           "provider_record_id",
           "request_scope",
-          "retrieval_reference"
+          "retrieval_reference",
+          "content_sha256",
+          "retrieved_at",
+          "contract_version"
         ],
         "title": "ProviderRecordDTO"
       },
