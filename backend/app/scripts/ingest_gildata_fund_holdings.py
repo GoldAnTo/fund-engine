@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -159,6 +160,7 @@ def _freeze_report(
     fund_code: str,
     period: date,
     permissions: dict[str, bool],
+    case_id: uuid.UUID | None = None,
 ) -> tuple[Any, ProviderRecord]:
     published_at = _parse_datetime(announcement["publish_date"])
     assert published_at is not None
@@ -173,6 +175,10 @@ def _freeze_report(
         title=announcement["title"],
         source_authority="primary_disclosure",
     )
+    if case_id is not None:
+        documents.attach_to_case(
+            research_case_id=case_id, document_version_id=document.id
+        )
     documents.add_span(
         document_version_id=document.id,
         locator={
@@ -225,6 +231,7 @@ def ingest(
     *,
     fund_codes: list[str],
     permissions: dict[str, bool] | None = None,
+    case_id: uuid.UUID | None = None,
 ) -> IngestStats:
     """Fetch specified fund holdings and admit only exact, displayable reports."""
     permissions = dict(permissions or {})
@@ -260,6 +267,7 @@ def ingest(
                 fund_code=fund_code,
                 period=period,
                 permissions=permissions,
+                case_id=case_id,
             )
             if not permissions.get("display", False):
                 pending_permission += len(group)
