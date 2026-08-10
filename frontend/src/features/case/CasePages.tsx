@@ -1968,6 +1968,7 @@ function ReviewContent({ caseId }: { caseId: string }) {
 function AtomicClaimReviewPanel({ caseId }: { caseId: string }) {
   const [claims, setClaims] = useState<AtomicClaimCandidate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let active = true;
     setClaims(null);
@@ -1983,7 +1984,7 @@ function AtomicClaimReviewPanel({ caseId }: { caseId: string }) {
     return () => {
       active = false;
     };
-  }, [caseId]);
+  }, [caseId, reload]);
   return (
     <section className="ros-atomic-review">
       <header className="ros-section-heading">
@@ -2001,12 +2002,22 @@ function AtomicClaimReviewPanel({ caseId }: { caseId: string }) {
             : "正在读取"}
         </span>
       </header>
-      {claims === null ? (
+      {error ? (
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>原子陈述队列暂不可读</strong>
+          <p>{error}</p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重试读取原子陈述队列
+          </button>
+        </div>
+      ) : claims === null ? (
         <div className="ros-empty ros-empty--compact">
           正在读取带原文定位的抽取候选…
         </div>
-      ) : error ? (
-        <p className="ros-error">{error}</p>
       ) : claims.length === 0 ? (
         <div className="ros-empty ros-empty--compact">
           当前 Case 没有待展示的原子陈述候选。

@@ -489,6 +489,35 @@ describe("Research OS event entry", () => {
     ).toBeEnabled();
   });
 
+  it("makes an unavailable atomic-claim queue explicit instead of leaving review in a loading state", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "atomicClaims").mockRejectedValueOnce(
+      new Error("Atomic claim queue unavailable"),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "原子陈述队列暂不可读",
+    );
+    expect(
+      screen.getByRole("button", { name: "重试读取原子陈述队列" }),
+    ).toBeEnabled();
+    await user.click(
+      screen.getByRole("button", { name: "重试读取原子陈述队列" }),
+    );
+    expect(
+      await screen.findByText("当前 Case 没有待展示的原子陈述候选。"),
+    ).toBeVisible();
+  });
+
   it("does not call an unavailable Case Wiki an empty graph", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "graph").mockRejectedValue(new Error("Wiki unavailable"));
