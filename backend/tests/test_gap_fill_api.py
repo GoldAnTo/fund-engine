@@ -8,33 +8,14 @@ from tests.tenant_admission import admit_case
 
 
 # ---------------------------------------------------------------------------
-# G1: GET /api/v1/provider-runs
+# G1 retired: the global prototype endpoint must never expose cross-Case runs.
+# Case-scoped run histories live on the active event-research routes.
 # ---------------------------------------------------------------------------
 
 
-def test_provider_runs_lists_airun_audit(cmd_client, cmd_seeded):
-    from app.models.ledger import ResearchCase, Thesis
-
-    case = cmd_seeded.scalar(select(ResearchCase))
-    thesis = cmd_seeded.scalar(
-        select(Thesis).where(Thesis.research_case_id == case.id)
-    )
-    reran = cmd_client.post(f"/api/v1/theses/{thesis.id}/rerun")
-    assert reran.status_code == 201
-
-    response = cmd_client.get("/api/v1/provider-runs", params={"kind": "assess"})
-    assert response.status_code == 200
-    runs = response.json()["runs"]
-    assert len(runs) == 1
-    assert runs[0]["status"] == "success"
-    assert runs[0]["kind"] == "assess"
-    assert runs[0]["input_ref"]["thesis_id"] == str(thesis.id)
-
-
-def test_provider_runs_empty(cmd_client, cmd_session):
+def test_retired_global_provider_runs_endpoint_is_not_exposed(cmd_client):
     response = cmd_client.get("/api/v1/provider-runs")
-    assert response.status_code == 200
-    assert response.json()["runs"] == []
+    assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------

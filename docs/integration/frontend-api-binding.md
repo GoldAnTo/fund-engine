@@ -73,7 +73,7 @@
 | 已有资料与数据（PlanAsset） | `GET /api/v1/documents`（冻结版本列表） | 🔧 |
 | 待审核结果（PlanPendingResult） | `GET /api/v1/review-queue?case_id=` | 🔧 |
 | Provider 查询计划（PlanProviderQuery） | 无后端（需新实体，勿拍脑袋建表） | ❌ mock |
-| Provider 运行记录（PlanProviderRun） | `GET /api/v1/provider-runs?kind=&limit=` | ✅ |
+| Provider 运行记录（PlanProviderRun） | 全局端点已退役；仅在当前 Case 的事件/补证/基金披露运行记录中展示 | ✅ 已替换 |
 
 ## 4. CaseWorkbenchScreen（行业案例）— `buildCaseWorkbenchView()`
 
@@ -118,7 +118,7 @@
 | 指标目录（DataCatalogItem） | `GET /api/v1/metrics/catalog?stock_id=&metric_name=` | ✅ |
 | 时点序列（DataSeriesPoint） | `GET /api/v1/metrics/series?stock_id=&metric_name=` | ✅ |
 | 修订对照（DataRevisionComparison） | series 多点对比即可（旧值 vs 新值） | 🔧 |
-| Provider 运行记录 | `GET /api/v1/provider-runs?kind=&limit=` | ✅ |
+| Provider 运行记录 | 全局端点已退役；仅在当前 Case 的事件/补证/基金披露运行记录中展示 | ✅ 已替换 |
 
 ## 9. VersionsScreen（版本比较）— `buildVersionsView()`
 
@@ -241,7 +241,7 @@ AI PATCH {tags, proposed_by: "ai"}
 
 | # | 缺口 | 影响的页 | 端点（已上线） |
 |---|---|---|---|
-| G1 | AIRun/Provider 运行记录只读 | 3、8 | `GET /api/v1/provider-runs?kind=&limit=` |
+| G1（已退役） | 全局 AIRun/Provider 运行记录只读 | 3、8 | 已由 Case 级可回放运行记录替代 |
 | G2 | 案件快照列表 | 9 | `GET /api/v1/research-cases/{id}/snapshots` |
 | G3 | 已复核知识层（statements 按 review 状态） | 7 | `GET /api/v1/knowledge?case_id=&review_state=`（含每条 link 的最新人工审核） |
 | G4 | dossier 不透出 Thesis 新增强字段 | 10/11 | dossier `theses[]` 已透出 title/观察期/支持反证条件/验证事件/creator_type/review_state |
@@ -270,8 +270,8 @@ AI PATCH {tags, proposed_by: "ai"}
 
 **合规拒绝的透出设计**（2026-08-01；2026-08-02 补重写回路）：
 - rerun 被合规门拒绝时：快照不落库（合规先于持久化，账本不可变约束下无法删半成品快照），失败的 AIRun 保留为审计痕迹。
-- 2026-08-02 起合规门为有界三段：REFUSE 类（买卖建议/荐股/仓位/个性化投顾）命中立即拒绝；REWRITE 类（目标价/收益预测）命中先给模型一次修复机会，修复文本重过合规门，残留违规才拒绝。修复成功的 rerun 返回 201，评估文本为清理后版本，AIRun 的 `output_summary` 带 `rewritten_for_compliance` 标记（provider-runs 可见）。前端语义不变：422 仍只表示"被合规拦截"。
-- dossier 新增 `assess_failure` 字段（`{model_version, error, failed_at}`）：仅当失败比最新成功评估**更新**时透出；后续 rerun 成功后自动隐藏。完整运行历史走 `GET /api/v1/provider-runs?kind=assess&status=`。
+- 2026-08-02 起合规门为有界三段：REFUSE 类（买卖建议/荐股/仓位/个性化投顾）命中立即拒绝；REWRITE 类（目标价/收益预测）命中先给模型一次修复机会，修复文本重过合规门，残留违规才拒绝。修复成功的 rerun 返回 201，评估文本为清理后版本，AIRun 的 `output_summary` 带 `rewritten_for_compliance` 标记（仅在当前 Case 的运行记录中可审计）。前端语义不变：422 仍只表示"被合规拦截"。
+- dossier 新增 `assess_failure` 字段（`{model_version, error, failed_at}`）：仅当失败比最新成功评估**更新**时透出；后续 rerun 成功后自动隐藏。完整运行历史仅在当前 Case 的受租户保护页面中查看。
 - 引擎脚本按 thesis 容错：单个 thesis 被拒不中断整跑。
 
 引擎脚本 `run_ai_engine` 的抽取过滤已从 parser_version 字面量改为「有 span 且无 statements」的待抽取语义，seed 场景幂等（重复跑不会重复抽取）。

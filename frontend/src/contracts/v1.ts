@@ -380,23 +380,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/provider-runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Provider Runs */
-        get: operations["list_provider_runs_api_v1_provider_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/research-ops/kpis": {
         parameters: {
             query?: never;
@@ -5548,42 +5531,6 @@ export interface components {
             /** Retrieval Reference */
             retrieval_reference: string | null;
         };
-        /**
-         * ProviderRunDTO
-         * @description One AI/provider invocation audit record.
-         *
-         *     成功 = 保留来源版本；失败 = 本次没有新数据；错误信息原样带出，
-         *     不掩饰、不推测（prototype Provider 运行记录的失败含义约定）。
-         */
-        ProviderRunDTO: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /** Model Version */
-            model_version: string;
-            /** Prompt Version */
-            prompt_version: string;
-            /** Status */
-            status: string;
-            /** Output Summary */
-            output_summary: string;
-            /** Error */
-            error: string | null;
-            /** Input Ref */
-            input_ref: {
-                [key: string]: unknown;
-            };
-            /** Started At */
-            started_at: string;
-            /** Finished At */
-            finished_at: string | null;
-        };
-        /** ProviderRunsResponse */
-        ProviderRunsResponse: {
-            /** Runs */
-            runs: components["schemas"]["ProviderRunDTO"][];
-        };
         /** PublishEventConclusionRequest */
         PublishEventConclusionRequest: {
             /** Text */
@@ -8169,38 +8116,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetricSeriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_provider_runs_api_v1_provider_runs_get: {
-        parameters: {
-            query?: {
-                kind?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProviderRunsResponse"];
                 };
             };
             /** @description Validation Error */

@@ -354,8 +354,8 @@ class CaseReadQueries:
 
         Fresh means: newer than the latest successful assessment (or no
         assessment at all).  A stale failure (a later rerun succeeded) is
-        hidden — the dossier shows current state, not history; the full
-        run history stays available via /provider-runs.
+        hidden — the dossier shows current state, not history; the active
+        Case workflow exposes its own auditable run history.
         """
         from app.models.ledger import AIRun
 

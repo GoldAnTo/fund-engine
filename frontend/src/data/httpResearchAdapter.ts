@@ -1927,10 +1927,6 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       ? await this.getDataCenterMetric(first.stock_id, first.metric_name)
       : { selectedMetric: EMPTY_METRIC_DETAIL, series: [] };
 
-    const runs = await this.get<Schemas["ProviderRunsResponse"]>(
-      `/provider-runs${this.buildQuery({ limit: "8" })}`,
-    );
-
     const kpis = await this.get<Schemas["ResearchOpsResponse"]>(
       `/research-ops/kpis`,
     );
@@ -1995,17 +1991,9 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         state: "计划中 · 尚未执行",
         meaning: "任务队列不属于当前目标范围，此块为占位展示。",
       },
-      historicalRuns: runs.runs.map((r) => ({
-        id: r.id.slice(0, 8),
-        providerLabel: r.model_version,
-        outcome: r.status === "success" ? "success" : "quota_failure",
-        outcomeLabel: r.status === "success" ? "成功" : "失败",
-        detailLabel:
-          r.status === "success"
-            ? r.output_summary
-            : (r.error ?? "（无错误详情）"),
-        observedAt: r.started_at,
-      })),
+      // Global provider-run history was retired: it crossed Case boundaries.
+      // Active Case pages expose only their own transparent run histories.
+      historicalRuns: [],
     };
   }
 
@@ -2084,12 +2072,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         compare: compareCutoff,
       })}`,
     );
-    const runs = await this.get<Schemas["ProviderRunsResponse"]>(
-      `/provider-runs${this.buildQuery({ kind: "assess", limit: "1" })}`,
-    );
-
     const thesis = compare.theses[0];
-    const lastAssessRun = runs.runs[0];
     const conclusionLabel = (c: string | null) =>
       c === "supported"
         ? "支持（成立）"
@@ -2167,13 +2150,11 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         reviewedAt: "",
       },
       aiProposal: {
-        runId: lastAssessRun ? lastAssessRun.id.slice(0, 8) : "—",
-        observedAt: lastAssessRun?.started_at ?? "",
+        runId: "—",
+        observedAt: "",
         label: "AI RERUN",
-        text: lastAssessRun
-          ? lastAssessRun.output_summary
-          : "（暂无 AI 评估运行记录）",
-        boundary: "AI 生成 · 未经人工复核",
+        text: "历史全局运行记录已下线；请在当前 Case 的运行记录中查看可复现过程。",
+        boundary: "仅展示当前 Case 的可审计运行记录",
       },
       perThesisChanges: (compare.theses ?? []).map((t) => ({
         thesisId: t.thesis_id,

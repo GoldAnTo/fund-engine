@@ -739,7 +739,6 @@ describe("HttpResearchAdapter", () => {
         if (url.includes("/research-ops/kpis")) return jsonResponse(kpisDto);
         if (url.includes("/metrics/catalog"))
           return jsonResponse({ entries: [] });
-        if (url.includes("/provider-runs")) return jsonResponse({ runs: [] });
         throw new Error(`unexpected fetch: ${url}`);
       }),
     );

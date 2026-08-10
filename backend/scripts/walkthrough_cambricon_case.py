@@ -727,7 +727,6 @@ def phase10_reads(case_id: str) -> dict:
         ("snapshots", "GET", f"/api/v1/research-cases/{case_id}/snapshots", {}),
         ("fund_exposure", "GET", f"/api/v1/research-cases/{case_id}/fund-exposure", {}),
         ("metric_catalog", "GET", "/api/v1/metrics/catalog", {}),
-        ("provider_runs", "GET", "/api/v1/provider-runs", {}),
     ]
     for name, method, path, params in reads:
         status, body = api(method, path, "P10", name, params=params or None)
