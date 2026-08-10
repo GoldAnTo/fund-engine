@@ -32,6 +32,7 @@ from app.services.jobs import JobService
 from app.services.ingest import DocumentService
 from app.repositories.documents import DocumentRepository
 from app.services.source_governance import SourceGovernanceService
+from app.services.source_admission import source_contract_is_active
 from app.schemas.v1.commands import (
     ExtractResponse,
     ExtractCandidateDTO,
@@ -241,8 +242,10 @@ def extract_statements(
             SourceContract.document_version_id == document_version_id
         )
     )
-    if contract is not None and not contract.allow_ai_processing:
-        message = "来源合同禁止 AI 处理；没有创建候选或正式陈述。"
+    if contract is not None and (
+        not contract.allow_ai_processing or not source_contract_is_active(contract)
+    ):
+        message = "来源合同禁止 AI 处理或当前已失效；没有创建候选或正式陈述。"
         record_run(
             db,
             kind="extract",

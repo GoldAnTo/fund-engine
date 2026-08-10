@@ -109,6 +109,39 @@ def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd
     assert refused_run.status == "failed"
 
 
+def test_extract_refuses_an_expired_source_contract(cmd_client, cmd_seeded):
+    from app.models.source_governance import SourceContract
+
+    version = _new_pending_version(cmd_seeded)
+    cmd_seeded.add(
+        SourceContract(
+            document_version_id=version.id,
+            source_type="licensed_provider",
+            provider_or_tenant="expired-provider",
+            allow_ai_processing=True,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            effective_until=datetime(2025, 1, 31, tzinfo=timezone.utc),
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=["expired"],
+            contract_version="fixture-v1",
+            intake_metadata={},
+            declared_by="human:researcher",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
+
+    assert response.status_code == 422
+    assert "当前已失效" in response.json()["error"]["message"]
+
+
 def test_supplement_text_creates_a_separate_case_document_with_intersected_permissions(
     cmd_client, cmd_seeded
 ):

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.ledger import CaseDocumentVersion, Company, SourceSpan, SourceStatement, Stock, Thesis, ValidationError
 from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.models.source_governance import SourceContract
+from app.services.source_admission import source_contract_is_active
 from app.repositories.research import ResearchRepository
 
 
@@ -302,7 +303,13 @@ class MarketExpressionService:
         contract = self._session.scalar(
             select(SourceContract).where(SourceContract.document_version_id == span.document_version_id)
         )
-        if case_document is None or contract is None or not contract.allow_ai_processing or not contract.allow_display:
+        if (
+            case_document is None
+            or contract is None
+            or not contract.allow_ai_processing
+            or not contract.allow_display
+            or not source_contract_is_active(contract)
+        ):
             raise ValidationError("source statement must be attached to this case and admitted for processing and display")
         return statement
 

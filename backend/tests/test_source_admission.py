@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from app.services.source_admission import (
     SourceAdmission,
     SourceStatus,
+    apply_source_contract,
     classify_source,
 )
 
@@ -265,3 +268,27 @@ def test_source_admission_is_immutable():
 
     with pytest.raises(FrozenInstanceError):
         result.can_accept = False
+
+
+def test_expired_source_contract_cannot_enter_formal_evidence():
+    admission = SourceAdmission(
+        status=SourceStatus.ACCESSIBLE,
+        reason="来源链接可访问且内容已验证。",
+        can_accept=True,
+    )
+    contract = SimpleNamespace(
+        allow_ai_processing=True,
+        allow_display=True,
+        effective_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        effective_until=datetime(2026, 1, 31, tzinfo=timezone.utc),
+    )
+
+    result = apply_source_contract(
+        admission,
+        contract,
+        at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    assert result.status is SourceStatus.RESTRICTED
+    assert result.can_accept is False
+    assert "已失效" in result.reason

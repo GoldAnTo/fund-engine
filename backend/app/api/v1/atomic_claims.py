@@ -32,6 +32,7 @@ from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.models.ledger import CaseTenantAdmission
 from app.models.source_governance import SourceContract
+from app.services.source_admission import source_contract_is_active
 
 
 router = APIRouter(
@@ -207,7 +208,11 @@ def propose_atomic_claim(
 
         raise NotFoundError("source span not found")
     span, document, contract = row
-    if contract is None or not contract.allow_display:
+    if (
+        contract is None
+        or not contract.allow_display
+        or not source_contract_is_active(contract)
+    ):
         from app.errors import NotFoundError
 
         # Do not reveal whether a non-displayable source is attached to the Case.
