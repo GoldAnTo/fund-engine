@@ -255,6 +255,7 @@ async function main() {
     for (let index = 1; index < factorCount; index += 1) {
       await factorChoices.nth(index).uncheck();
     }
+    await page.getByLabel("频率").selectOption("daily_20_00");
     await page.getByLabel("下一验证事件").fill("下一次公司财报披露");
     await page.getByLabel("新版本变更原因").fill("为新建事件设置受控补证范围");
     await page.getByRole("button", { name: "保存为新监控版本" }).click();
@@ -274,6 +275,20 @@ async function main() {
     await page.getByRole("heading", { name: "准备研究范围 · 排队中" }).first().waitFor();
     await page.getByText("已冻结本次运行范围", { exact: true }).first().waitFor();
 
+    await page.goto(`${uiBase}/events/${caseId}/monitor/config`, { waitUntil: "networkidle" });
+    await page.getByLabel("变更原因", { exact: true }).fill("等待下一次公司披露后恢复定时核验");
+    await page.getByRole("button", { name: "暂停未来定时任务" }).click();
+    await page.getByText("当前生效版本 v2").waitFor();
+    const pausedMonitor = await apiJson(apiBase, `/research-cases/${caseId}/monitor`, token);
+    if (
+      pausedMonitor.monitor?.status !== "paused"
+      || pausedMonitor.monitor?.version !== 2
+      || pausedMonitor.monitor?.frequency !== "daily_20_00"
+      || pausedMonitor.monitor?.change_reason !== "等待下一次公司披露后恢复定时核验"
+    ) {
+      throw new Error(`saved monitor pause was not replayable: ${JSON.stringify(pausedMonitor.monitor)}`);
+    }
+
     await page.goto(`${uiBase}/events`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "今天，先推进哪一个判断？" }).waitFor();
     await page.getByText(title, { exact: false }).first().waitFor();
@@ -285,6 +300,7 @@ async function main() {
       ["POST /event-research", (request) => request.startsWith("POST ") && request.endsWith("/event-research")],
       ["PUT /research-cases/:caseId/monitor", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/monitor`)],
       ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
+      ["POST /research-cases/:caseId/monitor/paused", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/paused`)],
       ["GET /event-research", (request) => request.startsWith("GET ") && request.endsWith("/event-research")],
     ];
     for (const [expected, observed] of expectedRequests) {
@@ -294,7 +310,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured, ran, and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured, ran, paused its future schedule, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)
