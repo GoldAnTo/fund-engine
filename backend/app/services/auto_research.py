@@ -28,6 +28,7 @@ from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion
 from app.models.research_expression import KeyFactor
 from app.models.event_research import EventResearchConclusion
+from app.models.source_governance import SourceContract
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.repositories.event_research import EventResearchLifecycleRepository
@@ -36,6 +37,7 @@ from app.services.compliance import ComplianceRefusedError
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.research_protocol import ResearchProtocolService
 from app.services.case_monitor import ResearchRunEventRepository
+from app.services.source_admission import source_contract_is_active
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
     lock_event_research_lifecycle,
@@ -244,6 +246,20 @@ class AutoResearchService:
         )
         if source is None:
             raise ValidationFailedError("continuation document is not frozen in this case")
+        contract = self.session.scalar(
+            select(SourceContract).where(
+                SourceContract.document_version_id == document_version_id
+            )
+        )
+        if (
+            contract is None
+            or not contract.allow_display
+            or not contract.allow_ai_processing
+            or not source_contract_is_active(contract)
+        ):
+            raise ValidationFailedError(
+                "continuation document source contract does not permit research"
+            )
         previous = self.session.scalar(
             select(EventResearchConclusion)
             .where(EventResearchConclusion.research_case_id == case_id)

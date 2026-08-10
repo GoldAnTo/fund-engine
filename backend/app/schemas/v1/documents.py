@@ -50,7 +50,9 @@ class SourceContractDTO(V1Model):
 class DocumentSummaryDTO(V1Model):
     id: str
     content_sha256: str
-    source_url: str
+    # A Case may retain audit metadata for a source whose terms forbid display.
+    # Never expose its original location through a read response in that state.
+    source_url: str | None
     published_at: str | None
     available_at: str
     acquired_at: str

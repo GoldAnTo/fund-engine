@@ -1842,8 +1842,8 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         id: d.id,
         // Prefer ingest-time locator metadata (research report title, issuer
         // org, document kind); fall back to the raw source URL when absent.
-        title: d.title ?? d.source_url,
-        sourceName: d.org ?? d.source_url,
+        title: d.title ?? d.source_url ?? "受限资料",
+        sourceName: d.org ?? d.source_url ?? "来源不予展示",
         sourceVersion: d.parser_version,
         documentType: (d.doc_kind && DOC_KIND_LABEL[d.doc_kind]) ?? "未分类",
         entity: d.entity ?? "—",
@@ -2143,7 +2143,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         inputs: compare.documents_added.map((d) => ({
           id: d.document_version_id,
           kind: "DocumentVersion",
-          label: d.source_url,
+          label: d.source_url ?? "来源不予展示",
           version: d.published_at ?? "",
         })),
         relationships: addedLinks.map(linkRow),

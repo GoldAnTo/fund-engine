@@ -128,17 +128,21 @@ class DocumentReadQueries:
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
             spans = self._docs.spans_for_version(version.id)
+            source_contract = contracts.get(version.id)
+            visible_spans = (
+                spans if self._content_is_displayable(source_contract) else []
+            )
             statements = self._research.statements_for_span_ids(
-                [s.id for s in spans]
+                [s.id for s in visible_spans]
             )
             items.append(
                 self._summary(
                     version,
-                    len(spans),
+                    len(visible_spans),
                     len(statements),
-                    spans=spans,
+                    spans=visible_spans,
                     latest_run=run_map.get(version.id),
-                    source_contract=contracts.get(version.id),
+                    source_contract=source_contract,
                     provider_record=provider_records.get(version.id),
                     upload_artifact=upload_artifacts.get(version.id),
                 )
@@ -156,9 +160,27 @@ class DocumentReadQueries:
         if version is None:
             raise NotFoundError("document version not found")
 
+        source_contract = self._session.scalar(
+            select(SourceContract).where(
+                SourceContract.document_version_id == version_id
+            )
+        )
+        provider_record = self._session.scalar(
+            select(ProviderRecord).where(
+                ProviderRecord.document_version_id == version_id
+            )
+        )
+        upload_artifact = self._session.scalar(
+            select(DocumentUploadArtifact).where(
+                DocumentUploadArtifact.document_version_id == version_id
+            )
+        )
         spans = self._docs.spans_for_version(version_id)
+        visible_spans = (
+            spans if self._content_is_displayable(source_contract) else []
+        )
         statements = self._research.statements_for_span_ids(
-            [s.id for s in spans]
+            [s.id for s in visible_spans]
         )
         span_to_statements: dict[uuid.UUID, list] = defaultdict(list)
         for st in statements:
@@ -179,7 +201,7 @@ class DocumentReadQueries:
             stmt_to_links[link.source_statement_id].append(link)
 
         span_dtos: list[SourceSpanDTO] = []
-        for span in spans:
+        for span in visible_spans:
             citations: list[dict] = []
             for st in span_to_statements.get(span.id, []):
                 for link in stmt_to_links.get(st.id, []):
@@ -211,15 +233,15 @@ class DocumentReadQueries:
         return DocumentDetailResponse(
             document=self._summary(
                 version,
-                len(spans),
+                len(visible_spans),
                 len(statements),
-                spans=spans,
+                spans=visible_spans,
                 latest_run=latest_extract_runs(self._session, [version_id]).get(
                     version_id
                 ),
-                source_contract=self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == version_id)),
-                provider_record=self._session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == version_id)),
-                upload_artifact=self._session.scalar(select(DocumentUploadArtifact).where(DocumentUploadArtifact.document_version_id == version_id)),
+                source_contract=source_contract,
+                provider_record=provider_record,
+                upload_artifact=upload_artifact,
             ),
             spans=span_dtos,
         )
@@ -329,6 +351,7 @@ class DocumentReadQueries:
         provider_record: ProviderRecord | None = None,
         upload_artifact: DocumentUploadArtifact | None = None,
     ) -> DocumentSummaryDTO:
+        content_is_displayable = self._content_is_displayable(source_contract)
         meta = self._locator_metadata(spans or [])
         quality, quality_reasons = assess_span_texts(
             [s.verbatim_text for s in spans] if spans else []
@@ -336,7 +359,7 @@ class DocumentReadQueries:
         return DocumentSummaryDTO(
             id=str(version.id),
             content_sha256=version.content_sha256,
-            source_url=version.source_url,
+            source_url=version.source_url if content_is_displayable else None,
             published_at=_iso(version.published_at),
             available_at=_iso(version.available_at),
             acquired_at=_iso(version.acquired_at),
@@ -369,11 +392,15 @@ class DocumentReadQueries:
             quality_reasons=quality_reasons,
             # S4: prefer the source-side title written at freeze time,
             # fall back to whatever the legacy span-locator derived.
-            title=version.title or meta["title"],
-            org=meta["org"],
-            doc_kind=meta["doc_kind"],
-            entity=self._resolve_entity(
-                meta["sec_code"], meta["title"], meta["sec_name"]
+            title=(version.title or meta["title"])
+            if content_is_displayable
+            else None,
+            org=meta["org"] if content_is_displayable else None,
+            doc_kind=meta["doc_kind"] if content_is_displayable else None,
+            entity=(
+                self._resolve_entity(meta["sec_code"], meta["title"], meta["sec_name"])
+                if content_is_displayable
+                else None
             ),
             source_contract=self._source_contract_dto(source_contract, provider_record),
             original_file=(
@@ -385,10 +412,15 @@ class DocumentReadQueries:
                     uploaded_by=upload_artifact.uploaded_by,
                     retention_policy=upload_artifact.retention_policy,
                 )
-                if upload_artifact is not None
+                if upload_artifact is not None and content_is_displayable
                 else None
             ),
         )
+
+    @staticmethod
+    def _content_is_displayable(contract: SourceContract | None) -> bool:
+        """Preserve legacy snapshots, but never disclose explicitly restricted content."""
+        return contract is None or contract.allow_display
 
     @staticmethod
     def _source_contract_dto(

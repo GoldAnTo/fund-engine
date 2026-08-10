@@ -2614,6 +2614,94 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("makes a contract-restricted frozen snapshot auditable but not actionable", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const detail = await adapter.getDocumentDetail("doc-event-tsm-q2", "event-tsm");
+    vi.spyOn(adapter, "getDocumentDetail").mockResolvedValue({
+      ...detail,
+      document: {
+        ...detail.document,
+        source_contract: {
+          ...detail.document.source_contract!,
+          status: "restricted",
+          effective_until: "2026-08-09T00:00:00Z",
+        },
+      },
+    });
+    setResearchClient(adapter);
+    setResearchOsApi(new MockResearchOsApi(adapter));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: /台积电 2026 年第二季度法说会摘要/,
+      }),
+    );
+
+    expect(await screen.findByText("来源当前受限")).toBeVisible();
+    expect(
+      screen.getByText(
+        "来源合同当前受限：此快照仅用于审计回放，不能继续提取或提出候选。",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "从冻结资料提取候选" }),
+    ).toBeDisabled();
+    expect(
+      screen.getAllByRole("button", { name: "将此段纳入待审候选" })[0],
+    ).toBeDisabled();
+  });
+
+  it("does not render text or locators when the source contract forbids display", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const detail = await adapter.getDocumentDetail("doc-event-tsm-q2", "event-tsm");
+    vi.spyOn(adapter, "getDocumentDetail").mockResolvedValue({
+      ...detail,
+      document: {
+        ...detail.document,
+        source_url: null,
+        source_contract: {
+          ...detail.document.source_contract!,
+          permissions: {
+            ...detail.document.source_contract!.permissions,
+            display: false,
+          },
+          status: "restricted",
+        },
+      },
+    });
+    setResearchClient(adapter);
+    setResearchOsApi(new MockResearchOsApi(adapter));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: /台积电 2026 年第二季度法说会摘要/,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "来源合同禁止展示：系统仅保留审核元数据，不显示正文、定位或引用。",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText("来源定位").nextElementSibling).toHaveTextContent("未记录");
+    expect(screen.queryByText(/资本开支指引/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "将此段纳入待审候选" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders reviewed Case relations separately from AI candidates in the global network", async () => {
     vi.stubGlobal(
       "fetch",

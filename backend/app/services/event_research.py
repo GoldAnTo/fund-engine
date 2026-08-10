@@ -1,6 +1,7 @@
 """Creation service for independent, automatically-starting event research."""
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -25,6 +26,17 @@ from app.errors import ValidationFailedError
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _submitted_snapshot_natural_key(namespace: str, raw_input: str) -> str:
+    """Deduplicate byte-identical submissions without collapsing new material.
+
+    Generic event:// locations and titles describe an intake channel, not a
+    semantic source document.  They must therefore not share the regular
+    source/title/date natural key used for issuer reports.
+    """
+    digest = hashlib.sha256(raw_input.encode("utf-8")).hexdigest()
+    return f"{namespace}:{digest}"
 
 
 @dataclass(frozen=True)
@@ -190,6 +202,9 @@ class EventResearchService:
             source_url=document_url,
             parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[source_type],
             title="已发布 Case 的新增材料",
+            natural_key=_submitted_snapshot_natural_key(
+                "published-material", raw_input
+            ),
             parse_state="partial",
             source_authority=source_metadata.get("authority_level", "unknown"),
         )
@@ -246,6 +261,9 @@ class EventResearchService:
                 "public_url": "user-pasted-public-url-v1",
             }[source_type],
             title=source_metadata.get("file_name", "收件箱新增材料"),
+            natural_key=_submitted_snapshot_natural_key(
+                "existing-case-material", raw_input
+            ),
             parse_state="partial",
             source_authority=source_metadata.get("authority_level", "unknown"),
         )

@@ -33,6 +33,7 @@ from app.models.ledger import (
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
 from app.models.proposals import Proposal
 from app.models.research_monitor import ResearchRunEvent
+from app.models.source_governance import SourceContract
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
@@ -1915,6 +1916,43 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
         ),
     )
     cmd_session.commit()
+
+    restricted = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/published-material-decisions",
+        json={
+            "raw_input": "这份受限资料不得成为后继研究输入。",
+            "source_type": "pasted_snapshot",
+            "source_metadata": {
+                "permissions": {"ai_processing": False, "display": False}
+            },
+            "decision": "no_change",
+            "reason": "仅保存受限资料的审计元数据。",
+            "actor": "human:lin",
+        },
+    )
+    assert restricted.status_code == 201, restricted.text
+    restricted_document_id = uuid.UUID(restricted.json()["document_version_id"])
+    assert restricted_document_id != uuid.UUID(unchanged.json()["document_version_id"])
+    restricted_contract = cmd_session.scalar(
+        select(SourceContract).where(
+            SourceContract.document_version_id == restricted_document_id
+        )
+    )
+    assert restricted_contract is not None
+    assert restricted_contract.allow_ai_processing is False
+    assert restricted_contract.allow_display is False
+
+    blocked = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/continuations",
+        json={
+            "document_version_id": str(restricted_document_id),
+            "reason": "尝试用受限资料重开研究。",
+            "triggered_by": "human:lin",
+        },
+    )
+    assert blocked.status_code == 422
+    assert "source contract does not permit research" in blocked.json()["error"]["message"]
+    assert cmd_session.get(EventResearchLifecycle, case_id).status == "published"
 
     response = cmd_client.post(
         f"/api/v1/event-research/{case_id}/published-material-decisions",

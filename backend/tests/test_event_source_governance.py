@@ -206,6 +206,43 @@ def test_expired_contract_is_visible_as_restricted_in_the_document_reader(
     assert detail.json()["document"]["source_contract"]["status"] == "restricted"
 
 
+def test_non_displayable_source_returns_auditable_metadata_without_its_content(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={
+                "original_url": "https://example.test/restricted-source",
+                "permissions": {"ai_processing": False, "display": False},
+            },
+        ),
+    )
+
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    assert document_id is not None
+
+    detail = cmd_client.get(
+        f"/api/v1/event-research/{case_id}/documents/{document_id}"
+    )
+
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["document"]["source_contract"]["status"] == "restricted"
+    assert payload["document"]["source_url"] is None
+    assert payload["document"]["title"] is None
+    assert payload["document"]["span_count"] == 0
+    assert payload["document"]["statement_count"] == 0
+    assert payload["spans"] == []
+
+
 def test_event_intake_freezes_declared_source_authority_and_exposes_it_to_readers(
     cmd_client, cmd_session
 ) -> None:

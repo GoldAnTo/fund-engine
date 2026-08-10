@@ -896,11 +896,24 @@ function DocumentReader({
   const publicSourceUrl = document.source_url?.match(/^https?:\/\//i)
     ? document.source_url
     : null;
+  const contentDisplayAllowed = contract?.permissions.display !== false;
+  const displayableSpans = contentDisplayAllowed ? spans : [];
   const extractionAllowed =
     document.parse_quality !== "failed" &&
+    contentDisplayAllowed &&
     contract?.permissions.ai_processing !== false &&
     contract?.status === "admitted";
-  const focused = focusSpanId && spans.some((span) => span.id === focusSpanId);
+  const continuationAllowed = contract?.status === "admitted";
+  const contractRestrictionNotice =
+    !contentDisplayAllowed
+      ? "来源合同禁止展示：系统仅保留审核元数据，不显示正文、定位或引用。"
+      : contract?.status === "restricted"
+      ? "来源合同当前受限：此快照仅用于审计回放，不能继续提取或提出候选。"
+      : !contract
+        ? "来源许可未完整记录：此快照不可据此继续处理或提出候选。"
+        : null;
+  const focused =
+    focusSpanId && displayableSpans.some((span) => span.id === focusSpanId);
   const [reason, setReason] = useState("");
   const [continuing, setContinuing] = useState(false);
   const [continuationNotice, setContinuationNotice] = useState<string | null>(
@@ -970,17 +983,28 @@ function DocumentReader({
         <span
           className={`ros-pill ${contract?.status === "admitted" ? "ros-pill--system" : "ros-pill--human"}`}
         >
-          {contract?.status === "admitted" ? "来源已准入" : "许可未完整记录"}
+          {contract?.status === "admitted"
+            ? "来源已准入"
+            : contract
+              ? "来源当前受限"
+              : "许可未完整记录"}
         </span>
         <h3>{document.title || "未命名资料"}</h3>
         <p>
-          {originalFile
+          {!contentDisplayAllowed
+            ? "资料正文与原件信息不予展示；仅保留审计元数据。"
+            : originalFile
             ? originalFile.mime_type === "application/pdf"
               ? "PDF 原件已冻结；解析定位另行保存。"
               : "文本原件已冻结；解析内容作为定位片段另行展示。"
             : "内容快照（当前 V1 未提供原件文件）"}
         </p>
       </header>
+      {contractRestrictionNotice && (
+        <p className="ros-error" role="alert">
+          {contractRestrictionNotice}
+        </p>
+      )}
       <dl className="ros-definition">
         <div>
           <dt>冻结资料 ID</dt>
@@ -995,7 +1019,7 @@ function DocumentReader({
         <div>
           <dt>来源定位</dt>
           <dd>
-            {publicSourceUrl ? (
+            {contentDisplayAllowed && publicSourceUrl ? (
               <a
                 href={publicSourceUrl}
                 target="_blank"
@@ -1004,7 +1028,7 @@ function DocumentReader({
               >
                 {publicSourceUrl}
               </a>
-            ) : document.source_url ? (
+            ) : contentDisplayAllowed && document.source_url ? (
               <code>{document.source_url}</code>
             ) : (
               "未记录"
@@ -1055,7 +1079,7 @@ function DocumentReader({
             {parseQualityLabel(document.parse_quality)} · 解析器 {document.parser_version}
           </dd>
         </div>
-        {originalFile && (
+        {contentDisplayAllowed && originalFile && (
           <>
             <div>
               <dt>原件文件</dt>
@@ -1121,11 +1145,16 @@ function DocumentReader({
           <button
             className="ros-button ros-button--primary"
             type="button"
-            disabled={!reason.trim() || continuing}
+            disabled={!reason.trim() || !continuationAllowed || continuing}
             onClick={continueFromMaterial}
           >
             {continuing ? "正在创建后继运行…" : "以此资料启动重新研究"}
           </button>
+          {!continuationAllowed && (
+            <small>
+              此资料的来源合同当前不允许继续研究；可查看冻结审计记录，但不能作为后继运行输入。
+            </small>
+          )}
           {continuationNotice && (
             <p
               className={
@@ -1203,8 +1232,8 @@ function DocumentReader({
                 已定位到审核候选对应的冻结原文片段；请核对原文、定位、许可与候选表述后再决定。
               </p>
             )}
-            {spans.length ? (
-              spans.map((span) => (
+            {displayableSpans.length ? (
+              displayableSpans.map((span) => (
                 <article
                   className={span.id === focusSpanId ? "is-focused" : ""}
                   key={span.id}

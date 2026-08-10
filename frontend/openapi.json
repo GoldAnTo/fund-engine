@@ -10740,7 +10740,14 @@
             "title": "Content Sha256"
           },
           "source_url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Source Url"
           },
           "published_at": {

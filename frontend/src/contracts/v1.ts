@@ -3132,7 +3132,7 @@ export interface components {
             /** Content Sha256 */
             content_sha256: string;
             /** Source Url */
-            source_url: string;
+            source_url: string | null;
             /** Published At */
             published_at: string | null;
             /** Available At */
