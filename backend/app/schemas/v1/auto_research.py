@@ -54,6 +54,15 @@ class ActiveResearchRunsResponse(CursorPage):
     items: list[ActiveResearchRunDTO]
 
 
+class ResearchWorkerStatusDTO(V1Model):
+    """Current liveness of the process that advances queued research work."""
+
+    status: str
+    last_seen_at: str | None = None
+    mode: str | None = None
+    state: str | None = None
+
+
 class ResearchRunArchiveDTO(ActiveResearchRunDTO):
     """A global, replayable run record, including terminal runs."""
 

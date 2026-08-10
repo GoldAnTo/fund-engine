@@ -406,6 +406,38 @@ def test_list_runs_returns_recent_runs(cmd_client, cmd_session):
     assert "budget_used" in body["items"][0]
 
 
+def test_worker_status_distinguishes_an_unavailable_executor_from_a_live_loop(
+    cmd_client, cmd_session
+):
+    unavailable = cmd_client.get("/api/v1/research-runs/worker-status")
+
+    assert unavailable.status_code == 200
+    assert unavailable.json() == {
+        "status": "unavailable",
+        "last_seen_at": None,
+        "mode": None,
+        "state": None,
+    }
+
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    WorkerHeartbeatService(cmd_session).touch(
+        worker_id="test-loop",
+        mode="loop",
+        state="polling",
+        seen_at=datetime.now(timezone.utc),
+    )
+    cmd_session.commit()
+
+    live = cmd_client.get("/api/v1/research-runs/worker-status")
+
+    assert live.status_code == 200
+    assert live.json()["status"] == "available"
+    assert live.json()["mode"] == "loop"
+    assert live.json()["state"] == "polling"
+    assert live.json()["last_seen_at"]
+
+
 def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(case); cmd_session.flush()

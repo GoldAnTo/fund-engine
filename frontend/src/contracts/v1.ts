@@ -925,6 +925,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-runs/worker-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Worker Status
+         * @description Expose whether queued runs can currently be claimed by a loop worker.
+         */
+        get: operations["worker_status_api_v1_research_runs_worker_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-runs": {
         parameters: {
             query?: never;
@@ -6164,6 +6184,20 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * ResearchWorkerStatusDTO
+         * @description Current liveness of the process that advances queued research work.
+         */
+        ResearchWorkerStatusDTO: {
+            /** Status */
+            status: string;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Mode */
+            mode?: string | null;
+            /** State */
+            state?: string | null;
+        };
         /** ResearchabilityDTO */
         ResearchabilityDTO: {
             /**
@@ -9277,6 +9311,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActiveResearchRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    worker_status_api_v1_research_runs_worker_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchWorkerStatusDTO"];
                 };
             };
             /** @description Validation Error */

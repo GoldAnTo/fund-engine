@@ -11,6 +11,8 @@ or keep one supervised worker polling locally::
 from __future__ import annotations
 
 import argparse
+import os
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +21,19 @@ from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
 from app.services.fund_disclosure_sync_scheduler import FundDisclosureSyncScheduler
+from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+
+def _worker_id() -> str:
+    return os.getenv("RESEARCH_WORKER_ID", socket.gethostname())[:128]
+
+
+def _touch(*, mode: str, state: str) -> None:
+    with SessionLocal() as session:
+        WorkerHeartbeatService(session).touch(
+            worker_id=_worker_id(), mode=mode, state=state
+        )
+        session.commit()
 
 
 def run_once(*, recover_after_minutes: int = 30) -> bool:
@@ -67,10 +82,14 @@ def main() -> None:
     if not args.once and not args.loop:
         parser.error("choose --once or --loop")
     if args.once:
+        _touch(mode="once", state="executing")
         run_once()
+        _touch(mode="once", state="idle")
         return
     while True:
+        _touch(mode="loop", state="polling")
         found = run_once()
+        _touch(mode="loop", state="polling")
         if not found:
             time.sleep(max(args.poll_seconds, 0.1))
 

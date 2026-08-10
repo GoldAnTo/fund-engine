@@ -17,6 +17,7 @@ import {
   type MonitorDetail,
   type Researchability,
   type ResearchNetwork,
+  type ResearchWorkerStatus,
 } from "../../app/researchOsApi";
 import { researchClient } from "../../data/researchClient";
 import type {
@@ -3638,6 +3639,8 @@ function MonitorContent({
   activeRunId: string | null;
 }) {
   const [detail, setDetail] = useState<MonitorDetail | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
+  const [workerStatusError, setWorkerStatusError] = useState(false);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3686,6 +3689,27 @@ function MonitorContent({
   useEffect(() => {
     void loadMonitor();
   }, [caseId]);
+  useEffect(() => {
+    let active = true;
+    const loadWorkerStatus = () => researchOsApi
+      .workerStatus()
+      .then((value) => {
+        if (!active) return;
+        setWorkerStatus(value);
+        setWorkerStatusError(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setWorkerStatus(null);
+        setWorkerStatusError(true);
+      });
+    void loadWorkerStatus();
+    const refresh = window.setInterval(() => void loadWorkerStatus(), 15_000);
+    return () => {
+      active = false;
+      window.clearInterval(refresh);
+    };
+  }, []);
   useEffect(() => {
     if (!selectedRunId) {
       setEvents([]);
@@ -3838,6 +3862,24 @@ function MonitorContent({
           >
             重新读取监控配置
           </button>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatus?.status === "unavailable" && (
+        <section className="ros-empty ros-empty--compact" role="status">
+          <strong>执行器未启动；已排队的研究不会自动推进。</strong>
+          <p>本次冻结范围和已有事件均已保存。执行器恢复前不会领取任务，系统也不会偷偷启用 mock 模型或外部数据。</p>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatus?.status === "stale" && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>执行器心跳已失联；已排队的研究暂不会自动推进。</strong>
+          <p>最后心跳：{workerStatus.last_seen_at ? new Date(workerStatus.last_seen_at).toLocaleString("zh-CN") : "未记录"}。恢复后请通过本页运行事件确认任务已被领取。</p>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatusError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>执行器状态暂不可读取</strong>
+          <p>已知本次运行仍在排队，但页面无法确认是否有 worker 可领取，不能把它显示为正在执行。</p>
         </section>
       )}
       {runEventsLoadError && (

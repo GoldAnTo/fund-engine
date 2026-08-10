@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { researchOsApi, type ResearchRunArchive, type RunEvent } from "../../app/researchOsApi";
+import { researchOsApi, type ResearchRunArchive, type ResearchWorkerStatus, type RunEvent } from "../../app/researchOsApi";
 import {
   formatRunEventDetails,
   runFrequencyLabel,
@@ -14,6 +14,8 @@ import { sourceTypeListLabel } from "../../domain/sourcePresentation";
 
 export function GlobalMonitoringPage() {
   const [runs, setRuns] = useState<ResearchRunArchive[] | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
+  const [workerStatusError, setWorkerStatusError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<ResearchRunArchive | null>(null);
   const [runEvents, setRunEvents] = useState<RunEvent[] | null>(null);
@@ -25,8 +27,20 @@ export function GlobalMonitoringPage() {
   async function loadRuns() {
     setRefreshing(true);
     try {
-      const response = await researchOsApi.runs();
-      setRuns(response.items); setError(null); setLastReadAt(new Date());
+      const [runsResult, workerResult] = await Promise.allSettled([
+        researchOsApi.runs(),
+        researchOsApi.workerStatus(),
+      ]);
+      if (runsResult.status === "rejected") throw runsResult.reason;
+      setRuns(runsResult.value.items);
+      if (workerResult.status === "fulfilled") {
+        setWorkerStatus(workerResult.value);
+        setWorkerStatusError(false);
+      } else {
+        setWorkerStatus(null);
+        setWorkerStatusError(true);
+      }
+      setError(null); setLastReadAt(new Date());
     } catch {
       setError("无法读取实际运行记录；系统不会以推测的运行状态替代真实记录。");
     } finally { setRefreshing(false); }
@@ -54,11 +68,20 @@ export function GlobalMonitoringPage() {
       <div className="ros-header-actions"><button className="ros-button ros-button--secondary" type="button" disabled={refreshing} onClick={() => void loadRuns()}>{refreshing ? "正在刷新运行档案…" : "刷新运行档案"}</button><Link className="ros-button ros-button--primary" to="/events/new">＋ 新增事件</Link></div>
     </header>
     {error && <p className="ros-error" role="alert">{error}</p>}
+    {!error && <WorkerStatusNotice status={workerStatus} unreadable={workerStatusError} />}
     {!runs ? !error && <GlobalRunArchiveSkeleton /> : runs.length === 0 ? <div className="ros-empty">尚无 ResearchRun。创建事件或在 Case 内启动一次受控补证后，范围和每一步都会保留在这里。</div> : <section className="ros-global-run-list" aria-label="全局研究运行档案">
       {runs.map((run) => <RunCard key={run.run_id} run={run} onOpen={() => void openRun(run)} />)}
     </section>}
     {selectedRun && <RunArchiveDrawer run={selectedRun} events={runEvents} error={runEventsError} loading={openingRunId === selectedRun.run_id} onRetry={() => void openRun(selectedRun)} onClose={() => setSelectedRun(null)} />}
   </main>;
+}
+
+function WorkerStatusNotice({ status, unreadable }: { status: ResearchWorkerStatus | null; unreadable: boolean }) {
+  if (unreadable) return <section className="ros-empty ros-empty--compact" role="alert"><strong>执行器状态暂不可读取</strong><p>运行档案仍可查看；但系统无法确认是否有 worker 会领取排队任务，因此不会把“排队中”解释为正在执行。</p></section>;
+  if (!status) return null;
+  if (status.status === "unavailable") return <section className="ros-empty ros-empty--compact" role="status"><strong>执行器未启动；已排队的研究不会自动推进。</strong><p>冻结范围、排队时间和已有阶段记录均已保存；待执行器恢复后才会领取。系统不会隐式启用 mock 模型或外部数据。</p></section>;
+  if (status.status === "stale") return <section className="ros-empty ros-empty--compact" role="alert"><strong>执行器心跳已失联；已排队的研究暂不会自动推进。</strong><p>最后心跳：{status.last_seen_at ? new Date(status.last_seen_at).toLocaleString("zh-CN") : "未记录"}。请恢复 worker 后再观察运行事件；历史范围和记录不会被覆盖。</p></section>;
+  return <p className="ros-muted" role="status">执行器在线 · {status.mode === "loop" ? "持续轮询" : "单次执行"} · {status.state === "polling" ? "等待领取任务" : "正在执行"} · 最近心跳 {status.last_seen_at ? new Date(status.last_seen_at).toLocaleTimeString("zh-CN") : "刚刚"}</p>;
 }
 
 function GlobalRunArchiveSkeleton() {

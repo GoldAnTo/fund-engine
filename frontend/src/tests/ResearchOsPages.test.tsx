@@ -2692,6 +2692,65 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("tells the Case researcher why a queued run cannot move when no worker is live", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.endsWith("/research-runs/worker-status")
+          ? { status: "unavailable", last_seen_at: null, mode: null, state: null }
+          : url.includes("/researchability")
+            ? {
+                status: "ready",
+                reason_codes: [],
+                effective_binding_id: "binding-ready",
+                next_action: "可开始补证",
+              }
+            : {
+                monitor: {
+                  id: "monitor-1",
+                  version: 1,
+                  status: "active",
+                  frequency: "weekday_08_30",
+                  factor_ids: ["event-tsm-factor-1"],
+                  allowed_source_types: ["company_disclosure"],
+                  next_verification_event: "下一次财报",
+                  budget: 10,
+                  changed_by: "human",
+                  change_reason: "test",
+                  created_at: "2026-08-09T00:00:00Z",
+                },
+                latest_run: {
+                  id: "run-queued",
+                  status: "queued",
+                  stage: "scope",
+                  updated_at: "2026-08-09T00:00:00Z",
+                },
+                confirmed_factors: [
+                  { id: "event-tsm-factor-1", statement: "资本开支指引" },
+                ],
+              };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("执行器未启动；已排队的研究不会自动推进。"),
+    ).toBeVisible();
+  });
+
   it("checks protocol readiness only for the factors selected by the active monitor", async () => {
     vi.stubGlobal(
       "fetch",
@@ -3601,6 +3660,63 @@ describe("Research OS event entry", () => {
     expect(
       await screen.findByRole("complementary", { name: "全局运行记录" }),
     ).toHaveTextContent("已冻结范围");
+  });
+
+  it("explains that queued work cannot advance while the execution service is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const workerStatus = String(input).endsWith(
+          "/research-runs/worker-status",
+        );
+        const payload = workerStatus
+          ? {
+              status: "unavailable",
+              last_seen_at: null,
+              mode: null,
+              state: null,
+            }
+          : {
+              items: [
+                {
+                  run_id: "run-queued",
+                  case_id: "event-tsm",
+                  case_title: "台积电 Case",
+                  status: "queued",
+                  stage: "planning",
+                  created_at: "2026-08-09T00:00:00Z",
+                  updated_at: "2026-08-09T00:04:00Z",
+                  processed_count: 0,
+                  stop_reason: null,
+                  next_action: "查看本次运行",
+                  scope: {
+                    trigger: "manual",
+                    factor_ids: ["factor-1"],
+                    allowed_source_types: ["company_disclosure"],
+                    budget: 12,
+                  },
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            };
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/monitoring"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("执行器未启动；已排队的研究不会自动推进。"),
+    ).toBeVisible();
   });
 
   it("keeps reviewed claims, market observations and disclosed fund holdings in separate layers", async () => {

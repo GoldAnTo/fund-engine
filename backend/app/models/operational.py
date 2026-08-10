@@ -294,6 +294,23 @@ class ResearchTask(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ResearchWorkerHeartbeat(Base):
+    """Mutable liveness record for a process that consumes ResearchRun jobs.
+
+    This is intentionally operational state rather than a research event:
+    users need to know whether queued work can advance, but a polling tick is
+    not evidence about any Case and must not clutter its immutable audit log.
+    """
+
+    __tablename__ = "research_worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 # --------------------------------------------------------------------------- #
 # Event-research lifecycle projection
 # --------------------------------------------------------------------------- #

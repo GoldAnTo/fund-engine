@@ -3528,6 +3528,56 @@
         }
       }
     },
+    "/api/v1/research-runs/worker-status": {
+      "get": {
+        "tags": [
+          "auto-research-v1"
+        ],
+        "summary": "Worker Status",
+        "description": "Expose whether queued runs can currently be claimed by a loop worker.",
+        "operationId": "worker_status_api_v1_research_runs_worker_status_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchWorkerStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-runs": {
       "get": {
         "tags": [
@@ -19381,6 +19431,54 @@
           "result"
         ],
         "title": "ResearchTaskDTO"
+      },
+      "ResearchWorkerStatusDTO": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ResearchWorkerStatusDTO",
+        "description": "Current liveness of the process that advances queued research work."
       },
       "ResearchabilityDTO": {
         "properties": {

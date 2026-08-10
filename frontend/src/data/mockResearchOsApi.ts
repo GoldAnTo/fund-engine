@@ -533,6 +533,15 @@ export class MockResearchOsApi implements ResearchOsApi {
     };
   }
 
+  async workerStatus(): ReturnType<ResearchOsApi["workerStatus"]> {
+    return {
+      status: "available",
+      last_seen_at: now,
+      mode: "loop",
+      state: "polling",
+    };
+  }
+
   async activeFundDisclosureSyncRuns(): ReturnType<ResearchOsApi["activeFundDisclosureSyncRuns"]> {
     // Demo mode never pretends a historical-disclosure request is executing
     // in the background. The live client is responsible for reporting the

@@ -16,6 +16,7 @@ from app.schemas.v1.auto_research import (
     ResearchRunEventsResponse,
     ActiveResearchRunDTO,
     ActiveResearchRunsResponse,
+    ResearchWorkerStatusDTO,
     FrozenRunScopeDTO,
     ResearchRunArchiveDTO,
     ResearchRunArchiveResponse,
@@ -27,6 +28,7 @@ from app.schemas.v1.auto_research import (
 from app.services.auto_research import AutoResearchService
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
+from app.services.research_worker_heartbeat import WorkerHeartbeatService
 
 router = APIRouter(
     tags=["auto-research-v1"], dependencies=[Depends(require_research_tenant)]
@@ -116,6 +118,14 @@ def list_active_runs(
         has_more=len(runs) > limit,
         next_cursor=None,
     )
+
+
+@router.get("/research-runs/worker-status", response_model=ResearchWorkerStatusDTO)
+def worker_status(
+    db: Session = Depends(get_db),
+):
+    """Expose whether queued runs can currently be claimed by a loop worker."""
+    return ResearchWorkerStatusDTO(**WorkerHeartbeatService(db).status())
 
 
 @router.get("/research-runs", response_model=ResearchRunArchiveResponse)
