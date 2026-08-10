@@ -6,6 +6,7 @@ see every table.  Keep the imports side-effect-free (no engine creation).
 """
 from app.models import events  # noqa: F401
 from app.models import event_research  # noqa: F401
+from app.models import fund_disclosure_sync  # noqa: F401
 from app.models import operational  # noqa: F401
 from app.models import proposals  # noqa: F401
 from app.models import research_monitor  # noqa: F401
@@ -19,6 +20,7 @@ __all__ = [
     "Base",
     "events",
     "event_research",
+    "fund_disclosure_sync",
     "operational",
     "proposals",
     "research_monitor",
