@@ -35,6 +35,7 @@ from app.api.v1.market_expression import router as market_expression_router
 from app.api.v1.research_protocol import router as research_protocol_router
 from app.api.v1.research_session import router as research_session_router
 from app.api.v1.fund_disclosure_sync import router as fund_disclosure_sync_router
+from app.api.v1.forecast_verdicts import router as forecast_verdicts_router
 from app.schemas.v1.common import HealthResponse
 
 router = APIRouter(prefix="/api/v1")
@@ -83,3 +84,4 @@ router.include_router(research_protocol_router)
 router.include_router(review_proposals_router)
 router.include_router(research_session_router)
 router.include_router(fund_disclosure_sync_router)
+router.include_router(forecast_verdicts_router)

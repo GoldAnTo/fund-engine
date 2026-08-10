@@ -45,7 +45,7 @@ def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
     }
 
 
-def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session) -> None:
+def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
     from app.models.research_expression import KeyFactor, ReportClaim
     from app.services.forecast_verdicts import (
@@ -181,3 +181,27 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert candidate.outcome == "contradicted"
     assert candidate.review_state == "machine_generated"
     assert verdict.outcome == "contradicted"
+
+    response = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
+        params={"cutoff": datetime.now(timezone.utc).isoformat()},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["case_id"] == str(case_id)
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["outcome"] == "contradicted"
+    assert payload["items"][0]["rule_version"] == "forecast-numeric-v1"
+    assert payload["items"][0]["forecast_source"]["document_title"] == "冻结券商预测"
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"test-tenant-token":"test-team","other-token":"other-team"}',
+    )
+    foreign = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
+        params={"cutoff": datetime.now(timezone.utc).isoformat()},
+        headers={"Authorization": "Bearer other-token"},
+    )
+    assert foreign.status_code == 404

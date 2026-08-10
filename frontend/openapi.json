@@ -7450,6 +7450,351 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/forecast-verdicts": {
+      "get": {
+        "tags": [
+          "forecast-verdicts-v1"
+        ],
+        "summary": "Get Forecast Verdicts",
+        "operationId": "get_forecast_verdicts_api_v1_research_cases__case_id__forecast_verdicts_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Cutoff"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastVerdictHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/forecast-targets": {
+      "post": {
+        "tags": [
+          "forecast-verdicts-v1"
+        ],
+        "summary": "Create Forecast Target",
+        "operationId": "create_forecast_target_api_v1_research_cases__case_id__forecast_targets_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateForecastTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastTargetDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/research-cases/{case_id}/actual-metric-observations": {
+      "post": {
+        "tags": [
+          "forecast-verdicts-v1"
+        ],
+        "summary": "Record Actual Metric Observation",
+        "operationId": "record_actual_metric_observation_api_v1_research_cases__case_id__actual_metric_observations_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordActualMetricObservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActualMetricObservationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast-targets/{target_id}/evaluate": {
+      "post": {
+        "tags": [
+          "forecast-verdicts-v1"
+        ],
+        "summary": "Evaluate Forecast Target",
+        "operationId": "evaluate_forecast_target_api_v1_forecast_targets__target_id__evaluate_post",
+        "parameters": [
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateForecastTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastEvaluationCandidateDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast-evaluations/{candidate_id}/verdicts": {
+      "post": {
+        "tags": [
+          "forecast-verdicts-v1"
+        ],
+        "summary": "Create Forecast Verdict",
+        "operationId": "create_forecast_verdict_api_v1_forecast_evaluations__candidate_id__verdicts_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateForecastVerdictRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastVerdictDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Health",
@@ -7671,6 +8016,72 @@
           "items"
         ],
         "title": "ActivityResponse"
+      },
+      "ActualMetricObservationDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "forecast_target_id": {
+            "type": "string",
+            "title": "Forecast Target Id"
+          },
+          "entity_key": {
+            "type": "string",
+            "title": "Entity Key"
+          },
+          "observed_value": {
+            "type": "number",
+            "title": "Observed Value"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "observed_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period Start"
+          },
+          "observed_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period End"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "recorded_by": {
+            "type": "string",
+            "title": "Recorded By"
+          },
+          "record_reason": {
+            "type": "string",
+            "title": "Record Reason"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "forecast_target_id",
+          "entity_key",
+          "observed_value",
+          "unit",
+          "observed_period_start",
+          "observed_period_end",
+          "available_at",
+          "recorded_by",
+          "record_reason",
+          "source"
+        ],
+        "title": "ActualMetricObservationDTO"
       },
       "ApproveOutcomeBindingRequest": {
         "properties": {
@@ -10451,6 +10862,184 @@
         ],
         "title": "CreateEventResearchResponse"
       },
+      "CreateForecastTargetRequest": {
+        "properties": {
+          "key_factor_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Key Factor Id"
+          },
+          "report_claim_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Report Claim Id"
+          },
+          "forecast_source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Forecast Source Statement Id"
+          },
+          "baseline_source_statement_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Source Statement Id"
+          },
+          "metric_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Metric Name"
+          },
+          "entity_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Entity Key"
+          },
+          "baseline_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Value"
+          },
+          "expected_value": {
+            "type": "number",
+            "title": "Expected Value"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "forecast_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Forecast Period Start"
+          },
+          "forecast_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Forecast Period End"
+          },
+          "comparator": {
+            "type": "string",
+            "enum": [
+              "at_least",
+              "at_most",
+              "within_tolerance"
+            ],
+            "title": "Comparator"
+          },
+          "relative_tolerance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Tolerance"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Review Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key_factor_id",
+          "report_claim_id",
+          "forecast_source_statement_id",
+          "metric_name",
+          "entity_key",
+          "expected_value",
+          "unit",
+          "forecast_period_start",
+          "forecast_period_end",
+          "comparator",
+          "reviewed_by",
+          "review_reason"
+        ],
+        "title": "CreateForecastTargetRequest"
+      },
+      "CreateForecastVerdictRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Decision"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "insufficient_evidence",
+                  "not_due"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reviewed By"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision",
+          "reason",
+          "reviewed_by"
+        ],
+        "title": "CreateForecastVerdictRequest"
+      },
       "CreateFundRequest": {
         "properties": {
           "code": {
@@ -11546,6 +12135,27 @@
           "gaps"
         ],
         "title": "DossierResponse"
+      },
+      "EvaluateForecastTargetRequest": {
+        "properties": {
+          "actual_observation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Actual Observation Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actual_observation_id",
+          "cutoff"
+        ],
+        "title": "EvaluateForecastTargetRequest"
       },
       "EventConclusionDraftDTO": {
         "properties": {
@@ -13088,6 +13698,310 @@
         ],
         "title": "ExtractResponse",
         "description": "Result of running review-gated extraction over one document version.\n\nThe extractor never writes formal SourceStatements. Every returned item\nhas a continuous source quote and stays in ``awaiting_review`` until a\nhuman confirms, modifies, or rejects it. ``reason`` explains a zero\ncandidate result without pretending that extraction succeeded silently."
+      },
+      "ForecastEvaluationCandidateDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "forecast_target_id": {
+            "type": "string",
+            "title": "Forecast Target Id"
+          },
+          "actual_observation_id": {
+            "type": "string",
+            "title": "Actual Observation Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Inputs"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "forecast_target_id",
+          "actual_observation_id",
+          "cutoff",
+          "outcome",
+          "rule_version",
+          "inputs",
+          "rationale",
+          "review_state",
+          "created_at"
+        ],
+        "title": "ForecastEvaluationCandidateDTO"
+      },
+      "ForecastTargetDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "key_factor_id": {
+            "type": "string",
+            "title": "Key Factor Id"
+          },
+          "report_claim_id": {
+            "type": "string",
+            "title": "Report Claim Id"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "entity_key": {
+            "type": "string",
+            "title": "Entity Key"
+          },
+          "baseline_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Value"
+          },
+          "expected_value": {
+            "type": "number",
+            "title": "Expected Value"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "forecast_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Forecast Period Start"
+          },
+          "forecast_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Forecast Period End"
+          },
+          "comparator": {
+            "type": "string",
+            "title": "Comparator"
+          },
+          "relative_tolerance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Tolerance"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "review_reason": {
+            "type": "string",
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "forecast_source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          },
+          "baseline_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpressionSourceDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "case_id",
+          "key_factor_id",
+          "report_claim_id",
+          "metric_name",
+          "entity_key",
+          "baseline_value",
+          "expected_value",
+          "unit",
+          "forecast_period_start",
+          "forecast_period_end",
+          "comparator",
+          "relative_tolerance",
+          "reviewed_by",
+          "review_reason",
+          "reviewed_at",
+          "forecast_source",
+          "baseline_source"
+        ],
+        "title": "ForecastTargetDTO"
+      },
+      "ForecastVerdictDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "candidate_id": {
+            "type": "string",
+            "title": "Candidate Id"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "decision": {
+            "type": "string",
+            "title": "Decision"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ForecastTargetDTO"
+          },
+          "actual": {
+            "$ref": "#/components/schemas/ActualMetricObservationDTO"
+          },
+          "rule_version": {
+            "type": "string",
+            "title": "Rule Version"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Inputs"
+          },
+          "candidate_rationale": {
+            "type": "string",
+            "title": "Candidate Rationale"
+          },
+          "forecast_source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          },
+          "actual_source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "candidate_id",
+          "supersedes_id",
+          "decision",
+          "outcome",
+          "reason",
+          "reviewed_by",
+          "reviewed_at",
+          "target",
+          "actual",
+          "rule_version",
+          "inputs",
+          "candidate_rationale",
+          "forecast_source",
+          "actual_source"
+        ],
+        "title": "ForecastVerdictDTO"
+      },
+      "ForecastVerdictHistoryResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastVerdictDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "cutoff",
+          "items"
+        ],
+        "title": "ForecastVerdictHistoryResponse"
       },
       "FrozenRunScopeDTO": {
         "properties": {
@@ -17187,6 +18101,74 @@
           "created_at"
         ],
         "title": "PublishedSourceStatementDTO"
+      },
+      "RecordActualMetricObservationRequest": {
+        "properties": {
+          "forecast_target_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Forecast Target Id"
+          },
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
+          "entity_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Entity Key"
+          },
+          "observed_value": {
+            "type": "number",
+            "title": "Observed Value"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "observed_period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period Start"
+          },
+          "observed_period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Observed Period End"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "recorded_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Recorded By"
+          },
+          "record_reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Record Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "forecast_target_id",
+          "source_statement_id",
+          "entity_key",
+          "observed_value",
+          "unit",
+          "observed_period_start",
+          "observed_period_end",
+          "available_at",
+          "recorded_by",
+          "record_reason"
+        ],
+        "title": "RecordActualMetricObservationRequest"
       },
       "RegisterClaimVerificationRequest": {
         "properties": {

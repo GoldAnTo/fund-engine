@@ -1880,6 +1880,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/forecast-verdicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Forecast Verdicts */
+        get: operations["get_forecast_verdicts_api_v1_research_cases__case_id__forecast_verdicts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/forecast-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Forecast Target */
+        post: operations["create_forecast_target_api_v1_research_cases__case_id__forecast_targets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-cases/{case_id}/actual-metric-observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Actual Metric Observation */
+        post: operations["record_actual_metric_observation_api_v1_research_cases__case_id__actual_metric_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/forecast-targets/{target_id}/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluate Forecast Target */
+        post: operations["evaluate_forecast_target_api_v1_forecast_targets__target_id__evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/forecast-evaluations/{candidate_id}/verdicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Forecast Verdict */
+        post: operations["create_forecast_verdict_api_v1_forecast_evaluations__candidate_id__verdicts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1969,6 +2054,39 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** ActualMetricObservationDTO */
+        ActualMetricObservationDTO: {
+            /** Id */
+            id: string;
+            /** Forecast Target Id */
+            forecast_target_id: string;
+            /** Entity Key */
+            entity_key: string;
+            /** Observed Value */
+            observed_value: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Recorded By */
+            recorded_by: string;
+            /** Record Reason */
+            record_reason: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
         };
         /** ApproveOutcomeBindingRequest */
         ApproveOutcomeBindingRequest: {
@@ -2996,6 +3114,73 @@ export interface components {
             brief_id: string;
             lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
         };
+        /** CreateForecastTargetRequest */
+        CreateForecastTargetRequest: {
+            /**
+             * Key Factor Id
+             * Format: uuid
+             */
+            key_factor_id: string;
+            /**
+             * Report Claim Id
+             * Format: uuid
+             */
+            report_claim_id: string;
+            /**
+             * Forecast Source Statement Id
+             * Format: uuid
+             */
+            forecast_source_statement_id: string;
+            /** Baseline Source Statement Id */
+            baseline_source_statement_id?: string | null;
+            /** Metric Name */
+            metric_name: string;
+            /** Entity Key */
+            entity_key: string;
+            /** Baseline Value */
+            baseline_value?: number | null;
+            /** Expected Value */
+            expected_value: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Forecast Period Start
+             * Format: date
+             */
+            forecast_period_start: string;
+            /**
+             * Forecast Period End
+             * Format: date
+             */
+            forecast_period_end: string;
+            /**
+             * Comparator
+             * @enum {string}
+             */
+            comparator: "at_least" | "at_most" | "within_tolerance";
+            /** Relative Tolerance */
+            relative_tolerance?: number | null;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+        };
+        /** CreateForecastVerdictRequest */
+        CreateForecastVerdictRequest: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirmed" | "modified" | "rejected";
+            /** Outcome */
+            outcome?: ("supported" | "contradicted" | "insufficient_evidence" | "not_due") | null;
+            /** Reason */
+            reason: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Supersedes Id */
+            supersedes_id?: string | null;
+        };
         /** CreateFundRequest */
         CreateFundRequest: {
             /** Code */
@@ -3357,6 +3542,19 @@ export interface components {
              * @default []
              */
             counter_research: components["schemas"]["CounterResearchTaskDTO"][];
+        };
+        /** EvaluateForecastTargetRequest */
+        EvaluateForecastTargetRequest: {
+            /**
+             * Actual Observation Id
+             * Format: uuid
+             */
+            actual_observation_id: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
         };
         /** EventConclusionDraftDTO */
         EventConclusionDraftDTO: {
@@ -3832,6 +4030,129 @@ export interface components {
             reason?: string | null;
             /** Candidates */
             candidates: components["schemas"]["ExtractCandidateDTO"][];
+        };
+        /** ForecastEvaluationCandidateDTO */
+        ForecastEvaluationCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Forecast Target Id */
+            forecast_target_id: string;
+            /** Actual Observation Id */
+            actual_observation_id: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Outcome */
+            outcome: string;
+            /** Rule Version */
+            rule_version: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: string;
+            };
+            /** Rationale */
+            rationale: string;
+            /** Review State */
+            review_state: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ForecastTargetDTO */
+        ForecastTargetDTO: {
+            /** Id */
+            id: string;
+            /** Case Id */
+            case_id: string;
+            /** Key Factor Id */
+            key_factor_id: string;
+            /** Report Claim Id */
+            report_claim_id: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Entity Key */
+            entity_key: string;
+            /** Baseline Value */
+            baseline_value: number | null;
+            /** Expected Value */
+            expected_value: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Forecast Period Start
+             * Format: date
+             */
+            forecast_period_start: string;
+            /**
+             * Forecast Period End
+             * Format: date
+             */
+            forecast_period_end: string;
+            /** Comparator */
+            comparator: string;
+            /** Relative Tolerance */
+            relative_tolerance: number | null;
+            /** Reviewed By */
+            reviewed_by: string;
+            /** Review Reason */
+            review_reason: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            forecast_source: components["schemas"]["ExpressionSourceDTO"];
+            baseline_source: components["schemas"]["ExpressionSourceDTO"] | null;
+        };
+        /** ForecastVerdictDTO */
+        ForecastVerdictDTO: {
+            /** Id */
+            id: string;
+            /** Candidate Id */
+            candidate_id: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            /** Decision */
+            decision: string;
+            /** Outcome */
+            outcome: string;
+            /** Reason */
+            reason: string;
+            /** Reviewed By */
+            reviewed_by: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
+            target: components["schemas"]["ForecastTargetDTO"];
+            actual: components["schemas"]["ActualMetricObservationDTO"];
+            /** Rule Version */
+            rule_version: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: string;
+            };
+            /** Candidate Rationale */
+            candidate_rationale: string;
+            forecast_source: components["schemas"]["ExpressionSourceDTO"];
+            actual_source: components["schemas"]["ExpressionSourceDTO"];
+        };
+        /** ForecastVerdictHistoryResponse */
+        ForecastVerdictHistoryResponse: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Items */
+            items: components["schemas"]["ForecastVerdictDTO"][];
         };
         /**
          * FrozenRunScopeDTO
@@ -5338,6 +5659,44 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RecordActualMetricObservationRequest */
+        RecordActualMetricObservationRequest: {
+            /**
+             * Forecast Target Id
+             * Format: uuid
+             */
+            forecast_target_id: string;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Entity Key */
+            entity_key: string;
+            /** Observed Value */
+            observed_value: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Observed Period Start
+             * Format: date
+             */
+            observed_period_start: string;
+            /**
+             * Observed Period End
+             * Format: date
+             */
+            observed_period_end: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Recorded By */
+            recorded_by: string;
+            /** Record Reason */
+            record_reason: string;
         };
         /** RegisterClaimVerificationRequest */
         RegisterClaimVerificationRequest: {
@@ -10990,6 +11349,189 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FundDisclosureSyncRunDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_forecast_verdicts_api_v1_research_cases__case_id__forecast_verdicts_get: {
+        parameters: {
+            query: {
+                cutoff: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastVerdictHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_forecast_target_api_v1_research_cases__case_id__forecast_targets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateForecastTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastTargetDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_actual_metric_observation_api_v1_research_cases__case_id__actual_metric_observations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordActualMetricObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActualMetricObservationDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_forecast_target_api_v1_forecast_targets__target_id__evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                target_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvaluateForecastTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastEvaluationCandidateDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_forecast_verdict_api_v1_forecast_evaluations__candidate_id__verdicts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateForecastVerdictRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastVerdictDTO"];
                 };
             };
             /** @description Validation Error */
