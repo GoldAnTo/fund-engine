@@ -154,3 +154,107 @@ class MarketObservation(Base):
     review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ForecastTargetVersion(Base):
+    """A reviewed numeric forecast frozen from a report claim."""
+
+    __tablename__ = "forecast_target_versions"
+    __table_args__ = (
+        CheckConstraint(
+            "comparator IN ('at_least', 'at_most', 'within_tolerance')",
+            name="ck_forecast_target_comparator",
+        ),
+        CheckConstraint(
+            "relative_tolerance IS NULL OR relative_tolerance >= 0",
+            name="ck_forecast_target_tolerance",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    key_factor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("key_factors.id"), nullable=False, index=True)
+    report_claim_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("report_claims.id"), nullable=False)
+    forecast_source_statement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=False)
+    baseline_source_statement_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=True)
+    metric_name: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    baseline_value: Mapped[Decimal | None] = mapped_column(Numeric(24, 6), nullable=True)
+    expected_value: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    unit: Mapped[str] = mapped_column(String(64), nullable=False)
+    forecast_period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    forecast_period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    comparator: Mapped[str] = mapped_column(String(32), nullable=False)
+    relative_tolerance: Mapped[Decimal | None] = mapped_column(Numeric(12, 8), nullable=True)
+    reviewed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    review_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ActualMetricObservation(Base):
+    """A source-backed actual for exactly one frozen target."""
+
+    __tablename__ = "actual_metric_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    forecast_target_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("forecast_target_versions.id"), nullable=False, index=True)
+    source_statement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=False)
+    entity_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    observed_value: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    unit: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    observed_period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    record_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ForecastEvaluationCandidate(Base):
+    """A deterministic comparison awaiting an explicit human verdict."""
+
+    __tablename__ = "forecast_evaluation_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')",
+            name="ck_forecast_evaluation_outcome",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    forecast_target_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("forecast_target_versions.id"), nullable=False, index=True)
+    actual_observation_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("actual_metric_observations.id"), nullable=False)
+    cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    inputs: Mapped[dict] = mapped_column(JSON, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False, default="machine_generated")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ForecastVerdict(Base):
+    """An append-only human publication or withdrawal of one candidate."""
+
+    __tablename__ = "forecast_verdicts"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('confirmed', 'modified', 'rejected')",
+            name="ck_forecast_verdict_decision",
+        ),
+        CheckConstraint(
+            "outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')",
+            name="ck_forecast_verdict_outcome",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("forecast_evaluation_candidates.id"), nullable=False, index=True)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("forecast_verdicts.id"), nullable=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
