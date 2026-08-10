@@ -24,4 +24,4 @@ def test_live_event_ui_verifier_creates_market_factor_instrument_fund_chain_runs
     )
 
     assert result.returncode == 0, result.stderr
-    assert "PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, ran, paused its future schedule, and listed the same Case through the live API" in result.stdout
+    assert "PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API" in result.stdout

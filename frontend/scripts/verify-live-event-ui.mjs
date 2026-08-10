@@ -239,7 +239,7 @@ async function prepareMarketCatalogAndHistoricalFundDisclosure({ apiBase, token,
   const fund = await apiJson(apiBase, "/funds", token, {
     method: "POST",
     body: JSON.stringify({
-      code: "LIVE-FUND-001",
+      code: "LIVFUND001",
       name: "验收历史披露基金",
       fund_type: "equity",
     }),
@@ -396,6 +396,23 @@ async function main() {
     await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
     await page.getByText("已追加已审核基本面传导").first().waitFor();
     await page.getByText("验收历史披露基金").first().waitFor();
+    await page.getByRole("heading", { name: "建议补充的基金披露" }).waitFor();
+    await page.getByLabel("补充频率").selectOption("monthly");
+    await page.getByLabel("配置调整理由").fill("按月补充当前股票相关的历史基金披露");
+    await page.getByRole("button", { name: "保存基金披露配置" }).click();
+    await page.getByText("已保存配置版本 1").waitFor();
+    await page.getByRole("button", { name: "立即补充一次" }).click();
+    await page.getByRole("heading", { name: "本次补充记录" }).waitFor();
+    const fundSync = await apiJson(apiBase, `/research-cases/${caseId}/fund-disclosure-sync`, token);
+    const firstFundSyncRun = fundSync.runs?.[0];
+    if (
+      fundSync.effective_config?.frequency !== "monthly"
+      || fundSync.effective_config?.fund_codes?.join(",") !== marketCatalog.fund.code
+      || firstFundSyncRun?.status !== "failed"
+      || firstFundSyncRun.events?.at(-1)?.stage !== "failed"
+    ) {
+      throw new Error(`fund disclosure task was not transparently replayable: ${JSON.stringify(fundSync)}`);
+    }
     await page.getByRole("button", { name: "登记市场观测" }).click();
     await page.getByLabel("观测标的").waitFor();
     await page.getByLabel("相对表现").fill("0.012");
@@ -435,6 +452,8 @@ async function main() {
       ["POST /research-cases/:caseId/key-factors", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/key-factors`)],
       ["POST /research-cases/:caseId/market-instruments", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/market-instruments`)],
       ["POST /research-cases/:caseId/key-factors/:factorId/fundamental-impacts", (request) => request.startsWith("POST ") && request.includes(`/research-cases/${caseId}/key-factors/`) && request.endsWith("/fundamental-impacts")],
+      ["PUT /research-cases/:caseId/fund-disclosure-sync/config", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/fund-disclosure-sync/config`)],
+      ["POST /research-cases/:caseId/fund-disclosure-sync/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/fund-disclosure-sync/runs`)],
       ["POST /research-cases/:caseId/key-factors/:factorId/market-observations", (request) => request.startsWith("POST ") && request.includes(`/research-cases/${caseId}/key-factors/`) && request.endsWith("/market-observations")],
       ["POST /research-cases/:caseId/monitor/factor-runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/factor-runs`)],
       ["POST /research-cases/:caseId/monitor/paused", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/paused`)],
@@ -447,7 +466,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, ran, paused its future schedule, and listed the same Case through the live API");
+    console.log("PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)
