@@ -1673,7 +1673,7 @@
         <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 198 L500 220"></path><text x="509" y="214">进入排期</text></g>
         <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 292 L500 314"></path><text x="509" y="309">实际交付</text></g>
         <g class="edge proposed" data-edge-kind="reviewed"><path d="M500 386 L500 408"></path><text x="509" y="404">收入确认</text></g>
-        <g class="edge projection" data-edge-kind="projection"><path d="M580 356 C602 356 606 112 625 112"></path><text x="587" y="176">影响对象</text></g>
+        <g class="edge projection" data-edge-kind="projection"><path d="M580 356 C602 356 606 112 625 112"></path><text x="587" y="176">公司/股票映射</text></g>
         <g class="edge projection" data-edge-kind="projection"><path d="M580 260 C600 260 606 265 625 265"></path><text x="590" y="252">供给映射</text></g>
         <g class="edge projection" data-edge-kind="projection"><path d="M580 70 C602 70 606 422 625 422"></path><text x="586" y="350">支出主体</text></g>
         <g class="edge projection" data-edge-kind="projection"><path d="M783 112 C804 112 808 112 828 112"></path><text x="792" y="102">披露持仓</text></g>

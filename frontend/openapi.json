@@ -14611,10 +14611,6 @@
           "falsifier": {
             "type": "string",
             "title": "Falsifier"
-          },
-          "impact_object": {
-            "type": "string",
-            "title": "Impact Object"
           }
         },
         "additionalProperties": false,
@@ -14633,8 +14629,7 @@
           "alternatives",
           "difference_explanation",
           "scope_warning",
-          "falsifier",
-          "impact_object"
+          "falsifier"
         ],
         "title": "KeyFactorRowDTO",
         "description": "单个命题下的「关键因素」行（含 AI / 人工角色 + 复盘链路）."

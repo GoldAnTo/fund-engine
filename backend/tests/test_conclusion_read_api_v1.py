@@ -186,13 +186,14 @@ def test_conclusion_header_exposes_ai_and_human_boundary(api_client, seeded_case
     assert header["reviewer"] == "tester"
 
 
-def test_conclusion_comparison_has_eight_columns(api_client, seeded_case):
+def test_conclusion_comparison_excludes_retired_impact_object_column(api_client, seeded_case):
     response = api_client.get(f"/api/v1/research-cases/{seeded_case}/conclusion")
     cols = response.json()["comparison"]["columns"]
-    assert len(cols) == 8
+    assert len(cols) == 7
     assert "评审维度" in cols
     assert "直接证据" in cols
     assert "替代解释" in cols
+    assert "影响对象" not in cols
 
 
 def test_conclusion_404_for_unknown_case(api_client):

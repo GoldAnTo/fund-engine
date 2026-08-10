@@ -2934,7 +2934,6 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         difference_explanation: string;
         scope_warning: string | null;
         falsifier: string;
-        impact_object: string;
       }>;
       comparison: {
         columns: string[];

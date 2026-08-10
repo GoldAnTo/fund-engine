@@ -4400,8 +4400,6 @@ export interface components {
             scope_warning: string | null;
             /** Falsifier */
             falsifier: string;
-            /** Impact Object */
-            impact_object: string;
         };
         /**
          * KnowledgeItemDTO
