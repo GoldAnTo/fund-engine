@@ -22,6 +22,14 @@ from app.scripts.ingest_gildata_fund_holdings import ingest
 
 
 _FUND_CODE = re.compile(r"^[0-9A-Z]{4,12}(?:\.[A-Z]{2})?$")
+_FUND_DISCLOSURE_TOOLS = ("FinQuery", "AnnouncementData")
+_FUND_DISCLOSURE_FIELDS = (
+    "fund_code",
+    "stock_code",
+    "report_period",
+    "publish_date",
+)
+_UNVERIFIED_FUND_CAPABILITIES = ("实时持仓", "基金筛选/推荐")
 
 
 def _utcnow() -> datetime:
@@ -129,6 +137,34 @@ class FundDisclosureSyncService:
                 "allow_display": run.allow_display,
             },
         )
+        try:
+            capability = self._provider_capability_snapshot(client)
+        except Exception as exc:
+            self._append_event(
+                run.id,
+                stage="provider_capability",
+                status="failed",
+                message="无法确认供应商可用工具；本次不会推测能力或继续查询",
+                payload_json={
+                    "provider": "gildata",
+                    "used_tools": [],
+                    "required_fields": list(_FUND_DISCLOSURE_FIELDS),
+                    "unverified_capabilities": list(_UNVERIFIED_FUND_CAPABILITIES),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return self.record_failure(
+                run.id,
+                error=exc,
+                message="供应商能力不可确认；本次范围已保存，可在能力恢复后重试",
+            )
+        self._append_event(
+            run.id,
+            stage="provider_capability",
+            status="completed",
+            message="已冻结本次实际可用的数据工具、字段与未验证边界",
+            payload_json=capability,
+        )
         self._append_event(
             run.id,
             stage="query_holdings",
@@ -185,6 +221,21 @@ class FundDisclosureSyncService:
             payload_json=payload,
         )
         return self._run(run.id)
+
+    @staticmethod
+    def _provider_capability_snapshot(client: object) -> dict:
+        descriptors = getattr(client, "list_tools")()
+        names = {
+            str(item.get("name"))
+            for item in descriptors
+            if isinstance(item, dict) and item.get("name")
+        }
+        return {
+            "provider": "gildata",
+            "used_tools": [name for name in _FUND_DISCLOSURE_TOOLS if name in names],
+            "required_fields": list(_FUND_DISCLOSURE_FIELDS),
+            "unverified_capabilities": list(_UNVERIFIED_FUND_CAPABILITIES),
+        }
 
     def record_failure(
         self, run_id: uuid.UUID, *, error: Exception, message: str = "基金披露补充失败；可在本记录基础上重试"

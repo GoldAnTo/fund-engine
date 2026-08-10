@@ -99,6 +99,12 @@ def test_suggestions_only_use_historical_disclosures_for_current_case_stocks(ses
 
 
 class _UnmatchedFundClient:
+    def list_tools(self) -> list[dict]:
+        return [
+            {"name": "FinQuery"},
+            {"name": "AnnouncementData"},
+        ]
+
     def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
         table = (
             "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
@@ -111,6 +117,11 @@ class _UnmatchedFundClient:
 
     def close(self) -> None:
         return None
+
+
+class _CapabilityUnavailableClient(_UnmatchedFundClient):
+    def list_tools(self) -> list[dict]:
+        raise RuntimeError("provider tool catalog unavailable")
 
 
 def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(session) -> None:
@@ -128,7 +139,43 @@ def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(sess
     run = service.run_now(case.id, client=_UnmatchedFundClient())
 
     assert run.events[-1].stage == "finished"
+    capability = next(event for event in run.events if event.stage == "provider_capability")
+    assert capability.payload_json == {
+        "provider": "gildata",
+        "used_tools": ["FinQuery", "AnnouncementData"],
+        "required_fields": [
+            "fund_code",
+            "stock_code",
+            "report_period",
+            "publish_date",
+        ],
+        "unverified_capabilities": ["实时持仓", "基金筛选/推荐"],
+    }
     assert run.events[-1].payload_json["pending_match_rows"] == 1
+    assert session.query(HoldingDisclosure).count() == 0
+
+
+def test_capability_probe_failure_is_replayable_and_stops_fund_sync(session) -> None:
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        change_reason="核验能力边界",
+        allow_display=True,
+    )
+
+    run = service.run_now(case.id, client=_CapabilityUnavailableClient())
+
+    assert [(event.stage, event.status) for event in run.events] == [
+        ("scope", "completed"),
+        ("provider_capability", "failed"),
+        ("failed", "failed"),
+    ]
+    assert run.events[1].payload_json["used_tools"] == []
+    assert run.events[1].payload_json["error_type"] == "RuntimeError"
     assert session.query(HoldingDisclosure).count() == 0
 
 
