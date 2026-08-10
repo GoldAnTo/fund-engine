@@ -1770,6 +1770,92 @@ describe("Research OS event entry", () => {
     expect(screen.getByText("工作台内容")).toBeVisible();
   });
 
+  it("makes an unreadable active-run drawer explicit and retries the same frozen run", async () => {
+    const user = userEvent.setup();
+    let eventLedgerAvailable = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const isActiveRuns = String(input).endsWith("/research-runs/active");
+        if (!isActiveRuns && !eventLedgerAvailable) {
+          return Promise.resolve(new Response("temporarily unavailable", { status: 503 }));
+        }
+        const body = isActiveRuns
+          ? {
+              items: [
+                {
+                  run_id: "run-drawer-retry",
+                  case_id: "event-tsm",
+                  case_title: "台积电 Case",
+                  status: "running",
+                  stage: "retrieve",
+                  updated_at: "2026-08-09T00:00:00Z",
+                  processed_count: 3,
+                  next_action: "查看本次运行",
+                  scope: {
+                    trigger: "manual",
+                    monitor_version_id: "monitor-1",
+                    factor_ids: ["factor-1"],
+                    allowed_source_types: ["company_disclosure"],
+                    budget: 12,
+                  },
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            }
+          : {
+              run_id: "run-drawer-retry",
+              items: [
+                {
+                  seq: 1,
+                  stage: "scope",
+                  status: "recorded",
+                  message: "已冻结范围",
+                  details: { allowed_source_types: ["company_disclosure"] },
+                  created_at: "2026-08-09T00:00:00Z",
+                },
+              ],
+              next_cursor: null,
+              has_more: false,
+            };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "展开运行详情" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "本次运行事件暂不可读取",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "不会以当前配置补写历史记录",
+    );
+
+    eventLedgerAvailable = true;
+    await user.click(
+      screen.getByRole("button", { name: "重新读取本次运行事件" }),
+    );
+    expect(
+      await screen.findByRole("complementary", { name: "全局运行详情" }),
+    ).toHaveTextContent("已冻结范围");
+  });
+
   it("keeps Case evidence separate from the current conclusion and exposes its frozen locator", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>

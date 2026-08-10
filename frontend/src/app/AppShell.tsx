@@ -66,6 +66,7 @@ export function AppShell() {
     created_at: string;
   }> | null>(null);
   const [drawerError, setDrawerError] = useState<string | null>(null);
+  const [drawerLoading, setDrawerLoading] = useState(false);
   const [session, setSession] = useState<ResearchSession | null>(null);
   useEffect(() => {
     const load = () =>
@@ -203,15 +204,15 @@ export function AppShell() {
       )
       .slice(0, 8);
   }, [events, searchQuery]);
-  function openDrawer(run: ActiveResearchRun) {
+  async function openDrawer(run: ActiveResearchRun) {
     setDrawerRun(run);
     setDrawerEvents(null);
     setDrawerError(null);
-    researchOsApi
-      .runEvents(run.run_id)
-      .then((response) =>
-        setDrawerEvents(
-          response.items.map((event) => ({
+    setDrawerLoading(true);
+    try {
+      const response = await researchOsApi.runEvents(run.run_id);
+      setDrawerEvents(
+        response.items.map((event) => ({
             seq: event.seq,
             stage: event.stage ?? null,
             status: event.status ?? null,
@@ -219,13 +220,14 @@ export function AppShell() {
             details: event.details ?? {},
             created_at: event.created_at,
           })),
-        ),
-      )
-      .catch(() =>
-        setDrawerError(
-          "无法读取这次运行的事件链；系统不会以当前配置补写历史记录。",
-        ),
       );
+    } catch {
+      setDrawerError(
+        "无法读取这次运行的事件链；系统不会以当前配置补写历史记录。",
+      );
+    } finally {
+      setDrawerLoading(false);
+    }
   }
   const canManageLegacyCases =
     session?.roles?.includes("case_administrator") ?? false;
@@ -411,6 +413,8 @@ export function AppShell() {
           run={drawerRun}
           events={drawerEvents}
           error={drawerError}
+          loading={drawerLoading}
+          onRetry={() => void openDrawer(drawerRun)}
           onClose={() => setDrawerRun(null)}
         />
       )}
@@ -422,6 +426,8 @@ function GlobalRunDrawer({
   run,
   events,
   error,
+  loading,
+  onRetry,
   onClose,
 }: {
   run: ActiveResearchRun;
@@ -434,6 +440,8 @@ function GlobalRunDrawer({
     created_at: string;
   }> | null;
   error: string | null;
+  loading: boolean;
+  onRetry: () => void;
   onClose: () => void;
 }) {
   const scope = run.scope;
@@ -475,9 +483,21 @@ function GlobalRunDrawer({
           </dl>
         </section>
         {error ? (
-          <p className="ros-error" role="alert">
-            {error}
-          </p>
+          <section className="ros-empty ros-empty--compact" role="alert">
+            <strong>本次运行事件暂不可读取</strong>
+            <p>
+              冻结范围仍可查看；但阶段、排除理由和候选输出暂无法确认，
+              不会以当前配置补写历史记录。
+            </p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={loading}
+              onClick={onRetry}
+            >
+              {loading ? "正在重新读取…" : "重新读取本次运行事件"}
+            </button>
+          </section>
         ) : !events ? (
           <div className="ros-empty ros-empty--compact">
             正在读取本次运行的事件链…
