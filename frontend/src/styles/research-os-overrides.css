@@ -416,6 +416,14 @@
 .ros-fund-sync__permission input { width: 15px; height: 15px; margin: 0; accent-color: var(--ros-moss); }
 .ros-fund-sync__actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .ros-fund-sync__actions .ros-button { width: 100%; min-height: 34px; }
+.ros-fund-sync__config-history { display: grid; gap: 8px; margin-top: 3px; padding-top: 12px; border-top: 1px solid var(--ros-rule); }
+.ros-fund-sync__config-history h4, .ros-fund-sync__config-history > p { margin: 0; }
+.ros-fund-sync__config-history > p { color: var(--ros-soft); font-size: 10px; line-height: 1.45; }
+.ros-fund-sync__config-history ol { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ros-fund-sync__config-history li { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--ros-rule); }
+.ros-fund-sync__config-history li > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ros-fund-sync__config-history li p { margin: 0; color: var(--ros-ink); font-size: 11px; line-height: 1.45; }
+.ros-fund-sync__config-history small { color: var(--ros-soft); font-size: 10px; line-height: 1.4; }
 .ros-fund-sync__history { display: grid; gap: 8px; margin-top: 3px; padding-top: 12px; border-top: 1px solid var(--ros-rule); }
 .ros-fund-sync__history h4 { margin: 0; font-size: 12px; }
 .ros-fund-sync__history article { display: grid; gap: 6px; padding: 9px 0; border-bottom: 1px solid var(--ros-rule); }

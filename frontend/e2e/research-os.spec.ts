@@ -39,6 +39,9 @@ test.describe("Event-first Research OS", () => {
     await page.getByRole("button", { name: "保存基金披露配置" }).click();
     await expect(page.getByRole("status")).toContainText("已保存配置版本 1");
     await expect(page.getByText(/下次定时：/)).toBeVisible();
+    const configuration = page.getByRole("heading", { name: "配置版本与调整理由" }).locator("..");
+    await expect(configuration).toContainText("按月补充当前股票相关的基金季报披露");
+    await expect(configuration).toContainText("版本 1 · 每月首日 09:00");
 
     await page.getByRole("button", { name: "立即补充一次" }).click();
     const record = page.getByRole("heading", { name: "本次补充记录" }).locator("..");

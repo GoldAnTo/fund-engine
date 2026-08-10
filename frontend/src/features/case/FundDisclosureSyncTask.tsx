@@ -6,6 +6,10 @@ function formatWhen(value: string | null): string {
   return value ? new Date(value).toLocaleString("zh-CN") : "尚未配置";
 }
 
+function frequencyLabel(value: "weekly" | "monthly"): string {
+  return value === "weekly" ? "每周一 09:00" : "每月首日 09:00";
+}
+
 function summaryText(payload: Record<string, unknown>): string {
   const labels: Record<string, string> = {
     holding_rows_seen: "持仓行",
@@ -190,6 +194,25 @@ export function FundDisclosureSyncTask({
       {detail.effective_config && <p className="ros-note">当前为版本 {detail.effective_config.version} · 下次定时：{formatWhen(detail.next_scheduled_at)} · 冻结股票：{detail.effective_config.stock_codes.join("、") || "当前未绑定股票"}</p>}
       {notice && <p className="ros-success" role="status">{notice}</p>}
       {error && <p className="ros-error" role="alert">{error}</p>}
+
+      <section className="ros-fund-sync__config-history" aria-live="polite">
+        <h4>配置版本与调整理由</h4>
+        <p>保存不会覆盖旧配置；每次补充与重试都会保留当时冻结的范围。</p>
+        {detail.config_history.length ? (
+          <ol>
+            {detail.config_history.slice(0, 3).map((config) => (
+              <li key={config.id}>
+                <header>
+                  <strong>版本 {config.version} · {frequencyLabel(config.frequency)}</strong>
+                  <small>{formatWhen(config.created_at)}</small>
+                </header>
+                <p>{config.change_reason}</p>
+                <small>基金：{config.fund_codes.join("、")} · 冻结股票：{config.stock_codes.join("、") || "未绑定"} · 配置人：{config.changed_by}</small>
+              </li>
+            ))}
+          </ol>
+        ) : <p className="ros-note">尚未保存配置。选择基金、频率并说明理由后，会在这里追加首个版本。</p>}
+      </section>
 
       <section className="ros-fund-sync__history" aria-live="polite">
         <h4>本次补充记录</h4>

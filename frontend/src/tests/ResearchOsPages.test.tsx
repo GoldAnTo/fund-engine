@@ -926,6 +926,11 @@ describe("Research OS event entry", () => {
     await user.type(screen.getByLabelText("配置调整理由"), "本周补充当前股票相关基金披露");
     await user.click(screen.getByRole("button", { name: "保存基金披露配置" }));
     expect(await screen.findByText(/已保存配置版本/)).toBeVisible();
+    const configHistory = (
+      await screen.findByRole("heading", { name: "配置版本与调整理由" })
+    ).parentElement;
+    expect(configHistory).toHaveTextContent("本周补充当前股票相关基金披露");
+    expect(configHistory).toHaveTextContent("版本 1 · 每周一 09:00");
     await user.click(screen.getByRole("button", { name: "立即补充一次" }));
     expect(await screen.findByText("本次补充记录")).toBeVisible();
     expect(await screen.findByText("已完成")).toBeVisible();
