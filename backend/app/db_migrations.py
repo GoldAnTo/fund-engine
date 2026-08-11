@@ -22,7 +22,12 @@ class UnmanagedDatabaseSchemaError(RuntimeError):
 
 def upgrade_database_to_head(database_url: str) -> None:
     """Upgrade ``database_url`` using this repository's Alembic history."""
-    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    backend_root = Path(__file__).parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    # ``script_location`` in alembic.ini is relative to the caller's CWD.
+    # Bootstrap is invoked by scripts and tests from outside ``backend/``, so
+    # bind it to this module's repository location instead.
+    config.set_main_option("script_location", str(backend_root / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
     engine = create_engine(database_url, future=True)
     try:
