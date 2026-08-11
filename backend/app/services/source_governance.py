@@ -299,17 +299,12 @@ class SourceGovernanceService:
         closed for AI processing, while display remains possible for the
         researcher who is completing the recovery.
         """
-        existing = self._session.scalar(
-            select(SourceContract).where(SourceContract.document_version_id == document.id)
-        )
-        if existing is not None:
-            return existing
         metadata = dict(source_metadata or {})
-        now = _utcnow()
-        research_source_type = _normalize_research_source_type(
+        research_source_type_for_intake = _normalize_research_source_type(
             source_type="pasted_snapshot",
             source_metadata=source_metadata,
             document=document,
+            incoming_source_url=document.source_url,
         )
         original_ai = original_contract.allow_ai_processing if original_contract is not None else False
         original_display = original_contract.allow_display if original_contract is not None else True
@@ -317,22 +312,63 @@ class SourceGovernanceService:
         original_api = original_contract.allow_api if original_contract is not None else False
         restrictions = list(original_contract.downstream_restrictions or []) if original_contract is not None else ["原资料权限未完整记录；补充正文不得用于 AI 或正式证据"]
         restrictions.append("补充正文为独立快照；页码仅为用户声明，不能替代原件定位")
+        region = str(metadata.get("region") or (original_contract.region if original_contract is not None else "not_recorded"))
+        effective_until = original_contract.effective_until if original_contract is not None else None
+        retention_policy = str(metadata.get("retention_policy") or (original_contract.retention_policy if original_contract is not None else "case_retained"))
+        deletion_policy = str(metadata.get("deletion_policy") or (original_contract.deletion_policy if original_contract is not None else "not_recorded"))
+        contract_version = (str(metadata["contract_version"]) if metadata.get("contract_version") else original_contract.contract_version if original_contract is not None else None)
+        allow_ai_processing = original_ai and _permission(metadata, "ai_processing", default=True)
+        allow_display = original_display and _permission(metadata, "display", default=True)
+        allow_export = original_export and _permission(metadata, "export", default=False)
+        allow_api = original_api and _permission(metadata, "api", default=False)
+        compatibility_metadata = dict(metadata)
+        compatibility_metadata.pop("tenant", None)
+        compatibility_metadata.update(
+            {
+                "permissions": {
+                    "ai_processing": allow_ai_processing,
+                    "display": allow_display,
+                    "export": allow_export,
+                    "api": allow_api,
+                },
+                "region": region,
+                "effective_from": None,
+                "effective_until": effective_until,
+                "retention_policy": retention_policy,
+                "deletion_policy": deletion_policy,
+                "downstream_restrictions": restrictions,
+                "contract_version": contract_version,
+            }
+        )
+        existing = self._session.scalar(
+            select(SourceContract).where(SourceContract.document_version_id == document.id)
+        )
+        if existing is not None:
+            self._assert_existing_contract_compatible(
+                existing=existing,
+                source_type="pasted_snapshot",
+                source_metadata=compatibility_metadata,
+                document=document,
+                incoming_source_url=document.source_url,
+            )
+            return existing
+        now = _utcnow()
         contract = SourceContract(
             document_version_id=document.id,
             source_type="pasted_snapshot",
-            research_source_type=research_source_type,
+            research_source_type=research_source_type_for_intake,
             provider_or_tenant=str(metadata.get("provider_name") or declared_by),
-            allow_ai_processing=original_ai and _permission(metadata, "ai_processing", default=True),
-            allow_display=original_display and _permission(metadata, "display", default=True),
-            allow_export=original_export and _permission(metadata, "export", default=False),
-            allow_api=original_api and _permission(metadata, "api", default=False),
-            region=str(metadata.get("region") or (original_contract.region if original_contract is not None else "not_recorded")),
+            allow_ai_processing=allow_ai_processing,
+            allow_display=allow_display,
+            allow_export=allow_export,
+            allow_api=allow_api,
+            region=region,
             effective_from=None,
-            effective_until=original_contract.effective_until if original_contract is not None else None,
-            retention_policy=str(metadata.get("retention_policy") or (original_contract.retention_policy if original_contract is not None else "case_retained")),
-            deletion_policy=str(metadata.get("deletion_policy") or (original_contract.deletion_policy if original_contract is not None else "not_recorded")),
+            effective_until=effective_until,
+            retention_policy=retention_policy,
+            deletion_policy=deletion_policy,
             downstream_restrictions=restrictions,
-            contract_version=(str(metadata["contract_version"]) if metadata.get("contract_version") else original_contract.contract_version if original_contract is not None else None),
+            contract_version=contract_version,
             intake_metadata=metadata,
             declared_by=declared_by,
             created_at=now,

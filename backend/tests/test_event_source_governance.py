@@ -195,6 +195,67 @@ def test_deduplicated_event_intake_validates_the_incoming_company_disclosure_url
     ]["message"]
 
 
+def _frozen_supplement_document(cmd_session, raw: bytes) -> DocumentVersion:
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+
+    return DocumentService(DocumentRepository(cmd_session)).freeze(
+        raw=raw,
+        source_url="supplement://original/recovery-text",
+        parser_version="user-supplement-v1",
+        parse_state="partial",
+    )
+
+
+def test_supplement_intake_rejects_company_disclosure_without_http_source_url(
+    cmd_session,
+) -> None:
+    from app.services.source_governance import SourceGovernanceService
+
+    supplement = _frozen_supplement_document(cmd_session, b"recovery text")
+
+    with pytest.raises(
+        ValueError, match="company_disclosure requires an HTTP\\(S\\) source_url"
+    ):
+        SourceGovernanceService(cmd_session).record_supplement_intake(
+            document=supplement,
+            original_contract=None,
+            source_metadata={"research_source_type": "company_disclosure"},
+            declared_by="human:researcher",
+        )
+
+
+@pytest.mark.parametrize(
+    ("research_source_type", "message"),
+    [
+        ("licensed_provider", "deduplicated original has a different source contract"),
+        ("unsupported_source", "research_source_type is not supported"),
+    ],
+)
+def test_deduplicated_supplement_intake_revalidates_research_source_type(
+    cmd_session, research_source_type, message
+) -> None:
+    from app.services.source_governance import SourceGovernanceService
+
+    supplement = _frozen_supplement_document(cmd_session, b"same recovery text")
+    service = SourceGovernanceService(cmd_session)
+    contract = service.record_supplement_intake(
+        document=supplement,
+        original_contract=None,
+        source_metadata={},
+        declared_by="human:researcher",
+    )
+
+    assert contract.research_source_type == "pasted_snapshot"
+    with pytest.raises(ValueError, match=message):
+        service.record_supplement_intake(
+            document=supplement,
+            original_contract=None,
+            source_metadata={"research_source_type": research_source_type},
+            declared_by="human:researcher",
+        )
+
+
 def test_licensed_provider_intake_preserves_provider_record_and_contract_version(
     cmd_client, cmd_session
 ) -> None:
