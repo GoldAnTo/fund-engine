@@ -16,6 +16,7 @@ from app.models.ledger import (
     CaseTenantAdmission,
     AtomicClaimCandidate,
     AIAssessment,
+    EvidenceSnapshot,
 )
 from app.models.operational import ResearchRun, ResearchTask, TaskItem
 from app.models.proposals import Proposal
@@ -282,6 +283,69 @@ def test_empty_run_completes_without_a_phantom_review_task(session):
     assert completion is not None
     assert completion.payload_json["status"] == "succeeded"
     assert "未产生新增待审材料" in completion.message
+
+
+def test_run_detail_exposes_open_provisional_assessment_review(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=now)
+    session.add(thesis)
+    session.flush()
+    snapshot = EvidenceSnapshot(
+        thesis_id=thesis.id,
+        cutoff=now,
+        evidence_link_ids=[],
+        created_at=now,
+    )
+    session.add(snapshot)
+    session.flush()
+    assessment = AIAssessment(
+        snapshot_id=snapshot.id,
+        conclusion="insufficient_evidence",
+        rationale="缺少原始预测值",
+        gaps=["补充历史预测值"],
+        created_at=now,
+    )
+    session.add(assessment)
+    session.flush()
+    run = AutoResearchRepository(session).create_run(research_case_id=case.id)
+    task = ResearchTask(
+        run_id=run.id,
+        research_case_id=case.id,
+        thesis_id=thesis.id,
+        status="done",
+        stage="completed",
+        round=1,
+        task_type="result",
+        query="生成临时评估",
+        result={"assessment_id": str(assessment.id)},
+        created_at=now,
+        updated_at=now,
+    )
+    review_task = TaskItem(
+        title="确认临时 AI 评估",
+        task_type="review_assessment",
+        ref_type="ai_assessment",
+        ref_id=assessment.id,
+        research_case_id=case.id,
+        status="open",
+        created_at=now,
+    )
+    session.add_all([task, review_task])
+    session.commit()
+
+    detail = AutoResearchService(session).detail(run.id)
+
+    assert detail["pending_assessments"] == [{
+        "assessment_id": str(assessment.id),
+        "conclusion": "insufficient_evidence",
+        "rationale": "缺少原始预测值",
+        "gaps": ["补充历史预测值"],
+        "task_id": str(review_task.id),
+        "task_status": "open",
+    }]
 
 
 def test_round_2_gap_task_executes(session):

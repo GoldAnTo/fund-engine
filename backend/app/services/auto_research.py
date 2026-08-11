@@ -17,6 +17,7 @@ from app.errors import ValidationFailedError
 from app.models.ledger import (
     AtomicClaimCandidate,
     CaseDocumentVersion,
+    AIAssessment,
     AtomicClaimReview,
     EvidenceLink,
     ResearchCase,
@@ -855,6 +856,72 @@ class AutoResearchService:
                 continue
         return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
 
+    def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
+        """Close only runs whose last outstanding human gate was this assessment."""
+        matching_runs: set[uuid.UUID] = set()
+        for task in self.session.scalars(
+            select(ResearchTask).where(ResearchTask.result.is_not(None))
+        ):
+            if str((task.result or {}).get("assessment_id") or "") == str(assessment_id):
+                matching_runs.add(task.run_id)
+
+        completed: list[uuid.UUID] = []
+        for run_id in matching_runs:
+            run = self.session.scalar(
+                select(ResearchRun).where(ResearchRun.id == run_id).with_for_update()
+            )
+            if run is None or run.status != "waiting_for_review":
+                continue
+            if self._has_open_reviewable_output(run):
+                continue
+            self.repo.update_run(run, status="succeeded", stage="complete")
+            ResearchRunEventRepository(self.session).append(
+                run.id,
+                stage="review_complete",
+                status="completed",
+                message="人工已完成临时 AI 评估审核；本次运行没有剩余待审项。",
+                payload_json={
+                    "assessment_id": str(assessment_id),
+                    "status": "succeeded",
+                },
+            )
+            completed.append(run.id)
+        return completed
+
+    def _has_open_reviewable_output(self, run) -> bool:
+        """Check run-local review gates after one human decision is persisted."""
+        for task in self.repo.tasks_for_run(run.id):
+            result = task.result or {}
+            for raw_id in result.get("proposed_proposal_ids", []):
+                try:
+                    proposal_id = uuid.UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    continue
+                proposal = self.session.get(Proposal, proposal_id)
+                if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
+                    continue
+                review_task = self.task_repo.find_by_ref(
+                    task_type="review_proposal", ref_type="proposal", ref_id=proposal.id
+                )
+                if review_task is None or review_task.status in {"open", "in_progress"}:
+                    return True
+            raw_assessment = result.get("assessment_id")
+            if not raw_assessment:
+                continue
+            try:
+                assessment_id = uuid.UUID(str(raw_assessment))
+            except (TypeError, ValueError):
+                continue
+            assessment = self.session.get(AIAssessment, assessment_id)
+            if assessment is None:
+                continue
+            review_task = self.task_repo.find_by_ref(
+                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
+            )
+            if review_task is None or review_task.status in {"open", "in_progress"}:
+                return True
+        return bool(self._pending_atomic_claims(run.research_case_id))
+
     def _run_allowed_source_types(self, run) -> set[str]:
         """Read the immutable source-type boundary from this run's scope event."""
         scope = self.session.scalar(
@@ -1212,6 +1279,33 @@ class AutoResearchService:
             )
             if review_task:
                 review_tasks.append(self._review_task_dict(review_task))
+        pending_assessments = []
+        for research_task in tasks:
+            raw_id = (research_task.result or {}).get("assessment_id")
+            if not raw_id:
+                continue
+            try:
+                assessment_id = uuid.UUID(str(raw_id))
+            except (TypeError, ValueError):
+                continue
+            review_task = self.task_repo.find_by_ref(
+                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id
+            )
+            assessment = self.session.get(AIAssessment, assessment_id)
+            if (
+                assessment is None
+                or review_task is None
+                or review_task.status not in {"open", "in_progress"}
+            ):
+                continue
+            pending_assessments.append({
+                "assessment_id": str(assessment.id),
+                "conclusion": assessment.conclusion,
+                "rationale": assessment.rationale,
+                "gaps": list(assessment.gaps or []),
+                "task_id": str(review_task.id),
+                "task_status": review_task.status,
+            })
         return {
             "id": str(run.id),
             "case_id": str(run.research_case_id),
@@ -1233,6 +1327,7 @@ class AutoResearchService:
             "gap_tasks": [self._task_dict(t) for t in gaps],
             "failed_tasks": [self._task_dict(t) for t in failed_tasks],
             "assessments": [t.result for t in tasks if t.result and t.result.get("assessment_id")],
+            "pending_assessments": pending_assessments,
             "pending_proposals": pending_proposals,
             "review_tasks": review_tasks,
             "next_action": next_action,

@@ -6,6 +6,7 @@ COMMIT, so they never share the session-scoped engine.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -385,3 +386,145 @@ def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
     assert response.status_code == 201, response.text
     cmd_seeded.refresh(task)
     assert task.status == "done"
+
+
+def test_assessment_review_completes_final_run_gate(cmd_client, cmd_seeded):
+    from app.models.ledger import AIAssessment, ResearchCase
+    from app.models.operational import ResearchRun, ResearchTask
+    from app.models.research_monitor import ResearchRunEvent
+    from app.repositories.operational import TaskRepository
+
+    now = datetime.now(timezone.utc)
+    case = cmd_seeded.scalar(select(ResearchCase))
+    assessment = cmd_seeded.scalar(select(AIAssessment))
+    assert case is not None and assessment is not None
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_seeded.add(run)
+    cmd_seeded.flush()
+    cmd_seeded.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="生成临时评估",
+            result={"assessment_id": str(assessment.id)},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    TaskRepository(cmd_seeded).add_task(
+        title="确认临时 AI 评估",
+        task_type="review_assessment",
+        ref_type="ai_assessment",
+        ref_id=assessment.id,
+        research_case_id=case.id,
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/assessments/{assessment.id}/reviews",
+        json={
+            "outcome": "confirmed",
+            "conclusion": assessment.conclusion,
+            "reason": "人工确认资料不足",
+            "reviewer": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_seeded.refresh(run)
+    assert run.status == "succeeded"
+    assert run.stage == "complete"
+    assert run.stop_reason == "max_rounds_reached"
+    assert any(
+        event.stage == "review_complete"
+        and event.payload_json["assessment_id"] == str(assessment.id)
+        for event in cmd_seeded.scalars(
+            select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)
+        )
+    )
+
+
+def test_assessment_review_keeps_run_waiting_when_other_review_remains(cmd_client, cmd_seeded):
+    from app.models.ledger import AIAssessment, ResearchCase
+    from app.models.operational import ResearchRun, ResearchTask
+    from app.repositories.operational import TaskRepository
+
+    now = datetime.now(timezone.utc)
+    case = cmd_seeded.scalar(select(ResearchCase))
+    first_assessment = cmd_seeded.scalar(select(AIAssessment))
+    assert case is not None and first_assessment is not None
+    second_assessment = AIAssessment(
+        snapshot_id=first_assessment.snapshot_id,
+        conclusion="insufficient_evidence",
+        rationale="仍缺少第二项资料",
+        gaps=["补充第二项资料"],
+        created_at=now,
+    )
+    cmd_seeded.add(second_assessment)
+    cmd_seeded.flush()
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        stop_reason="max_rounds_reached",
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_seeded.add(run)
+    cmd_seeded.flush()
+    for assessment in (first_assessment, second_assessment):
+        cmd_seeded.add(
+            ResearchTask(
+                run_id=run.id,
+                research_case_id=case.id,
+                status="done",
+                stage="completed",
+                round=1,
+                task_type="result",
+                query="生成临时评估",
+                result={"assessment_id": str(assessment.id)},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        TaskRepository(cmd_seeded).add_task(
+            title="确认临时 AI 评估",
+            task_type="review_assessment",
+            ref_type="ai_assessment",
+            ref_id=assessment.id,
+            research_case_id=case.id,
+        )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/assessments/{first_assessment.id}/reviews",
+        json={
+            "outcome": "confirmed",
+            "conclusion": first_assessment.conclusion,
+            "reason": "只确认第一项评估",
+            "reviewer": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_seeded.refresh(run)
+    assert run.status == "waiting_for_review"

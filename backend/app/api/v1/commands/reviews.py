@@ -21,6 +21,7 @@ from app.schemas.v1.commands import (
     ReviewQueueResponse,
 )
 from app.services.assessment import AssessmentService
+from app.services.auto_research import AutoResearchService
 from app.services.review import ReviewService
 
 router = APIRouter(tags=["review-commands-v1"])
@@ -96,6 +97,7 @@ def review_assessment(
         ref_type="ai_assessment",
         ref_id=assessment_id,
     )
+    AutoResearchService(db).complete_runs_after_assessment_review(assessment_id)
     commit_or_rollback(db)
     return AssessmentReviewResponse(
         id=str(review.id),

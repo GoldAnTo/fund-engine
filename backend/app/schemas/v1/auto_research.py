@@ -134,6 +134,16 @@ class ReviewTaskDTO(V1Model):
     ref_type: str | None
     ref_id: str | None
 
+
+class PendingAssessmentDTO(V1Model):
+    assessment_id: str
+    conclusion: str
+    rationale: str
+    gaps: list[str]
+    task_id: str
+    task_status: str
+
+
 class ResearchRunResponse(V1Model):
     id: str
     case_id: str
@@ -152,6 +162,7 @@ class ResearchRunResponse(V1Model):
     gap_tasks: list[ResearchTaskDTO]
     failed_tasks: list[ResearchTaskDTO]
     assessments: list[dict[str, Any] | None]
+    pending_assessments: list[PendingAssessmentDTO]
     pending_proposals: list[PendingProposalDTO]
     review_tasks: list[ReviewTaskDTO]
     next_action: str
