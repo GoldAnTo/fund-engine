@@ -112,12 +112,16 @@ def create_document_supplement(
             },
             verbatim_text=payload.raw_text,
         )
-    contract = SourceGovernanceService(db).record_supplement_intake(
-        document=supplement,
-        original_contract=original_contract,
-        source_metadata=payload.source_metadata,
-        declared_by=payload.created_by,
-    )
+    try:
+        contract = SourceGovernanceService(db).record_supplement_intake(
+            document=supplement,
+            original_contract=original_contract,
+            source_metadata=payload.source_metadata,
+            declared_by=payload.created_by,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
     commit_or_rollback(db)
     return CreateDocumentSupplementResponse(
         document_version_id=str(supplement.id),
