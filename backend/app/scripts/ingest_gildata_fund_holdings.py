@@ -35,6 +35,12 @@ from app.services.source_governance import SourceGovernanceService
 
 SOURCE_GILDATA_FUND_REPORT = "gildata_fund_report"
 PARSER_VERSION = "gildata-fund-report-v1"
+_FILING_KIND_PRECEDENCE = {
+    "other": 0,
+    "quarterly": 1,
+    "annual": 2,
+    "correction": 3,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +74,10 @@ def _parse_datetime(value: str) -> datetime | None:
     )
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def _fund_code(value: str) -> str:
     return (value or "").strip().upper().removesuffix(".OF")
 
@@ -79,6 +89,17 @@ def _canonical_fund_code(value: str) -> str:
 
 def _quarter_label(period: date) -> str:
     return f"{period.year}年第{((period.month - 1) // 3) + 1}季度"
+
+
+def _filing_kind(title: str) -> str:
+    normalized = "".join((title or "").split())
+    if "更正" in normalized:
+        return "correction"
+    if "年度报告" in normalized:
+        return "annual"
+    if "季度" in normalized:
+        return "quarterly"
+    return "other"
 
 
 def _matches_exact_fund_report(
@@ -93,9 +114,13 @@ def _matches_exact_fund_report(
     title = "".join((announcement.get("title") or "").split())
     name = "".join((fund_name or "").split())
     reported_alias = "".join((announcement.get("sec_name") or "").split())
+    period_marker_matches = (
+        _quarter_label(period) in title
+        or (period.month == 12 and f"{period.year}年年度报告" in title)
+    )
     return bool(
         name
-        and _quarter_label(period) in title
+        and period_marker_matches
         and (name in title or name == reported_alias)
     )
 
@@ -156,7 +181,12 @@ def _ensure_stock(
 
 
 def _disclosure_exists(
-    session: Session, *, fund_id: Any, stock_id: Any, report_period: date
+    session: Session,
+    *,
+    fund_id: Any,
+    stock_id: Any,
+    report_period: date,
+    source_document_version_id: Any,
 ) -> bool:
     return session.scalar(
         select(HoldingDisclosure.id)
@@ -164,8 +194,48 @@ def _disclosure_exists(
         .where(HoldingDisclosure.stock_id == stock_id)
         .where(HoldingDisclosure.report_period == report_period)
         .where(HoldingDisclosure.source == SOURCE_GILDATA_FUND_REPORT)
+        .where(HoldingDisclosure.source_document_version_id == source_document_version_id)
         .limit(1)
     ) is not None
+
+
+def _predecessor_for(
+    session: Session,
+    *,
+    fund_id: Any,
+    stock_id: Any,
+    report_period: date,
+    filing_kind: str,
+    published_at: datetime,
+) -> HoldingDisclosure | None:
+    candidates = [
+        disclosure
+        for disclosure in session.scalars(
+            select(HoldingDisclosure)
+            .where(HoldingDisclosure.fund_id == fund_id)
+            .where(HoldingDisclosure.stock_id == stock_id)
+            .where(HoldingDisclosure.report_period == report_period)
+        )
+        if (
+            _FILING_KIND_PRECEDENCE[disclosure.filing_kind]
+            < _FILING_KIND_PRECEDENCE[filing_kind]
+            or (
+                _FILING_KIND_PRECEDENCE[disclosure.filing_kind]
+                == _FILING_KIND_PRECEDENCE[filing_kind]
+                and _as_utc(disclosure.published_at) < _as_utc(published_at)
+            )
+        )
+    ]
+    return max(
+        candidates,
+        key=lambda disclosure: (
+            _FILING_KIND_PRECEDENCE[disclosure.filing_kind],
+            disclosure.published_at,
+            disclosure.created_at,
+            str(disclosure.id),
+        ),
+        default=None,
+    )
 
 
 def _freeze_report(
@@ -300,6 +370,9 @@ def ingest(
             if not permissions.get("display", False):
                 pending_permission += len(group)
                 continue
+            filing_kind = _filing_kind(announcement["title"])
+            published_at = _parse_datetime(announcement["publish_date"])
+            assert published_at is not None
             fund = _ensure_fund(session, instruments, code=fund_code, name=fund_name)
             for holding in group:
                 stock = _ensure_stock(
@@ -324,19 +397,30 @@ def ingest(
                     fund_id=fund.id,
                     stock_id=stock.id,
                     report_period=period,
+                    source_document_version_id=document.id,
                 ):
                     skipped_duplicate += 1
                     continue
+                predecessor = _predecessor_for(
+                    session,
+                    fund_id=fund.id,
+                    stock_id=stock.id,
+                    report_period=period,
+                    filing_kind=filing_kind,
+                    published_at=published_at,
+                )
                 InstrumentService(session).add_holding_disclosure(
                     fund=fund,
                     stock=stock,
                     weight=weight,
                     report_period=period,
-                    published_at=_parse_datetime(announcement["publish_date"]),
+                    published_at=published_at,
                     source=SOURCE_GILDATA_FUND_REPORT,
                     source_document_version_id=document.id,
                     provider_record_id=provider_record.id,
                     coverage_status="partial",
+                    filing_kind=filing_kind,
+                    supersedes_disclosure_id=predecessor.id if predecessor else None,
                 )
                 written += 1
 

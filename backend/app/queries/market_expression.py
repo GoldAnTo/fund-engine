@@ -12,6 +12,7 @@ from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fun
 from app.models.source_governance import SourceContract
 from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
+from app.services.exposure import choose_latest_disclosure_per_fund_stock
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
     ExpressionSourceDTO,
@@ -228,9 +229,18 @@ class MarketExpressionQueries:
         stock_ids = [item.stock_id for item in fundamentals if item.stock_id is not None]
         if not stock_ids:
             return []
-        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
-        for disclosure in self._db.scalars(select(HoldingDisclosure).where(HoldingDisclosure.stock_id.in_(stock_ids)).where(HoldingDisclosure.report_period <= as_of).where(HoldingDisclosure.published_at <= cutoff).order_by(HoldingDisclosure.report_period.desc(), HoldingDisclosure.created_at.desc())):
-            latest.setdefault((disclosure.fund_id, disclosure.stock_id), disclosure)
+        visible = list(
+            self._db.scalars(
+                select(HoldingDisclosure)
+                .where(HoldingDisclosure.stock_id.in_(stock_ids))
+                .where(HoldingDisclosure.report_period <= as_of)
+                .where(HoldingDisclosure.published_at <= cutoff)
+            )
+        )
+        latest = {
+            (disclosure.fund_id, disclosure.stock_id): disclosure
+            for disclosure in choose_latest_disclosure_per_fund_stock(visible)
+        }
         grouped: dict[uuid.UUID, list[HoldingDisclosure]] = {}
         for disclosure in latest.values():
             grouped.setdefault(disclosure.fund_id, []).append(disclosure)
@@ -247,6 +257,11 @@ class MarketExpressionQueries:
                 document = self._db.get(DocumentVersion, disclosure.source_document_version_id) if disclosure.source_document_version_id else None
                 contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
                 span = self._db.get(SourceSpan, disclosure.source_span_id) if disclosure.source_span_id else None
+                predecessor = (
+                    self._db.get(HoldingDisclosure, disclosure.supersedes_disclosure_id)
+                    if disclosure.supersedes_disclosure_id
+                    else None
+                )
                 source_visible = bool(contract and contract.allow_display)
                 source_visible_in_case = bool(
                     source_visible
@@ -280,6 +295,10 @@ class MarketExpressionQueries:
                     source_permission_status="admitted" if source_visible else "not_recorded" if document is None else "restricted",
                     coverage_status=disclosure.coverage_status,
                     freshness_status=freshness_status,
+                    filing_kind=disclosure.filing_kind,
+                    supersedes_disclosure_id=str(predecessor.id) if predecessor else None,
+                    supersedes_filing_kind=predecessor.filing_kind if predecessor else None,
+                    supersedes_published_at=predecessor.published_at if predecessor else None,
                 ))
             coverage_complete = positions and all(
                 position.coverage_status == "complete" and position.freshness_status == "historical_disclosure"

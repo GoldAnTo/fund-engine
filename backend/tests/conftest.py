@@ -624,6 +624,8 @@ class _SeededDatabase:
                 "source_span_id CHAR(32), "
                 "provider_record_id CHAR(32), "
                 "coverage_status VARCHAR(32) NOT NULL DEFAULT 'not_recorded', "
+                "filing_kind VARCHAR(16) NOT NULL DEFAULT 'other', "
+                "supersedes_disclosure_id CHAR(32), "
                 "created_at DATETIME NOT NULL, "
                 "PRIMARY KEY (id), "
                 "FOREIGN KEY(fund_id) REFERENCES funds (id), "

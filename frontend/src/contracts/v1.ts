@@ -3309,6 +3309,14 @@ export interface components {
              * @enum {string}
              */
             coverage_status: "complete" | "partial" | "not_recorded";
+            /**
+             * Filing Kind
+             * @default other
+             * @enum {string}
+             */
+            filing_kind: "quarterly" | "annual" | "correction" | "other";
+            /** Supersedes Disclosure Id */
+            supersedes_disclosure_id?: string | null;
         };
         /** CreateStockRequest */
         CreateStockRequest: {
@@ -4360,6 +4368,17 @@ export interface components {
             coverage_status: string;
             /** Freshness Status */
             freshness_status: string;
+            /**
+             * Filing Kind
+             * @default other
+             */
+            filing_kind: string;
+            /** Supersedes Disclosure Id */
+            supersedes_disclosure_id?: string | null;
+            /** Supersedes Filing Kind */
+            supersedes_filing_kind?: string | null;
+            /** Supersedes Published At */
+            supersedes_published_at?: string | null;
         };
         /** FundDisclosureSyncConfigDTO */
         FundDisclosureSyncConfigDTO: {
@@ -4721,6 +4740,10 @@ export interface components {
             provider_record_id: string | null;
             /** Coverage Status */
             coverage_status: string;
+            /** Filing Kind */
+            filing_kind: string;
+            /** Supersedes Disclosure Id */
+            supersedes_disclosure_id: string | null;
             /**
              * Created At
              * Format: date-time

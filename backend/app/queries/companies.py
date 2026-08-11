@@ -34,6 +34,7 @@ from app.models.ledger import (
 from app.queries.basis import HistoricalBasis
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
+from app.services.exposure import choose_latest_disclosure_per_fund_stock
 from app.schemas.v1.common import CursorPage
 from app.schemas.v1.companies import (
     AssessmentViewDTO,
@@ -343,7 +344,7 @@ class CompanyReadQueries:
         cutoff_end = datetime.combine(
             basis.cutoff.date(), time(23, 59, 59, 999999), tzinfo=timezone.utc
         )
-        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
+        visible: list[HoldingDisclosure] = []
         for disclosure in self._instruments.holding_disclosures_for_stocks(
             stock_ids
         ):
@@ -352,10 +353,12 @@ class CompanyReadQueries:
             published = _to_aware(disclosure.published_at)
             if published > cutoff_end:
                 continue
-            key = (disclosure.fund_id, disclosure.stock_id)
-            previous = latest.get(key)
-            if previous is None or disclosure.report_period > previous.report_period:
-                latest[key] = disclosure
+            visible.append(disclosure)
+
+        latest = {
+            (disclosure.fund_id, disclosure.stock_id): disclosure
+            for disclosure in choose_latest_disclosure_per_fund_stock(visible)
+        }
 
         funds: dict[uuid.UUID, Fund] = {
             fund.id: fund

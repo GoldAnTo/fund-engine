@@ -272,6 +272,10 @@ class FundDisclosurePositionDTO(V1Model):
     source_permission_status: str
     coverage_status: str
     freshness_status: str
+    filing_kind: str = "other"
+    supersedes_disclosure_id: str | None = None
+    supersedes_filing_kind: str | None = None
+    supersedes_published_at: datetime | None = None
 
 
 class FundDisclosureExposureDTO(V1Model):
