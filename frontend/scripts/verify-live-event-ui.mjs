@@ -218,6 +218,50 @@ async function prepareReviewedSourceStatement({ apiBase, token, caseId }) {
   };
 }
 
+async function prepareReviewedActualSourceStatement({ apiBase, token, caseId }) {
+  // The forecast UI may only record a later actual against another admitted,
+  // reviewed frozen source.  This setup deliberately uses the normal Case
+  // material endpoint rather than inserting a document into the database.
+  const attached = await apiJson(apiBase, `/event-research/${caseId}/materials`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      raw_input: "公司 2026 年度公告：验收公司 2026 年归母净利润为 1.1 亿元。",
+      source_type: "pasted_snapshot",
+      source_metadata: {
+        file_name: "验收公司 2026 年度公告",
+        permissions: { ai_processing: true, display: true, export: false, api: false },
+      },
+      actor: "human:researcher",
+    }),
+  });
+  const detail = await apiJson(apiBase, `/documents/${attached.document_version_id}?research_mode=true`, token);
+  const span = detail.spans.find((item) => item.verbatim_text?.trim());
+  if (!span) throw new Error("attached actual-source document did not retain a source span");
+  const candidate = await apiJson(apiBase, `/research-cases/${caseId}/atomic-claims`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      source_span_id: span.id,
+      normalized_text: span.verbatim_text,
+      claim_type: "reported_fact",
+      assertion_actor: "company:live-verifier",
+      actor: "human:researcher",
+    }),
+  });
+  const review = await apiJson(apiBase, `/atomic-claims/${candidate.id}/reviews`, token, {
+    method: "POST",
+    body: JSON.stringify({
+      outcome: "confirmed",
+      reviewer: "human:reviewer",
+      reason: "验收时已逐字核对后续公告中的实际指标。",
+      idempotency_key: `live-forecast-actual-source-${caseId}`,
+    }),
+  });
+  if (!review.published_source_statement?.id) {
+    throw new Error(`actual-source review did not publish a SourceStatement: ${JSON.stringify(review)}`);
+  }
+  return review.published_source_statement.id;
+}
+
 async function prepareMarketCatalogAndHistoricalFundDisclosure({ apiBase, token, source }) {
   // Instrument and fund records enter through the public ledger command API.
   // The browser still creates every Case-specific mapping and observation.
@@ -379,6 +423,7 @@ async function main() {
     });
     const { thesisId } = await prepareReadyProtocol({ apiBase, token, caseId });
     const reviewedSource = await prepareReviewedSourceStatement({ apiBase, token, caseId });
+    const actualSourceStatementId = await prepareReviewedActualSourceStatement({ apiBase, token, caseId });
     const marketCatalog = await prepareMarketCatalogAndHistoricalFundDisclosure({
       apiBase,
       token,
@@ -414,8 +459,8 @@ async function main() {
     await page.getByLabel("主张审核理由").fill("主张逐句回到当前 Case 冻结原文核对。 ");
     await page.getByRole("button", { name: "登记已审核主张" }).click();
     await page.getByText("已登记已审核主张").waitFor();
-    await page.getByLabel("关键因素名称").fill("验收主张的订单验证");
-    await page.getByLabel("验证指标").fill("订单同比增速");
+    await page.getByLabel("关键因素名称").fill("验收公司归母净利润预测验证");
+    await page.getByLabel("验证指标").fill("归母净利润");
     await page.getByLabel("允许来源").fill("licensed_provider");
     await page.getByLabel("验证开始日期").fill("2026-01-01");
     await page.getByLabel("验证结束日期").fill("2026-12-31");
@@ -426,6 +471,39 @@ async function main() {
     await page.getByLabel("因素审核理由").fill("指标、窗口、来源和反证条件均已人工确认。 ");
     await page.getByRole("button", { name: "登记已审核关键因素" }).click();
     await page.getByText("已登记已审核关键因素").waitFor();
+    await page.getByRole("button", { name: "登记历史预测验证" }).click();
+    await page.getByLabel("冻结预测值").fill("100000000");
+    await page.getByLabel("实体标识").fill("LIVE001.SZ");
+    await page.getByLabel("单位").fill("CNY");
+    await page.getByLabel("本阶段审核理由").fill("冻结研报预测的数值、主体、单位、期间及原文定位。");
+    await page.getByRole("button", { name: "冻结预测目标" }).click();
+    await page.getByText("已冻结预测目标").waitFor();
+    await page.getByLabel("后续实际值来源").selectOption(actualSourceStatementId);
+    await page.getByLabel("后续实际值").fill("110000000");
+    await page.getByLabel("本阶段审核理由").fill("冻结公告实际值，并与预测的主体、单位、期间逐项核对。");
+    await page.getByRole("button", { name: "冻结后续实际值" }).click();
+    await page.getByText("已冻结后续实际值").waitFor();
+    await page.getByRole("button", { name: "生成机器候选" }).click();
+    await page.getByText(/机器候选：得到支持/u).waitFor();
+    await page.getByLabel("人工裁决理由").fill("确认机器比较规则、冻结输入与后续公告原文一致。");
+    await page.getByRole("button", { name: "发布人工裁决" }).click();
+    await page.getByText("已追加人工发布裁决；历史预测验证将更新。").waitFor();
+    await page.getByText("得到支持", { selector: ".ros-forecast-verdict strong" }).waitFor();
+    const forecastVerdicts = await apiJson(
+      apiBase,
+      `/research-cases/${caseId}/forecast-verdicts?cutoff=${encodeURIComponent(new Date().toISOString())}`,
+      token,
+    );
+    const forecastVerdict = forecastVerdicts.items?.[0];
+    if (
+      forecastVerdict?.outcome !== "supported"
+      || forecastVerdict?.forecast_source?.source_statement_id !== reviewedSource.sourceStatementId
+      || forecastVerdict?.actual_source?.source_statement_id !== actualSourceStatementId
+      || forecastVerdict?.inputs?.expected_value !== "100000000"
+      || forecastVerdict?.inputs?.actual_value !== "110000000"
+    ) {
+      throw new Error(`forecast verification was not persisted as a replayable human verdict: ${JSON.stringify(forecastVerdicts)}`);
+    }
     await page.getByRole("button", { name: "关联公司与股票" }).click();
     await page.getByLabel("新增关联标的").selectOption(marketCatalog.company.id);
     await page.getByLabel("标的审核理由").fill("冻结原文已明确这家公司处于订单传导范围。 ");
@@ -503,6 +581,10 @@ async function main() {
       ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
       ["POST /research-cases/:caseId/report-claims", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/report-claims`)],
       ["POST /research-cases/:caseId/key-factors", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/key-factors`)],
+      ["POST /research-cases/:caseId/forecast-targets", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/forecast-targets`)],
+      ["POST /research-cases/:caseId/actual-metric-observations", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/actual-metric-observations`)],
+      ["POST /forecast-targets/:targetId/evaluate", (request) => request.startsWith("POST ") && request.includes("/forecast-targets/") && request.endsWith("/evaluate")],
+      ["POST /forecast-evaluations/:candidateId/verdicts", (request) => request.startsWith("POST ") && request.includes("/forecast-evaluations/") && request.endsWith("/verdicts")],
       ["POST /research-cases/:caseId/market-instruments", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/market-instruments`)],
       ["POST /research-cases/:caseId/key-factors/:factorId/fundamental-impacts", (request) => request.startsWith("POST ") && request.includes(`/research-cases/${caseId}/key-factors/`) && request.endsWith("/fundamental-impacts")],
       ["PUT /research-cases/:caseId/fund-disclosure-sync/config", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/fund-disclosure-sync/config`)],
