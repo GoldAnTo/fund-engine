@@ -4565,8 +4565,9 @@ function MonitorStatusControl({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const target = status === "paused" ? "active" : "paused";
+  const statusChangeReady = !busy && Boolean(reason.trim());
   async function change() {
-    if (!reason.trim()) return;
+    if (!statusChangeReady) return;
     setBusy(true);
     setError(null);
     try {
@@ -4600,7 +4601,7 @@ function MonitorStatusControl({
       <button
         className="ros-button ros-button--secondary"
         type="button"
-        disabled={!reason.trim() || busy}
+        disabled={!statusChangeReady}
         onClick={change}
       >
         {busy
@@ -4609,6 +4610,11 @@ function MonitorStatusControl({
             ? "暂停未来定时任务"
             : "恢复定时任务"}
       </button>
+      {!reason.trim() && (
+        <p className="ros-note" role="status">
+          变更定时任务前还需填写：填写变更原因。系统会保留本次状态变更，不会默默暂停或恢复后续运行。
+        </p>
+      )}
       {error && <p className="ros-error">{error}</p>}
     </div>
   );
