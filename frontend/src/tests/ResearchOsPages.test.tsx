@@ -1257,6 +1257,12 @@ describe("Research OS event entry", () => {
         name: "调整关键因素，创建新的研究范围",
       }),
     ).toBeVisible();
+    await user.clear(screen.getByLabelText("本次调整原因"));
+    expect(screen.getByRole("button", { name: "保存新的研究范围" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "保存研究范围前还需填写：填写本次调整原因",
+    );
+    await user.type(screen.getByLabelText("本次调整原因"), "补足当前验证缺口");
     await user.click(screen.getByRole("button", { name: "保存新的研究范围" }));
     expect(await screen.findByText(/已创建范围版本 v2/)).toBeVisible();
   });

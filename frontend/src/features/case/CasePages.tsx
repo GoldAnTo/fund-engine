@@ -1737,24 +1737,23 @@ function ScopeEditor({
     };
   }, [caseId, notice, historyReload]);
   const normalized = factors.map((factor) => factor.trim()).filter(Boolean);
+  const scopeMissingRequirements = [
+    normalized.length < 3 || normalized.length > 5
+      ? "保留 3–5 个关键因素"
+      : null,
+    new Set(normalized).size !== normalized.length
+      ? "移除重复的关键因素"
+      : null,
+    !reason.trim() ? "填写本次调整原因" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const scopeSaveReady = !busy && scopeMissingRequirements.length === 0;
   function edit(index: number, value: string) {
     setFactors((current) =>
       current.map((factor, position) => (position === index ? value : factor)),
     );
   }
   async function save() {
-    if (
-      normalized.length < 3 ||
-      normalized.length > 5 ||
-      new Set(normalized).size !== normalized.length
-    ) {
-      setNotice("请保留 3–5 个不重复的关键因素；空白项不会保存。");
-      return;
-    }
-    if (!reason.trim()) {
-      setNotice("请记录本次范围调整的原因，历史版本才可复现。");
-      return;
-    }
+    if (!scopeSaveReady) return;
     setBusy(true);
     setNotice(null);
     try {
@@ -1833,12 +1832,17 @@ function ScopeEditor({
         <button
           className="ros-button ros-button--primary"
           type="button"
-          disabled={busy}
+          disabled={!scopeSaveReady}
           onClick={save}
         >
           {busy ? "正在创建范围版本…" : "保存新的研究范围"}
         </button>
       </div>
+      {scopeMissingRequirements.length > 0 && (
+        <p className="ros-note" role="status">
+          保存研究范围前还需填写：{scopeMissingRequirements.join("、")}。系统会创建新版本，不会改写已冻结的范围。
+        </p>
+      )}
       {notice && (
         <p
           className={notice.startsWith("已创建") ? "ros-success" : "ros-error"}
