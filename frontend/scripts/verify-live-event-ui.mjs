@@ -296,8 +296,8 @@ async function main() {
       cwd: frontend,
       env: {
         ...env,
-        VITE_RESEARCH_API_URL: apiBase,
-        VITE_RESEARCH_BEARER_TOKEN: token,
+        VITE_BACKEND_URL: `http://127.0.0.1:${apiPort}`,
+        RESEARCH_BEARER_TOKEN: token,
         VITE_RESEARCH_CLIENT: "",
       },
     });
