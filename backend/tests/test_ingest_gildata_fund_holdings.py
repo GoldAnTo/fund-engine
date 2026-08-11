@@ -39,6 +39,12 @@ MATCHED_2024_ANNUAL_REPORT = (
     "原文地址：https://fund.example/515050/2024annual.pdf；\n"
     "原文：本基金2024年年度报告。"
 )
+MATCHED_2024_Q4_LATER_DISCLOSURE = (
+    "公告标题：华夏中证5G通信主题交易型开放式指数证券投资基金2024年第4季度公开披露股票持仓明细；\n"
+    "发布时间：2025-03-31；\n"
+    "原文地址：https://fund.example/515050/2024q4-later.pdf；\n"
+    "原文：本基金2024年第4季度公开披露股票持仓明细。"
+)
 
 
 class _FundClient:
@@ -116,6 +122,35 @@ def test_ingest_annual_report_supersedes_frozen_quarterly_disclosure(session):
     assert len(disclosures) == 2
     annual = next(item for item in disclosures if item.filing_kind == "annual")
     assert annual.supersedes_disclosure_id == quarterly.id
+
+
+def test_ingest_later_quarterly_disclosure_supersedes_earlier_quarterly_disclosure(session):
+    from app.scripts.ingest_gildata_fund_holdings import ingest
+
+    first_result = ingest(
+        session,
+        _FundClient(MATCHED_2024_Q4_REPORT, holdings=HOLDINGS_2024_Q4),
+        fund_codes=["515050"],
+        report_period=date(2024, 12, 31),
+        permissions={"display": True},
+    )
+    assert first_result.holding_disclosures_written == 1
+    first = session.scalar(select(HoldingDisclosure))
+    assert first is not None
+
+    later_result = ingest(
+        session,
+        _FundClient(MATCHED_2024_Q4_LATER_DISCLOSURE, holdings=HOLDINGS_2024_Q4),
+        fund_codes=["515050"],
+        report_period=date(2024, 12, 31),
+        permissions={"display": True},
+    )
+
+    assert later_result.holding_disclosures_written == 1
+    disclosures = list(session.scalars(select(HoldingDisclosure)))
+    later = max(disclosures, key=lambda item: item.published_at)
+    assert later.filing_kind == "quarterly"
+    assert later.supersedes_disclosure_id == first.id
 
 
 def test_ingest_keeps_unmatched_holding_out_of_formal_exposure(session):

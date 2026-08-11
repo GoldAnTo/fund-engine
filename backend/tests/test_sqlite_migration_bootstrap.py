@@ -39,6 +39,48 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         )
 
 
+def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path) -> None:
+    database_path = tmp_path / "stale-0047.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0047"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "ALTER TABLE fund_disclosure_sync_config_versions "
+                "ADD COLUMN report_period DATE"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "ALTER TABLE fund_disclosure_sync_runs ADD COLUMN report_period DATE"
+            )
+        )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0049"
+
+
 def test_live_case_runner_bootstraps_its_database_before_materializing(
     monkeypatch, tmp_path
 ) -> None:

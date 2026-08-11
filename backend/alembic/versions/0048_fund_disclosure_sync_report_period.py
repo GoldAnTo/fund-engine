@@ -18,14 +18,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
+    inspector = sa.inspect(op.get_bind())
+    for table_name in (
         "fund_disclosure_sync_config_versions",
-        sa.Column("report_period", sa.Date(), nullable=True),
-    )
-    op.add_column(
         "fund_disclosure_sync_runs",
-        sa.Column("report_period", sa.Date(), nullable=True),
-    )
+    ):
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if "report_period" not in columns:
+            op.add_column(table_name, sa.Column("report_period", sa.Date(), nullable=True))
 
 
 def downgrade() -> None:

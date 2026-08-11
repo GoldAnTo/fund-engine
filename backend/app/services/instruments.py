@@ -55,6 +55,10 @@ def _today_utc() -> date:
     return datetime.now(timezone.utc).date()
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 _FILING_KIND_PRECEDENCE = {
     "other": 0,
     "quarterly": 1,
@@ -227,8 +231,12 @@ class InstrumentService:
                 or predecessor.report_period != report_period
             ):
                 raise ValidationError("前序披露必须属于同一基金、股票和报告期")
-            if _FILING_KIND_PRECEDENCE[predecessor.filing_kind] >= _FILING_KIND_PRECEDENCE[filing_kind]:
+            predecessor_priority = _FILING_KIND_PRECEDENCE[predecessor.filing_kind]
+            filing_priority = _FILING_KIND_PRECEDENCE[filing_kind]
+            if predecessor_priority > filing_priority:
                 raise ValidationError("新披露必须高于前序披露的文件优先级")
+            if predecessor_priority == filing_priority and _as_utc(predecessor.published_at) >= _as_utc(published_at):
+                raise ValidationError("同优先级披露必须晚于前序披露的发布时间")
 
         return self._instruments.add_holding_disclosure(
             fund_id=fund.id,

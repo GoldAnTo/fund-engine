@@ -74,6 +74,10 @@ def _parse_datetime(value: str) -> datetime | None:
     )
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def _fund_code(value: str) -> str:
     return (value or "").strip().upper().removesuffix(".OF")
 
@@ -202,6 +206,7 @@ def _predecessor_for(
     stock_id: Any,
     report_period: date,
     filing_kind: str,
+    published_at: datetime,
 ) -> HoldingDisclosure | None:
     candidates = [
         disclosure
@@ -211,8 +216,15 @@ def _predecessor_for(
             .where(HoldingDisclosure.stock_id == stock_id)
             .where(HoldingDisclosure.report_period == report_period)
         )
-        if _FILING_KIND_PRECEDENCE[disclosure.filing_kind]
-        < _FILING_KIND_PRECEDENCE[filing_kind]
+        if (
+            _FILING_KIND_PRECEDENCE[disclosure.filing_kind]
+            < _FILING_KIND_PRECEDENCE[filing_kind]
+            or (
+                _FILING_KIND_PRECEDENCE[disclosure.filing_kind]
+                == _FILING_KIND_PRECEDENCE[filing_kind]
+                and _as_utc(disclosure.published_at) < _as_utc(published_at)
+            )
+        )
     ]
     return max(
         candidates,
@@ -359,6 +371,8 @@ def ingest(
                 pending_permission += len(group)
                 continue
             filing_kind = _filing_kind(announcement["title"])
+            published_at = _parse_datetime(announcement["publish_date"])
+            assert published_at is not None
             fund = _ensure_fund(session, instruments, code=fund_code, name=fund_name)
             for holding in group:
                 stock = _ensure_stock(
@@ -393,13 +407,14 @@ def ingest(
                     stock_id=stock.id,
                     report_period=period,
                     filing_kind=filing_kind,
+                    published_at=published_at,
                 )
                 InstrumentService(session).add_holding_disclosure(
                     fund=fund,
                     stock=stock,
                     weight=weight,
                     report_period=period,
-                    published_at=_parse_datetime(announcement["publish_date"]),
+                    published_at=published_at,
                     source=SOURCE_GILDATA_FUND_REPORT,
                     source_document_version_id=document.id,
                     provider_record_id=provider_record.id,

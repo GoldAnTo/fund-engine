@@ -305,6 +305,42 @@ def test_holding_disclosure_keeps_an_annual_successor_of_quarterly_disclosure(
     assert quarterly_row.supersedes_disclosure_id is None
 
 
+def test_holding_disclosure_keeps_a_later_same_kind_filing_as_a_successor(
+    cmd_client, cmd_session
+):
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+    fund_id = _create_fund(cmd_client)["id"]
+    first = _disclosure_payload(stock.id)
+    first.update(
+        {
+            "filing_kind": "quarterly",
+            "published_at": "2026-07-22T08:00:00+08:00",
+            "source": "基金2026年二季度报告",
+        }
+    )
+    first_response = cmd_client.post(
+        f"/api/v1/funds/{fund_id}/holding-disclosures", json=first
+    )
+    assert first_response.status_code == 201, first_response.text
+
+    corrected_snapshot = _disclosure_payload(stock.id)
+    corrected_snapshot.update(
+        {
+            "filing_kind": "quarterly",
+            "published_at": "2026-07-25T08:00:00+08:00",
+            "source": "基金2026年二季度报告补充持仓快照",
+            "supersedes_disclosure_id": first_response.json()["id"],
+        }
+    )
+    response = cmd_client.post(
+        f"/api/v1/funds/{fund_id}/holding-disclosures", json=corrected_snapshot
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["supersedes_disclosure_id"] == first_response.json()["id"]
+
+
 def test_holding_disclosure_keeps_source_version_provider_and_coverage(cmd_client, cmd_session):
     from hashlib import sha256
 
