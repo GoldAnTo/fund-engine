@@ -19,6 +19,10 @@ from app.errors import NotFoundError
 from app.models.ledger import HoldingDisclosure, Stock, ValuationSnapshot
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
+from app.services.exposure import (
+    choose_latest_disclosure_per_fund_stock,
+    choose_latest_disclosure_per_stock,
+)
 from app.schemas.v1.penetration import (
     CompositionPositionDTO,
     ExposurePositionDTO,
@@ -94,9 +98,10 @@ class PenetrationQueries:
         disclosures = self._instruments.disclosures_visible_on_or_before(
             fund_id, as_of
         )
-        latest_by_stock: dict[uuid.UUID, HoldingDisclosure] = {}
-        for disclosure in disclosures:  # ordered by report_period desc
-            latest_by_stock.setdefault(disclosure.stock_id, disclosure)
+        latest_by_stock = {
+            disclosure.stock_id: disclosure
+            for disclosure in choose_latest_disclosure_per_stock(disclosures)
+        }
 
         stock_ids = list(latest_by_stock)
         stocks = {
@@ -142,7 +147,7 @@ class PenetrationQueries:
         cutoff = dt.combine(
             as_of, time(23, 59, 59, 999999), tzinfo=timezone.utc
         )
-        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
+        visible: list[HoldingDisclosure] = []
         for d in self._instruments.holding_disclosures_for_stocks(stock_ids):
             if d.published_at is None:
                 continue
@@ -153,8 +158,8 @@ class PenetrationQueries:
             )
             if pub > cutoff:
                 continue
-            latest.setdefault((d.fund_id, d.stock_id), d)
-        return list(latest.values())
+            visible.append(d)
+        return choose_latest_disclosure_per_fund_stock(visible)
 
     def _latest_valuations(
         self, stock_ids: list[uuid.UUID], as_of: date

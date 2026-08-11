@@ -34,6 +34,36 @@ def test_latest_report_period_wins_per_stock(
     assert exposure.theme_weight == Decimal("0.082")
 
 
+def test_annual_disclosure_wins_only_after_it_is_published(
+    exposure_service, fund, mapped_stock, instrument_repository
+):
+    quarterly = instrument_repository.add_holding_disclosure(
+        fund_id=fund.id,
+        stock_id=mapped_stock.id,
+        weight=Decimal("0.050"),
+        report_period=date(2026, 6, 30),
+        published_at=date(2026, 7, 22),
+        source="fund-report-2026Q2",
+        filing_kind="quarterly",
+    )
+    annual = instrument_repository.add_holding_disclosure(
+        fund_id=fund.id,
+        stock_id=mapped_stock.id,
+        weight=Decimal("0.050"),
+        report_period=date(2026, 6, 30),
+        published_at=date(2027, 3, 31),
+        source="fund-report-2026-annual",
+        filing_kind="annual",
+        supersedes_disclosure_id=quarterly.id,
+    )
+
+    before_annual = exposure_service.for_fund(fund.id, as_of=date(2026, 12, 1))
+    after_annual = exposure_service.for_fund(fund.id, as_of=date(2027, 4, 1))
+
+    assert quarterly.id in {row.disclosure_id for row in before_annual.rows}
+    assert annual.id in {row.disclosure_id for row in after_annual.rows}
+
+
 def test_stock_without_theme_role_excluded_from_theme_weight(
     exposure_service, fund, company, holding_disclosure, instrument_repository
 ):

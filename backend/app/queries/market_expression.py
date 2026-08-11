@@ -12,6 +12,7 @@ from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fun
 from app.models.source_governance import SourceContract
 from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
+from app.services.exposure import choose_latest_disclosure_per_fund_stock
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
     ExpressionSourceDTO,
@@ -228,9 +229,18 @@ class MarketExpressionQueries:
         stock_ids = [item.stock_id for item in fundamentals if item.stock_id is not None]
         if not stock_ids:
             return []
-        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
-        for disclosure in self._db.scalars(select(HoldingDisclosure).where(HoldingDisclosure.stock_id.in_(stock_ids)).where(HoldingDisclosure.report_period <= as_of).where(HoldingDisclosure.published_at <= cutoff).order_by(HoldingDisclosure.report_period.desc(), HoldingDisclosure.created_at.desc())):
-            latest.setdefault((disclosure.fund_id, disclosure.stock_id), disclosure)
+        visible = list(
+            self._db.scalars(
+                select(HoldingDisclosure)
+                .where(HoldingDisclosure.stock_id.in_(stock_ids))
+                .where(HoldingDisclosure.report_period <= as_of)
+                .where(HoldingDisclosure.published_at <= cutoff)
+            )
+        )
+        latest = {
+            (disclosure.fund_id, disclosure.stock_id): disclosure
+            for disclosure in choose_latest_disclosure_per_fund_stock(visible)
+        }
         grouped: dict[uuid.UUID, list[HoldingDisclosure]] = {}
         for disclosure in latest.values():
             grouped.setdefault(disclosure.fund_id, []).append(disclosure)
