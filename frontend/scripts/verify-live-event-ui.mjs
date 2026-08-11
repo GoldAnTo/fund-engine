@@ -214,6 +214,7 @@ async function prepareReviewedSourceStatement({ apiBase, token, caseId }) {
   return {
     documentVersionId: baseline.id,
     sourceSpanId: span.id,
+    sourceStatementId: review.published_source_statement.id,
   };
 }
 
@@ -320,7 +321,7 @@ async function main() {
     const title = "真实浏览器默认 HTTP 事件验收";
     await page.goto(`${uiBase}/events/new`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "先冻结材料，再决定它属于哪个研究" }).waitFor();
-    await page.getByLabel("事件原始输入").fill(`${title}。公司披露新的经营数据，等待人工核验。`);
+    await page.getByLabel("事件原始输入").fill(`${title}。研报预计验收公司2024年归母净利润为1亿元，等待人工核验。`);
     await page.getByRole("button", { name: "识别事件与研究问题" }).click();
     await page.getByLabel("研究问题").waitFor();
     await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
@@ -372,6 +373,15 @@ async function main() {
       .waitFor();
 
     await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "从冻结原文解析关键因素" }).click();
+    await page.getByLabel("解析来源原文").selectOption(reviewedSource.sourceStatementId);
+    await page.getByRole("button", { name: "生成关键因素候选" }).click();
+    await page.getByText("2024 年归母净利润预测兑现").waitFor();
+    await page.getByRole("button", { name: "带入人工登记" }).click();
+    await page.getByLabel("主张归属").waitFor();
+    if (await page.getByLabel("研报主张文本").inputValue() !== "预计验收公司2024年归母净利润为1亿元") {
+      throw new Error("parsed key-factor candidate was not carried into the human registration form");
+    }
     await page.getByRole("button", { name: "选择冻结原文并登记主张" }).click();
     await page.getByLabel("冻结原文陈述").waitFor();
     await page.getByLabel("主张归属").fill("验收研究员");
