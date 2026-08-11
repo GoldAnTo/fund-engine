@@ -14,6 +14,7 @@ from app.models.source_governance import ProviderRecord, SourceContract
 
 USER_CONTROLLED_TYPES = frozenset({"pasted_snapshot", "uploaded_file"})
 DECLARED_SOURCE_URL_METADATA_KEY = "_source_contract_declared_url"
+DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY = "_source_contract_declared_url_is_explicit"
 RESEARCH_SOURCE_TYPES = frozenset(
     {
         "pasted_snapshot",
@@ -86,20 +87,43 @@ def _normalize_research_source_type(
     return research_source_type
 
 
+def _retrieval_reference(source_metadata: dict[str, Any] | None) -> str | None:
+    value = (source_metadata or {}).get("retrieval_reference")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _declared_source_url(
-    *, document: DocumentVersion, incoming_source_url: str | None
+    *,
+    document: DocumentVersion,
+    source_metadata: dict[str, Any] | None,
+    incoming_source_url: str | None,
 ) -> str:
-    return incoming_source_url if incoming_source_url is not None else document.source_url
+    """Select the immutable declaration URL independently from frozen storage.
+
+    The explicit request URL wins.  Provider/upload callers without one use
+    their retrieval reference; only then do generated document URLs apply.
+    """
+    return (
+        incoming_source_url
+        if incoming_source_url is not None
+        else _retrieval_reference(source_metadata) or document.source_url
+    )
 
 
 def _existing_declared_source_url(
     *, existing: SourceContract, document: DocumentVersion
 ) -> str:
     metadata = existing.intake_metadata if isinstance(existing.intake_metadata, dict) else {}
-    for key in (DECLARED_SOURCE_URL_METADATA_KEY, "retrieval_reference"):
-        value = metadata.get(key)
-        if isinstance(value, str):
-            return value
+    declared = metadata.get(DECLARED_SOURCE_URL_METADATA_KEY)
+    if (
+        metadata.get(DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY) is True
+        and isinstance(declared, str)
+    ):
+        return declared
+    if retrieval_reference := _retrieval_reference(metadata):
+        return retrieval_reference
+    if isinstance(declared, str):
+        return declared
     return document.source_url
 
 
@@ -161,7 +185,9 @@ class SourceGovernanceService:
         """
         metadata = dict(source_metadata or {})
         declared_source_url = _declared_source_url(
-            document=document, incoming_source_url=incoming_source_url
+            document=document,
+            source_metadata=metadata,
+            incoming_source_url=incoming_source_url,
         )
         research_source_type = _normalize_research_source_type(
             source_type=source_type,
@@ -243,7 +269,9 @@ class SourceGovernanceService:
         incoming_source_url: str | None = None,
     ) -> SourceContract:
         declared_source_url = _declared_source_url(
-            document=document, incoming_source_url=incoming_source_url
+            document=document,
+            source_metadata=source_metadata,
+            incoming_source_url=incoming_source_url,
         )
         existing = self._session.scalar(
             select(SourceContract).where(
@@ -256,11 +284,14 @@ class SourceGovernanceService:
                 source_type=source_type,
                 source_metadata=source_metadata,
                 document=document,
-                incoming_source_url=declared_source_url,
+                incoming_source_url=incoming_source_url,
             )
             return existing
         metadata = dict(source_metadata or {})
         metadata[DECLARED_SOURCE_URL_METADATA_KEY] = declared_source_url
+        metadata[DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY] = (
+            incoming_source_url is not None
+        )
         user_controlled = source_type in USER_CONTROLLED_TYPES
         research_source_type = _normalize_research_source_type(
             source_type=source_type,

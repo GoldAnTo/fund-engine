@@ -339,6 +339,66 @@ def test_licensed_provider_intake_preserves_provider_record_and_contract_version
     assert provider.content_sha256 == cmd_session.get(DocumentVersion, document_id).content_sha256
 
 
+def test_legacy_licensed_provider_replay_uses_retrieval_reference_as_declaration_url(
+    cmd_client, cmd_session
+) -> None:
+    """A pre-0051 contract has no internal declaration-url metadata key."""
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+
+    retrieval_reference = "juyuan://research-report/JRPT-legacy-001"
+    payload = _event_payload(
+        source_type="licensed_provider",
+        source_metadata={"retrieval_reference": retrieval_reference},
+    )
+    document = DocumentService(DocumentRepository(cmd_session)).freeze(
+        raw=payload["raw_input"].encode("utf-8"),
+        source_url="provider://unresolved-record",
+        parser_version="provider-snapshot-v1",
+        title=payload["event_title"],
+        parse_state="partial",
+    )
+    cmd_session.add(
+        SourceContract(
+            document_version_id=document.id,
+            source_type="licensed_provider",
+            research_source_type="licensed_provider",
+            provider_or_tenant="human:researcher",
+            allow_ai_processing=False,
+            allow_display=False,
+            allow_export=False,
+            allow_api=False,
+            region="not_recorded",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="not_recorded",
+            downstream_restrictions=["权限未完整记录；不得作为正式证据"],
+            contract_version=None,
+            intake_metadata={"retrieval_reference": retrieval_reference},
+            declared_by="human:researcher",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_session.commit()
+
+    replay = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert replay.status_code == 201
+
+    different_reference = _event_payload(
+        source_type="licensed_provider",
+        source_metadata={"retrieval_reference": "juyuan://research-report/JRPT-legacy-002"},
+    )
+    different_reference["event_title"] = "同正文的另一份供应商记录"
+    rejected = cmd_client.post("/api/v1/event-research", json=different_reference)
+
+    assert rejected.status_code == 422
+    assert "deduplicated original has a different source contract" in rejected.json()[
+        "error"
+    ]["message"]
+
+
 def test_event_intake_preserves_declared_contract_validity_window(
     cmd_client, cmd_session
 ) -> None:
