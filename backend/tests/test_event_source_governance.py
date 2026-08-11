@@ -210,6 +210,31 @@ def test_deduplicated_event_intake_validates_the_incoming_company_disclosure_url
     ]["message"]
 
 
+def test_deduplicated_event_intake_rejects_a_different_declared_source_url(
+    cmd_client,
+) -> None:
+    first_payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    first_payload["source_url"] = "https://issuer-a.example.com/disclosures/annual-report"
+    first = cmd_client.post("/api/v1/event-research", json=first_payload)
+
+    second_payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    second_payload["event_title"] = "同正文的另一披露链接"
+    second_payload["source_url"] = "https://issuer-b.example.com/disclosures/annual-report"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 422
+    assert "deduplicated original has a different source contract" in second.json()[
+        "error"
+    ]["message"]
+
+
 def _frozen_supplement_document(cmd_session, raw: bytes) -> DocumentVersion:
     from app.repositories.documents import DocumentRepository
     from app.services.ingest import DocumentService

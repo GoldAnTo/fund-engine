@@ -13,6 +13,7 @@ from app.models.source_governance import ProviderRecord, SourceContract
 
 
 USER_CONTROLLED_TYPES = frozenset({"pasted_snapshot", "uploaded_file"})
+DECLARED_SOURCE_URL_METADATA_KEY = "_source_contract_declared_url"
 RESEARCH_SOURCE_TYPES = frozenset(
     {
         "pasted_snapshot",
@@ -85,6 +86,23 @@ def _normalize_research_source_type(
     return research_source_type
 
 
+def _declared_source_url(
+    *, document: DocumentVersion, incoming_source_url: str | None
+) -> str:
+    return incoming_source_url if incoming_source_url is not None else document.source_url
+
+
+def _existing_declared_source_url(
+    *, existing: SourceContract, document: DocumentVersion
+) -> str:
+    metadata = existing.intake_metadata if isinstance(existing.intake_metadata, dict) else {}
+    for key in (DECLARED_SOURCE_URL_METADATA_KEY, "retrieval_reference"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            return value
+    return document.source_url
+
+
 class SourceGovernanceService:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -142,6 +160,22 @@ class SourceGovernanceService:
         widening the later Case's stated permission.
         """
         metadata = dict(source_metadata or {})
+        declared_source_url = _declared_source_url(
+            document=document, incoming_source_url=incoming_source_url
+        )
+        research_source_type = _normalize_research_source_type(
+            source_type=source_type,
+            source_metadata=source_metadata,
+            document=document,
+            incoming_source_url=declared_source_url,
+        )
+        if _existing_declared_source_url(
+            existing=existing, document=document
+        ) != declared_source_url:
+            raise ValueError(
+                "deduplicated original has a different source contract; "
+                "do not reuse it under incompatible permissions"
+            )
         user_controlled = source_type in USER_CONTROLLED_TYPES
         # Tenant ownership is an independent boundary from a provider name.
         # Event routes inject the authenticated tenant, so it must win the
@@ -158,12 +192,7 @@ class SourceGovernanceService:
         )
         incoming = {
             "source_type": source_type,
-            "research_source_type": _normalize_research_source_type(
-                source_type=source_type,
-                source_metadata=source_metadata,
-                document=document,
-                incoming_source_url=incoming_source_url,
-            ),
+            "research_source_type": research_source_type,
             "provider_or_tenant": str(incoming_provider)
             if incoming_provider is not None
             else None,
@@ -213,6 +242,9 @@ class SourceGovernanceService:
         declared_by: str,
         incoming_source_url: str | None = None,
     ) -> SourceContract:
+        declared_source_url = _declared_source_url(
+            document=document, incoming_source_url=incoming_source_url
+        )
         existing = self._session.scalar(
             select(SourceContract).where(
                 SourceContract.document_version_id == document.id
@@ -224,16 +256,17 @@ class SourceGovernanceService:
                 source_type=source_type,
                 source_metadata=source_metadata,
                 document=document,
-                incoming_source_url=incoming_source_url,
+                incoming_source_url=declared_source_url,
             )
             return existing
         metadata = dict(source_metadata or {})
+        metadata[DECLARED_SOURCE_URL_METADATA_KEY] = declared_source_url
         user_controlled = source_type in USER_CONTROLLED_TYPES
         research_source_type = _normalize_research_source_type(
             source_type=source_type,
             source_metadata=source_metadata,
             document=document,
-            incoming_source_url=incoming_source_url,
+            incoming_source_url=declared_source_url,
         )
         now = _utcnow()
         effective_from = _effective_at(metadata, "effective_from")

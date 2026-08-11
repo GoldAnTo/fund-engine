@@ -141,6 +141,53 @@ def test_upload_company_disclosure_uses_the_declared_retrieval_reference(
     assert contract.research_source_type == "company_disclosure"
 
 
+def test_deduplicated_upload_rejects_a_different_declared_retrieval_reference(
+    cmd_client, cmd_session
+) -> None:
+    raw = "公司正式披露年度经营数据。".encode()
+    first_case_id = _create_event(cmd_client)
+    first_reference = "https://issuer-a.example.com/disclosures/annual-report"
+    first = _upload(
+        cmd_client,
+        first_case_id,
+        name="annual-report.txt",
+        raw=raw,
+        mime="text/plain",
+        source_metadata={
+            "research_source_type": "company_disclosure",
+            "retrieval_reference": first_reference,
+            "permissions": {"ai_processing": True, "display": True},
+        },
+    )
+    second_case_id = _create_event(cmd_client)
+    second = _upload(
+        cmd_client,
+        second_case_id,
+        name="annual-report.txt",
+        raw=raw,
+        mime="text/plain",
+        source_metadata={
+            "research_source_type": "company_disclosure",
+            "retrieval_reference": "https://issuer-b.example.com/disclosures/annual-report",
+            "permissions": {"ai_processing": True, "display": True},
+        },
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 422
+    assert "deduplicated original has a different source contract" in second.json()[
+        "error"
+    ]["message"]
+    first_document_id = uuid.UUID(first.json()["document_version_id"])
+    contract = cmd_session.scalar(
+        select(SourceContract).where(
+            SourceContract.document_version_id == first_document_id
+        )
+    )
+    assert contract is not None
+    assert contract.intake_metadata["retrieval_reference"] == first_reference
+
+
 @pytest.mark.parametrize("retrieval_reference", [None, "event://not-an-http-url"])
 def test_upload_company_disclosure_rejects_a_missing_or_non_http_retrieval_reference(
     cmd_client, retrieval_reference
