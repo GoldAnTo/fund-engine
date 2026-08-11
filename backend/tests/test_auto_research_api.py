@@ -258,16 +258,30 @@ def test_budget_stop(session):
     assert detail["budget_used"] >= 1
 
 
-def test_round_stop(session):
+def test_empty_run_completes_without_a_phantom_review_task(session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
-    session.add(case); session.flush()
-    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
-    session.add(thesis); session.commit()
-    run = AutoResearchService(session).start(case.id, max_rounds=1, budget=1000)
+    session.add(case)
+    session.commit()
+    run = AutoResearchRepository(session).create_run(
+        research_case_id=case.id,
+        max_rounds=1,
+        budget=1000,
+    )
     AutoResearchService(session).execute(run)
     session.commit()
-    detail = AutoResearchService(session).detail(run.id)
-    assert detail["stop_reason"] in {"max_rounds_reached", "no_new_evidence", "task_failed"}
+    session.refresh(run)
+
+    assert run.status == "succeeded"
+    assert run.stop_reason == "max_rounds_reached"
+    assert list(session.scalars(select(TaskItem).where(TaskItem.research_case_id == case.id))) == []
+    completion = session.scalar(
+        select(ResearchRunEvent)
+        .where(ResearchRunEvent.run_id == run.id)
+        .where(ResearchRunEvent.stage == "complete")
+    )
+    assert completion is not None
+    assert completion.payload_json["status"] == "succeeded"
+    assert "未产生新增待审材料" in completion.message
 
 
 def test_round_2_gap_task_executes(session):

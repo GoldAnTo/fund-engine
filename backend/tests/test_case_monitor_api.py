@@ -320,6 +320,17 @@ def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
     assert item["scope"]["factor_statements"] == [factor.statement]
 
+    completed = cmd_session.get(ResearchRun, uuid.UUID(started.json()["id"]))
+    assert completed is not None
+    completed.status = "succeeded"
+    completed.stage = "complete"
+    completed.stop_reason = "no_new_evidence"
+    cmd_session.commit()
+
+    active = cmd_client.get("/api/v1/research-runs/active")
+    assert active.status_code == 200
+    assert str(completed.id) not in {run["run_id"] for run in active.json()["items"]}
+
 
 def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_started_it(
     cmd_client, cmd_session

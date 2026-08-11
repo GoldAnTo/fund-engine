@@ -394,7 +394,7 @@ class AutoResearchService:
             if used >= run.budget:
                 self.repo.update_run(
                     run,
-                    status="waiting_for_review",
+                    status=self._successful_terminal_status(run),
                     stage="stopped",
                     budget_used=used,
                     stop_reason="budget_exhausted",
@@ -516,27 +516,34 @@ class AutoResearchService:
             now = self._run_evidence_count(run)
             self.repo.update_run(run, budget_used=used, round=current_round)
             if used >= run.budget:
-                self.repo.update_run(run, status="waiting_for_review", stage="stopped", stop_reason="budget_exhausted")
+                self.repo.update_run(run, status=self._successful_terminal_status(run), stage="stopped", stop_reason="budget_exhausted")
                 break
             if current_round >= run.max_rounds:
-                self.repo.update_run(run, status="failed" if failed else "waiting_for_review", stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
+                self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
                 break
             next_tasks = self.repo.queued_tasks_for_run(run.id, current_round + 1)
             if now <= previous and not next_tasks:
-                self.repo.update_run(run, status="failed" if failed else "waiting_for_review", stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "no_new_evidence")
+                self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "no_new_evidence")
                 break
             previous = now
         else:
-            self.repo.update_run(run, status="failed" if failed else "waiting_for_review", stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
+            self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
         self.session.flush()
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)
         self.refresh_event_lifecycle(run)
+        completion_message = (
+            "运行失败，需检查失败项"
+            if run.status == "failed"
+            else "运行已结束，未产生新增待审材料"
+            if run.status == "succeeded"
+            else "运行已结束，等待后续人工动作"
+        )
         ResearchRunEventRepository(self.session).append(
             run.id,
             stage="complete" if run.status != "failed" else "failed",
             status="completed" if run.status != "failed" else "failed",
-            message="运行已结束，等待后续人工动作" if run.status != "failed" else "运行失败，需检查失败项",
+            message=completion_message,
             payload_json={
                 "status": run.status,
                 "stop_reason": run.stop_reason,
@@ -827,6 +834,26 @@ class AutoResearchService:
                 research_case_id=run.research_case_id,
                 priority="high",
             )
+
+    def _successful_terminal_status(self, run) -> str:
+        """Require a concrete reviewable output before pausing for a human."""
+        for task in self.repo.tasks_for_run(run.id):
+            result = task.result or {}
+            for raw_id in result.get("proposed_proposal_ids", []):
+                try:
+                    proposal_id = uuid.UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    continue
+                proposal = self.session.get(Proposal, proposal_id)
+                if proposal is not None and proposal.kind == "evidence_link" and proposal.status == "pending":
+                    return "waiting_for_review"
+            try:
+                if result.get("assessment_id"):
+                    uuid.UUID(str(result["assessment_id"]))
+                    return "waiting_for_review"
+            except (TypeError, ValueError):
+                continue
+        return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
 
     def _run_allowed_source_types(self, run) -> set[str]:
         """Read the immutable source-type boundary from this run's scope event."""
