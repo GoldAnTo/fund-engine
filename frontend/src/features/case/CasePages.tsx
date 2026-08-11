@@ -2936,6 +2936,34 @@ function ProtocolBindingForm(props: {
   onRetryDocuments: () => void;
 }) {
   const metric = props.metrics.find((item) => item.id === props.metricId);
+  const selectedBaselineDocument = props.documents?.find(
+    (document) => props.baselineSource.trim() === `document:${document.id}`,
+  );
+  const missingSaveRequirements = [
+    !metric ? "选择已审核的结果指标" : null,
+    !props.companyId.trim() ? "填写公司 ID" : null,
+    !props.scopeName.trim() ? `填写${metric?.entity_scope || "实体"}范围` : null,
+    props.documentsError
+      ? "重试读取当前 Case 的冻结资料"
+      : props.documents === null
+        ? "等待冻结资料核对完成"
+        : props.documents.length === 0
+          ? "补充一份当前 Case 已准入的冻结资料"
+          : !selectedBaselineDocument
+            ? "选择当前 Case 的冻结基线资料"
+            : null,
+    selectedBaselineDocument &&
+    props.availableAt !== selectedBaselineDocument.available_at
+      ? "使基线可用时点与冻结资料一致"
+      : null,
+    !props.baselineValue.trim() ? "填写基线数值" : null,
+    !props.baselinePeriod ? "填写基线观察期" : null,
+    !props.availableAt ? "填写基线可用时点" : null,
+    !props.horizonStart ? "填写验证窗口起点" : null,
+    !props.horizonEnd ? "填写验证窗口终点" : null,
+    !props.reason.trim() ? "填写登记原因" : null,
+  ].filter((value): value is string => Boolean(value));
+  const saveReady = !props.busy && missingSaveRequirements.length === 0;
   function selectBaseline(documentId: string) {
     const document = props.documents?.find((item) => item.id === documentId);
     if (!document) return;
@@ -3092,10 +3120,16 @@ function ProtocolBindingForm(props: {
               placeholder="说明为何选择该指标、基线与窗口"
             />
           </label>
+          {!saveReady && (
+            <div className="ros-rulebox" role="status">
+              <b>保存前还需填写：</b>
+              {missingSaveRequirements.join("、")}。系统不会补写缺失字段。
+            </div>
+          )}
           <button
             className="ros-button ros-button--primary"
             type="button"
-            disabled={props.busy}
+            disabled={!saveReady}
             onClick={props.onSave}
           >
             {props.busy ? "正在登记…" : "登记为待审核结果绑定"}

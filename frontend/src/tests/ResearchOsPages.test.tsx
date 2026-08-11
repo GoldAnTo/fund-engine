@@ -1148,6 +1148,8 @@ describe("Research OS event entry", () => {
     await user.click(screen.getByRole("button", { name: "登记历史预测验证" }));
     expect(await screen.findByLabelText("冻结预测值")).toBeVisible();
     expect(screen.getByText(/机器只会生成候选/)).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("冻结预测前还需填写");
+    expect(screen.getByRole("button", { name: "冻结预测目标" })).toBeDisabled();
     await user.type(screen.getByLabelText("冻结预测值"), "100");
     await user.type(screen.getByLabelText("实体标识"), "TSM");
     await user.type(screen.getByLabelText("单位"), "%");
@@ -2644,6 +2646,7 @@ describe("Research OS event entry", () => {
   });
 
   it("shows the researchability gate as an explicit Case workflow, never a hidden worker state", async () => {
+    const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
@@ -2655,6 +2658,21 @@ describe("Research OS event entry", () => {
               effective_binding_id: null,
               next_action: "确认结果指标、范围、基线和时间窗",
             }
+          : url.endsWith("/metric-definitions")
+            ? [
+                {
+                  id: "metric-revenue",
+                  metric_id: "revenue",
+                  version: 1,
+                  display_name: "营业收入",
+                  entity_scope: "company",
+                  unit: "CNY m",
+                  role_eligibility: ["outcome"],
+                  approved_by: "human:methodology",
+                  reason: "测试用已审核指标",
+                  created_at: "2026-08-09T00:00:00Z",
+                },
+              ]
           : url.endsWith("/mechanism-templates")
             ? [
                 {
@@ -2699,6 +2717,16 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("button", { name: "设定结果指标与验证窗口" }),
     ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "设定结果指标与验证窗口" }),
+    );
+    expect(
+      screen.getByRole("status"),
+    ).toHaveTextContent("保存前还需填写");
+    expect(screen.getByRole("status")).toHaveTextContent("填写公司 ID");
+    expect(
+      screen.getByRole("button", { name: "登记为待审核结果绑定" }),
+    ).toBeDisabled();
     expect(
       await screen.findByRole("button", { name: "选择此模板" }),
     ).toBeVisible();
