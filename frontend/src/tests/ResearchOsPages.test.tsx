@@ -1108,8 +1108,11 @@ describe("Research OS event entry", () => {
     expect(
       screen.queryByLabelText("允许在当前 Case 展示匹配季报来源"),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存基金披露配置" })).toBeDisabled();
+    expect(screen.getByText("保存前还需：说明配置调整理由")).toBeVisible();
     await user.selectOptions(screen.getByLabelText("补充频率"), "weekly");
     await user.type(screen.getByLabelText("配置调整理由"), "本周补充当前股票相关基金披露");
+    expect(screen.getByRole("button", { name: "保存基金披露配置" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "保存基金披露配置" }));
     expect(await screen.findByText(/已保存配置版本/)).toBeVisible();
     const configHistory = (

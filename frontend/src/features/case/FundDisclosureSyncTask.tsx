@@ -182,6 +182,12 @@ export function FundDisclosureSyncTask({
   }
   if (!detail) return null;
   const isBusy = state === "saving" || state === "running";
+  const saveReady = configuredCodes().length > 0 && Boolean(reason.trim());
+  const saveRequirement = !configuredCodes().length
+    ? "选择至少一只建议基金或填写基金代码"
+    : !reason.trim()
+      ? "说明配置调整理由"
+      : null;
 
   return (
     <section className="ros-fund-sync" aria-labelledby="fund-sync-heading">
@@ -208,7 +214,8 @@ export function FundDisclosureSyncTask({
         <label>手动补充基金代码<textarea value={manualCodes} onChange={(event) => setManualCodes(event.target.value)} placeholder="例如 005827, 110011" /></label>
         <label>补充频率<select value={frequency} onChange={(event) => setFrequency(event.target.value as "weekly" | "monthly")}><option value="weekly">每周一 09:00</option><option value="monthly">每月首日 09:00</option></select></label>
         <label>配置调整理由<textarea aria-label="配置调整理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何增减基金或调整周期" /></label>
-        <div className="ros-fund-sync__actions"><button className="ros-button ros-button--secondary" type="button" disabled={isBusy} onClick={() => void save()}>{state === "saving" ? "正在保存配置…" : "保存基金披露配置"}</button><button className="ros-button ros-button--primary" type="button" disabled={isBusy || !detail.effective_config} onClick={() => void start()}>{state === "running" ? "正在补充…" : "立即补充一次"}</button></div>
+        <div className="ros-fund-sync__actions"><button className="ros-button ros-button--secondary" type="button" disabled={isBusy || !saveReady} onClick={() => void save()}>{state === "saving" ? "正在保存配置…" : "保存基金披露配置"}</button><button className="ros-button ros-button--primary" type="button" disabled={isBusy || !detail.effective_config} onClick={() => void start()}>{state === "running" ? "正在补充…" : "立即补充一次"}</button></div>
+        {saveRequirement && <p className="ros-note">保存前还需：{saveRequirement}</p>}
       </div>
       {detail.effective_config && <p className="ros-note">当前为版本 {detail.effective_config.version} · 下次定时：{formatWhen(detail.next_scheduled_at)} · 冻结股票：{detail.effective_config.stock_codes.join("、") || "当前未绑定股票"}</p>}
       {notice && <p className="ros-success" role="status">{notice}</p>}
