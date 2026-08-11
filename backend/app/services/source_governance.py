@@ -15,6 +15,18 @@ from app.models.source_governance import ProviderRecord, SourceContract
 USER_CONTROLLED_TYPES = frozenset({"pasted_snapshot", "uploaded_file"})
 DECLARED_SOURCE_URL_METADATA_KEY = "_source_contract_declared_url"
 DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY = "_source_contract_declared_url_is_explicit"
+_GENERATED_DOCUMENT_SOURCE_URLS = frozenset(
+    {
+        "event://pasted-news",
+        "event://published-material-snapshot",
+        "event://inbox-material-snapshot",
+        "upload://event-text-snapshot",
+        "upload://published-material-text-snapshot",
+        "upload://inbox-material-text-snapshot",
+        "provider://unresolved-record",
+        "https://invalid.example/public-url-required",
+    }
+)
 RESEARCH_SOURCE_TYPES = frozenset(
     {
         "pasted_snapshot",
@@ -92,6 +104,12 @@ def _retrieval_reference(source_metadata: dict[str, Any] | None) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _is_generated_document_source_url(source_url: str) -> bool:
+    return source_url in _GENERATED_DOCUMENT_SOURCE_URLS or source_url.startswith(
+        "upload://"
+    )
+
+
 def _declared_source_url(
     *,
     document: DocumentVersion,
@@ -120,6 +138,8 @@ def _existing_declared_source_url(
         and isinstance(declared, str)
     ):
         return declared
+    if not _is_generated_document_source_url(document.source_url):
+        return document.source_url
     if retrieval_reference := _retrieval_reference(metadata):
         return retrieval_reference
     if isinstance(declared, str):
