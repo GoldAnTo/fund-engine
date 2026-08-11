@@ -62,3 +62,16 @@ def test_index_reconciliation_keeps_active_model_index_names() -> None:
         "research_runs",
         "ix_research_runs_case_created",
     ) in migration.RETIRED_ACTIVE_INDEXES
+
+
+def test_task_type_constraint_reconciliation_tracks_the_retired_constraint() -> None:
+    migration_path = MIGRATION_PATH.with_name("0046_drop_retired_task_type_constraint.py")
+    spec = importlib.util.spec_from_file_location("task_type_constraint_reconciliation", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.RETIRED_TASK_TYPE_CONSTRAINT == (
+        "research_tasks",
+        "ck_research_task_type",
+    )
