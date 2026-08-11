@@ -5,6 +5,8 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from app.models.ledger import (
     CaseDocumentVersion,
     CaseTenantAdmission,
@@ -13,9 +15,10 @@ from app.models.ledger import (
     SourceSpan,
     SourceStatement,
 )
-from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun
+from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun, FundDisclosureSyncRunEvent
 from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
 from app.models.research_expression import MarketInstrumentBinding
+from app.scripts.ingest_gildata_fund_holdings import ingest
 from app.services.fund_disclosure_sync import FundDisclosureSyncService
 
 
@@ -40,6 +43,7 @@ def test_saving_configurations_appends_versions_and_manual_run_uses_latest(sessi
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="每周核验",
     )
     second = service.save_config(
@@ -47,6 +51,7 @@ def test_saving_configurations_appends_versions_and_manual_run_uses_latest(sessi
         actor="human:researcher",
         fund_codes=["005827", "110011"],
         frequency="monthly",
+        report_period=date(2025, 6, 30),
         change_reason="调整范围",
     )
     run = service.start_manual_run(case.id)
@@ -170,6 +175,71 @@ class _MatchedFundClient(_UnmatchedFundClient):
         return json.dumps({"code": "0", "results": [{"table_markdown": table}]}, ensure_ascii=False)
 
 
+class _ScopedFundClient(_UnmatchedFundClient):
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
+        query = str(arguments.get("query", ""))
+        self.queries.append(query)
+        table = (
+            "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
+            "|---|---|---|---|---|---|\n"
+            "|示例ETF|515050.OF|2024-12-31|工业富联|601138|5.33|\n"
+            "|示例ETF|515050.SH|2024-12-31|立讯精密|002475|1.20|\n"
+            "|示例ETF|515050.OF|2025-03-31|未来样本|300001|3.00|\n"
+            "|其他基金|999999.OF|2024-12-31|错误范围|600000|2.00|"
+            if name == "FinQuery"
+            else "公告标题：示例ETF2024年第4季度报告；\n发布时间：2025-01-21；"
+        )
+        return json.dumps({"code": "0", "results": [{"table_markdown": table}]}, ensure_ascii=False)
+
+
+def test_ingest_normalizes_provider_suffixes_and_discards_out_of_scope_rows(session) -> None:
+    client = _ScopedFundClient()
+
+    stats = ingest(
+        session,
+        client,
+        fund_codes=["515050"],
+        report_period=date(2024, 12, 31),
+        permissions={"display": True},
+    )
+
+    assert stats.holding_rows_seen == 4
+    assert stats.holding_disclosures_written == 2
+    assert stats.out_of_scope_rows == 2
+    assert session.scalar(select(HoldingDisclosure.weight).order_by(HoldingDisclosure.weight.desc())) == Decimal("0.0533")
+    assert all("2024年第4季度" in query for query in client.queries)
+    assert not any("2025年第1季度" in query for query in client.queries)
+
+
+class _AliasFundClient(_UnmatchedFundClient):
+    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
+        table = (
+            "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
+            "|---|---|---|---|---|---|\n"
+            "|通信ETF华夏|515050.SH|2024-12-31|工业富联|601138.SH|5.33|\n"
+            "|华夏中证5G通信主题ETF|515050.OF|2024-12-31|立讯精密|002475.SZ|1.20|"
+            if name == "FinQuery"
+            else "公告标题：华夏中证5G通信主题交易型开放式指数证券投资基金2024年第4季度报告；\n证券简称：华夏中证5G通信主题ETF；\n发布时间：2025-01-22；"
+        )
+        return json.dumps({"code": "0", "results": [{"table_markdown": table}]}, ensure_ascii=False)
+
+
+def test_ingest_accepts_provider_announced_alias_but_still_requires_exact_quarter(session) -> None:
+    stats = ingest(
+        session,
+        _AliasFundClient(),
+        fund_codes=["515050"],
+        report_period=date(2024, 12, 31),
+        permissions={"display": True},
+    )
+
+    assert stats.matched_reports == 1
+    assert stats.holding_disclosures_written == 2
+
+
 def test_fund_disclosure_sync_ignores_display_permission_toggle_in_v1(session) -> None:
     case = _case(session)
     service = FundDisclosureSyncService(session)
@@ -178,6 +248,7 @@ def test_fund_disclosure_sync_ignores_display_permission_toggle_in_v1(session) -
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="第一版统一展示已核验的历史披露",
         allow_display=False,
     )
@@ -198,6 +269,7 @@ def test_unmatched_report_is_recorded_as_pending_and_never_becomes_exposure(sess
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="核验季报",
         allow_display=True,
     )
@@ -229,6 +301,7 @@ def test_capability_probe_failure_is_replayable_and_stops_fund_sync(session) -> 
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="核验能力边界",
         allow_display=True,
     )
@@ -271,6 +344,7 @@ def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_
         "actor": "human:researcher",
         "fund_codes": ["005827"],
         "frequency": "monthly",
+        "report_period": "2025-06-30",
         "allow_display": True,
         "change_reason": "按月核验官方季报",
     }
@@ -291,6 +365,38 @@ def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_
     assert foreign.status_code == 404
 
 
+def test_config_requires_and_freezes_a_report_period_for_the_run(cmd_client, cmd_session) -> None:
+    case = _admitted_case(cmd_session)
+    url = f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config"
+
+    missing_period = cmd_client.put(
+        url,
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["515050"],
+            "frequency": "monthly",
+            "change_reason": "历史回放",
+        },
+    )
+    saved = cmd_client.put(
+        url,
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["515050"],
+            "frequency": "monthly",
+            "report_period": "2024-12-31",
+            "change_reason": "历史回放",
+        },
+    )
+
+    assert missing_period.status_code == 422
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["report_period"] == "2024-12-31"
+
+    run = FundDisclosureSyncService(cmd_session).start_manual_run(case.id)
+    assert run.report_period == date(2024, 12, 31)
+
+
 def test_active_fund_disclosure_runs_are_visible_across_the_research_workspace(
     cmd_client, cmd_session
 ) -> None:
@@ -301,6 +407,7 @@ def test_active_fund_disclosure_runs_are_visible_across_the_research_workspace(
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="展示正在进行的基金披露补充",
     )
     run = service.start_manual_run(case.id)
@@ -342,6 +449,7 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
             "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
+            "report_period": "2025-06-30",
             "allow_display": True,
             "change_reason": "立即核验历史持仓季报",
         },
@@ -360,3 +468,47 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
     assert retried.status_code == 201, retried.text
     assert retried.json()["trigger"] == "retry"
     assert retried.json()["fund_codes"] == ["005827"]
+
+
+def test_stale_run_is_interrupted_and_retry_preserves_frozen_period(session) -> None:
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["515050"],
+        frequency="monthly",
+        report_period=date(2024, 12, 31),
+        change_reason="历史回放",
+    )
+    config = service._latest_config(case.id)
+    assert config is not None
+    run = FundDisclosureSyncRun(
+        research_case_id=case.id,
+        config_version_id=config.id,
+        trigger="manual",
+        report_period=config.report_period,
+        fund_codes=list(config.fund_codes),
+        stock_codes=list(config.stock_codes),
+        allow_display=config.allow_display,
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    session.add(run)
+    session.flush()
+    session.add(FundDisclosureSyncRunEvent(
+        run_id=run.id,
+        seq=1,
+        stage="query_holdings",
+        status="started",
+        message="开始查询指定基金的历史股票持仓披露",
+        payload_json={"report_period": "2024-12-31"},
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    ))
+    session.flush()
+
+    assert service.recover_interrupted_runs(case.id, now=datetime(2025, 1, 1, 0, 10, tzinfo=timezone.utc)) == 1
+    recovered = service._run(run.id)
+    assert recovered.events[-1].stage == "interrupted"
+    assert recovered.events[-1].status == "failed"
+    retry = service.start_retry(case.id, run.id)
+    assert retry.report_period == date(2024, 12, 31)

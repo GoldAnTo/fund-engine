@@ -1115,6 +1115,7 @@ describe("Research OS event entry", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存基金披露配置" })).toBeDisabled();
     expect(screen.getByText("保存前还需：说明配置调整理由")).toBeVisible();
+    expect(screen.getByLabelText("目标报告期")).toHaveValue("2026-06-30");
     await user.selectOptions(screen.getByLabelText("补充频率"), "weekly");
     await user.type(screen.getByLabelText("配置调整理由"), "本周补充当前股票相关基金披露");
     expect(screen.getByRole("button", { name: "保存基金披露配置" })).toBeEnabled();
@@ -1125,6 +1126,7 @@ describe("Research OS event entry", () => {
     ).parentElement;
     expect(configHistory).toHaveTextContent("本周补充当前股票相关基金披露");
     expect(configHistory).toHaveTextContent("版本 1 · 每周一 09:00");
+    expect(configHistory).toHaveTextContent("目标报告期：2026-06-30");
     const runRefresh = vi.fn();
     window.addEventListener("research-os-run-refresh", runRefresh);
     await user.click(screen.getByRole("button", { name: "立即补充一次" }));

@@ -51,6 +51,7 @@ def _config_dto(config) -> FundDisclosureSyncConfigDTO:
         id=str(config.id),
         version=config.version,
         frequency=config.frequency,
+        report_period=config.report_period,
         fund_codes=list(config.fund_codes),
         stock_codes=list(config.stock_codes),
         allow_display=config.allow_display,
@@ -67,6 +68,7 @@ def _run_dto(view: FundDisclosureSyncRunView | FundDisclosureSyncExecution) -> F
         id=str(run.id),
         config_version_id=str(run.config_version_id),
         trigger=run.trigger,
+        report_period=run.report_period,
         fund_codes=list(run.fund_codes),
         stock_codes=list(run.stock_codes),
         allow_display=run.allow_display,
@@ -123,6 +125,10 @@ def list_active_fund_disclosure_sync_runs(
     work is currently in progress and to tell the global shell what it is
     doing without leaking source content.
     """
+    case_ids = list(db.scalars(CaseTenantAccess(db).case_ids(tenant_id)))
+    service = FundDisclosureSyncService(db)
+    if any(service.recover_interrupted_runs(case_id) for case_id in case_ids):
+        db.commit()
     latest_seq = (
         select(func.max(FundDisclosureSyncRunEvent.seq))
         .where(FundDisclosureSyncRunEvent.run_id == FundDisclosureSyncRun.id)
@@ -140,9 +146,7 @@ def list_active_fund_disclosure_sync_runs(
         )
         .join(ResearchCase, ResearchCase.id == FundDisclosureSyncRun.research_case_id)
         .where(
-            FundDisclosureSyncRun.research_case_id.in_(
-                CaseTenantAccess(db).case_ids(tenant_id)
-            )
+            FundDisclosureSyncRun.research_case_id.in_(case_ids)
         )
         .where(FundDisclosureSyncRunEvent.status.in_(("queued", "started", "running")))
         .order_by(FundDisclosureSyncRunEvent.created_at.desc(), FundDisclosureSyncRun.id.desc())
@@ -176,7 +180,10 @@ def get_fund_disclosure_sync(
     tenant_id: str = Depends(require_research_tenant),
 ) -> FundDisclosureSyncDetailResponse:
     _require_case(db, case_id, tenant_id)
-    return _detail_dto(FundDisclosureSyncService(db).detail(case_id))
+    service = FundDisclosureSyncService(db)
+    if service.recover_interrupted_runs(case_id):
+        db.commit()
+    return _detail_dto(service.detail(case_id))
 
 
 @router.put(
@@ -196,6 +203,7 @@ def save_fund_disclosure_sync_config(
             actor=payload.actor,
             fund_codes=payload.fund_codes,
             frequency=payload.frequency,
+            report_period=payload.report_period,
             allow_display=payload.allow_display,
             change_reason=payload.change_reason,
         )

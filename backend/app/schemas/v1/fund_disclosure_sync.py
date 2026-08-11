@@ -13,6 +13,7 @@ class SaveFundDisclosureSyncConfigRequest(V1Model):
     actor: str = Field(min_length=1, max_length=128)
     fund_codes: list[str] = Field(min_length=1, max_length=50)
     frequency: Literal["weekly", "monthly"]
+    report_period: date
     allow_display: bool = False
     change_reason: str = Field(min_length=1)
 
@@ -28,6 +29,7 @@ class FundDisclosureSyncConfigDTO(V1Model):
     id: str
     version: int
     frequency: Literal["weekly", "monthly"]
+    report_period: date | None
     fund_codes: list[str]
     stock_codes: list[str]
     allow_display: bool
@@ -49,6 +51,7 @@ class FundDisclosureSyncRunDTO(V1Model):
     id: str
     config_version_id: str
     trigger: Literal["manual", "scheduled", "retry"]
+    report_period: date | None
     fund_codes: list[str]
     stock_codes: list[str]
     allow_display: bool

@@ -19,6 +19,7 @@ function summaryText(payload: Record<string, unknown>): string {
     holding_disclosures_written: "写入披露",
     holding_disclosures_skipped_duplicate: "跳过重复",
     invalid_rows: "无效行",
+    out_of_scope_rows: "范围外行",
   };
   return Object.entries(payload)
     .filter(([key]) => key in labels)
@@ -52,6 +53,7 @@ export function FundDisclosureSyncTask({
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [manualCodes, setManualCodes] = useState("");
   const [frequency, setFrequency] = useState<"weekly" | "monthly">("monthly");
+  const [reportPeriod, setReportPeriod] = useState("");
   const [reason, setReason] = useState("");
   const [state, setState] = useState<"loading" | "saving" | "running" | "idle">("loading");
   const [notice, setNotice] = useState<string | null>(null);
@@ -75,6 +77,7 @@ export function FundDisclosureSyncTask({
       const configured = next.effective_config;
       setSelectedCodes(configured?.fund_codes ?? next.suggestions.map((item) => item.fund_code));
       setFrequency(configured?.frequency ?? "monthly");
+      setReportPeriod(configured?.report_period ?? next.suggestions[0]?.latest_report_period ?? "");
     } catch {
       if (sequence !== reloadSequence.current) return;
       setError("暂时无法读取基金披露补充记录。不会以空白记录替代，请重试读取。");
@@ -118,6 +121,7 @@ export function FundDisclosureSyncTask({
         actor: "human:researcher",
         fund_codes: fundCodes,
         frequency,
+        report_period: reportPeriod,
         allow_display: true,
         change_reason: reason.trim(),
       });
@@ -182,9 +186,11 @@ export function FundDisclosureSyncTask({
   }
   if (!detail) return null;
   const isBusy = state === "saving" || state === "running";
-  const saveReady = configuredCodes().length > 0 && Boolean(reason.trim());
+  const saveReady = configuredCodes().length > 0 && Boolean(reportPeriod) && Boolean(reason.trim());
   const saveRequirement = !configuredCodes().length
     ? "选择至少一只建议基金或填写基金代码"
+    : !reportPeriod
+      ? "选择需要核验的目标报告期"
     : !reason.trim()
       ? "说明配置调整理由"
       : null;
@@ -213,11 +219,12 @@ export function FundDisclosureSyncTask({
       <div className="ros-fund-sync__config">
         <label>手动补充基金代码<textarea value={manualCodes} onChange={(event) => setManualCodes(event.target.value)} placeholder="例如 005827, 110011" /></label>
         <label>补充频率<select value={frequency} onChange={(event) => setFrequency(event.target.value as "weekly" | "monthly")}><option value="weekly">每周一 09:00</option><option value="monthly">每月首日 09:00</option></select></label>
+        <label>目标报告期<input aria-label="目标报告期" type="date" value={reportPeriod} onChange={(event) => setReportPeriod(event.target.value)} /></label>
         <label>配置调整理由<textarea aria-label="配置调整理由" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何增减基金或调整周期" /></label>
         <div className="ros-fund-sync__actions"><button className="ros-button ros-button--secondary" type="button" disabled={isBusy || !saveReady} onClick={() => void save()}>{state === "saving" ? "正在保存配置…" : "保存基金披露配置"}</button><button className="ros-button ros-button--primary" type="button" disabled={isBusy || !detail.effective_config} onClick={() => void start()}>{state === "running" ? "正在补充…" : "立即补充一次"}</button></div>
         {saveRequirement && <p className="ros-note">保存前还需：{saveRequirement}</p>}
       </div>
-      {detail.effective_config && <p className="ros-note">当前为版本 {detail.effective_config.version} · 下次定时：{formatWhen(detail.next_scheduled_at)} · 冻结股票：{detail.effective_config.stock_codes.join("、") || "当前未绑定股票"}</p>}
+      {detail.effective_config && <p className="ros-note">当前为版本 {detail.effective_config.version} · 目标报告期：{detail.effective_config.report_period || "旧版未冻结"} · 下次定时：{formatWhen(detail.next_scheduled_at)} · 冻结股票：{detail.effective_config.stock_codes.join("、") || "当前未绑定股票"}</p>}
       {notice && <p className="ros-success" role="status">{notice}</p>}
       {error && <p className="ros-error" role="alert">{error}</p>}
 
@@ -233,7 +240,7 @@ export function FundDisclosureSyncTask({
                   <small>{formatWhen(config.created_at)}</small>
                 </header>
                 <p>{config.change_reason}</p>
-                <small>基金：{config.fund_codes.join("、")} · 冻结股票：{config.stock_codes.join("、") || "未绑定"} · 配置人：{config.changed_by}</small>
+                <small>基金：{config.fund_codes.join("、")} · 目标报告期：{config.report_period || "旧版未冻结"} · 冻结股票：{config.stock_codes.join("、") || "未绑定"} · 配置人：{config.changed_by}</small>
               </li>
             ))}
           </ol>
@@ -245,7 +252,7 @@ export function FundDisclosureSyncTask({
         {detail.runs.length ? detail.runs.slice(0, 3).map((run) => (
           <article key={run.id}>
             <header><strong>{run.trigger === "scheduled" ? "定时补充" : run.trigger === "retry" ? "失败重试" : "立即补充"}</strong><span className={`ros-pill ros-pill--${run.status === "failed" ? "risk" : "system"}`}>{run.status === "failed" ? "失败" : run.status === "queued" ? "等待执行" : "已完成"}</span></header>
-            <small>基金 {run.fund_codes.join("、")} · 股票 {run.stock_codes.join("、") || "未绑定"} · {new Date(run.created_at).toLocaleString("zh-CN")}</small>
+            <small>基金 {run.fund_codes.join("、")} · 目标报告期 {run.report_period || "旧版未冻结"} · 股票 {run.stock_codes.join("、") || "未绑定"} · {new Date(run.created_at).toLocaleString("zh-CN")}</small>
             {run.events.filter((event) => event.stage === "provider_capability").map((event) => {
               const payload = event.payload as Record<string, unknown>;
               const tools = Array.isArray(payload.used_tools) ? payload.used_tools.join("、") : "未确认";

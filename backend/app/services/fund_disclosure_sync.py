@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -63,6 +63,7 @@ class FundDisclosureSyncService:
         actor: str,
         fund_codes: list[str],
         frequency: str,
+        report_period: date,
         change_reason: str,
         allow_display: bool = False,
     ) -> FundDisclosureSyncConfigVersion:
@@ -71,6 +72,7 @@ class FundDisclosureSyncService:
             actor=actor,
             fund_codes=fund_codes,
             frequency=frequency,
+            report_period=report_period,
             change_reason=change_reason,
         )
         last_version = self._session.scalar(
@@ -82,6 +84,7 @@ class FundDisclosureSyncService:
             research_case_id=case_id,
             version=(last_version or 0) + 1,
             frequency=frequency.strip().lower(),
+            report_period=report_period,
             fund_codes=normalized_codes,
             stock_codes=self._case_stock_codes(case_id),
             # V1 deliberately does not gate Case-scoped historical disclosure
@@ -116,11 +119,14 @@ class FundDisclosureSyncService:
             research_case_id=case_id,
             config_version_id=previous.config_version_id,
             trigger="retry",
+            report_period=previous.report_period,
             fund_codes=list(previous.fund_codes),
             stock_codes=list(previous.stock_codes),
             allow_display=previous.allow_display,
             created_at=_utcnow(),
         )
+        if previous.report_period is None:
+            raise ValueError("fund disclosure sync run has no frozen report period; create a successor configuration")
         self._session.add(run)
         self._session.flush()
         return run
@@ -129,6 +135,8 @@ class FundDisclosureSyncService:
         run = self._session.get(FundDisclosureSyncRun, run_id)
         if run is None:
             raise ValueError("fund disclosure sync run not found")
+        if run.report_period is None:
+            raise ValueError("fund disclosure sync run has no frozen report period; create a successor configuration")
         self._append_event(
             run.id,
             stage="scope",
@@ -138,6 +146,7 @@ class FundDisclosureSyncService:
                 "config_version_id": str(run.config_version_id),
                 "fund_codes": list(run.fund_codes),
                 "stock_codes": list(run.stock_codes),
+                "report_period": run.report_period.isoformat() if run.report_period else None,
                 "allow_display": run.allow_display,
             },
         )
@@ -174,7 +183,10 @@ class FundDisclosureSyncService:
             stage="query_holdings",
             status="started",
             message="开始查询指定基金的历史股票持仓披露",
-            payload_json={"fund_codes": list(run.fund_codes)},
+            payload_json={
+                "fund_codes": list(run.fund_codes),
+                "report_period": run.report_period.isoformat() if run.report_period else None,
+            },
         )
         # Provider calls can take tens of seconds.  Publish the frozen scope
         # and the explicit in-progress stage before crossing that boundary so
@@ -185,6 +197,7 @@ class FundDisclosureSyncService:
                 self._session,
                 client,
                 fund_codes=list(run.fund_codes),
+                report_period=run.report_period,
                 permissions={"display": run.allow_display},
                 case_id=run.research_case_id,
             )
@@ -208,6 +221,7 @@ class FundDisclosureSyncService:
                 "matched_reports": stats.matched_reports,
                 "pending_match_rows": stats.pending_match_rows,
                 "pending_permission_rows": stats.pending_permission_rows,
+                "out_of_scope_rows": stats.out_of_scope_rows,
             },
         )
         self._append_event(
@@ -265,6 +279,47 @@ class FundDisclosureSyncService:
             raise ValueError("research case not found")
         return FundDisclosureSyncQuery(self._session).detail(case_id)
 
+    def recover_interrupted_runs(
+        self, case_id: uuid.UUID, *, now: datetime | None = None
+    ) -> int:
+        """Terminally record stale in-flight runs without changing their scope.
+
+        Provider work happens after the frozen scope is committed.  If the
+        process dies in that boundary, an append-only terminal event makes the
+        original range truthful and gives the reviewer a retryable record.
+        """
+        cutoff = (now or _utcnow()) - timedelta(minutes=5)
+        recovered = 0
+        for run in self._session.scalars(
+            select(FundDisclosureSyncRun).where(FundDisclosureSyncRun.research_case_id == case_id)
+        ):
+            last = self._session.scalar(
+                select(FundDisclosureSyncRunEvent)
+                .where(FundDisclosureSyncRunEvent.run_id == run.id)
+                .order_by(FundDisclosureSyncRunEvent.seq.desc())
+                .limit(1)
+            )
+            if (
+                last is None
+                or last.status not in {"queued", "started", "running"}
+                or (last.created_at.replace(tzinfo=timezone.utc) if last.created_at.tzinfo is None else last.created_at) > cutoff
+            ):
+                continue
+            self._append_event(
+                run.id,
+                stage="interrupted",
+                status="failed",
+                message="运行超时或进程中断；已保留冻结范围，可按原配置重试",
+                payload_json={
+                    "reason": "stale_run_timeout",
+                    "report_period": run.report_period.isoformat() if run.report_period else None,
+                    "fund_codes": list(run.fund_codes),
+                    "stock_codes": list(run.stock_codes),
+                },
+            )
+            recovered += 1
+        return recovered
+
     @classmethod
     def next_due_at(cls, frequency: str, *, now: datetime | None = None) -> datetime | None:
         if frequency not in {"weekly", "monthly"}:
@@ -289,10 +344,13 @@ class FundDisclosureSyncService:
         config = self._latest_config(case_id)
         if config is None:
             raise ValueError("fund disclosure sync configuration not found")
+        if config.report_period is None:
+            raise ValueError("fund disclosure sync configuration has no frozen report period; create a successor configuration")
         run = FundDisclosureSyncRun(
             research_case_id=case_id,
             config_version_id=config.id,
             trigger=trigger,
+            report_period=config.report_period,
             fund_codes=list(config.fund_codes),
             stock_codes=list(config.stock_codes),
             allow_display=config.allow_display,
@@ -372,6 +430,7 @@ class FundDisclosureSyncService:
         actor: str,
         fund_codes: list[str],
         frequency: str,
+        report_period: date,
         change_reason: str,
     ) -> list[str]:
         if self._session.get(ResearchCase, case_id) is None:
@@ -380,6 +439,8 @@ class FundDisclosureSyncService:
             raise ValueError("actor must not be empty")
         if frequency.strip().lower() not in {"weekly", "monthly"}:
             raise ValueError("frequency must be weekly or monthly")
+        if report_period.month not in {3, 6, 9, 12} or report_period.day not in {30, 31}:
+            raise ValueError("report period must be a calendar quarter end")
         if not change_reason.strip():
             raise ValueError("change reason must not be empty")
         codes = sorted({code.strip().upper() for code in fund_codes if code.strip()})
