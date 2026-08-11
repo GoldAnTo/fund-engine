@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
@@ -32,6 +32,45 @@ import {
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
 import type { EventWorkbench } from "../domain/eventResearch";
+
+const historicalRunSummaries = [
+  {
+    id: "run-reviewed",
+    status: "succeeded",
+    stage: "complete",
+    round: 1,
+    stop_reason: "max_rounds_reached",
+    created_at: "2026-08-11T01:00:00Z",
+    next_action: "查看已审核结论",
+  },
+  {
+    id: "run-waiting",
+    status: "waiting_for_review",
+    stage: "stopped",
+    round: 1,
+    stop_reason: "max_rounds_reached",
+    created_at: "2026-08-10T01:00:00Z",
+    next_action: "人工审核临时评估",
+  },
+];
+
+function MonitorLocationProbe() {
+  const location = useLocation();
+  return <output data-testid="monitor-location">{location.search}</output>;
+}
+
+function renderMonitorPage(initialEntry: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route
+          path="/events/:caseId/monitor"
+          element={<><CaseMonitorPage /><MonitorLocationProbe /></>}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 describe("Research OS event entry", () => {
   it("groups Case navigation into research stages", async () => {
@@ -3240,6 +3279,146 @@ describe("Research OS event entry", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
+  });
+
+  async function setupHistoricalRunReplay(options: {
+    latestRunId?: string;
+    rejectDetailFor?: string;
+  } = {}) {
+    const adapter = new MockResearchAdapter();
+    const baseRun = await adapter.getResearchRun("run-aic-001");
+    const latestRunId = options.latestRunId ?? "run-reviewed";
+    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue(historicalRunSummaries);
+    vi.spyOn(adapter, "getResearchRun").mockImplementation(async (runId) => {
+      if (runId === options.rejectDetailFor) {
+        throw new Error("run detail unavailable");
+      }
+      const summary = historicalRunSummaries.find((item) => item.id === runId);
+      if (!summary) throw new Error("run missing");
+      return {
+        ...baseRun,
+        ...summary,
+        case_id: "event-tsm",
+        pending_assessments: [],
+        pending_proposals: [],
+        review_tasks: [],
+        gap_tasks: [],
+        failed_tasks: [],
+      };
+    });
+    setResearchClient(adapter);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const runId = url.match(/\/research-runs\/([^/]+)\/events$/)?.[1];
+        const body = url.endsWith("/research-runs/worker-status")
+          ? { status: "healthy", last_seen_at: "2026-08-11T01:00:00Z", mode: "manual", state: "idle" }
+          : url.includes("/researchability")
+            ? { status: "ready", reason_codes: [], effective_binding_id: "binding-1", next_action: "可开始补证" }
+            : runId
+              ? {
+                  run_id: runId,
+                  has_more: false,
+                  items: [{
+                    seq: 7,
+                    stage: "complete",
+                    status: runId === "run-reviewed" ? "succeeded" : "waiting_for_review",
+                    message: runId === "run-reviewed"
+                      ? "人工已完成临时 AI 评估审核；本次运行没有剩余待审项。"
+                      : "等待人工审核临时 AI 评估。",
+                    details: {},
+                    created_at: "2026-08-11T01:00:00Z",
+                  }],
+                }
+              : {
+                  monitor: {
+                    id: "monitor-v1",
+                    version: 1,
+                    status: "active",
+                    frequency: "weekday_08_30",
+                    factor_ids: ["event-tsm-factor-1"],
+                    allowed_source_types: ["company_disclosure"],
+                    next_verification_event: "下一次财报",
+                    budget: 10,
+                    changed_by: "human:researcher",
+                    change_reason: "验收历史运行回放",
+                    created_at: "2026-08-10T01:00:00Z",
+                  },
+                  latest_run: {
+                    id: latestRunId,
+                    status: latestRunId === "run-reviewed" ? "succeeded" : "waiting_for_review",
+                    stage: latestRunId === "run-reviewed" ? "complete" : "stopped",
+                    updated_at: "2026-08-11T01:00:00Z",
+                  },
+                  confirmed_factors: [{ id: "event-tsm-factor-1", statement: "资本开支指引" }],
+                  next_scheduled_at: null,
+                };
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+  }
+
+  it("replays the exact historical run named by the monitor URL", async () => {
+    await setupHistoricalRunReplay();
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+
+    expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
+    expect(
+      screen.getByText("人工已完成临时 AI 评估审核；本次运行没有剩余待审项。"),
+    ).toBeVisible();
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed");
+  });
+
+  it("writes the latest run into an empty monitor URL and keeps it after remount", async () => {
+    await setupHistoricalRunReplay();
+    const first = renderMonitorPage("/events/event-tsm/monitor");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed"),
+    );
+    first.unmount();
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+    expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
+  });
+
+  it("selects a history row by changing the URL and opening that run detail", async () => {
+    const user = userEvent.setup();
+    await setupHistoricalRunReplay();
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+
+    await user.click(
+      await screen.findByRole("button", { name: "待人工审核 · 已停止 · run-waiting" }),
+    );
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-waiting");
+    expect(await screen.findByText("ResearchRun · run-waiting")).toBeVisible();
+  });
+
+  it("does not replace an invalid or unreadable run URL with the latest run", async () => {
+    await setupHistoricalRunReplay();
+    renderMonitorPage("/events/event-tsm/monitor?run=run-missing");
+
+    const missingAlert = await screen.findByRole("alert");
+    expect(missingAlert).toHaveTextContent("无法回放此运行");
+    expect(missingAlert).toHaveTextContent("run-missing");
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-missing");
+    expect(screen.queryByText("ResearchRun · run-reviewed")).not.toBeInTheDocument();
+  });
+
+  it("keeps a detail-read failure on the requested run URL", async () => {
+    await setupHistoricalRunReplay({ rejectDetailFor: "run-reviewed" });
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("无法回放此运行");
+    expect(alert).toHaveTextContent("run-reviewed");
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed");
+    expect(screen.queryByText("ResearchRun · run-waiting")).not.toBeInTheDocument();
   });
 
   it("reviews a provisional assessment from the run that produced it", async () => {
