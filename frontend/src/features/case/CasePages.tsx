@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   Link,
   useLocation,
@@ -26,7 +26,10 @@ import type {
   EventSourceType,
   EventWorkbench,
 } from "../../domain/eventResearch";
-import type { ResearchRunDetail } from "../../domain/prototypeTypes";
+import type {
+  ResearchRunDetail,
+  ResearchRunSummary,
+} from "../../domain/prototypeTypes";
 import {
   decodeRecoveryRouteState,
   encodeRecoveryRouteState,
@@ -3688,7 +3691,6 @@ export function CaseMonitorPage() {
       {(data, caseId) => (
         <MonitorContent
           caseId={caseId}
-          activeRunId={data.lifecycle.activeRunId}
         />
       )}
     </CaseFrame>
@@ -3696,47 +3698,88 @@ export function CaseMonitorPage() {
 }
 function MonitorContent({
   caseId,
-  activeRunId,
 }: {
   caseId: string;
-  activeRunId: string | null;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedRunId = searchParams.get("run");
   const [detail, setDetail] = useState<MonitorDetail | null>(null);
   const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
   const [workerStatusError, setWorkerStatusError] = useState(false);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [runDetail, setRunDetail] = useState<ResearchRunDetail | null>(null);
   const [runDetailLoadError, setRunDetailLoadError] = useState(false);
-  const [drawer, setDrawer] = useState(false);
+  const [drawer, setDrawer] = useState(() => Boolean(selectedRunId));
   const [error, setError] = useState<string | null>(null);
   const [monitorLoadError, setMonitorLoadError] = useState(false);
   const [runEventsLoadError, setRunEventsLoadError] = useState(false);
   const [protocolLoadError, setProtocolLoadError] = useState(false);
   const [protocolReload, setProtocolReload] = useState(0);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(
-    activeRunId,
-  );
+  const [runHistory, setRunHistory] = useState<ResearchRunSummary[]>([]);
+  const [runHistoryLoaded, setRunHistoryLoaded] = useState(false);
+  const [runHistoryLoadError, setRunHistoryLoadError] = useState(false);
+  const selectedRunIdRef = useRef<string | null>(selectedRunId);
+  const beganWithRunParameterRef = useRef(Boolean(selectedRunId));
   const [starting, setStarting] = useState(false);
   const [protocolStates, setProtocolStates] = useState<
     Record<string, Researchability>
   >({});
-  const loadMonitor = ({ retainSelectedRun = false } = {}) => {
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId;
+  }, [selectedRunId]);
+  function selectRun(
+    runId: string,
+    {
+      replace = false,
+      openDrawer = true,
+    }: {
+      replace?: boolean;
+      openDrawer?: boolean;
+    } = {},
+  ) {
+    selectedRunIdRef.current = runId;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("run", runId);
+      return next;
+    }, { replace });
+    if (openDrawer) setDrawer(true);
+  }
+  const loadMonitor = () => {
     setMonitorLoadError(false);
     return researchOsApi
       .monitor(caseId)
       .then((value) => {
         setDetail(value);
-        if (!retainSelectedRun) {
-          setSelectedRunId(value.latest_run?.id ?? null);
+        if (!selectedRunIdRef.current && value.latest_run?.id) {
+          selectRun(value.latest_run.id, {
+            replace: true,
+            openDrawer: false,
+          });
         }
       })
       .catch(() => setMonitorLoadError(true));
+  };
+  const loadRunHistory = () => {
+    setRunHistoryLoadError(false);
+    setRunHistoryLoaded(false);
+    return researchClient
+      .listResearchRuns(caseId)
+      .then((items) => {
+        setRunHistory(items);
+        setRunHistoryLoaded(true);
+      })
+      .catch(() => {
+        setRunHistory([]);
+        setRunHistoryLoadError(true);
+      });
   };
   const loadEvents = (runId: string) => {
     setRunEventsLoadError(false);
     return researchOsApi
       .runEvents(runId)
-      .then((response) =>
+      .then((response) => {
+        if (selectedRunIdRef.current !== runId) return;
         setEvents(
           response.items.map((event) => ({
             seq: event.seq,
@@ -3746,9 +3789,10 @@ function MonitorContent({
             details: event.details ?? {},
             createdAt: event.created_at,
           })),
-        ),
-      )
+        );
+      })
       .catch(() => {
+        if (selectedRunIdRef.current !== runId) return;
         setEvents([]);
         setRunEventsLoadError(true);
       });
@@ -3757,14 +3801,29 @@ function MonitorContent({
     setRunDetailLoadError(false);
     return researchClient
       .getResearchRun(runId)
-      .then((value) => setRunDetail(value))
+      .then((value) => {
+        if (selectedRunIdRef.current === runId) setRunDetail(value);
+      })
       .catch(() => {
+        if (selectedRunIdRef.current !== runId) return;
         setRunDetail(null);
         setRunDetailLoadError(true);
       });
   };
+  const selectedRunKnown = !selectedRunId
+    || !beganWithRunParameterRef.current
+    || !runHistoryLoaded
+    || runHistory.length === 0
+    || runHistory.some((run) => run.id === selectedRunId);
+  const cannotReplaySelectedRun = Boolean(selectedRunId && !selectedRunKnown);
+  const runReplayLoadFailed = Boolean(
+    selectedRunId
+      && beganWithRunParameterRef.current
+      && runDetailLoadError,
+  );
   useEffect(() => {
     void loadMonitor();
+    void loadRunHistory();
   }, [caseId]);
   useEffect(() => {
     let active = true;
@@ -3788,7 +3847,7 @@ function MonitorContent({
     };
   }, []);
   useEffect(() => {
-    if (!selectedRunId) {
+    if (!selectedRunId || cannotReplaySelectedRun) {
       setEvents([]);
       setRunDetail(null);
       setRunDetailLoadError(false);
@@ -3800,11 +3859,11 @@ function MonitorContent({
       5_000,
     );
     return () => window.clearInterval(refresh);
-  }, [selectedRunId]);
+  }, [selectedRunId, cannotReplaySelectedRun]);
   useEffect(() => {
-    if (!selectedRunId) return;
+    if (!selectedRunId || cannotReplaySelectedRun) return;
     void loadRunDetail(selectedRunId);
-  }, [selectedRunId]);
+  }, [selectedRunId, cannotReplaySelectedRun]);
   useEffect(() => {
     let active = true;
     // A manual run is frozen from CaseMonitor.factor_ids.  Checking every
@@ -3845,6 +3904,14 @@ function MonitorContent({
       : runDetail?.id === selectedRunId
         ? runDetail
         : null;
+  const runTimestamp = run
+    ? "updated_at" in run && run.updated_at
+      ? run.updated_at
+      : "created_at" in run
+        ? run.created_at
+        : null
+    : null;
+  const latestRunId = detail?.latest_run?.id ?? null;
   const protocolBlockers = Object.entries(protocolStates)
     .filter(([, state]) => state.status === "blocked")
     .flatMap(([id, state]) =>
@@ -3863,9 +3930,8 @@ function MonitorContent({
     setError(null);
     try {
       const created = await researchOsApi.startMonitorRun(caseId);
-      setSelectedRunId(created.id);
-      await Promise.all([loadMonitor(), loadEvents(created.id)]);
-      setDrawer(true);
+      selectRun(created.id);
+      await Promise.all([loadMonitor(), loadRunHistory(), loadEvents(created.id)]);
     } catch {
       setError(
         "无法按当前 CaseMonitor 版本创建立即补证运行；没有写入部分运行。请检查服务状态后重试。",
@@ -3879,7 +3945,7 @@ function MonitorContent({
     setError(null);
     try {
       await researchOsApi.cancelRun(selectedRunId, changeReason);
-      await Promise.all([loadMonitor(), loadEvents(selectedRunId)]);
+      await Promise.all([loadMonitor(), loadRunHistory(), loadEvents(selectedRunId)]);
     } catch {
       setError(
         "停止运行失败；原运行状态与记录未被页面伪造修改。请刷新后重试。",
@@ -3889,7 +3955,8 @@ function MonitorContent({
   async function reloadAfterAssessmentReview() {
     if (!selectedRunId) return;
     await Promise.all([
-      loadMonitor({ retainSelectedRun: true }),
+      loadMonitor(),
+      loadRunHistory(),
       loadRunDetail(selectedRunId),
       loadEvents(selectedRunId),
     ]);
@@ -3991,6 +4058,23 @@ function MonitorContent({
           </button>
         </section>
       )}
+      {selectedRunId && (cannotReplaySelectedRun || runReplayLoadFailed) && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>无法回放此运行</strong>
+          <p>
+            运行 {selectedRunId} 不在当前案例可访问的历史中，或详情暂不可读取；页面不会自动切换为另一条运行。
+          </p>
+          {latestRunId && (
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => selectRun(latestRunId)}
+            >
+              返回最新运行
+            </button>
+          )}
+        </section>
+      )}
       {protocolLoadError && (
         <section className="ros-empty ros-empty--compact" role="alert">
           <strong>研究协议状态暂不可读取</strong>
@@ -4008,6 +4092,51 @@ function MonitorContent({
       )}
       {error && <p className="ros-error">{error}</p>}
       <div className="ros-monitor-grid">
+        <aside className="ros-run-history" aria-label="运行历史">
+          <p className="ros-eyebrow">运行历史</p>
+          <h2>冻结记录</h2>
+          {runHistoryLoadError ? (
+            <section className="ros-empty ros-empty--compact" role="alert">
+              <strong>运行历史暂不可读取</strong>
+              <p>已选运行的详情不会因此被其他记录替代。</p>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                onClick={() => void loadRunHistory()}
+              >
+                重新读取运行历史
+              </button>
+            </section>
+          ) : runHistory.length ? (
+            <ol>
+              {runHistory.slice(0, 20).map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={item.id === selectedRunId ? "is-selected" : undefined}
+                    aria-current={item.id === selectedRunId ? "true" : undefined}
+                    aria-label={`${runStatusLabel(item.status)} · ${runStageLabel(item.stage)} · ${item.id}`}
+                    onClick={() => selectRun(item.id)}
+                  >
+                    <strong>
+                      {runStatusLabel(item.status)} · {runStageLabel(item.stage)}
+                    </strong>
+                    <span>
+                      {new Date(item.created_at).toLocaleString("zh-CN", {
+                        timeZone: "Asia/Shanghai",
+                      })}
+                    </span>
+                    <small>{item.stop_reason || "尚无停止原因"}</small>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : runHistoryLoaded ? (
+            <div className="ros-empty ros-empty--compact">尚无运行记录。</div>
+          ) : (
+            <div className="ros-empty ros-empty--compact">正在读取运行历史…</div>
+          )}
+        </aside>
         <section className="ros-card ros-run-card">
           <header className="ros-card-head">
             <div>
@@ -4016,7 +4145,7 @@ function MonitorContent({
               </p>
               <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : selectedRunId ? "运行状态暂不可读取" : "先配置持续研究"}</h2>
             </div>
-            <span>{run ? `更新于 ${"updated_at" in run ? run.updated_at : run.created_at}` : selectedRunId ? "等待服务返回实际状态" : ""}</span>
+            <span>{run ? runTimestamp ? `更新于 ${runTimestamp}` : "更新时间未记录" : selectedRunId ? "等待服务返回实际状态" : ""}</span>
           </header>
           <div className="ros-run-summary">
             <strong>
@@ -4134,7 +4263,7 @@ function MonitorContent({
           </p>
         </aside>
       </div>
-      {drawer && selectedRunId && (
+      {drawer && selectedRunId && !cannotReplaySelectedRun && !runReplayLoadFailed && (
         <RunDrawer
           run={run}
           detail={detail}

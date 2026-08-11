@@ -72,6 +72,18 @@ function renderMonitorPage(initialEntry: string) {
   );
 }
 
+function monitorRunSummary(id: string, status: string, stage: string) {
+  return {
+    id,
+    status,
+    stage,
+    round: 1,
+    stop_reason: null,
+    created_at: "2026-08-09T00:00:00Z",
+    next_action: "查看运行详情",
+  };
+}
+
 describe("Research OS event entry", () => {
   it("groups Case navigation into research stages", async () => {
     render(
@@ -463,7 +475,12 @@ describe("Research OS event entry", () => {
 
   it("makes an unreadable run-event ledger explicit and lets the researcher retry it", async () => {
     const user = userEvent.setup();
-    const api = new MockResearchOsApi(new MockResearchAdapter());
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue([
+      monitorRunSummary("run-demo-1", "awaiting_review", "review"),
+    ]);
+    const api = new MockResearchOsApi(adapter);
+    setResearchClient(adapter);
     const runEvents = vi.spyOn(api, "runEvents").mockRejectedValue(
       new Error("Run events unavailable"),
     );
@@ -488,7 +505,12 @@ describe("Research OS event entry", () => {
 
   it("does not allow immediate replenishment while researchability is unreadable", async () => {
     const user = userEvent.setup();
-    const api = new MockResearchOsApi(new MockResearchAdapter());
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue([
+      monitorRunSummary("run-demo-1", "awaiting_review", "review"),
+    ]);
+    const api = new MockResearchOsApi(adapter);
+    setResearchClient(adapter);
     const researchability = vi
       .spyOn(api, "researchability")
       .mockRejectedValue(new Error("Researchability unavailable"));
@@ -3039,6 +3061,13 @@ describe("Research OS event entry", () => {
   it("starts immediate replenishment through the frozen-monitor endpoint", async () => {
     const user = userEvent.setup();
     let monitorRunCreated = false;
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchRuns").mockImplementation(async () =>
+      monitorRunCreated
+        ? [monitorRunSummary("run-monitor-v3", "running", "retrieve")]
+        : [],
+    );
+    setResearchClient(adapter);
     const monitor = {
       id: "monitor-v3",
       version: 3,
@@ -3180,6 +3209,11 @@ describe("Research OS event entry", () => {
 
   it("requires a recorded reason before a researcher stops an in-progress run", async () => {
     const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue([
+      monitorRunSummary("run-live", "running", "retrieve"),
+    ]);
+    setResearchClient(adapter);
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const body = url.includes("/researchability")
@@ -3284,11 +3318,15 @@ describe("Research OS event entry", () => {
   async function setupHistoricalRunReplay(options: {
     latestRunId?: string;
     rejectDetailFor?: string;
+    rejectHistory?: boolean;
   } = {}) {
     const adapter = new MockResearchAdapter();
     const baseRun = await adapter.getResearchRun("run-aic-001");
     const latestRunId = options.latestRunId ?? "run-reviewed";
-    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue(historicalRunSummaries);
+    vi.spyOn(adapter, "listResearchRuns").mockImplementation(async () => {
+      if (options.rejectHistory) throw new Error("run history unavailable");
+      return historicalRunSummaries;
+    });
     vi.spyOn(adapter, "getResearchRun").mockImplementation(async (runId) => {
       if (runId === options.rejectDetailFor) {
         throw new Error("run detail unavailable");
@@ -3298,6 +3336,7 @@ describe("Research OS event entry", () => {
       return {
         ...baseRun,
         ...summary,
+        updated_at: undefined,
         case_id: "event-tsm",
         pending_assessments: [],
         pending_proposals: [],
@@ -3370,9 +3409,18 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
     expect(
-      screen.getByText("人工已完成临时 AI 评估审核；本次运行没有剩余待审项。"),
-    ).toBeVisible();
+      screen.getAllByText("人工已完成临时 AI 评估审核；本次运行没有剩余待审项。"),
+    ).toHaveLength(2);
     expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed");
+  });
+
+  it("uses the historical run creation time when its detail has no update time", async () => {
+    await setupHistoricalRunReplay({ latestRunId: "run-waiting" });
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+
+    expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
+    expect(screen.queryByText("更新于 undefined")).not.toBeInTheDocument();
+    expect(screen.getByText(/更新于 2026-08-11T01:00:00Z/)).toBeVisible();
   });
 
   it("writes the latest run into an empty monitor URL and keeps it after remount", async () => {
@@ -3393,13 +3441,14 @@ describe("Research OS event entry", () => {
     renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
 
     await user.click(
-      await screen.findByRole("button", { name: "待人工审核 · 已停止 · run-waiting" }),
+      await screen.findByRole("button", { name: "等待人工审核 · 运行已停止 · run-waiting" }),
     );
     expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-waiting");
     expect(await screen.findByText("ResearchRun · run-waiting")).toBeVisible();
   });
 
   it("does not replace an invalid or unreadable run URL with the latest run", async () => {
+    const user = userEvent.setup();
     await setupHistoricalRunReplay();
     renderMonitorPage("/events/event-tsm/monitor?run=run-missing");
 
@@ -3408,6 +3457,10 @@ describe("Research OS event entry", () => {
     expect(missingAlert).toHaveTextContent("run-missing");
     expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-missing");
     expect(screen.queryByText("ResearchRun · run-reviewed")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "返回最新运行" }));
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed");
+    expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
   });
 
   it("keeps a detail-read failure on the requested run URL", async () => {
@@ -3421,10 +3474,22 @@ describe("Research OS event entry", () => {
     expect(screen.queryByText("ResearchRun · run-waiting")).not.toBeInTheDocument();
   });
 
+  it("keeps a URL-selected run detail visible when the history list cannot load", async () => {
+    await setupHistoricalRunReplay({ rejectHistory: true });
+    renderMonitorPage("/events/event-tsm/monitor?run=run-reviewed");
+
+    expect(await screen.findByText("运行历史暂不可读取")).toBeVisible();
+    expect(await screen.findByText("ResearchRun · run-reviewed")).toBeVisible();
+    expect(screen.getByTestId("monitor-location")).toHaveTextContent("?run=run-reviewed");
+  });
+
   it("reviews a provisional assessment from the run that produced it", async () => {
     const user = userEvent.setup();
     const adapter = new MockResearchAdapter();
     const baseRun = await adapter.getResearchRun("run-aic-001");
+    vi.spyOn(adapter, "listResearchRuns").mockResolvedValue([
+      monitorRunSummary("run-live", "waiting_for_review", "stopped"),
+    ]);
     let reviewed = false;
     const reviewAssessment = vi.spyOn(adapter, "reviewAssessment").mockImplementation(async () => {
       reviewed = true;
