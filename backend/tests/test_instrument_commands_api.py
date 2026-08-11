@@ -6,6 +6,7 @@ fixtures: command endpoints COMMIT, so they never share the session engine.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 
 import pytest
@@ -258,6 +259,50 @@ def test_create_holding_disclosure_persists_ledger_row(cmd_client, cmd_session):
     assert row.report_period == date(2026, 6, 30)
     assert row.source == "基金2026年二季报"
     assert row.published_at.tzinfo is not None or row.published_at is not None
+
+
+def test_holding_disclosure_keeps_an_annual_successor_of_quarterly_disclosure(
+    cmd_client, cmd_session
+):
+    from app.models.ledger import HoldingDisclosure
+
+    company = _seed_company(cmd_session)
+    stock = _seed_stock(cmd_session, company)
+    fund_id = _create_fund(cmd_client)["id"]
+    quarterly = _disclosure_payload(stock.id)
+    quarterly.update(
+        {
+            "filing_kind": "quarterly",
+            "published_at": "2026-07-22T08:00:00+08:00",
+            "source": "基金2026年二季度报告",
+        }
+    )
+    quarterly_response = cmd_client.post(
+        f"/api/v1/funds/{fund_id}/holding-disclosures", json=quarterly
+    )
+    assert quarterly_response.status_code == 201, quarterly_response.text
+
+    annual = _disclosure_payload(stock.id)
+    annual.update(
+        {
+            "filing_kind": "annual",
+            "published_at": "2027-03-31T08:00:00+08:00",
+            "source": "基金2026年年度报告",
+            "supersedes_disclosure_id": quarterly_response.json()["id"],
+        }
+    )
+    annual_response = cmd_client.post(
+        f"/api/v1/funds/{fund_id}/holding-disclosures", json=annual
+    )
+
+    assert annual_response.status_code == 201, annual_response.text
+    assert annual_response.json()["filing_kind"] == "annual"
+    assert annual_response.json()["supersedes_disclosure_id"] == quarterly_response.json()["id"]
+    quarterly_row = cmd_session.get(
+        HoldingDisclosure, uuid.UUID(quarterly_response.json()["id"])
+    )
+    assert quarterly_row is not None
+    assert quarterly_row.supersedes_disclosure_id is None
 
 
 def test_holding_disclosure_keeps_source_version_provider_and_coverage(cmd_client, cmd_session):

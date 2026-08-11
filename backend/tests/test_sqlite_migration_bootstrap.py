@@ -33,7 +33,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0048"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0049"
         assert {"key_factor_candidate_runs", "key_factor_candidates"}.issubset(
             sa.inspect(connection).get_table_names()
         )
@@ -90,7 +90,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0048"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0049"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:

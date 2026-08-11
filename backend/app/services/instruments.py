@@ -55,6 +55,14 @@ def _today_utc() -> date:
     return datetime.now(timezone.utc).date()
 
 
+_FILING_KIND_PRECEDENCE = {
+    "other": 0,
+    "quarterly": 1,
+    "annual": 2,
+    "correction": 3,
+}
+
+
 class InstrumentService:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -141,6 +149,8 @@ class InstrumentService:
         source_span_id: uuid.UUID | None = None,
         provider_record_id: uuid.UUID | None = None,
         coverage_status: str = "not_recorded",
+        filing_kind: str = "other",
+        supersedes_disclosure_id: uuid.UUID | None = None,
     ) -> HoldingDisclosure:
         if weight <= 0 or weight > Decimal("100"):
             raise ValidationError("weight 必须在 (0, 100] 区间内")
@@ -155,6 +165,8 @@ class InstrumentService:
         source = _require_non_empty(source, "source", 128)
         if coverage_status not in {"complete", "partial", "not_recorded"}:
             raise ValidationError("coverage_status 必须为 complete、partial 或 not_recorded")
+        if filing_kind not in _FILING_KIND_PRECEDENCE:
+            raise ValidationError("filing_kind 必须为 quarterly、annual、correction 或 other")
         document = self._session.get(DocumentVersion, source_document_version_id) if source_document_version_id else None
         span = self._session.get(SourceSpan, source_span_id) if source_span_id else None
         provider = self._session.get(ProviderRecord, provider_record_id) if provider_record_id else None
@@ -196,6 +208,19 @@ class InstrumentService:
         if existing:
             raise ConflictError("该基金在该报告期对该股票的同一来源披露已存在")
 
+        if supersedes_disclosure_id is not None:
+            predecessor = self._session.get(HoldingDisclosure, supersedes_disclosure_id)
+            if predecessor is None:
+                raise ValidationError("supersedes_disclosure_id 不存在")
+            if (
+                predecessor.fund_id != fund.id
+                or predecessor.stock_id != stock.id
+                or predecessor.report_period != report_period
+            ):
+                raise ValidationError("前序披露必须属于同一基金、股票和报告期")
+            if _FILING_KIND_PRECEDENCE[predecessor.filing_kind] >= _FILING_KIND_PRECEDENCE[filing_kind]:
+                raise ValidationError("新披露必须高于前序披露的文件优先级")
+
         return self._instruments.add_holding_disclosure(
             fund_id=fund.id,
             stock_id=stock.id,
@@ -207,6 +232,8 @@ class InstrumentService:
             source_span_id=source_span_id,
             provider_record_id=provider_record_id,
             coverage_status=coverage_status,
+            filing_kind=filing_kind,
+            supersedes_disclosure_id=supersedes_disclosure_id,
         )
 
     def add_valuation_snapshot(

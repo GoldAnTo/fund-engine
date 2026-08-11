@@ -653,6 +653,10 @@ class HoldingDisclosure(Base):
     __tablename__ = "holding_disclosures"
     __table_args__ = (
         CheckConstraint("coverage_status IN ('complete', 'partial', 'not_recorded')", name="ck_holding_disclosures_coverage_status"),
+        CheckConstraint(
+            "filing_kind IN ('quarterly', 'annual', 'correction', 'other')",
+            name="ck_holding_disclosures_filing_kind",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -675,6 +679,10 @@ class HoldingDisclosure(Base):
     source_span_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=True)
     provider_record_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("provider_records.id"), nullable=True)
     coverage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_recorded")
+    filing_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="other")
+    supersedes_disclosure_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("holding_disclosures.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

@@ -153,6 +153,8 @@ class InstrumentRepository:
         source_span_id: uuid.UUID | None = None,
         provider_record_id: uuid.UUID | None = None,
         coverage_status: str = "not_recorded",
+        filing_kind: str = "other",
+        supersedes_disclosure_id: uuid.UUID | None = None,
     ) -> HoldingDisclosure:
         disclosure = HoldingDisclosure(
             fund_id=fund_id,
@@ -166,6 +168,8 @@ class InstrumentRepository:
             source_span_id=source_span_id,
             provider_record_id=provider_record_id,
             coverage_status=coverage_status,
+            filing_kind=filing_kind,
+            supersedes_disclosure_id=supersedes_disclosure_id,
             created_at=_utcnow(),
         )
         self._session.add(disclosure)
