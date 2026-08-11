@@ -3242,6 +3242,117 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("reviews a provisional assessment from the run that produced it", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const baseRun = await adapter.getResearchRun("run-aic-001");
+    const reviewAssessment = vi.spyOn(adapter, "reviewAssessment").mockResolvedValue({
+      id: "review-1",
+      outcome: "confirmed",
+      reviewer: "human:researcher",
+      createdAt: "2026-08-11T00:00:00Z",
+    });
+    vi.spyOn(adapter, "getResearchRun").mockResolvedValue({
+      ...baseRun,
+      id: "run-live",
+      case_id: "event-tsm",
+      status: "waiting_for_review",
+      stage: "stopped",
+      round: 1,
+      stop_reason: "max_rounds_reached",
+      pending_assessments: [{
+        assessment_id: "assessment-1",
+        conclusion: "insufficient_evidence",
+        rationale: "缺少历史预测值",
+        gaps: ["补充预测基线"],
+        task_id: "task-1",
+        task_status: "open",
+      }],
+      pending_proposals: [],
+      review_tasks: [],
+      gap_tasks: [],
+      failed_tasks: [],
+      next_action: "人工审核临时判断",
+    });
+    setResearchClient(adapter);
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = url.includes("/researchability")
+        ? {
+            status: "ready",
+            reason_codes: [],
+            effective_binding_id: "binding-1",
+            next_action: "可开始补证",
+          }
+        : url.endsWith("/research-runs/run-live/events")
+          ? { run_id: "run-live", has_more: false, items: [] }
+          : {
+                monitor: {
+                  id: "monitor-v1",
+                  version: 1,
+                  status: "active",
+                  frequency: "weekday_08_30",
+                  factor_ids: ["event-tsm-factor-1"],
+                  allowed_source_types: ["company_disclosure"],
+                  next_verification_event: "下一次财报",
+                  budget: 10,
+                  changed_by: "human",
+                  change_reason: "test",
+                  created_at: "2026-08-09T00:00:00Z",
+                },
+                latest_run: {
+                  id: "run-live",
+                  status: "waiting_for_review",
+                  stage: "stopped",
+                  updated_at: "2026-08-09T00:01:00Z",
+                },
+                confirmed_factors: [
+                  { id: "event-tsm-factor-1", statement: "资本开支指引" },
+                ],
+              };
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: init?.method === "POST" ? 201 : 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/monitor"]}>
+        <Routes>
+          <Route path="/events/:caseId/monitor" element={<CaseMonitorPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "打开运行详情" }),
+    );
+    expect(await screen.findByText("临时 AI 评估待审核")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "insufficient_evidence" })).toBeVisible();
+    expect(screen.getByText(/补充预测基线/)).toBeVisible();
+    const confirm = screen.getByRole("button", { name: "确认临时评估" });
+    expect(confirm).toBeDisabled();
+    await user.type(screen.getByLabelText("临时评估审核理由"), "人工确认资料不足");
+    await user.click(confirm);
+
+    await waitFor(() =>
+      expect(reviewAssessment).toHaveBeenCalledWith("assessment-1", {
+        outcome: "confirmed",
+        conclusion: "insufficient_evidence",
+        reason: "人工确认资料不足",
+        reviewer: "human:researcher",
+      }),
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/research-runs/run-live/events",
+        expect.anything(),
+      ),
+    );
+  });
+
   it("keeps the newly saved monitor version and scope visible in the configuration form", async () => {
     const user = userEvent.setup();
     const initial = {

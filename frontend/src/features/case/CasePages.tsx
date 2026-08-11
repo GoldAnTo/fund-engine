@@ -26,6 +26,7 @@ import type {
   EventSourceType,
   EventWorkbench,
 } from "../../domain/eventResearch";
+import type { ResearchRunDetail } from "../../domain/prototypeTypes";
 import {
   decodeRecoveryRouteState,
   encodeRecoveryRouteState,
@@ -3704,6 +3705,8 @@ function MonitorContent({
   const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
   const [workerStatusError, setWorkerStatusError] = useState(false);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [runDetail, setRunDetail] = useState<ResearchRunDetail | null>(null);
+  const [runDetailLoadError, setRunDetailLoadError] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [monitorLoadError, setMonitorLoadError] = useState(false);
@@ -3748,6 +3751,16 @@ function MonitorContent({
         setRunEventsLoadError(true);
       });
   };
+  const loadRunDetail = (runId: string) => {
+    setRunDetailLoadError(false);
+    return researchClient
+      .getResearchRun(runId)
+      .then((value) => setRunDetail(value))
+      .catch(() => {
+        setRunDetail(null);
+        setRunDetailLoadError(true);
+      });
+  };
   useEffect(() => {
     void loadMonitor();
   }, [caseId]);
@@ -3775,6 +3788,8 @@ function MonitorContent({
   useEffect(() => {
     if (!selectedRunId) {
       setEvents([]);
+      setRunDetail(null);
+      setRunDetailLoadError(false);
       return;
     }
     void loadEvents(selectedRunId);
@@ -3783,6 +3798,10 @@ function MonitorContent({
       5_000,
     );
     return () => window.clearInterval(refresh);
+  }, [selectedRunId]);
+  useEffect(() => {
+    if (!selectedRunId) return;
+    void loadRunDetail(selectedRunId);
   }, [selectedRunId]);
   useEffect(() => {
     let active = true;
@@ -3862,6 +3881,14 @@ function MonitorContent({
         "停止运行失败；原运行状态与记录未被页面伪造修改。请刷新后重试。",
       );
     }
+  }
+  async function reloadAfterAssessmentReview() {
+    if (!selectedRunId) return;
+    await Promise.all([
+      loadMonitor(),
+      loadRunDetail(selectedRunId),
+      loadEvents(selectedRunId),
+    ]);
   }
   return (
     <section className="ros-monitor">
@@ -4107,8 +4134,11 @@ function MonitorContent({
         <RunDrawer
           run={run}
           detail={detail}
+          runDetail={runDetail}
+          runDetailLoadError={runDetailLoadError}
           events={events}
           onCancel={cancelRun}
+          onAssessmentReviewed={reloadAfterAssessmentReview}
           onClose={() => setDrawer(false)}
         />
       )}
@@ -4119,8 +4149,11 @@ function MonitorContent({
 function RunDrawer({
   run,
   detail,
+  runDetail,
+  runDetailLoadError,
   events,
   onCancel,
+  onAssessmentReviewed,
   onClose,
 }: {
   run:
@@ -4128,8 +4161,11 @@ function RunDrawer({
     | { id: string; status: string; stage: string; updated_at: string }
     | null;
   detail: MonitorDetail | null;
+  runDetail: ResearchRunDetail | null;
+  runDetailLoadError: boolean;
   events: RunEvent[];
   onCancel: (reason: string) => Promise<void>;
+  onAssessmentReviewed: () => Promise<void>;
   onClose: () => void;
 }) {
   const [reason, setReason] = useState("");
@@ -4239,6 +4275,22 @@ function RunDrawer({
             </button>
           </section>
         )}
+        {runDetailLoadError ? (
+          <section className="ros-empty ros-empty--compact" role="alert">
+            <strong>临时评估审核详情暂不可读取</strong>
+            <p>页面不会把读取失败显示为没有待审评估；请刷新运行详情后再决定。</p>
+          </section>
+        ) : runDetail ? (
+          <AssessmentReviewPanel
+            runId={run?.id || ""}
+            assessments={runDetail.pending_assessments ?? []}
+            onReviewed={onAssessmentReviewed}
+          />
+        ) : run?.status === "waiting_for_review" ? (
+          <section className="ros-empty ros-empty--compact">
+            正在读取本次运行的待审临时评估…
+          </section>
+        ) : null}
         <ol className="ros-run-log">
           {events.map((event) => (
             <li key={event.seq}>
@@ -4259,6 +4311,130 @@ function RunDrawer({
         </ol>
       </div>
     </aside>
+  );
+}
+
+function AssessmentReviewPanel({
+  runId,
+  assessments,
+  onReviewed,
+}: {
+  runId: string;
+  assessments: ResearchRunDetail["pending_assessments"];
+  onReviewed: () => Promise<void>;
+}) {
+  if (!assessments.length) return null;
+  return (
+    <section className="ros-run-control">
+      <p className="ros-eyebrow">临时 AI 评估待审核</p>
+      <p>这项判断来自本次冻结运行；人工决定会追加审核记录，不会改写 AI 原始结论。</p>
+      {assessments.map((assessment) => (
+        <AssessmentReviewItem
+          key={assessment.assessment_id}
+          runId={runId}
+          assessment={assessment}
+          onReviewed={onReviewed}
+        />
+      ))}
+    </section>
+  );
+}
+
+function AssessmentReviewItem({
+  runId,
+  assessment,
+  onReviewed,
+}: {
+  runId: string;
+  assessment: ResearchRunDetail["pending_assessments"][number];
+  onReviewed: () => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const [replacement, setReplacement] = useState(assessment.conclusion);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function decide(outcome: "confirmed" | "modified" | "rejected") {
+    if (!reason.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await researchClient.reviewAssessment(assessment.assessment_id, {
+        outcome,
+        conclusion: outcome === "modified" ? replacement : assessment.conclusion,
+        reason: reason.trim(),
+        reviewer: "human:researcher",
+      });
+      await onReviewed();
+      setNotice("审核决定已记录；页面已从服务端重读本次运行状态。");
+    } catch {
+      setError("提交临时评估审核失败；原评估与运行状态均未在页面中伪造更新。请刷新后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <article className="ros-review-item">
+      <div>
+        <span className="ros-pill ros-pill--human">本次运行待审</span>
+        <h3>{assessment.conclusion}</h3>
+        <p>冻结运行 · {runId}</p>
+        <blockquote>{assessment.rationale}</blockquote>
+        {assessment.gaps.length > 0 && (
+          <p>待补材料：{assessment.gaps.join("；")}</p>
+        )}
+      </div>
+      <label>
+        临时评估审核理由
+        <textarea
+          aria-label="临时评估审核理由"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="说明确认、修改或驳回此评估的依据"
+        />
+      </label>
+      <label>
+        修改后的结论
+        <select
+          aria-label="修改后的结论"
+          value={replacement}
+          onChange={(event) => setReplacement(event.target.value as typeof replacement)}
+        >
+          <option value="supported">supported</option>
+          <option value="contradicted">contradicted</option>
+          <option value="insufficient_evidence">insufficient_evidence</option>
+        </select>
+      </label>
+      <div>
+        <button
+          className="ros-button ros-button--primary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("confirmed")}
+        >
+          确认临时评估
+        </button>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("modified")}
+        >
+          修改后确认
+        </button>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("rejected")}
+        >
+          驳回临时评估
+        </button>
+      </div>
+      {error && <p className="ros-error">{error}</p>}
+      {notice && <p className="ros-success">{notice}</p>}
+    </article>
   );
 }
 

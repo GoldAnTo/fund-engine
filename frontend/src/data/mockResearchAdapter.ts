@@ -3035,6 +3035,7 @@ const MOCK_RESEARCH_RUNS: ResearchRunDetail[] = [
     progress: { tasks_total: 6, tasks_completed: 4, tasks_failed: 1 },
     evidence: { discovered: 18, accepted: 11, pending: 3 },
     pending_proposals: [{ id: "proposal-1", thesis_id: "TH-AIC-03", task_id: "task-3", status: "pending" }],
+    pending_assessments: [],
     review_tasks: [{ id: "review-1", status: "open", task_type: "evidence_link", ref_type: "evidence_link", ref_id: "EL-003" }],
     gap_tasks: [{ id: "gap-1", status: "open", task_type: "gap", stage: "evidence_search", round: 2, query: "订单到收入的独立披露", evidence_count: 0, gap_reason: "缺少同主体连续披露" }],
     failed_tasks: [{ id: "failed-1", status: "failed", task_type: "provider_query", stage: "evidence_search", round: 2, query: "历史持仓明细", evidence_count: 0, gap_reason: "权限不足" }],

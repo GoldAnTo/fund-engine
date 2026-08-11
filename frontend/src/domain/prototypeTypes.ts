@@ -1060,11 +1060,21 @@ export interface ResearchRunTask {
   gap_reason?: string | null;
 }
 
+export interface PendingAssessmentReview {
+  assessment_id: string;
+  conclusion: "supported" | "contradicted" | "insufficient_evidence";
+  rationale: string;
+  gaps: string[];
+  task_id: string;
+  task_status: string;
+}
+
 export interface ResearchRunDetail extends ResearchRunSummary {
   case_id: string;
   progress: Record<string, number>;
   evidence: Record<string, number>;
   pending_proposals: { id: string; thesis_id: string | null; task_id: string | null; status: string }[];
+  pending_assessments: PendingAssessmentReview[];
   review_tasks: { id: string; status: string; task_type: string; ref_type: string | null; ref_id: string | null }[];
   gap_tasks: ResearchRunTask[];
   failed_tasks: ResearchRunTask[];
