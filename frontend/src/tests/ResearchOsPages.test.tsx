@@ -2740,6 +2740,36 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
+  it("makes a pending outcome binding review actionable before approval", async () => {
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "researchability").mockResolvedValue({
+      status: "blocked",
+      reason_codes: ["binding_not_approved"],
+      effective_binding_id: "binding-pending",
+      next_action: "审核并固定结果绑定",
+    });
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/protocol"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/protocol"
+            element={<CaseProtocolPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByRole("button", {
+      name: "审核并固定结果绑定",
+    });
+    expect(screen.getByLabelText("结果绑定审核理由")).toBeVisible();
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/审核结果绑定前还需填写/)).toHaveTextContent(
+      "审核结果绑定前还需填写：填写审核理由",
+    );
+  });
+
   it("blocks immediate replenishment in the UI with the exact missing protocol work", async () => {
     vi.stubGlobal(
       "fetch",

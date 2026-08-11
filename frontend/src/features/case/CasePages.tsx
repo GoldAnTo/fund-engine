@@ -2574,6 +2574,7 @@ function ProtocolContent({
   const [horizonStart, setHorizonStart] = useState("");
   const [horizonEnd, setHorizonEnd] = useState("");
   const [reason, setReason] = useState("");
+  const [approvalReason, setApprovalReason] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const selected =
@@ -2581,6 +2582,8 @@ function ProtocolContent({
     data.factors[0];
   const state = selected?.thesisId ? states[selected.thesisId] : undefined;
   const selectedMetric = metrics.find((metric) => metric.id === metricId);
+  const approvalReady =
+    !busy && Boolean(state?.effective_binding_id && approvalReason.trim());
   async function refresh() {
     const factors = data.factors.filter((factor) => factor.thesisId);
     const results = await Promise.all(
@@ -2712,16 +2715,13 @@ function ProtocolContent({
     }
   }
   async function approveBinding() {
-    if (!state?.effective_binding_id || !reason.trim()) {
-      setNotice("请先填写审核理由。审核会追加新版本，不会修改原草案。");
-      return;
-    }
+    if (!approvalReady || !state?.effective_binding_id) return;
     setBusy(true);
     setNotice(null);
     try {
       await researchOsApi.approveOutcomeBinding(state.effective_binding_id, {
         reviewer: "human:reviewer",
-        reason: reason.trim(),
+        reason: approvalReason.trim(),
       });
       setNotice(
         "结果绑定已审核并固定为新的不可变版本；后续机制和验证规则仍需补齐。",
@@ -2828,14 +2828,30 @@ function ProtocolContent({
                   {showForm ? "收起配置" : "设定结果指标与验证窗口"}
                 </button>
                 {state?.reason_codes.includes("binding_not_approved") && (
-                  <button
-                    className="ros-button ros-button--secondary"
-                    type="button"
-                    disabled={busy}
-                    onClick={approveBinding}
-                  >
-                    {busy ? "正在审核…" : "审核并固定结果绑定"}
-                  </button>
+                  <div className="ros-protocol-approval">
+                    <label>
+                      结果绑定审核理由
+                      <input
+                        aria-label="结果绑定审核理由"
+                        value={approvalReason}
+                        onChange={(event) => setApprovalReason(event.target.value)}
+                        placeholder="说明为什么此草案可固定为研究协议"
+                      />
+                    </label>
+                    <button
+                      className="ros-button ros-button--secondary"
+                      type="button"
+                      disabled={!approvalReady}
+                      onClick={approveBinding}
+                    >
+                      {busy ? "正在审核…" : "审核并固定结果绑定"}
+                    </button>
+                    {!approvalReason.trim() && (
+                      <p className="ros-note" role="status">
+                        审核结果绑定前还需填写：填写审核理由。审核会追加新版本，不会修改原草案。
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
               {showForm && (
