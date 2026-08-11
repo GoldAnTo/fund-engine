@@ -3355,6 +3355,10 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText(/当前 Case 独有/)).toBeVisible();
     expect(screen.getByLabelText("支持条件")).toHaveValue("原始支持条件");
     await user.clear(screen.getByLabelText("支持条件"));
+    expect(screen.getByRole("status")).toHaveTextContent("保存前还需填写：支持条件");
+    expect(
+      screen.getByRole("button", { name: "保存为新的验证规则版本" }),
+    ).toBeDisabled();
     await user.type(screen.getByLabelText("支持条件"), "调整后的支持条件");
     await user.click(
       screen.getByRole("button", { name: "保存为新的验证规则版本" }),

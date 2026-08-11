@@ -3366,23 +3366,25 @@ function MechanismRuleConfig({ caseId }: { caseId: string }) {
     setContradiction(current.contradiction_predicate);
     setReason(current.reason);
   }, [edgeId, protocol]);
+  const allowedSourceRoles = sourceRoles
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const missingRuleRequirements = [
+    !edgeId ? "选择机制边" : null,
+    !metricId ? "选择验证指标" : null,
+    !support.trim() ? "支持条件" : null,
+    !contradiction.trim() ? "反证条件" : null,
+    !allowedSourceRoles.length ? "允许来源角色" : null,
+    !periodStart ? "观察期起点" : null,
+    !periodEnd ? "观察期终点" : null,
+    !availableDeadline ? "最晚可用时点" : null,
+    !nextEvent.trim() ? "下一验证事件" : null,
+    !reason.trim() ? "登记原因" : null,
+  ].filter((value): value is string => Boolean(value));
+  const ruleSaveReady = !busy && missingRuleRequirements.length === 0;
   async function save() {
-    const allowedSourceRoles = sourceRoles
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (
-      !edgeId ||
-      !metricId ||
-      !support.trim() ||
-      !contradiction.trim() ||
-      !nextEvent.trim() ||
-      !reason.trim() ||
-      !periodStart ||
-      !periodEnd ||
-      !availableDeadline ||
-      !allowedSourceRoles.length
-    ) {
+    if (!ruleSaveReady) {
       setMessage(
         "请填写支持与反证条件、来源角色、观察期、可用截止日、下一验证事件和记录原因。",
       );
@@ -3538,10 +3540,15 @@ function MechanismRuleConfig({ caseId }: { caseId: string }) {
           />
         </label>
       </div>
+      {!ruleSaveReady && (
+        <p className="ros-note" role="status">
+          保存前还需填写：{missingRuleRequirements.join("、")}。系统不会用默认规则补写机制边。
+        </p>
+      )}
       <button
         className="ros-button ros-button--primary"
         type="button"
-        disabled={busy || !metrics.length}
+        disabled={!ruleSaveReady}
         onClick={save}
       >
         {busy ? "正在保存…" : "保存为新的验证规则版本"}
