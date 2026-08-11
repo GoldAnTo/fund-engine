@@ -17,6 +17,7 @@ describe("run presentation", () => {
     expect(runStageLabel("source_scope")).toBe("核对资料来源范围");
     expect(runStatusLabel("waiting_for_review")).toBe("等待人工审核");
     expect(runStatusLabel("awaiting_review")).toBe("等待人工审核");
+    expect(runStatusLabel("succeeded")).toBe("已完成");
     expect(runTriggerLabel("schedule")).toBe("定时任务");
     expect(runFrequencyLabel("weekday_08_30")).toBe("工作日 08:30");
     expect(runFrequencyLabel("weekday_12_30")).toBe("工作日 12:30");

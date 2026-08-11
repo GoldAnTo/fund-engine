@@ -30,6 +30,7 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   started: "已开始",
   recorded: "已记录",
   completed: "已完成",
+  succeeded: "已完成",
   waiting_for_review: "等待人工审核",
   awaiting_review: "等待人工审核",
   failed: "失败",
