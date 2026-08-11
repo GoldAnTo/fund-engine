@@ -252,6 +252,19 @@ test.describe("Event-first Research OS", () => {
     expect(box!.height).toBeLessThanOrEqual(48);
   });
 
+  test("protocol audit rail keeps immutable identifiers readable at desktop width", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/events/event-tsm/protocol?client=mock");
+
+    await expect(page.getByRole("heading", { name: "研究协议与可研究性门槛" })).toBeVisible();
+    const auditRail = page.locator(".ros-protocol-rail .ros-definition");
+    await expect(auditRail).toHaveCSS("grid-template-columns", "238px");
+    const identifier = auditRail.locator("dd").first();
+    const box = await identifier.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(100);
+  });
+
   test("event intake keeps the scope confirmation unavailable until the source is read", async ({ page }) => {
     await page.goto("/events/new?client=mock");
 
