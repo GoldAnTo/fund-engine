@@ -9,6 +9,12 @@ const freshnessLabels: Record<string, string> = {
   coverage_incomplete: "覆盖不足",
   source_unlinked: "来源受限",
 };
+const filingKindLabels: Record<string, string> = {
+  quarterly: "季度报告",
+  annual: "年报",
+  correction: "更正公告",
+  other: "其他/历史来源",
+};
 
 function useMarketExpression(caseId: string) {
   const [expression, setExpression] = useState<MarketExpression | null>(null);
@@ -253,6 +259,16 @@ export function MarketFundProfile({
               覆盖 {position.coverage_status} ·{" "}
               {freshnessLabels[position.freshness_status] ?? "状态未记录"}
             </small>
+            <p className="ros-note">
+              披露版本：{filingKindLabels[position.filing_kind] ?? "其他/历史来源"}
+            </p>
+            {position.supersedes_disclosure_id && position.supersedes_published_at && (
+              <p className="ros-note">
+                前序披露：
+                {filingKindLabels[position.supersedes_filing_kind ?? "other"] ?? "其他/历史来源"}
+                （{new Date(position.supersedes_published_at).toLocaleDateString("zh-CN")}）
+              </p>
+            )}
             <SourceLink
               caseId={caseId}
               documentId={

@@ -154,6 +154,21 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         reviewed_at=now,
         created_at=now,
     ))
+    quarterly_disclosure = HoldingDisclosure(
+        fund_id=fund.id,
+        stock_id=stock.id,
+        weight=Decimal("0.051"),
+        report_period=date(2025, 12, 31),
+        published_at=datetime(2026, 1, 10, tzinfo=timezone.utc),
+        acquired_at=now,
+        source="licensed_provider",
+        source_document_version_id=document.id,
+        coverage_status="complete",
+        filing_kind="quarterly",
+        created_at=now,
+    )
+    cmd_session.add(quarterly_disclosure)
+    cmd_session.flush()
     cmd_session.add(HoldingDisclosure(
         fund_id=fund.id,
         stock_id=stock.id,
@@ -164,6 +179,8 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         source="licensed_provider",
         source_document_version_id=document.id,
         coverage_status="complete",
+        filing_kind="annual",
+        supersedes_disclosure_id=quarterly_disclosure.id,
         created_at=now,
     ))
     unlinked_document = DocumentVersion(
@@ -224,6 +241,10 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert position["source_document_version_id"] == str(document.id)
     assert position["source_visible_in_case"] is True
     assert position["freshness_status"] == "stale_disclosure"
+    assert position["filing_kind"] == "annual"
+    assert position["supersedes_disclosure_id"] == str(quarterly_disclosure.id)
+    assert position["supersedes_filing_kind"] == "quarterly"
+    assert position["supersedes_published_at"].startswith("2026-01-10")
     # Complete coverage does not rescue an expired disclosure.  Do not promote
     # it into a precise current fund exposure.
     assert next(item for item in payload["fund_exposure"] if item["fund_code"] == "000001")["disclosed_exposure"] is None

@@ -1249,6 +1249,8 @@ describe("Research OS event entry", () => {
       }),
     ).toBeVisible();
     expect(screen.getByText("命中股票与披露来源")).toBeVisible();
+    expect(screen.getByText("披露版本：年报")).toBeVisible();
+    expect(screen.getByText("前序披露：季度报告（2026/7/20）")).toBeVisible();
   });
 
   it("routes a published Case to its immutable conclusion history, not a generic monitor", async () => {

@@ -11433,6 +11433,29 @@
             ],
             "title": "Coverage Status",
             "default": "not_recorded"
+          },
+          "filing_kind": {
+            "type": "string",
+            "enum": [
+              "quarterly",
+              "annual",
+              "correction",
+              "other"
+            ],
+            "title": "Filing Kind",
+            "default": "other"
+          },
+          "supersedes_disclosure_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Disclosure Id"
           }
         },
         "additionalProperties": false,
@@ -14602,6 +14625,45 @@
           "freshness_status": {
             "type": "string",
             "title": "Freshness Status"
+          },
+          "filing_kind": {
+            "type": "string",
+            "title": "Filing Kind",
+            "default": "other"
+          },
+          "supersedes_disclosure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Disclosure Id"
+          },
+          "supersedes_filing_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Filing Kind"
+          },
+          "supersedes_published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Published At"
           }
         },
         "additionalProperties": false,
@@ -15572,6 +15634,22 @@
             "type": "string",
             "title": "Coverage Status"
           },
+          "filing_kind": {
+            "type": "string",
+            "title": "Filing Kind"
+          },
+          "supersedes_disclosure_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Disclosure Id"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -15593,6 +15671,8 @@
           "source_span_id",
           "provider_record_id",
           "coverage_status",
+          "filing_kind",
+          "supersedes_disclosure_id",
           "created_at"
         ],
         "title": "HoldingDisclosureDTO"
