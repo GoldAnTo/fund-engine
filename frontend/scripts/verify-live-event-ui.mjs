@@ -329,6 +329,32 @@ async function main() {
     const caseId = new URL(page.url()).pathname.split("/").at(-1);
     if (!caseId) throw new Error("created Case URL did not contain an id");
 
+    const caseReadChecks = [
+      ["", () => page.getByRole("heading", { name: title }).waitFor()],
+      ["/evidence", () => page.getByRole("heading", { name: "每一条关系都保留原文、时点与审核边界" }).waitFor()],
+      ["/documents", () => page.getByRole("heading", { name: "原文资料" }).waitFor()],
+      ["/review", () => page.getByRole("heading", { name: /条待审核关系/u }).waitFor()],
+      ["/wiki", () => page.getByRole("heading", { name: "从关系回到冻结原文与审核边界" }).waitFor()],
+      ["/relations", () => page.getByRole("heading", { name: "只显示与这个 Case 直接相连的研究" }).waitFor()],
+    ];
+    for (const [suffix, assertVisible] of caseReadChecks) {
+      await page.goto(`${uiBase}/events/${caseId}${suffix}`, { waitUntil: "networkidle" });
+      await assertVisible();
+      if (await page.getByRole("alert").count()) {
+        throw new Error(`Case page ${suffix || "/"} rendered a live-data error`);
+      }
+    }
+    await page.goto(`${uiBase}/events/${caseId}/documents`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "从冻结资料提取候选" }).click();
+    await page.getByText(/已从此冻结版本创建 \d+ 条待人工审核的原子陈述/u).waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/review`, { waitUntil: "networkidle" });
+    await page.getByText("原子陈述审核").waitFor();
+    await page.getByRole("button", { name: "在此页核对原文" }).first().click();
+    await page.getByText("在此页核对的冻结原文").waitFor();
+    await page.getByLabel("原子陈述审核理由").first().fill("逐字核对了冻结原文、定位、主体与来源许可。");
+    await page.getByRole("button", { name: "确认并发布" }).first().click();
+    await page.getByText("已发布为正式陈述；候选、原文定位和审核记录仍可回放。").waitFor();
+
     await page.goto(`${uiBase}/events/${caseId}/monitor/config`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: "调整后会创建新的可复现版本" }).waitFor();
     const factorChoices = page
@@ -405,6 +431,11 @@ async function main() {
     await page.getByLabel("标的审核理由").fill("冻结原文已明确这家公司处于订单传导范围。 ");
     await page.getByRole("button", { name: "保存已审核标的关联" }).click();
     await page.getByText("已追加已审核标的关联").first().waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/stocks/${marketCatalog.stock.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "验收映射股票 · 股票研究档案" }).waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/funds/${marketCatalog.fund.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "验收历史披露基金 · 基金披露档案" }).waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "登记基本面传导" }).click();
     await page.getByLabel("传导标的").waitFor();
     await page.getByLabel("传导机制").fill("订单增长通过履约和确认节奏传导至收入。 ");
