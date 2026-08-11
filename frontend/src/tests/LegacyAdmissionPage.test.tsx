@@ -9,7 +9,7 @@ import { resetResearchOsApi, setResearchOsApi, type ResearchOsApi } from "../app
 describe("legacy Case admission", () => {
   afterEach(() => resetResearchOsApi());
 
-  it("requires a source and written reason, then appends the explicit admission", async () => {
+  it("explains admission requirements before appending the explicit admission", async () => {
     const admitLegacyCase = vi.fn().mockResolvedValue({
       case_id: "case-legacy",
       tenant_id: "team-a",
@@ -36,8 +36,8 @@ describe("legacy Case admission", () => {
     render(<MemoryRouter><LegacyAdmissionPage /></MemoryRouter>);
 
     await screen.findByRole("heading", { name: "历史 Case 准入" });
-    await user.click(screen.getByRole("button", { name: "确认并准入此 Case" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("填写目标团队、操作人和准入依据");
+    expect(screen.getByRole("button", { name: "确认并准入此 Case" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("准入前还需填写：填写准入依据");
 
     await user.type(screen.getByLabelText("历史订单事件 的准入依据"), "迁移记录已核验");
     await user.click(screen.getByRole("button", { name: "确认并准入此 Case" }));

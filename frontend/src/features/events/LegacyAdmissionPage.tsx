@@ -48,12 +48,16 @@ function AdmissionRow({ item, defaultTenant, onAdmitted }: { item: LegacyCaseAdm
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = item.documents.find((document) => document.document_version_id === documentId);
+  const missingRequirements = [
+    !documentId ? "选择冻结资料" : null,
+    !tenantId.trim() ? "填写目标团队" : null,
+    !actor.trim() ? "填写操作人" : null,
+    !reason.trim() ? "填写准入依据" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const readyToSubmit = !submitting && missingRequirements.length === 0;
 
   async function submit() {
-    if (!documentId || !tenantId.trim() || !actor.trim() || !reason.trim()) {
-      setError("请选择冻结资料，并填写目标团队、操作人和准入依据。");
-      return;
-    }
+    if (!readyToSubmit) return;
     setSubmitting(true); setError(null);
     try {
       await researchOsApi.admitLegacyCase(item.case_id, { tenant_id: tenantId.trim(), initial_document_version_id: documentId, admitted_by: actor.trim(), reason: reason.trim() });
@@ -66,7 +70,7 @@ function AdmissionRow({ item, defaultTenant, onAdmitted }: { item: LegacyCaseAdm
   return <article className="ros-admission-row">
     <header><div><p className="ros-eyebrow">未准入 Case · {new Date(item.created_at).toLocaleString("zh-CN")}</p><h2>{item.event_title}</h2><code>{item.case_id}</code></div><span className="ros-pill">需要人工归属</span></header>
     <div className="ros-admission-layout"><section><h3>选择初始冻结资料</h3><p>只能选择该 Case 在准入前已关联的资料。选择不会改写原文或重新解析内容。</p><div className="ros-admission-documents">{item.documents.map((document) => <label key={document.document_version_id} className={document.document_version_id === documentId ? "is-selected" : ""}><input type="radio" name={`source-${item.case_id}`} checked={document.document_version_id === documentId} onChange={() => setDocumentId(document.document_version_id)} /><span><strong>{document.title || "未命名冻结资料"}</strong><small>{document.source_url} · 可得于 {new Date(document.available_at).toLocaleString("zh-CN")}</small><code>{document.document_version_id}</code></span></label>)}</div></section>
-      <section className="ros-admission-form"><h3>记录准入决定</h3><label>目标团队<input aria-label={`${item.event_title} 的目标团队`} value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="例如 public-equities" /></label><label>操作人<input aria-label={`${item.event_title} 的操作人`} value={actor} onChange={(event) => setActor(event.target.value)} /></label><label>准入依据<textarea aria-label={`${item.event_title} 的准入依据`} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明如何核验历史迁移记录、原始资料和团队归属" /></label>{selected && <p className="ros-admission-proof">将写入：<b>{selected.title || selected.document_version_id}</b>，以及上述团队、操作人与依据。</p>}{error && <p className="ros-error" role="alert">{error}</p>}<button className="ros-button ros-button--primary" type="button" disabled={submitting} onClick={() => void submit()}>{submitting ? "正在追加准入记录…" : "确认并准入此 Case"}</button></section></div>
+      <section className="ros-admission-form"><h3>记录准入决定</h3><label>目标团队<input aria-label={`${item.event_title} 的目标团队`} value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="例如 public-equities" /></label><label>操作人<input aria-label={`${item.event_title} 的操作人`} value={actor} onChange={(event) => setActor(event.target.value)} /></label><label>准入依据<textarea aria-label={`${item.event_title} 的准入依据`} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明如何核验历史迁移记录、原始资料和团队归属" /></label>{selected && <p className="ros-admission-proof">将写入：<b>{selected.title || selected.document_version_id}</b>，以及上述团队、操作人与依据。</p>}{missingRequirements.length > 0 && <p className="ros-note" role="status">准入前还需填写：{missingRequirements.join("、")}。系统不会从创建人、来源地址或内容哈希推断团队归属。</p>}{error && <p className="ros-error" role="alert">{error}</p>}<button className="ros-button ros-button--primary" type="button" disabled={!readyToSubmit} onClick={() => void submit()}>{submitting ? "正在追加准入记录…" : "确认并准入此 Case"}</button></section></div>
   </article>;
 }
 
