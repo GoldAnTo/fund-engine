@@ -60,8 +60,10 @@ def _normalize_research_source_type(
     document: DocumentVersion,
 ) -> str:
     metadata = dict(source_metadata or {})
-    raw = metadata.get("research_source_type") or source_type
-    research_source_type = raw.strip() if isinstance(raw, str) else ""
+    raw = metadata.get("research_source_type", source_type)
+    if raw is None:
+        raw = source_type
+    research_source_type = str(raw).strip()
     if research_source_type not in RESEARCH_SOURCE_TYPES:
         raise ValueError("research_source_type is not supported")
     if research_source_type == "company_disclosure":
@@ -71,7 +73,7 @@ def _normalize_research_source_type(
             raise ValueError(
                 "company_disclosure requires an HTTP(S) source_url"
             ) from exc
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
             raise ValueError("company_disclosure requires an HTTP(S) source_url")
     return research_source_type
 

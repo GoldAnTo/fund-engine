@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
+import pytest
 from sqlalchemy import select, update
 
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError, SourceSpan, SourceStatement, Thesis
@@ -136,6 +137,37 @@ def test_event_intake_rejects_an_unknown_research_source_type(cmd_client) -> Non
 
     assert created.status_code == 422
     assert "research_source_type is not supported" in created.json()["error"]["message"]
+
+
+@pytest.mark.parametrize("research_source_type", [0, False, "", "  "])
+def test_event_intake_rejects_explicit_falsey_research_source_type(
+    cmd_client, research_source_type
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"research_source_type": research_source_type},
+        ),
+    )
+
+    assert created.status_code == 422
+    assert "research_source_type is not supported" in created.json()["error"]["message"]
+
+
+def test_event_intake_rejects_company_disclosure_without_a_hostname(cmd_client) -> None:
+    payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    payload["source_url"] = "https://@/report"
+
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 422
+    assert "company_disclosure requires an HTTP(S) source_url" in created.json()[
+        "error"
+    ]["message"]
 
 
 def test_licensed_provider_intake_preserves_provider_record_and_contract_version(
