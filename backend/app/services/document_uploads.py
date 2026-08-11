@@ -158,7 +158,11 @@ class DocumentUploadService:
             source_type="uploaded_file",
             source_metadata=source_metadata,
             declared_by=actor,
-            incoming_source_url=document.source_url,
+            incoming_source_url=(
+                source_metadata["retrieval_reference"]
+                if isinstance(source_metadata.get("retrieval_reference"), str)
+                else document.source_url
+            ),
         )
         for locator, verbatim_text, text_sha256, context_hash, locator_v1 in parsed.spans:
             self._documents.add_span(

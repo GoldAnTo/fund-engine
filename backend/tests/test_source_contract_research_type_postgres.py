@@ -13,23 +13,23 @@ import sqlalchemy as sa
 
 def _schema_database_url(database_url: str, schema: str) -> str:
     separator = "&" if "?" in database_url else "?"
-    return f"{database_url}{separator}options=-csearch_path%3D{schema}"
+    return f"{database_url}{separator}options=-csearch_path={schema}"
 
 
 @pytest.mark.pg_only
-def test_0051_postgres_backfill_restores_source_contract_immutability(engine) -> None:
+def test_0051_postgres_backfill_restores_source_contract_immutability() -> None:
     database_url = os.environ["TEST_DATABASE_URL"]
     schema = f"source_contract_0051_{uuid.uuid4().hex}"
     migration_url = _schema_database_url(database_url, schema)
+    admin_engine = sa.create_engine(database_url, future=True)
     schema_engine = sa.create_engine(migration_url, future=True)
     backend = Path(__file__).parents[1]
     document_id = str(uuid.uuid4())
     contract_id = str(uuid.uuid4())
 
-    with engine.begin() as connection:
-        connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
-
     try:
+        with admin_engine.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
         upgraded_to_0050 = subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "0050"],
             cwd=backend,
@@ -46,10 +46,11 @@ def test_0051_postgres_backfill_restores_source_contract_immutability(engine) ->
                     """
                     INSERT INTO document_versions (
                         id, content_sha256, source_url, available_at, acquired_at,
-                        parser_version
+                        parser_version, parse_state, source_authority
                     ) VALUES (
                         :id, :content_sha256, 'https://provider.example/report',
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'fixture-v1'
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'fixture-v1', 'partial',
+                        'unknown'
                     )
                     """
                 ),
@@ -105,5 +106,6 @@ def test_0051_postgres_backfill_restores_source_contract_immutability(engine) ->
                 )
     finally:
         schema_engine.dispose()
-        with engine.begin() as connection:
+        with admin_engine.begin() as connection:
             connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin_engine.dispose()

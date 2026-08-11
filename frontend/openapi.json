@@ -18181,6 +18181,48 @@
         ],
         "title": "OverviewTotalsDTO"
       },
+      "PendingAssessmentDTO": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "title": "Assessment Id"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "task_status": {
+            "type": "string",
+            "title": "Task Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "conclusion",
+          "rationale",
+          "gaps",
+          "task_id",
+          "task_status"
+        ],
+        "title": "PendingAssessmentDTO"
+      },
       "PendingProposalDTO": {
         "properties": {
           "id": {
@@ -19677,6 +19719,13 @@
             "type": "array",
             "title": "Assessments"
           },
+          "pending_assessments": {
+            "items": {
+              "$ref": "#/components/schemas/PendingAssessmentDTO"
+            },
+            "type": "array",
+            "title": "Pending Assessments"
+          },
           "pending_proposals": {
             "items": {
               "$ref": "#/components/schemas/PendingProposalDTO"
@@ -19723,6 +19772,7 @@
           "gap_tasks",
           "failed_tasks",
           "assessments",
+          "pending_assessments",
           "pending_proposals",
           "review_tasks",
           "next_action",
@@ -20636,6 +20686,10 @@
             "type": "string",
             "title": "Source Type"
           },
+          "research_source_type": {
+            "type": "string",
+            "title": "Research Source Type"
+          },
           "provider_or_tenant": {
             "type": "string",
             "title": "Provider Or Tenant"
@@ -20724,6 +20778,7 @@
         "type": "object",
         "required": [
           "source_type",
+          "research_source_type",
           "provider_or_tenant",
           "permissions",
           "status",
