@@ -112,7 +112,9 @@ test.describe("Event-first Research OS", () => {
     await page.getByLabel("单位").fill("%");
     await page.getByLabel("本阶段审核理由").fill("已回到冻结研报原文核对数值、单位与期间。");
     await page.getByRole("button", { name: "冻结预测目标" }).click();
-    await expect(page.getByRole("status")).toContainText("已冻结预测目标");
+    await expect(
+      page.getByRole("status").filter({ hasText: "已冻结预测目标" }),
+    ).toContainText("已冻结预测目标");
 
     await page.getByRole("textbox", { name: "后续实际值" }).fill("80");
     await page.getByLabel("本阶段审核理由").fill("已回到年报原文核对实际值的口径与可得时间。");
@@ -124,7 +126,9 @@ test.describe("Event-first Research OS", () => {
     await page.getByLabel("修订后的结果").selectOption("insufficient_evidence");
     await page.getByLabel("人工裁决理由").fill("研究员确认：实际值未达到冻结预测。 ");
     await page.getByRole("button", { name: "发布人工裁决" }).click();
-    await expect(page.getByRole("status")).toContainText("已追加人工发布裁决");
+    await expect(
+      page.getByRole("status").filter({ hasText: "已追加人工发布裁决" }),
+    ).toContainText("已追加人工发布裁决");
     await expect(
       page.locator(".ros-forecast-verdict strong").filter({ hasText: "证据不足" }),
     ).toBeVisible();
