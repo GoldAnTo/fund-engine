@@ -1087,6 +1087,13 @@ function MarketInstrumentWorkspace({
   const [busy, setBusy] = useState(false);
   const selectedCompany =
     catalog.find((item) => item.company_id === companyId) ?? null;
+  const bindingMissingRequirements = [
+    !companyId ? "选择本地账本标的" : null,
+    !sourceId ? "选择冻结原文" : null,
+    !reviewer.trim() ? "填写审核人" : null,
+    !reason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const bindingSaveReady = !busy && bindingMissingRequirements.length === 0;
 
   async function reload() {
     setLoading(true);
@@ -1124,7 +1131,7 @@ function MarketInstrumentWorkspace({
     }
   }
   async function saveBinding() {
-    if (!companyId || !sourceId || !reviewer.trim() || !reason.trim()) return;
+    if (!bindingSaveReady) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -1288,11 +1295,16 @@ function MarketInstrumentWorkspace({
           <button
             className="ros-button ros-button--primary"
             type="button"
-            disabled={busy || !companyId || !sourceId || !reason.trim()}
+            disabled={!bindingSaveReady}
             onClick={() => void saveBinding()}
           >
             {busy ? "正在追加标的关联…" : "保存已审核标的关联"}
           </button>
+          {bindingMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存标的关联前还需填写：{bindingMissingRequirements.join("、")}。系统不会从事件标题推断公司或股票。
+            </p>
+          )}
         </div>
       )}
       <FundamentalImpactRegistration
@@ -1342,6 +1354,16 @@ function FundamentalImpactRegistration({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const impactMissingRequirements = [
+    !factor ? "选择关键因素" : null,
+    !bindingId ? "选择已审核传导标的" : null,
+    !sourceId ? "选择传导来源" : null,
+    !metric.trim() ? "填写传导指标" : null,
+    !rationale.trim() ? "填写传导机制" : null,
+    !reviewer.trim() ? "填写审核人" : null,
+    !reason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const impactSaveReady = !busy && impactMissingRequirements.length === 0;
   async function begin() {
     if (!factor) return;
     setOpen(true);
@@ -1358,16 +1380,7 @@ function FundamentalImpactRegistration({
     }
   }
   async function save() {
-    if (
-      !factor ||
-      !bindingId ||
-      !sourceId ||
-      !metric.trim() ||
-      !rationale.trim() ||
-      !reviewer.trim() ||
-      !reason.trim()
-    )
-      return;
+    if (!impactSaveReady || !factor) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -1482,18 +1495,16 @@ function FundamentalImpactRegistration({
           <button
             className="ros-button ros-button--primary"
             type="button"
-            disabled={
-              busy ||
-              !bindingId ||
-              !sourceId ||
-              !metric.trim() ||
-              !rationale.trim() ||
-              !reason.trim()
-            }
+            disabled={!impactSaveReady}
             onClick={() => void save()}
           >
             {busy ? "正在追加传导…" : "保存已审核基本面传导"}
           </button>
+          {impactMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存基本面传导前还需填写：{impactMissingRequirements.join("、")}。系统不会把因素方向自动写成公司传导。
+            </p>
+          )}
         </div>
       )}
       {!bindings.length && (
@@ -1537,6 +1548,20 @@ function MarketObservationRegistration({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const observationMissingRequirements = [
+    !factor ? "选择关键因素" : null,
+    !bindingId ? "选择包含股票的已审核标的" : null,
+    !eventAt ? "填写事件时间" : null,
+    !availableAt ? "填写资料可得时间" : null,
+    !windowLabel.trim() ? "填写观测窗口" : null,
+    !benchmark.trim() ? "填写比较基准" : null,
+    !priceSource.trim() ? "填写价格来源" : null,
+    !afterHoursTreatment.trim() ? "填写盘后处理" : null,
+    !reviewer.trim() ? "填写审核人" : null,
+    !reason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const observationSaveReady =
+    !busy && observationMissingRequirements.length === 0;
   function begin() {
     if (!factor) return;
     setOpen(true);
@@ -1544,19 +1569,7 @@ function MarketObservationRegistration({
     setBindingId(stockBindings[0]?.id ?? "");
   }
   async function save() {
-    if (
-      !factor ||
-      !bindingId ||
-      !eventAt ||
-      !availableAt ||
-      !windowLabel.trim() ||
-      !benchmark.trim() ||
-      !priceSource.trim() ||
-      !afterHoursTreatment.trim() ||
-      !reviewer.trim() ||
-      !reason.trim()
-    )
-      return;
+    if (!observationSaveReady || !factor) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -1692,16 +1705,16 @@ function MarketObservationRegistration({
           <button
             className="ros-button ros-button--primary"
             type="button"
-            disabled={
-              busy ||
-              !bindingId ||
-              !afterHoursTreatment.trim() ||
-              !reason.trim()
-            }
+            disabled={!observationSaveReady}
             onClick={() => void save()}
           >
             {busy ? "正在追加市场观测…" : "保存已审核市场观测"}
           </button>
+          {observationMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存市场观测前还需填写：{observationMissingRequirements.join("、")}。窗口表现只作为观测，不自动形成因果结论。
+            </p>
+          )}
         </div>
       )}
       {!stockBindings.length && (
@@ -1763,6 +1776,32 @@ function MarketExpressionRegistration({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedSource = sources.find((item) => item.id === sourceId) ?? null;
+  const allowedSourceTypes = sourceTypes
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const claimMissingRequirements = [
+    !sourceId ? "选择已准入冻结原文" : null,
+    !claimText.trim() ? "填写主张表述" : null,
+    !assertedBy.trim() ? "填写主张归属" : null,
+    !claimReviewer.trim() ? "填写审核人" : null,
+    !claimReason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const factorMissingRequirements = [
+    !claimId ? "选择已审核主张" : null,
+    !factorName.trim() ? "填写关键因素名称" : null,
+    !metricName.trim() ? "填写验证指标" : null,
+    !allowedSourceTypes.length ? "填写允许来源" : null,
+    !windowStart ? "填写验证开始日期" : null,
+    !windowEnd ? "填写验证结束日期" : null,
+    !support.trim() ? "填写支持条件" : null,
+    !refutation.trim() ? "填写反证条件" : null,
+    !nextEvent.trim() ? "填写下一验证事件" : null,
+    !factorReviewer.trim() ? "填写审核人" : null,
+    !factorReason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const claimSaveReady = !busy && claimMissingRequirements.length === 0;
+  const factorSaveReady = !busy && factorMissingRequirements.length === 0;
   const availableClaims = savedClaim
     ? [
         ...claims.filter((claim) => claim.id !== savedClaim.id),
@@ -1797,14 +1836,7 @@ function MarketExpressionRegistration({
   }
 
   async function saveClaim() {
-    if (
-      !sourceId ||
-      !claimText.trim() ||
-      !assertedBy.trim() ||
-      !claimReviewer.trim() ||
-      !claimReason.trim()
-    )
-      return;
+    if (!claimSaveReady) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -1837,24 +1869,7 @@ function MarketExpressionRegistration({
   }
 
   async function saveFactor() {
-    const allowed = sourceTypes
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    if (
-      !claimId ||
-      !factorName.trim() ||
-      !metricName.trim() ||
-      !allowed.length ||
-      !windowStart ||
-      !windowEnd ||
-      !support.trim() ||
-      !refutation.trim() ||
-      !nextEvent.trim() ||
-      !factorReviewer.trim() ||
-      !factorReason.trim()
-    )
-      return;
+    if (!factorSaveReady || !claimId) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -1864,7 +1879,7 @@ function MarketExpressionRegistration({
         name: factorName.trim(),
         expected_direction: direction,
         metric_name: metricName.trim(),
-        allowed_source_types: allowed,
+        allowed_source_types: allowedSourceTypes,
         verification_window_start: windowStart,
         verification_window_end: windowEnd,
         support_condition: support.trim(),
@@ -2021,13 +2036,7 @@ function MarketExpressionRegistration({
               <button
                 className="ros-button ros-button--primary"
                 type="button"
-                disabled={
-                  busy ||
-                  !sourceId ||
-                  !claimText.trim() ||
-                  !assertedBy.trim() ||
-                  !claimReason.trim()
-                }
+                disabled={!claimSaveReady}
                 onClick={() => void saveClaim()}
               >
                 {busy
@@ -2036,6 +2045,11 @@ function MarketExpressionRegistration({
                     ? "已登记主张"
                     : "登记已审核主张"}
               </button>
+              {claimMissingRequirements.length > 0 && (
+                <p className="ros-note" role="status">
+                  登记主张前还需填写：{claimMissingRequirements.join("、")}。系统不会从摘要或事件标题补写主张。
+                </p>
+              )}
               {availableClaims.length > 0 && (
                 <label>
                   已审核主张
@@ -2181,21 +2195,16 @@ function MarketExpressionRegistration({
                   <button
                     className="ros-button ros-button--primary"
                     type="button"
-                    disabled={
-                      busy ||
-                      !factorName.trim() ||
-                      !metricName.trim() ||
-                      !windowStart ||
-                      !windowEnd ||
-                      !support.trim() ||
-                      !refutation.trim() ||
-                      !nextEvent.trim() ||
-                      !factorReason.trim()
-                    }
+                    disabled={!factorSaveReady}
                     onClick={() => void saveFactor()}
                   >
                     {busy ? "正在追加关键因素…" : "登记已审核关键因素"}
                   </button>
+                  {factorMissingRequirements.length > 0 && (
+                    <p className="ros-note" role="status">
+                      登记关键因素前还需填写：{factorMissingRequirements.join("、")}。系统不会默认补写验证口径。
+                    </p>
+                  )}
                 </section>
               )}
             </>
@@ -2235,6 +2244,14 @@ function VerificationRegistration({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const verificationMissingRequirements = [
+    !sourceId ? "选择冻结原文" : null,
+    !rationale.trim() ? "填写核验说明" : null,
+    !reviewer.trim() ? "填写审核人" : null,
+    !reason.trim() ? "填写审核理由" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const verificationSaveReady =
+    !busy && verificationMissingRequirements.length === 0;
   async function openForm() {
     setOpen(true);
     setMessage(null);
@@ -2249,8 +2266,7 @@ function VerificationRegistration({
     }
   }
   async function save() {
-    if (!sourceId || !rationale.trim() || !reviewer.trim() || !reason.trim())
-      return;
+    if (!verificationSaveReady) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -2345,11 +2361,16 @@ function VerificationRegistration({
           <button
             className="ros-button ros-button--secondary"
             type="button"
-            disabled={busy || !sourceId || !rationale.trim() || !reason.trim()}
+            disabled={!verificationSaveReady}
             onClick={() => void save()}
           >
             {busy ? "正在追加验证…" : "保存审核验证"}
           </button>
+          {verificationMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存审核验证前还需填写：{verificationMissingRequirements.join("、")}。系统不会把运行结果自动写成支持或反证。
+            </p>
+          )}
         </div>
       )}
       {message && (

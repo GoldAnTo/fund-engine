@@ -944,6 +944,10 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("冻结原文陈述")).toBeVisible();
     expect(screen.getByText("公司季度业绩说明")).toBeVisible();
     expect(screen.getByText(/只可选择本 Case 内已准入/)).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("登记主张前还需填写");
+    expect(
+      screen.getByRole("button", { name: "登记已审核主张" }),
+    ).toBeDisabled();
     await user.type(screen.getByLabelText("主张归属"), "公司管理层");
     await user.type(
       screen.getByLabelText("主张审核理由"),
@@ -957,6 +961,7 @@ describe("Research OS event entry", () => {
     expect(
       screen.getByRole("button", { name: "登记已审核关键因素" }),
     ).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("登记关键因素前还需填写");
     await user.type(screen.getByLabelText("验证指标"), "订单同比增速");
     await user.type(screen.getByLabelText("验证开始日期"), "2026-07-01");
     await user.type(screen.getByLabelText("验证结束日期"), "2026-09-30");
