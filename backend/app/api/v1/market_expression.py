@@ -137,6 +137,7 @@ def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
         factor_id,
         MarketObservationInput(
             market_instrument_binding_id=payload.market_instrument_binding_id,
+            source_statement_id=payload.source_statement_id,
             event_at=payload.event_at,
             available_at=payload.available_at,
             window_label=payload.window_label,

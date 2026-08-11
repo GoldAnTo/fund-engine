@@ -129,6 +129,7 @@ class RegisterFundamentalImpactRequest(V1Model):
 
 class RegisterMarketObservationRequest(V1Model):
     market_instrument_binding_id: uuid.UUID
+    source_statement_id: uuid.UUID
     event_at: datetime
     available_at: datetime
     window_label: str = Field(min_length=1)
@@ -250,6 +251,7 @@ class MarketObservationDTO(V1Model):
     reviewed_by: str
     review_reason: str
     reviewed_at: datetime
+    source: ExpressionSourceDTO | None
 
 
 class FundDisclosurePositionDTO(V1Model):

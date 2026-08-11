@@ -189,6 +189,9 @@ class MarketObservation(Base):
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
     key_factor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("key_factors.id"), nullable=True)
     stock_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("stocks.id"), nullable=False)
+    # Old observations remain readable without a source after the audit hardening
+    # migration.  New writes require this through MarketObservationInput.
+    source_statement_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=True)
     event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_label: Mapped[str] = mapped_column(String(64), nullable=False)

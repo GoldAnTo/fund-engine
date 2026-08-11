@@ -906,6 +906,7 @@ export class MockResearchOsApi implements ResearchOsApi {
           reviewed_by: "human:reviewer",
           review_reason: "仅核验数据窗口",
           reviewed_at: now,
+          source,
         },
         ...(this.marketObservations.get(caseId) ?? []),
       ],
@@ -1363,6 +1364,10 @@ export class MockResearchOsApi implements ResearchOsApi {
     );
     if (!binding?.stock_id || !binding.stock_code || !binding.stock_name)
       throw new Error("market observation requires a reviewed stock binding");
+    const source = (await this.sourceStatements(caseId)).items.find(
+      (item) => item.id === input.source_statement_id,
+    );
+    if (!source) throw new Error("market observation requires an admitted frozen source statement");
     const created: Schemas["MarketObservationDTO"] = {
       id: `observation-${Date.now()}`,
       key_factor_id: factorId,
@@ -1379,6 +1384,15 @@ export class MockResearchOsApi implements ResearchOsApi {
       reviewed_by: input.reviewed_by,
       review_reason: input.review_reason,
       reviewed_at: now,
+      source: {
+        source_statement_id: source.id,
+        document_version_id: source.document_version_id,
+        document_title: source.document_title,
+        source_url: source.source_url,
+        locator: source.locator,
+        available_at: source.available_at,
+        permission_status: source.permission_status,
+      },
     };
     this.marketObservations.set(caseId, [
       ...(this.marketObservations.get(caseId) ?? []),

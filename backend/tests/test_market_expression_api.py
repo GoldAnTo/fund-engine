@@ -726,7 +726,7 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     })
     assert binding.status_code == 201
 
-    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations", json={
+    payload = {
         "market_instrument_binding_id": binding.json()["id"],
         "event_at": "2026-08-08T20:00:00Z",
         "available_at": "2026-08-09T00:00:00Z",
@@ -737,7 +737,17 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
         "relative_return": 0.034,
         "reviewed_by": "human:researcher",
         "review_reason": "只核对窗口、基准和价格来源，不作因果归因。",
-    })
+    }
+    missing_source = cmd_client.post(
+        f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations",
+        json=payload,
+    )
+    assert missing_source.status_code == 422
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations",
+        json={**payload, "source_statement_id": str(statement.id)},
+    )
 
     assert response.status_code == 201
     observation = response.json()
@@ -745,4 +755,5 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     assert observation["window_label"] == "T0 至 T+5"
     assert observation["relative_return"] == 0.034
     assert observation["after_hours_treatment"] == "事件发生在盘后，窗口从下一交易日开盘开始"
+    assert observation["source"]["source_statement_id"] == str(statement.id)
     assert "causal_result" not in observation

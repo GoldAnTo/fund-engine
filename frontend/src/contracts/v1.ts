@@ -5319,6 +5319,7 @@ export interface components {
              * Format: date-time
              */
             reviewed_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"] | null;
         };
         /** MechanismEdgeDTO */
         MechanismEdgeDTO: {
@@ -5933,6 +5934,11 @@ export interface components {
              * Format: uuid
              */
             market_instrument_binding_id: string;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
             /**
              * Event At
              * Format: date-time

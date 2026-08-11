@@ -17284,6 +17284,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Reviewed At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpressionSourceDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -17303,7 +17313,8 @@
           "relative_return",
           "reviewed_by",
           "review_reason",
-          "reviewed_at"
+          "reviewed_at",
+          "source"
         ],
         "title": "MarketObservationDTO"
       },
@@ -18794,6 +18805,11 @@
             "format": "uuid",
             "title": "Market Instrument Binding Id"
           },
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
           "event_at": {
             "type": "string",
             "format": "date-time",
@@ -18850,6 +18866,7 @@
         "type": "object",
         "required": [
           "market_instrument_binding_id",
+          "source_statement_id",
           "event_at",
           "available_at",
           "window_label",

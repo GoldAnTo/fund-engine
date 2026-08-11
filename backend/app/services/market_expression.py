@@ -81,6 +81,7 @@ class FundamentalImpactInput:
 @dataclass(frozen=True, slots=True)
 class MarketObservationInput:
     market_instrument_binding_id: uuid.UUID
+    source_statement_id: uuid.UUID
     event_at: datetime
     available_at: datetime
     window_label: str
@@ -305,6 +306,7 @@ class MarketExpressionService:
         if binding is None or binding.research_case_id != case_id or binding.review_state != "reviewed" or binding.stock_id is None:
             raise ValidationError("market observation requires a reviewed stock binding in this research case")
         self._require_admitted_case_statement(case_id, binding.source_statement_id)
+        self._require_admitted_case_statement(case_id, value.source_statement_id)
         if value.event_at.tzinfo is None or value.available_at.tzinfo is None:
             raise ValidationError("event_at and available_at must include a timezone")
         if value.available_at < value.event_at:
@@ -317,6 +319,7 @@ class MarketExpressionService:
             research_case_id=case_id,
             key_factor_id=factor.id,
             stock_id=binding.stock_id,
+            source_statement_id=value.source_statement_id,
             event_at=value.event_at,
             available_at=value.available_at,
             window_label=value.window_label.strip(),

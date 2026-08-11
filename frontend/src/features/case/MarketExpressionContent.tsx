@@ -568,6 +568,16 @@ export function MarketExpressionContent({
                         审核 {observation.reviewed_by} ·{" "}
                         {observation.review_reason}
                       </small>
+                      <small>
+                        {observation.source?.document_version_id ? (
+                          <Link
+                            className="ros-source-link"
+                            to={`/events/${caseId}/documents?document=${observation.source.document_version_id}`}
+                          >
+                            定位到冻结行情原文
+                          </Link>
+                        ) : "历史记录未保存冻结行情原文"}
+                      </small>
                       <p className="ros-note">
                         这是市场观测，不自动表述为研报或因素造成。
                       </p>
@@ -1551,6 +1561,8 @@ function MarketObservationRegistration({
 }) {
   const stockBindings = bindings.filter((binding) => binding.stock_id !== null);
   const [open, setOpen] = useState(false);
+  const [sources, setSources] = useState<SourceStatementOptions["items"]>([]);
+  const [sourceId, setSourceId] = useState("");
   const [bindingId, setBindingId] = useState("");
   const [eventAt, setEventAt] = useState("2026-08-08T20:00");
   const [availableAt, setAvailableAt] = useState("2026-08-09T00:00");
@@ -1568,6 +1580,7 @@ function MarketObservationRegistration({
   const observationMissingRequirements = [
     !factor ? "选择关键因素" : null,
     !bindingId ? "选择包含股票的已审核标的" : null,
+    !sourceId ? "选择冻结行情原文" : null,
     !eventAt ? "填写事件时间" : null,
     !availableAt ? "填写资料可得时间" : null,
     !windowLabel.trim() ? "填写观测窗口" : null,
@@ -1579,11 +1592,25 @@ function MarketObservationRegistration({
   ].filter((requirement): requirement is string => Boolean(requirement));
   const observationSaveReady =
     !busy && observationMissingRequirements.length === 0;
-  function begin() {
+  async function begin() {
     if (!factor) return;
     setOpen(true);
     setMessage(null);
     setBindingId(stockBindings[0]?.id ?? "");
+    setBusy(true);
+    try {
+      const options = await researchOsApi.sourceStatements(caseId);
+      setSources(options.items);
+      setSourceId(
+        factor.verification?.source.source_statement_id
+          ?? options.items[0]?.id
+          ?? "",
+      );
+    } catch {
+      setMessage("无法读取当前 Case 已准入的冻结行情原文；系统不会仅凭价格来源文字登记市场观测。");
+    } finally {
+      setBusy(false);
+    }
   }
   async function save() {
     if (!observationSaveReady || !factor) return;
@@ -1592,6 +1619,7 @@ function MarketObservationRegistration({
     try {
       await researchOsApi.createMarketObservation(caseId, factor.id, {
         market_instrument_binding_id: bindingId,
+        source_statement_id: sourceId,
         event_at: new Date(eventAt).toISOString(),
         available_at: new Date(availableAt).toISOString(),
         window_label: windowLabel.trim(),
@@ -1618,7 +1646,7 @@ function MarketObservationRegistration({
           className="ros-button ros-button--secondary"
           type="button"
           disabled={!factor || !stockBindings.length}
-          onClick={begin}
+          onClick={() => void begin()}
         >
           登记市场观测
         </button>
@@ -1636,6 +1664,20 @@ function MarketObservationRegistration({
                   {binding.company_name} · {binding.stock_code} ·{" "}
                   {instrumentRoleLabels[binding.relationship_role] ??
                     binding.relationship_role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            冻结行情原文
+            <select
+              aria-label="冻结行情原文"
+              value={sourceId}
+              onChange={(event) => setSourceId(event.target.value)}
+            >
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.document_title} · {JSON.stringify(source.locator)}
                 </option>
               ))}
             </select>
