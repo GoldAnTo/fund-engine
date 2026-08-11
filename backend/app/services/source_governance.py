@@ -58,6 +58,7 @@ def _normalize_research_source_type(
     source_type: str,
     source_metadata: dict[str, Any] | None,
     document: DocumentVersion,
+    incoming_source_url: str | None = None,
 ) -> str:
     metadata = dict(source_metadata or {})
     raw = metadata.get("research_source_type", source_type)
@@ -68,7 +69,11 @@ def _normalize_research_source_type(
         raise ValueError("research_source_type is not supported")
     if research_source_type == "company_disclosure":
         try:
-            parsed = urlparse(document.source_url or "")
+            parsed = urlparse(
+                incoming_source_url
+                if incoming_source_url is not None
+                else document.source_url or ""
+            )
         except ValueError as exc:
             raise ValueError(
                 "company_disclosure requires an HTTP(S) source_url"
@@ -124,6 +129,7 @@ class SourceGovernanceService:
         source_type: str,
         source_metadata: dict[str, Any] | None,
         document: DocumentVersion,
+        incoming_source_url: str | None,
     ) -> None:
         """Fail closed when deduplicated bytes arrive under different terms.
 
@@ -154,6 +160,7 @@ class SourceGovernanceService:
                 source_type=source_type,
                 source_metadata=source_metadata,
                 document=document,
+                incoming_source_url=incoming_source_url,
             ),
             "provider_or_tenant": str(incoming_provider)
             if incoming_provider is not None
@@ -202,6 +209,7 @@ class SourceGovernanceService:
         source_type: str,
         source_metadata: dict[str, Any] | None,
         declared_by: str,
+        incoming_source_url: str | None = None,
     ) -> SourceContract:
         existing = self._session.scalar(
             select(SourceContract).where(
@@ -214,6 +222,7 @@ class SourceGovernanceService:
                 source_type=source_type,
                 source_metadata=source_metadata,
                 document=document,
+                incoming_source_url=incoming_source_url,
             )
             return existing
         metadata = dict(source_metadata or {})
@@ -222,6 +231,7 @@ class SourceGovernanceService:
             source_type=source_type,
             source_metadata=source_metadata,
             document=document,
+            incoming_source_url=incoming_source_url,
         )
         now = _utcnow()
         effective_from = _effective_at(metadata, "effective_from")

@@ -170,6 +170,31 @@ def test_event_intake_rejects_company_disclosure_without_a_hostname(cmd_client) 
     ]["message"]
 
 
+def test_deduplicated_event_intake_validates_the_incoming_company_disclosure_url(
+    cmd_client,
+) -> None:
+    first_payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    first_payload["source_url"] = "https://www.cninfo.com.cn/new/disclosure/detail?stockCode=601138"
+    first = cmd_client.post("/api/v1/event-research", json=first_payload)
+
+    second_payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    second_payload["event_title"] = "同正文的无效公司披露链接"
+    second_payload["source_url"] = "event://not-http"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 422
+    assert "company_disclosure requires an HTTP(S) source_url" in second.json()[
+        "error"
+    ]["message"]
+
+
 def test_licensed_provider_intake_preserves_provider_record_and_contract_version(
     cmd_client, cmd_session
 ) -> None:

@@ -92,6 +92,11 @@ class EventResearchService:
             source_type=payload.source_type,
             source_metadata=payload.source_metadata,
             declared_by=payload.created_by,
+            incoming_source_url=(
+                payload.source_url
+                if payload.source_url is not None
+                else document_url
+            ),
         )
         document_service.add_span(
             document_version_id=document.id,
@@ -215,6 +220,7 @@ class EventResearchService:
             source_type=source_type,
             source_metadata=source_metadata,
             declared_by=actor,
+            incoming_source_url=(source_url if source_url is not None else document_url),
         )
         document_service.add_span(
             document_version_id=document.id,
@@ -276,6 +282,7 @@ class EventResearchService:
             source_type=source_type,
             source_metadata=source_metadata,
             declared_by=actor,
+            incoming_source_url=(source_url if source_url is not None else document_url),
         )
         document_service.add_span(
             document_version_id=document.id,
