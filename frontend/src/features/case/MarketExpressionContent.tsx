@@ -584,7 +584,7 @@ export function MarketExpressionContent({
                     </article>
                   ))
                 ) : (
-                  <Empty text="当前因素尚缺股票市场观测。" />
+                  <Empty text="尚未登记带冻结行情原文的市场观测；系统不会把研报或公告期间的价格变化写成影响结论。" />
                 )}
               </div>
             </div>
