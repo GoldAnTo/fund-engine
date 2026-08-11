@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.ledger import DocumentVersion, EvidenceLink, ResearchCase, SourceSpan, SourceStatement, Thesis
 from app.models.operational import EventResearchLifecycle
 from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion
+from app.models.research_expression import KeyFactor, MarketInstrumentBinding, MarketObservation
 from app.repositories.documents import DocumentRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.event_research import EventResearchService
@@ -39,6 +40,7 @@ from app.services.market_expression import (
     KeyFactorInput,
     MarketExpressionService,
     MarketInstrumentBindingInput,
+    MarketObservationInput,
     ReportClaimInput,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
@@ -375,6 +377,58 @@ def _configure_demo_research_protocol(
     )
 
 
+def _register_market_window(
+    session: Session,
+    *,
+    case_id: uuid.UUID,
+    expression: MarketExpressionService,
+    forecast_factor: KeyFactor,
+    binding: MarketInstrumentBinding,
+    bundle: IndustrialFoxconnSourceBundle,
+) -> MarketObservation:
+    """Append one source-bound daily price observation, never a causal verdict."""
+    existing = session.scalar(
+        select(MarketObservation)
+        .where(MarketObservation.research_case_id == case_id)
+        .where(MarketObservation.key_factor_id == forecast_factor.id)
+        .where(MarketObservation.window_label == "2025-04-29 收盘至 2025-04-30 收盘")
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+    market_doc = _admit_document(
+        session, case_id=case_id, title=bundle.market_window.snapshot.title,
+        published_at=bundle.market_window.snapshot.published_at,
+        raw_response=bundle.market_window.snapshot.raw_response,
+        tool=bundle.market_window.snapshot.tool, query=bundle.market_window.snapshot.query,
+        authority="licensed_market_data",
+    )
+    market_statement = _statement(
+        session, document=market_doc, label="2025-04-30-daily-price-window",
+        quote=bundle.market_window.snapshot.content,
+        kind="market_observation", observed_period=date(2025, 4, 30),
+    )
+    return expression.register_market_observation(case_id, forecast_factor.id, MarketObservationInput(
+        market_instrument_binding_id=binding.id,
+        source_statement_id=market_statement.id,
+        event_at=bundle.market_window.event_at,
+        available_at=bundle.market_window.event_at,
+        window_label="2025-04-29 收盘至 2025-04-30 收盘",
+        benchmark="中证全指 000985",
+        price_source="Gildata FinQuery 历史日度行情",
+        after_hours_treatment=(
+            "日度价格窗口从前一交易日收盘至2025-04-30收盘；"
+            "不将同日年度报告与该价格表现建立因果。"
+        ),
+        relative_return=bundle.market_window.relative_return,
+        reviewed_by=ACTOR,
+        review_reason=(
+            "演示人审：工业富联前复权收盘价17.44元至17.41元，"
+            "中证全指4649.04点至4666.80点；仅记录相对窗口表现。"
+        ),
+    ))
+
+
 def materialize_live_industrial_foxconn_case(
     session: Session,
     *,
@@ -546,6 +600,10 @@ def materialize_live_industrial_foxconn_case(
             expected_direction="positive", rationale=rationale, reviewed_by=ACTOR,
             review_reason="演示人审：记录基本面映射，不生成投资建议或股价因果结论。",
         ))
+    _register_market_window(
+        session, case_id=case_id, expression=expression,
+        forecast_factor=forecast_factor, binding=binding, bundle=bundle,
+    )
     fund = instruments.create_fund(code=bundle.fund.code, name="华夏中证5G通信主题交易型开放式指数证券投资基金", fund_type="ETF")
     holding_span = session.get(SourceSpan, holding_statement.source_span_id)
     instruments.add_holding_disclosure(
@@ -588,3 +646,40 @@ def materialize_live_industrial_foxconn_case(
         case_id=case_id, verdict_id=verdict.id, expected_value=str(bundle.expected_profit),
         baseline_value=str(bundle.baseline_profit), actual_value=str(bundle.actual_profit), outcome=verdict.outcome,
     )
+
+
+def append_live_industrial_foxconn_market_window(
+    session: Session,
+    *,
+    bundle: IndustrialFoxconnSourceBundle,
+) -> MarketObservation:
+    """Append the approved source-bound price window to the existing demo Case.
+
+    This is intentionally idempotent and cannot alter the historical forecast
+    verdict, conclusion, fund disclosure, or any prior observation.
+    """
+    case = session.scalar(select(ResearchCase).where(ResearchCase.title == CASE_TITLE).limit(1))
+    if case is None:
+        raise ValueError("local demonstration case does not exist")
+    factor = session.scalar(
+        select(KeyFactor)
+        .where(KeyFactor.research_case_id == case.id)
+        .where(KeyFactor.name == "2024 年归母净利润预测兑现")
+        .where(KeyFactor.review_state == "reviewed")
+        .limit(1)
+    )
+    binding = session.scalar(
+        select(MarketInstrumentBinding)
+        .where(MarketInstrumentBinding.research_case_id == case.id)
+        .where(MarketInstrumentBinding.review_state == "reviewed")
+        .where(MarketInstrumentBinding.stock_id.is_not(None))
+        .limit(1)
+    )
+    if factor is None or binding is None:
+        raise ValueError("local demonstration case is missing its reviewed stock expression chain")
+    record = _register_market_window(
+        session, case_id=case.id, expression=MarketExpressionService(session),
+        forecast_factor=factor, binding=binding, bundle=bundle,
+    )
+    session.commit()
+    return record

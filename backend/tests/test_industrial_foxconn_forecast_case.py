@@ -45,6 +45,20 @@ class FakeGildataClient:
                 "原文：本报告为华夏中证5G通信主题交易型开放式指数证券投资基金2024年年度报告。"
             )
         if name == "FinQuery":
+            if "中证全指" in query:
+                return _payload(
+                    "|指数名称|指数代码|交易日|收盘价(点)|昨收盘(点)|\n"
+                    "|---|---|---|---|---|\n"
+                    "|中证全指|000985|2025-04-30|4666.80|4649.04|\n"
+                    "|中证全指|000985|2025-04-29|4649.04|4639.90|"
+                )
+            if "日度行情" in query:
+                return _payload(
+                    "|股票名称|股票代码|交易日|收盘价（元）|前收盘（元）|\n"
+                    "|---|---|---|---|---|\n"
+                    "|工业富联|601138|2025-04-30|17.41|17.44|\n"
+                    "|工业富联|601138|2025-04-29|17.44|17.36|"
+                )
             return _payload(
                 "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
                 "|---|---|---|---|---|---|\n"
@@ -69,6 +83,11 @@ def test_loads_only_the_predeclared_report_annual_report_and_fund_position() -> 
     assert bundle.fund.code == "515050"
     assert bundle.fund.position_weight == Decimal("0.0533")
     assert bundle.fund.report_period == date(2024, 12, 31)
+    assert bundle.market_window.stock_start_close == Decimal("17.44")
+    assert bundle.market_window.stock_end_close == Decimal("17.41")
+    assert bundle.market_window.benchmark_start_close == Decimal("4649.04")
+    assert bundle.market_window.benchmark_end_close == Decimal("4666.80")
+    assert bundle.market_window.relative_return.quantize(Decimal("0.000001")) == Decimal("-0.005540")
 
 
 def test_rejects_a_provider_response_without_the_approved_numeric_prediction() -> None:
@@ -87,10 +106,12 @@ def test_materialized_case_publishes_a_bounded_human_conclusion(cmd_session) -> 
 
     from app.models.event_research import EventResearchConclusion
     from app.models.operational import EventResearchLifecycle
+    from app.models.research_expression import MarketObservation
     from app.services.industrial_foxconn_forecast_case import (
         load_industrial_foxconn_sources,
     )
     from app.services.live_industrial_foxconn_case import (
+        append_live_industrial_foxconn_market_window,
         materialize_live_industrial_foxconn_case,
     )
 
@@ -111,6 +132,19 @@ def test_materialized_case_publishes_a_bounded_human_conclusion(cmd_session) -> 
     assert published is not None
     assert "251.49" in published.text
     assert "不据此推断股票价格因果" in published.text
+    observation = cmd_session.scalar(
+        select(MarketObservation).where(MarketObservation.research_case_id == result.case_id)
+    )
+    assert observation is not None
+    assert observation.relative_return is not None
+    assert observation.source_statement_id is not None
+    assert observation.window_label == "2025-04-29 收盘至 2025-04-30 收盘"
+    replayed = append_live_industrial_foxconn_market_window(
+        cmd_session,
+        bundle=load_industrial_foxconn_sources(FakeGildataClient()),
+    )
+    assert replayed.id == observation.id
+    assert cmd_session.query(MarketObservation).filter_by(research_case_id=result.case_id).count() == 1
 
 
 def test_materialized_key_factors_are_linked_to_reviewed_case_theses(cmd_session, monkeypatch) -> None:

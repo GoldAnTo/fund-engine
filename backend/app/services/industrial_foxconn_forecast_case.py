@@ -19,6 +19,8 @@ REPORT_QUERY = "工业富联 海通证券 2024-03-25"
 ANNUAL_REPORT_QUERY = "工业富联:富士康工业互联网股份有限公司2024年年度报告"
 FUND_REPORT_QUERY = "华夏中证5G通信主题交易型开放式指数证券投资基金2024年年度报告"
 FUND_HOLDING_QUERY = "查询基金515050 2024年第4季度公开披露的股票持仓明细，包括股票代码、股票名称、持仓权重、报告期"
+STOCK_MARKET_QUERY = "查询工业富联 601138 在2025-04-29和2025-04-30的前复权日度行情，返回交易日、收盘价、前收盘价。"
+BENCHMARK_MARKET_QUERY = "查询中证全指 000985 在2025-04-29和2025-04-30的日度行情，返回交易日、收盘价、昨收盘价。"
 
 REPORT_TITLE = "工业富联(601138)：盈利整体平稳增长 AI业务表现强劲"
 ANNUAL_REPORT_TITLE = "工业富联:富士康工业互联网股份有限公司2024年年度报告"
@@ -55,6 +57,24 @@ class FundPosition:
 
 
 @dataclass(frozen=True)
+class MarketWindow:
+    """A frozen daily-price observation, deliberately separate from causality."""
+
+    snapshot: ProviderDocument
+    event_at: datetime
+    stock_start_close: Decimal
+    stock_end_close: Decimal
+    benchmark_start_close: Decimal
+    benchmark_end_close: Decimal
+
+    @property
+    def relative_return(self) -> Decimal:
+        stock_return = self.stock_end_close / self.stock_start_close - Decimal("1")
+        benchmark_return = self.benchmark_end_close / self.benchmark_start_close - Decimal("1")
+        return stock_return - benchmark_return
+
+
+@dataclass(frozen=True)
 class IndustrialFoxconnSourceBundle:
     report: ProviderDocument
     annual_report: ProviderDocument
@@ -64,6 +84,7 @@ class IndustrialFoxconnSourceBundle:
     baseline_profit: Decimal
     actual_profit: Decimal
     fund: FundPosition
+    market_window: MarketWindow
 
 
 def _utc_day(value: str, *, label: str) -> datetime:
@@ -173,6 +194,73 @@ def _fund_position(client: GildataClient) -> tuple[ProviderDocument, FundPositio
     raise SourceSelectionError("未找到基金515050于2024-12-31披露的工业富联持仓")
 
 
+def _daily_close(
+    rows: list[dict[str, str]],
+    *,
+    code_key: str,
+    code: str,
+    close_key: str,
+    trade_date: str,
+    label: str,
+) -> Decimal:
+    for row in rows:
+        if row.get(code_key, "").strip().split(".")[0] != code:
+            continue
+        if row.get("交易日", "").strip() != trade_date:
+            continue
+        try:
+            value = Decimal(row[close_key].strip())
+        except (KeyError, InvalidOperation) as exc:
+            raise SourceSelectionError(f"{label}{trade_date}收盘价不可解析") from exc
+        if value <= 0:
+            raise SourceSelectionError(f"{label}{trade_date}收盘价必须为正数")
+        return value
+    raise SourceSelectionError(f"未找到{label}{trade_date}的预设日度行情")
+
+
+def _market_window(client: GildataClient) -> MarketWindow:
+    stock_raw = client.call_tool("FinQuery", {"query": STOCK_MARKET_QUERY})
+    benchmark_raw = client.call_tool("FinQuery", {"query": BENCHMARK_MARKET_QUERY})
+    stock_rows = _rows(stock_raw)
+    benchmark_rows = _rows(benchmark_raw)
+    stock_start = _daily_close(
+        stock_rows, code_key="股票代码", code="601138", close_key="收盘价（元）",
+        trade_date="2025-04-29", label="工业富联",
+    )
+    stock_end = _daily_close(
+        stock_rows, code_key="股票代码", code="601138", close_key="收盘价（元）",
+        trade_date="2025-04-30", label="工业富联",
+    )
+    benchmark_start = _daily_close(
+        benchmark_rows, code_key="指数代码", code="000985", close_key="收盘价(点)",
+        trade_date="2025-04-29", label="中证全指",
+    )
+    benchmark_end = _daily_close(
+        benchmark_rows, code_key="指数代码", code="000985", close_key="收盘价(点)",
+        trade_date="2025-04-30", label="中证全指",
+    )
+    published_at = datetime(2025, 4, 30, 7, tzinfo=timezone.utc)
+    content = (
+        f"工业富联601138于2025-04-29前复权收盘{stock_start}元、2025-04-30前复权收盘{stock_end}元；"
+        f"中证全指000985于2025-04-29收盘{benchmark_start}点、2025-04-30收盘{benchmark_end}点。"
+    )
+    return MarketWindow(
+        snapshot=ProviderDocument(
+            title="工业富联与中证全指 2025-04-29 至 2025-04-30 日度行情",
+            published_at=published_at,
+            content=content,
+            raw_response=f"工业富联日度行情\n{stock_raw}\n中证全指日度行情\n{benchmark_raw}",
+            tool="FinQuery",
+            query=f"{STOCK_MARKET_QUERY}\n{BENCHMARK_MARKET_QUERY}",
+        ),
+        event_at=published_at,
+        stock_start_close=stock_start,
+        stock_end_close=stock_end,
+        benchmark_start_close=benchmark_start,
+        benchmark_end_close=benchmark_end,
+    )
+
+
 def load_industrial_foxconn_sources(client: GildataClient) -> IndustrialFoxconnSourceBundle:
     """Return the four frozen source inputs for the approved live case only."""
     report = _document(
@@ -197,6 +285,7 @@ def load_industrial_foxconn_sources(client: GildataClient) -> IndustrialFoxconnS
         title_key="公告标题",
     )
     fund_holding_snapshot, fund = _fund_position(client)
+    market_window = _market_window(client)
     return IndustrialFoxconnSourceBundle(
         report=report,
         annual_report=annual_report,
@@ -208,4 +297,5 @@ def load_industrial_foxconn_sources(client: GildataClient) -> IndustrialFoxconnS
         baseline_profit=_forecast_baseline_profit(report.content),
         actual_profit=_cny_yi(annual_report.content, "232.16", label="年度报告实际值"),
         fund=fund,
+        market_window=market_window,
     )
