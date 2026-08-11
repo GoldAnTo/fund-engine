@@ -3246,33 +3246,49 @@ describe("Research OS event entry", () => {
     const user = userEvent.setup();
     const adapter = new MockResearchAdapter();
     const baseRun = await adapter.getResearchRun("run-aic-001");
-    const reviewAssessment = vi.spyOn(adapter, "reviewAssessment").mockResolvedValue({
-      id: "review-1",
-      outcome: "confirmed",
-      reviewer: "human:researcher",
-      createdAt: "2026-08-11T00:00:00Z",
+    let reviewed = false;
+    const reviewAssessment = vi.spyOn(adapter, "reviewAssessment").mockImplementation(async () => {
+      reviewed = true;
+      return {
+        id: "review-1",
+        outcome: "confirmed",
+        reviewer: "human:researcher",
+        createdAt: "2026-08-11T00:00:00Z",
+      };
     });
-    vi.spyOn(adapter, "getResearchRun").mockResolvedValue({
-      ...baseRun,
-      id: "run-live",
-      case_id: "event-tsm",
-      status: "waiting_for_review",
-      stage: "stopped",
-      round: 1,
-      stop_reason: "max_rounds_reached",
-      pending_assessments: [{
-        assessment_id: "assessment-1",
-        conclusion: "insufficient_evidence",
-        rationale: "缺少历史预测值",
-        gaps: ["补充预测基线"],
-        task_id: "task-1",
-        task_status: "open",
-      }],
-      pending_proposals: [],
-      review_tasks: [],
-      gap_tasks: [],
-      failed_tasks: [],
-      next_action: "人工审核临时判断",
+    vi.spyOn(adapter, "getResearchRun").mockImplementation(async (runId) => {
+      if (runId === "run-live") {
+        return {
+          ...baseRun,
+          id: "run-live",
+          case_id: "event-tsm",
+          status: reviewed ? "succeeded" : "waiting_for_review",
+          stage: reviewed ? "complete" : "stopped",
+          round: 1,
+          stop_reason: "max_rounds_reached",
+          pending_assessments: reviewed ? [] : [{
+            assessment_id: "assessment-1",
+            conclusion: "insufficient_evidence",
+            rationale: "缺少历史预测值",
+            gaps: ["补充预测基线"],
+            task_id: "task-1",
+            task_status: "open",
+          }],
+          pending_proposals: [],
+          review_tasks: [],
+          gap_tasks: [],
+          failed_tasks: [],
+          next_action: reviewed ? "继续执行" : "人工审核临时判断",
+        };
+      }
+      return {
+        ...baseRun,
+        id: "run-older",
+        case_id: "event-tsm",
+        status: "waiting_for_review",
+        stage: "stopped",
+        pending_assessments: [],
+      };
     });
     setResearchClient(adapter);
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -3284,8 +3300,8 @@ describe("Research OS event entry", () => {
             effective_binding_id: "binding-1",
             next_action: "可开始补证",
           }
-        : url.endsWith("/research-runs/run-live/events")
-          ? { run_id: "run-live", has_more: false, items: [] }
+        : url.includes("/research-runs/") && url.endsWith("/events")
+          ? { run_id: reviewed ? "run-older" : "run-live", has_more: false, items: [] }
           : {
                 monitor: {
                   id: "monitor-v1",
@@ -3301,7 +3317,7 @@ describe("Research OS event entry", () => {
                   created_at: "2026-08-09T00:00:00Z",
                 },
                 latest_run: {
-                  id: "run-live",
+                  id: reviewed ? "run-older" : "run-live",
                   status: "waiting_for_review",
                   stage: "stopped",
                   updated_at: "2026-08-09T00:01:00Z",
@@ -3351,6 +3367,10 @@ describe("Research OS event entry", () => {
         expect.anything(),
       ),
     );
+    await waitFor(() =>
+      expect(screen.getByText("ResearchRun · run-live")).toBeVisible(),
+    );
+    expect(screen.queryByText("临时 AI 评估待审核")).not.toBeInTheDocument();
   });
 
   it("keeps the newly saved monitor version and scope visible in the configuration form", async () => {

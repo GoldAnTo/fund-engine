@@ -3720,13 +3720,15 @@ function MonitorContent({
   const [protocolStates, setProtocolStates] = useState<
     Record<string, Researchability>
   >({});
-  const loadMonitor = () => {
+  const loadMonitor = ({ retainSelectedRun = false } = {}) => {
     setMonitorLoadError(false);
     return researchOsApi
       .monitor(caseId)
       .then((value) => {
         setDetail(value);
-        setSelectedRunId(value.latest_run?.id ?? null);
+        if (!retainSelectedRun) {
+          setSelectedRunId(value.latest_run?.id ?? null);
+        }
       })
       .catch(() => setMonitorLoadError(true));
   };
@@ -3840,7 +3842,9 @@ function MonitorContent({
   const run =
     selectedRunId && detail?.latest_run?.id === selectedRunId
       ? detail.latest_run
-      : null;
+      : runDetail?.id === selectedRunId
+        ? runDetail
+        : null;
   const protocolBlockers = Object.entries(protocolStates)
     .filter(([, state]) => state.status === "blocked")
     .flatMap(([id, state]) =>
@@ -3885,7 +3889,7 @@ function MonitorContent({
   async function reloadAfterAssessmentReview() {
     if (!selectedRunId) return;
     await Promise.all([
-      loadMonitor(),
+      loadMonitor({ retainSelectedRun: true }),
       loadRunDetail(selectedRunId),
       loadEvents(selectedRunId),
     ]);
@@ -4012,7 +4016,7 @@ function MonitorContent({
               </p>
               <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : selectedRunId ? "运行状态暂不可读取" : "先配置持续研究"}</h2>
             </div>
-            <span>{run ? `更新于 ${run.updated_at}` : selectedRunId ? "等待服务返回实际状态" : ""}</span>
+            <span>{run ? `更新于 ${"updated_at" in run ? run.updated_at : run.created_at}` : selectedRunId ? "等待服务返回实际状态" : ""}</span>
           </header>
           <div className="ros-run-summary">
             <strong>
@@ -4159,6 +4163,7 @@ function RunDrawer({
   run:
     | MonitorDetail["latest_run"]
     | { id: string; status: string; stage: string; updated_at: string }
+    | { id: string; status: string; stage: string; created_at: string }
     | null;
   detail: MonitorDetail | null;
   runDetail: ResearchRunDetail | null;
