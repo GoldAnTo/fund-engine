@@ -242,7 +242,7 @@ async function prepareReviewedActualSourceStatement({ apiBase, token, caseId }) 
     body: JSON.stringify({
       source_span_id: span.id,
       normalized_text: span.verbatim_text,
-      claim_type: "reported_fact",
+      claim_type: "reported_claim",
       assertion_actor: "company:live-verifier",
       actor: "human:researcher",
     }),
@@ -450,10 +450,9 @@ async function main() {
     await page.getByText("2024 年归母净利润预测兑现").waitFor();
     await page.getByRole("button", { name: "带入人工登记" }).click();
     await page.getByLabel("主张归属").waitFor();
-    if (await page.getByLabel("研报主张文本").inputValue() !== "预计验收公司2024年归母净利润为1亿元") {
+    if (await page.getByLabel("主张表述").inputValue() !== "预计验收公司2024年归母净利润为1亿元") {
       throw new Error("parsed key-factor candidate was not carried into the human registration form");
     }
-    await page.getByRole("button", { name: "选择冻结原文并登记主张" }).click();
     await page.getByLabel("冻结原文陈述").waitFor();
     await page.getByLabel("主张归属").fill("验收研究员");
     await page.getByLabel("主张审核理由").fill("主张逐句回到当前 Case 冻结原文核对。 ");
@@ -479,7 +478,7 @@ async function main() {
     await page.getByRole("button", { name: "冻结预测目标" }).click();
     await page.getByText("已冻结预测目标").waitFor();
     await page.getByLabel("后续实际值来源").selectOption(actualSourceStatementId);
-    await page.getByLabel("后续实际值").fill("110000000");
+    await page.getByRole("textbox", { name: "后续实际值" }).fill("110000000");
     await page.getByLabel("本阶段审核理由").fill("冻结公告实际值，并与预测的主体、单位、期间逐项核对。");
     await page.getByRole("button", { name: "冻结后续实际值" }).click();
     await page.getByText("已冻结后续实际值").waitFor();

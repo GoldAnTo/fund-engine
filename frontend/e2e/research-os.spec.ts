@@ -317,7 +317,7 @@ test.describe("Event-first Research OS", () => {
 
     await expect(page).toHaveURL(/\/events\/event-created-1$/);
     await expect(page.getByRole("heading", { name: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
-    await expect(page.getByText("无后台运行")).toBeVisible();
+    await expect(page.getByText("尚未创建主研究运行")).toBeVisible();
     const inspectSource = page.getByRole("link", { name: "核验冻结原文" });
     await expect(inspectSource).toHaveAttribute("href", "/events/event-created-1/documents");
     await inspectSource.click();
@@ -491,6 +491,8 @@ test.describe("Event-first Research OS", () => {
     await expect(page.locator(".ros-fund-row").getByText(/报告期 2026-06-30/)).toBeVisible();
     await expect(page.getByRole("button", { name: "立即补证此因素" })).toBeEnabled();
     await page.getByRole("button", { name: "立即补证此因素" }).click();
+    await expect(page.getByRole("status")).toContainText("已创建单因素补证运行");
+    await page.getByRole("link", { name: "查看运行记录" }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
   });
 
