@@ -195,7 +195,7 @@ class InstrumentService:
             if contract is None or not contract.allow_display:
                 raise ValidationError("持仓来源版本必须具有可展示的来源许可")
 
-        existing = self._session.scalar(
+        existing_query = (
             select(func.count())
             .select_from(HoldingDisclosure)
             .where(
@@ -205,6 +205,15 @@ class InstrumentService:
                 HoldingDisclosure.source == source,
             )
         )
+        if source_document_version_id is None:
+            existing_query = existing_query.where(
+                HoldingDisclosure.source_document_version_id.is_(None)
+            )
+        else:
+            existing_query = existing_query.where(
+                HoldingDisclosure.source_document_version_id == source_document_version_id
+            )
+        existing = self._session.scalar(existing_query)
         if existing:
             raise ConflictError("该基金在该报告期对该股票的同一来源披露已存在")
 
