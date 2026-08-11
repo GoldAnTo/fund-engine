@@ -3229,6 +3229,12 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText("当前生效版本 v1")).toBeVisible();
     await user.click(screen.getByLabelText("授权数据源"));
     await user.clear(screen.getByLabelText("下一验证事件"));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "保存监控版本前还需填写：填写下一验证事件",
+    );
+    expect(
+      screen.getByRole("button", { name: "保存为新监控版本" }),
+    ).toBeDisabled();
     await user.type(screen.getByLabelText("下一验证事件"), "下一次财报后补证");
     await user.clear(screen.getByLabelText("新版本变更原因"));
     await user.type(screen.getByLabelText("新版本变更原因"), "补充授权来源");

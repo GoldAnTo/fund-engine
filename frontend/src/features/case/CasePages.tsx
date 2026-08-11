@@ -4339,6 +4339,7 @@ function MonitorConfigForm({
   const [budget, setBudget] = useState(20);
   const [reason, setReason] = useState("调整监控范围");
   const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     researchOsApi
       .monitor(caseId)
@@ -4369,18 +4370,17 @@ function MonitorConfigForm({
         ? current.filter((value) => value !== source)
         : [...current, source],
     );
+  const monitorMissingRequirements = [
+    !selected.length ? "选择至少一个已确认因素" : null,
+    !sources.length ? "选择至少一个允许来源" : null,
+    !nextEvent.trim() ? "填写下一验证事件" : null,
+    !reason.trim() ? "填写新版本变更原因" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const monitorSaveReady = !busy && monitorMissingRequirements.length === 0;
   async function save() {
-    if (
-      !selected.length ||
-      !sources.length ||
-      !nextEvent.trim() ||
-      !reason.trim()
-    ) {
-      setMessage(
-        "请选择至少一个已确认因素、一个允许来源，并说明下一验证事件与变更原因。",
-      );
-      return;
-    }
+    if (!monitorSaveReady) return;
+    setBusy(true);
+    setMessage(null);
     try {
       const saved = await researchOsApi.saveMonitor(caseId, {
         actor: "human:researcher",
@@ -4409,6 +4409,8 @@ function MonitorConfigForm({
       onSaved();
     } catch {
       setMessage("保存失败，未写入任何配置版本。");
+    } finally {
+      setBusy(false);
     }
   }
   return (
@@ -4521,10 +4523,16 @@ function MonitorConfigForm({
           <button
             className="ros-button ros-button--primary"
             type="button"
+            disabled={!monitorSaveReady}
             onClick={save}
           >
-            保存为新监控版本
+            {busy ? "正在保存监控版本…" : "保存为新监控版本"}
           </button>
+          {monitorMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存监控版本前还需填写：{monitorMissingRequirements.join("、")}。立即补证和定时任务都不会引用未完整冻结的配置。
+            </p>
+          )}
         </div>
       )}
       {message && (
