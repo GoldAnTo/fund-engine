@@ -61,9 +61,11 @@ def _normalize_research_source_type(
     incoming_source_url: str | None = None,
 ) -> str:
     metadata = dict(source_metadata or {})
-    raw = metadata.get("research_source_type", source_type)
-    if raw is None:
-        raw = source_type
+    raw = (
+        metadata["research_source_type"]
+        if "research_source_type" in metadata
+        else source_type
+    )
     research_source_type = str(raw).strip()
     if research_source_type not in RESEARCH_SOURCE_TYPES:
         raise ValueError("research_source_type is not supported")

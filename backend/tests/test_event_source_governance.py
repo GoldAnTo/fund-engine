@@ -155,6 +155,21 @@ def test_event_intake_rejects_explicit_falsey_research_source_type(
     assert "research_source_type is not supported" in created.json()["error"]["message"]
 
 
+def test_event_intake_rejects_an_explicit_null_research_source_type(
+    cmd_client,
+) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"research_source_type": None},
+        ),
+    )
+
+    assert created.status_code == 422
+    assert "research_source_type is not supported" in created.json()["error"]["message"]
+
+
 def test_event_intake_rejects_company_disclosure_without_a_hostname(cmd_client) -> None:
     payload = _event_payload(
         source_type="pasted_snapshot",
@@ -230,6 +245,7 @@ def test_supplement_intake_rejects_company_disclosure_without_http_source_url(
     [
         ("licensed_provider", "deduplicated original has a different source contract"),
         ("unsupported_source", "research_source_type is not supported"),
+        (None, "research_source_type is not supported"),
     ],
 )
 def test_deduplicated_supplement_intake_revalidates_research_source_type(
