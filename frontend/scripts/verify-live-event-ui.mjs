@@ -348,7 +348,7 @@ async function main() {
     await page.getByRole("button", { name: "从冻结资料提取候选" }).click();
     await page.getByText(/已从此冻结版本创建 \d+ 条待人工审核的原子陈述/u).waitFor();
     await page.goto(`${uiBase}/events/${caseId}/review`, { waitUntil: "networkidle" });
-    await page.getByText("原子陈述审核").waitFor();
+    await page.getByRole("heading", { name: "原子陈述审核" }).waitFor();
     await page.getByRole("button", { name: "在此页核对原文" }).first().click();
     await page.getByText("在此页核对的冻结原文").waitFor();
     await page.getByLabel("原子陈述审核理由").first().fill("逐字核对了冻结原文、定位、主体与来源许可。");
