@@ -33,10 +33,14 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
         assert {"key_factor_candidate_runs", "key_factor_candidates"}.issubset(
             sa.inspect(connection).get_table_names()
         )
+        research_source_type = {
+            column["name"]: column for column in sa.inspect(connection).get_columns("source_contracts")
+        }["research_source_type"]
+        assert research_source_type["nullable"] is False
 
 
 def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path) -> None:
@@ -78,7 +82,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -132,7 +136,62 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+
+
+def test_upgrade_from_0050_backfills_source_contract_research_type(tmp_path) -> None:
+    database_path = tmp_path / "source-contracts-0050.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0050"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(f"sqlite:///{database_path}")
+    contract_id = "11111111111111111111111111111111"
+    document_id = "22222222222222222222222222222222"
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO source_contracts (
+                    id, document_version_id, source_type, provider_or_tenant,
+                    allow_ai_processing, allow_display, allow_export, allow_api,
+                    region, retention_policy, deletion_policy,
+                    downstream_restrictions, intake_metadata, declared_by, created_at
+                ) VALUES (
+                    :id, :document_id, 'licensed_provider', 'legacy-provider',
+                    1, 1, 0, 0, 'CN', 'case_retained', 'not_recorded',
+                    '[]', '{}', 'legacy-user', :created_at
+                )
+                """
+            ),
+            {"id": contract_id, "document_id": document_id, "created_at": datetime.now(UTC)},
+        )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert connection.execute(
+            sa.text("SELECT research_source_type FROM source_contracts WHERE id = :id"),
+            {"id": contract_id},
+        ).scalar_one() == "licensed_provider"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:

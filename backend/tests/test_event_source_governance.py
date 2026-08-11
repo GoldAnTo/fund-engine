@@ -48,6 +48,7 @@ def test_event_intake_creates_a_displayable_but_export_restricted_user_source_co
     )
     assert contract is not None
     assert contract.source_type == "pasted_snapshot"
+    assert contract.research_source_type == "pasted_snapshot"
     assert contract.allow_ai_processing is True
     assert contract.allow_display is True
     assert contract.allow_export is False
@@ -59,6 +60,7 @@ def test_event_intake_creates_a_displayable_but_export_restricted_user_source_co
     assert detail.status_code == 200
     source = detail.json()["document"]["source_contract"]
     assert source["source_type"] == "pasted_snapshot"
+    assert source["research_source_type"] == "pasted_snapshot"
     assert source["permissions"] == {
         "ai_processing": True,
         "display": True,
@@ -71,6 +73,69 @@ def test_event_intake_creates_a_displayable_but_export_restricted_user_source_co
         cmd_session.execute(
             update(SourceContract).where(SourceContract.id == contract.id).values(allow_export=True)
         )
+
+
+def test_event_intake_rejects_company_disclosure_without_http_source_url(
+    cmd_client,
+) -> None:
+    payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    payload["source_url"] = "event://pasted-news"
+
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 422
+    assert "company_disclosure requires an HTTP(S) source_url" in created.json()[
+        "error"
+    ]["message"]
+
+
+def test_event_intake_keeps_acquisition_type_and_reads_research_source_type(
+    cmd_client, cmd_session
+) -> None:
+    payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "company_disclosure"},
+    )
+    payload["source_url"] = "https://www.cninfo.com.cn/new/disclosure/detail?stockCode=601138"
+
+    created = cmd_client.post("/api/v1/event-research", json=payload)
+
+    assert created.status_code == 201
+    case_id = uuid.UUID(created.json()["case_id"])
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    contract = cmd_session.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document_id)
+    )
+    assert contract is not None
+    assert contract.source_type == "pasted_snapshot"
+    assert contract.research_source_type == "company_disclosure"
+
+    detail = cmd_client.get(f"/api/v1/documents/{document_id}")
+
+    assert detail.status_code == 200
+    source = detail.json()["document"]["source_contract"]
+    assert source["source_type"] == "pasted_snapshot"
+    assert source["research_source_type"] == "company_disclosure"
+
+
+def test_event_intake_rejects_an_unknown_research_source_type(cmd_client) -> None:
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"research_source_type": "unverified_press_release"},
+        ),
+    )
+
+    assert created.status_code == 422
+    assert "research_source_type is not supported" in created.json()["error"]["message"]
 
 
 def test_licensed_provider_intake_preserves_provider_record_and_contract_version(
@@ -308,6 +373,30 @@ def test_reusing_the_same_frozen_snapshot_rejects_an_incompatible_contract(
     assert len(contracts) == 1
     assert contracts[0].provider_or_tenant == "team-a"
     assert contracts[0].allow_export is False
+
+
+def test_reusing_the_same_snapshot_rejects_a_different_research_source_type(
+    cmd_client,
+) -> None:
+    first = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(
+            source_type="pasted_snapshot",
+            source_metadata={"research_source_type": "public_url"},
+        ),
+    )
+    second_payload = _event_payload(
+        source_type="pasted_snapshot",
+        source_metadata={"research_source_type": "uploaded_file"},
+    )
+    second_payload["event_title"] = "同一快照的不同研究来源类别"
+    second = cmd_client.post("/api/v1/event-research", json=second_payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 422
+    assert "deduplicated original has a different source contract" in second.json()[
+        "error"
+    ]["message"]
 
 
 def test_contract_that_forbids_ai_processing_blocks_formal_evidence_acceptance(

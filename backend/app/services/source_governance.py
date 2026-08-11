@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,6 +13,15 @@ from app.models.source_governance import ProviderRecord, SourceContract
 
 
 USER_CONTROLLED_TYPES = frozenset({"pasted_snapshot", "uploaded_file"})
+RESEARCH_SOURCE_TYPES = frozenset(
+    {
+        "pasted_snapshot",
+        "uploaded_file",
+        "licensed_provider",
+        "public_url",
+        "company_disclosure",
+    }
+)
 
 
 def _utcnow() -> datetime:
@@ -41,6 +51,29 @@ def _effective_at(metadata: dict[str, Any], name: str) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _normalize_research_source_type(
+    *,
+    source_type: str,
+    source_metadata: dict[str, Any] | None,
+    document: DocumentVersion,
+) -> str:
+    metadata = dict(source_metadata or {})
+    raw = metadata.get("research_source_type") or source_type
+    research_source_type = raw.strip() if isinstance(raw, str) else ""
+    if research_source_type not in RESEARCH_SOURCE_TYPES:
+        raise ValueError("research_source_type is not supported")
+    if research_source_type == "company_disclosure":
+        try:
+            parsed = urlparse(document.source_url or "")
+        except ValueError as exc:
+            raise ValueError(
+                "company_disclosure requires an HTTP(S) source_url"
+            ) from exc
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("company_disclosure requires an HTTP(S) source_url")
+    return research_source_type
 
 
 class SourceGovernanceService:
@@ -88,6 +121,7 @@ class SourceGovernanceService:
         existing: SourceContract,
         source_type: str,
         source_metadata: dict[str, Any] | None,
+        document: DocumentVersion,
     ) -> None:
         """Fail closed when deduplicated bytes arrive under different terms.
 
@@ -114,6 +148,11 @@ class SourceGovernanceService:
         )
         incoming = {
             "source_type": source_type,
+            "research_source_type": _normalize_research_source_type(
+                source_type=source_type,
+                source_metadata=source_metadata,
+                document=document,
+            ),
             "provider_or_tenant": str(incoming_provider)
             if incoming_provider is not None
             else None,
@@ -172,10 +211,16 @@ class SourceGovernanceService:
                 existing=existing,
                 source_type=source_type,
                 source_metadata=source_metadata,
+                document=document,
             )
             return existing
         metadata = dict(source_metadata or {})
         user_controlled = source_type in USER_CONTROLLED_TYPES
+        research_source_type = _normalize_research_source_type(
+            source_type=source_type,
+            source_metadata=source_metadata,
+            document=document,
+        )
         now = _utcnow()
         effective_from = _effective_at(metadata, "effective_from")
         effective_until = _effective_at(metadata, "effective_until")
@@ -188,6 +233,7 @@ class SourceGovernanceService:
         contract = SourceContract(
             document_version_id=document.id,
             source_type=source_type,
+            research_source_type=research_source_type,
             provider_or_tenant=str(
                 metadata.get("tenant")
                 or metadata.get("provider_name")
@@ -248,6 +294,11 @@ class SourceGovernanceService:
             return existing
         metadata = dict(source_metadata or {})
         now = _utcnow()
+        research_source_type = _normalize_research_source_type(
+            source_type="pasted_snapshot",
+            source_metadata=source_metadata,
+            document=document,
+        )
         original_ai = original_contract.allow_ai_processing if original_contract is not None else False
         original_display = original_contract.allow_display if original_contract is not None else True
         original_export = original_contract.allow_export if original_contract is not None else False
@@ -257,6 +308,7 @@ class SourceGovernanceService:
         contract = SourceContract(
             document_version_id=document.id,
             source_type="pasted_snapshot",
+            research_source_type=research_source_type,
             provider_or_tenant=str(metadata.get("provider_name") or declared_by),
             allow_ai_processing=original_ai and _permission(metadata, "ai_processing", default=True),
             allow_display=original_display and _permission(metadata, "display", default=True),
