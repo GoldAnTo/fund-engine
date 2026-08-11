@@ -1,7 +1,7 @@
 """Add immutable filing-version metadata to historical holding disclosures.
 
-Revision ID: 0049
-Revises: 0048
+Revision ID: 0050
+Revises: 0049
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0049"
-down_revision: Union[str, None] = "0048"
+revision: str = "0050"
+down_revision: Union[str, None] = "0049"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -13,7 +13,7 @@
 ### Task 1: Add immutable disclosure-version storage
 
 **Files:**
-- Create: `backend/alembic/versions/0049_holding_disclosure_version_chain.py`
+- Create: `backend/alembic/versions/0050_holding_disclosure_version_chain.py`
 - Modify: `backend/app/models/ledger.py:643-676`
 - Modify: `backend/app/schemas/v1/instrument_commands.py:63-94`
 - Modify: `backend/app/services/instruments.py:136-210`
@@ -33,7 +33,7 @@ def test_holding_disclosure_accepts_annual_successor_without_mutating_quarterly_
     assert reload(quarterly)["supersedes_disclosure_id"] is None
 ```
 
-Add migration assertions that a fresh SQLite database reaches `0049`, and legacy rows retain `filing_kind="other"` and null predecessor after upgrade.
+Add migration assertions that a fresh SQLite database reaches `0050`, and legacy rows retain their frozen facts while receiving recoverable filing metadata after upgrade.
 
 - [ ] **Step 2: Run the tests to verify RED**
 
@@ -49,12 +49,12 @@ Add nullable, legacy-safe `filing_kind` (backfill `other`) and `supersedes_discl
 
 Run: `cd backend && PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/test_instrument_commands_api.py tests/test_sqlite_migration_bootstrap.py -q`
 
-Expected: all selected tests pass and Alembic reports a single `0049` head.
+Expected: all selected tests pass and Alembic reports a single `0050` head.
 
 - [ ] **Step 5: Commit the storage slice**
 
 ```bash
-git add backend/alembic/versions/0049_holding_disclosure_version_chain.py backend/app/models/ledger.py backend/app/schemas/v1/instrument_commands.py backend/app/services/instruments.py backend/tests/test_instrument_commands_api.py backend/tests/test_sqlite_migration_bootstrap.py
+git add backend/alembic/versions/0050_holding_disclosure_version_chain.py backend/app/models/ledger.py backend/app/schemas/v1/instrument_commands.py backend/app/services/instruments.py backend/tests/test_instrument_commands_api.py backend/tests/test_sqlite_migration_bootstrap.py
 git commit -m "feat: version historical fund disclosures"
 ```
 
@@ -254,7 +254,7 @@ Expected: no test failures; explicitly report environment-skipped tests.
 
 - [ ] **Step 2: Run the historical case against a copy of the local database**
 
-Create a temporary copy of `.local/industrial-foxconn-case.db`, migrate it to `0049`, configure `515050 / 2024-12-31`, then use the default HTTP UI to show the selected annual version and the earlier quarterly predecessor. Verify 2025-02-01 replay selects the quarterly record and 2025-04-01 selects annual.
+Create a temporary copy of `.local/industrial-foxconn-case.db`, migrate it to `0050`, configure `515050 / 2024-12-31`, then use the default HTTP UI to show the selected later quarterly version and the earlier quarterly predecessor. Verify replay respects each version's publication time.
 
 - [ ] **Step 3: Inspect the final diff and commit verification artifacts only if intentional**
 
