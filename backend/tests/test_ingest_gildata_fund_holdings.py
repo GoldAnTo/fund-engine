@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -45,6 +46,7 @@ def test_ingest_writes_partial_disclosure_only_after_exact_fund_report_match(ses
         session,
         _FundClient(MATCHED_REPORT),
         fund_codes=["005827"],
+        report_period=date(2025, 6, 30),
         permissions={"display": True},
     )
 
@@ -54,6 +56,7 @@ def test_ingest_writes_partial_disclosure_only_after_exact_fund_report_match(ses
     disclosure = session.scalar(select(HoldingDisclosure))
     assert disclosure is not None
     assert disclosure.report_period == date(2025, 6, 30)
+    assert disclosure.weight == Decimal("0.095")
     assert disclosure.published_at.date() == date(2025, 7, 21)
     assert disclosure.coverage_status == "partial"
     assert disclosure.source_document_version_id is not None
@@ -73,6 +76,7 @@ def test_ingest_keeps_unmatched_holding_out_of_formal_exposure(session):
         session,
         _FundClient(MATCHED_REPORT.replace("2025年第2季度", "2025年第1季度")),
         fund_codes=["005827"],
+        report_period=date(2025, 6, 30),
         permissions={"display": True},
     )
 
@@ -89,6 +93,7 @@ def test_ingest_keeps_matched_holding_out_of_formal_exposure_without_display_per
         session,
         _FundClient(MATCHED_REPORT),
         fund_codes=["005827"],
+        report_period=date(2025, 6, 30),
         permissions={"display": False},
     )
 
@@ -105,11 +110,14 @@ def test_cli_arguments_require_explicit_funds_and_permission_declaration():
         [
             "--fund-codes",
             "005827,110011.OF",
+            "--report-period",
+            "2025-06-30",
             "--allow-display",
             "--dry-run",
         ]
     )
 
     assert args.fund_codes == ["005827", "110011.OF"]
+    assert args.report_period == date(2025, 6, 30)
     assert args.allow_display is True
     assert args.dry_run is True

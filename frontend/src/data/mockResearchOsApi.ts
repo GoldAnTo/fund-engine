@@ -1130,6 +1130,7 @@ export class MockResearchOsApi implements ResearchOsApi {
       id: `fund-sync-${caseId}-v${history.length + 1}`,
       version: history.length + 1,
       frequency: input.frequency,
+      report_period: input.report_period,
       fund_codes: [...input.fund_codes],
       stock_codes: ["TSM"],
       allow_display: input.allow_display,
@@ -1150,15 +1151,16 @@ export class MockResearchOsApi implements ResearchOsApi {
       id: `fund-sync-run-${caseId}-${Date.now()}`,
       config_version_id: config.id,
       trigger: "manual",
+      report_period: config.report_period,
       fund_codes: [...config.fund_codes],
       stock_codes: [...config.stock_codes],
       allow_display: config.allow_display,
       status: "completed",
       created_at: now,
       events: [
-        { seq: 1, stage: "scope", status: "completed", message: "已冻结基金与当前 Case 股票范围", payload: { fund_codes: config.fund_codes, stock_codes: config.stock_codes, allow_display: config.allow_display }, created_at: now },
+        { seq: 1, stage: "scope", status: "completed", message: "已冻结基金与当前 Case 股票范围", payload: { fund_codes: config.fund_codes, stock_codes: config.stock_codes, report_period: config.report_period, allow_display: config.allow_display }, created_at: now },
         { seq: 2, stage: "provider_capability", status: "completed", message: "已冻结本次实际可用的数据工具、字段与未验证边界", payload: { provider: "gildata", used_tools: ["FinQuery", "AnnouncementData"], required_fields: ["fund_code", "stock_code", "report_period", "publish_date"], unverified_capabilities: ["实时持仓", "基金筛选/推荐"] }, created_at: now },
-        { seq: 3, stage: "match_report", status: "completed", message: "已按同基金、同报告期季报规则核验来源", payload: { holding_rows_seen: 1, matched_reports: 1, pending_match_rows: 0, pending_permission_rows: 0 }, created_at: now },
+        { seq: 3, stage: "match_report", status: "completed", message: "已按同基金、同报告期季报规则核验来源", payload: { holding_rows_seen: 1, matched_reports: 1, pending_match_rows: 0, pending_permission_rows: 0, out_of_scope_rows: 0 }, created_at: now },
         { seq: 4, stage: "finished", status: "completed", message: "本次基金披露补充已完成；结果仅代表历史披露", payload: { holding_disclosures_written: 1, holding_disclosures_skipped_duplicate: 0, invalid_rows: 0 }, created_at: now },
       ],
     };
@@ -1173,7 +1175,7 @@ export class MockResearchOsApi implements ResearchOsApi {
     const prior = (this.fundDisclosureSyncRuns.get(caseId) ?? []).find((run) => run.id === runId);
     if (!prior) throw new Error("fund disclosure sync run not found");
     const run = await this.startFundDisclosureSync(caseId);
-    const retried = { ...run, trigger: "retry" as const, fund_codes: [...prior.fund_codes], stock_codes: [...prior.stock_codes] };
+    const retried = { ...run, trigger: "retry" as const, report_period: prior.report_period, fund_codes: [...prior.fund_codes], stock_codes: [...prior.stock_codes] };
     this.fundDisclosureSyncRuns.set(caseId, [retried, ...(this.fundDisclosureSyncRuns.get(caseId) ?? []).filter((item) => item.id !== run.id)]);
     return retried;
   }

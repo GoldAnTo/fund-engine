@@ -4372,6 +4372,8 @@ export interface components {
              * @enum {string}
              */
             frequency: "weekly" | "monthly";
+            /** Report Period */
+            report_period: string | null;
             /** Fund Codes */
             fund_codes: string[];
             /** Stock Codes */
@@ -4413,6 +4415,8 @@ export interface components {
              * @enum {string}
              */
             trigger: "manual" | "scheduled" | "retry";
+            /** Report Period */
+            report_period: string | null;
             /** Fund Codes */
             fund_codes: string[];
             /** Stock Codes */
@@ -6451,6 +6455,11 @@ export interface components {
              * @enum {string}
              */
             frequency: "weekly" | "monthly";
+            /**
+             * Report Period
+             * Format: date
+             */
+            report_period: string;
             /**
              * Allow Display
              * @default false

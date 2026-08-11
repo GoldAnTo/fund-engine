@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.models.ledger import ResearchCase
 from app.services.fund_disclosure_sync import FundDisclosureSyncService
@@ -31,6 +31,7 @@ def test_scheduler_creates_one_replayable_weekly_run_and_records_provider_failur
         actor="human:researcher",
         fund_codes=["005827"],
         frequency="weekly",
+        report_period=date(2025, 6, 30),
         change_reason="每周补充历史披露",
     )
     scheduler = FundDisclosureSyncScheduler(session, client_factory=_UnavailableClientFactory())

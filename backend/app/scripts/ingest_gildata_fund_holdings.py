@@ -46,6 +46,7 @@ class IngestStats:
     pending_match_rows: int
     pending_permission_rows: int
     invalid_rows: int
+    out_of_scope_rows: int
 
 
 def _parse_date(value: str) -> date | None:
@@ -71,6 +72,11 @@ def _fund_code(value: str) -> str:
     return (value or "").strip().upper().removesuffix(".OF")
 
 
+def _canonical_fund_code(value: str) -> str:
+    """Remove provider exchange suffixes before comparing configured funds."""
+    return _fund_code(value).split(".", 1)[0]
+
+
 def _quarter_label(period: date) -> str:
     return f"{period.year}年第{((period.month - 1) // 3) + 1}季度"
 
@@ -86,7 +92,12 @@ def _matches_exact_fund_report(
     """
     title = "".join((announcement.get("title") or "").split())
     name = "".join((fund_name or "").split())
-    return bool(name and name in title and _quarter_label(period) in title)
+    reported_alias = "".join((announcement.get("sec_name") or "").split())
+    return bool(
+        name
+        and _quarter_label(period) in title
+        and (name in title or name == reported_alias)
+    )
 
 
 def _find_exact_report(
@@ -115,6 +126,10 @@ def _ensure_fund(
 
 def _stock_identity(code: str) -> tuple[str, str] | None:
     code = (code or "").strip().upper()
+    if code.endswith(".SH") and code[:-3].isdigit() and len(code[:-3]) == 6:
+        return code, "SSE"
+    if code.endswith(".SZ") and code[:-3].isdigit() and len(code[:-3]) == 6:
+        return code, "SZSE"
     if code.endswith(".HK") and code[:-3].isdigit():
         return code, "HKEX"
     if code.isdigit() and len(code) == 6:
@@ -230,6 +245,7 @@ def ingest(
     client: Any,
     *,
     fund_codes: list[str],
+    report_period: date,
     permissions: dict[str, bool] | None = None,
     case_id: uuid.UUID | None = None,
 ) -> IngestStats:
@@ -237,23 +253,35 @@ def ingest(
     permissions = dict(permissions or {})
     instruments = InstrumentRepository(session)
     rows_seen = matched_reports = written = skipped_duplicate = 0
-    pending_match = pending_permission = invalid = 0
+    pending_match = pending_permission = invalid = out_of_scope = 0
 
     for requested_code in fund_codes:
-        query = f"查询基金{_fund_code(requested_code)}最近一期公开披露的股票持仓明细，包括股票代码、股票名称、持仓权重、报告期"
+        requested = _canonical_fund_code(requested_code)
+        query = f"查询基金{requested}{_quarter_label(report_period)}公开披露的股票持仓明细，包括股票代码、股票名称、持仓权重、报告期"
         holdings = adapters.fetch_fund_stock_holdings(client, query)
-        groups: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+        groups: dict[tuple[str, str], list[dict[str, str]]] = {}
         for holding in holdings:
             rows_seen += 1
-            fund_code = _fund_code(holding["fund_code"])
-            period = holding["report_period"]
-            groups.setdefault((fund_code, holding.get("fund_name", ""), period), []).append(holding)
+            fund_code = _canonical_fund_code(holding["fund_code"])
+            period = _parse_date(holding["report_period"])
+            if period is None:
+                invalid += 1
+                continue
+            if fund_code != requested or period != report_period:
+                out_of_scope += 1
+                continue
+            groups.setdefault((fund_code, period.isoformat()), []).append(holding)
 
-        for (fund_code, fund_name, raw_period), group in groups.items():
+        for (fund_code, raw_period), group in groups.items():
             period = _parse_date(raw_period)
             if period is None:
                 invalid += len(group)
                 continue
+            fund_name = max(
+                (str(item.get("fund_name", "")) for item in group),
+                key=len,
+                default="",
+            )
             announcement = _find_exact_report(
                 client, fund_code=fund_code, fund_name=fund_name, period=period
             )
@@ -281,7 +309,10 @@ def ingest(
                     name=holding.get("stock_name", ""),
                 )
                 try:
-                    weight = Decimal(holding["weight"])
+                    # Provider values are explicitly percentage points (for
+                    # example 5.33 means 5.33%).  Ledger and read models use
+                    # a 0..1 ratio so presentation can multiply once.
+                    weight = Decimal(holding["weight"]) / Decimal("100")
                 except (InvalidOperation, ValueError):
                     invalid += 1
                     continue
@@ -317,6 +348,7 @@ def ingest(
         pending_match_rows=pending_match,
         pending_permission_rows=pending_permission,
         invalid_rows=invalid,
+        out_of_scope_rows=out_of_scope,
     )
 
 
@@ -327,6 +359,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         type=lambda value: [item.strip() for item in value.split(",") if item.strip()],
         help="comma-separated fund codes, for example 005827,110011.OF",
+    )
+    parser.add_argument(
+        "--report-period",
+        required=True,
+        type=date.fromisoformat,
+        help="frozen quarter-end report period, for example 2024-12-31",
     )
     parser.add_argument(
         "--allow-display",
@@ -354,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
             session,
             client,
             fund_codes=args.fund_codes,
+            report_period=args.report_period,
             permissions={"display": args.allow_display},
         )
         if args.dry_run:
@@ -364,6 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "fund_codes": args.fund_codes,
+                "report_period": args.report_period.isoformat(),
                 "allow_display": args.allow_display,
                 "dry_run": args.dry_run,
                 **asdict(stats),

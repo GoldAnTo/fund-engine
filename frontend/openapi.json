@@ -14642,6 +14642,18 @@
             ],
             "title": "Frequency"
           },
+          "report_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Period"
+          },
           "fund_codes": {
             "items": {
               "type": "string"
@@ -14680,6 +14692,7 @@
           "id",
           "version",
           "frequency",
+          "report_period",
           "fund_codes",
           "stock_codes",
           "allow_display",
@@ -14770,6 +14783,18 @@
             ],
             "title": "Trigger"
           },
+          "report_period": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Period"
+          },
           "fund_codes": {
             "items": {
               "type": "string"
@@ -14811,6 +14836,7 @@
           "id",
           "config_version_id",
           "trigger",
+          "report_period",
           "fund_codes",
           "stock_codes",
           "allow_display",
@@ -20248,6 +20274,11 @@
             ],
             "title": "Frequency"
           },
+          "report_period": {
+            "type": "string",
+            "format": "date",
+            "title": "Report Period"
+          },
           "allow_display": {
             "type": "boolean",
             "title": "Allow Display",
@@ -20265,6 +20296,7 @@
           "actor",
           "fund_codes",
           "frequency",
+          "report_period",
           "change_reason"
         ],
         "title": "SaveFundDisclosureSyncConfigRequest"
