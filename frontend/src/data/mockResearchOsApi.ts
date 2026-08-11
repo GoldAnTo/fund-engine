@@ -216,6 +216,10 @@ export class MockResearchOsApi implements ResearchOsApi {
   private forecastActuals = new Map<string, Schemas["ActualMetricObservationDTO"]>();
   private forecastCandidates = new Map<string, Schemas["ForecastEvaluationCandidateDTO"]>();
   private forecastVerdictRecords = new Map<string, Schemas["ForecastVerdictDTO"]>();
+  private keyFactorCandidateRunHistory = new Map<
+    string,
+    Schemas["KeyFactorCandidateRunDTO"][]
+  >();
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
@@ -1181,8 +1185,8 @@ export class MockResearchOsApi implements ResearchOsApi {
       items: [
         {
           id: source.source_statement_id!,
-          kind: "disclosed_fact",
-          text: "公司上调全年资本开支指引。",
+          kind: "forecast",
+          text: "公司预计2026年资本开支为200亿元。",
           document_version_id: source.document_version_id!,
           document_title: source.document_title!,
           source_url: source.source_url,
@@ -1192,6 +1196,59 @@ export class MockResearchOsApi implements ResearchOsApi {
         },
       ],
     };
+  }
+  async keyFactorCandidateRuns(
+    caseId: string,
+  ): ReturnType<ResearchOsApi["keyFactorCandidateRuns"]> {
+    return { items: this.keyFactorCandidateRunHistory.get(caseId) ?? [] };
+  }
+  async startKeyFactorCandidateRun(
+    caseId: string,
+    input: Parameters<ResearchOsApi["startKeyFactorCandidateRun"]>[1],
+  ): ReturnType<ResearchOsApi["startKeyFactorCandidateRun"]> {
+    const statement = (await this.sourceStatements(caseId)).items.find(
+      (item) => item.id === input.source_statement_id,
+    );
+    if (!statement) throw new Error("source statement is not admitted");
+    const run: Schemas["KeyFactorCandidateRunDTO"] = {
+      id: `key-factor-candidate-run-${Date.now()}`,
+      requested_by: input.requested_by,
+      parser_version: "key-factor-rules-v1",
+      status: "completed",
+      candidate_count: 1,
+      skipped_reason: null,
+      created_at: now,
+      source: {
+        source_statement_id: statement.id,
+        document_version_id: statement.document_version_id,
+        document_title: statement.document_title,
+        source_url: statement.source_url,
+        locator: statement.locator,
+        available_at: statement.available_at,
+        permission_status: statement.permission_status,
+      },
+      candidates: [
+        {
+          id: `key-factor-candidate-${Date.now()}`,
+          name: "2026 年资本开支预测兑现",
+          metric_name: "资本开支",
+          expected_direction: "neutral",
+          verification_window_start: "2026-01-01",
+          verification_window_end: "2026-12-31",
+          support_condition: "公司后续披露的 2026 年资本开支与冻结预测值按已确认比较规则核验。",
+          refutation_condition: "公司后续披露的 2026 年资本开支未满足冻结预测的已确认比较规则。",
+          next_verification_event: "公司 2026 年年度报告或同口径正式披露",
+          evidence_excerpt: "预计2026年资本开支为200亿元",
+          rule_id: "cn_numeric_forecast_v1",
+          review_state: "machine_generated",
+        },
+      ],
+    };
+    this.keyFactorCandidateRunHistory.set(caseId, [
+      run,
+      ...(this.keyFactorCandidateRunHistory.get(caseId) ?? []),
+    ]);
+    return run;
   }
   async marketInstruments(
     caseId: string,

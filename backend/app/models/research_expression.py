@@ -59,6 +59,53 @@ class KeyFactor(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class KeyFactorCandidateRun(Base):
+    """One reproducible, source-bound deterministic parsing attempt."""
+
+    __tablename__ = "key_factor_candidate_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('completed')", name="ck_key_factor_candidate_runs_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
+    source_statement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=False, index=True)
+    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_count: Mapped[int] = mapped_column(nullable=False)
+    skipped_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class KeyFactorCandidate(Base):
+    """Machine proposal retained separately from a reviewed KeyFactor."""
+
+    __tablename__ = "key_factor_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "review_state IN ('machine_generated')",
+            name="ck_key_factor_candidates_review_state",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("key_factor_candidate_runs.id"), nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    metric_name: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    verification_window_start: Mapped[date] = mapped_column(Date, nullable=False)
+    verification_window_end: Mapped[date] = mapped_column(Date, nullable=False)
+    support_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    refutation_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    next_verification_event: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ClaimVerification(Base):
     __tablename__ = "claim_verifications"
     __table_args__ = (

@@ -49,7 +49,9 @@ cd backend && python scripts/eval_recall_ab.py       # recall@20: 0.7333 → 1.0
 
 # 前端：开发与测试
 cd frontend && npm ci
-npm run dev:live                                     # 默认真实 API（VITE_RESEARCH_API_URL 可指定后端）
+# 真实本地 API：先复制 frontend/.env.local.example 为 frontend/.env.local，
+# 填写后端地址与 RESEARCH_TENANT_TOKENS 中已配置的 Bearer token，再启动。
+npm run dev:live                                     # 默认真实 API，不会回退到 mock
 npm run dev:mock                                     # 显式内存 mock，用于 UI 演示和隔离测试
 npm test                                             # 62 vitest
 npm run e2e                                          # 32 条 Playwright（macOS 12 用 PW_BROWSER_CHANNEL=chrome）

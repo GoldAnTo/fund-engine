@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
 from app.models.source_governance import SourceContract
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
@@ -19,6 +19,9 @@ from app.schemas.v1.market_expression import (
     FundDisclosurePositionDTO,
     FundamentalImpactDTO,
     KeyFactorDTO,
+    KeyFactorCandidateDTO,
+    KeyFactorCandidateRunDTO,
+    KeyFactorCandidateRunsResponse,
     MarketExpressionResponse,
     MarketInstrumentBindingDTO,
     MarketInstrumentBindingsResponse,
@@ -94,6 +97,18 @@ class MarketExpressionQueries:
             if self._case_has_source(case_id, item.source_statement_id)
         ])
 
+    def key_factor_candidate_runs(self, case_id: uuid.UUID) -> KeyFactorCandidateRunsResponse:
+        if ResearchRepository(self._db).get_case(case_id) is None:
+            raise NotFoundError(f"research case {case_id} not found")
+        runs = self._db.scalars(
+            select(KeyFactorCandidateRun)
+            .where(KeyFactorCandidateRun.research_case_id == case_id)
+            .order_by(KeyFactorCandidateRun.created_at.desc(), KeyFactorCandidateRun.id.desc())
+        )
+        return KeyFactorCandidateRunsResponse(
+            items=[self._key_factor_candidate_run(item) for item in runs]
+        )
+
     def market_instrument_catalog(self, query: str = "") -> MarketInstrumentCatalogResponse:
         needle = query.strip()
         clause = None
@@ -145,6 +160,39 @@ class MarketExpressionQueries:
 
     def _claim(self, item: ReportClaim) -> ReportClaimDTO:
         return ReportClaimDTO(id=str(item.id), text=item.text, claim_kind=item.claim_kind, asserted_period=item.asserted_period, asserted_by=item.asserted_by, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id))
+
+    def _key_factor_candidate_run(self, item: KeyFactorCandidateRun) -> KeyFactorCandidateRunDTO:
+        candidates = self._db.scalars(
+            select(KeyFactorCandidate)
+            .where(KeyFactorCandidate.run_id == item.id)
+            .order_by(KeyFactorCandidate.ordinal, KeyFactorCandidate.id)
+        )
+        return KeyFactorCandidateRunDTO(
+            id=str(item.id),
+            requested_by=item.requested_by,
+            parser_version=item.parser_version,
+            status=item.status,
+            candidate_count=item.candidate_count,
+            skipped_reason=item.skipped_reason,
+            created_at=item.created_at,
+            source=self._source(item.source_statement_id),
+            candidates=[
+                KeyFactorCandidateDTO(
+                    id=str(candidate.id), name=candidate.name,
+                    metric_name=candidate.metric_name,
+                    expected_direction=candidate.expected_direction,
+                    verification_window_start=candidate.verification_window_start,
+                    verification_window_end=candidate.verification_window_end,
+                    support_condition=candidate.support_condition,
+                    refutation_condition=candidate.refutation_condition,
+                    next_verification_event=candidate.next_verification_event,
+                    evidence_excerpt=candidate.evidence_excerpt,
+                    rule_id=candidate.rule_id,
+                    review_state=candidate.review_state,
+                )
+                for candidate in candidates
+            ],
+        )
 
     def _market_instrument(self, item: MarketInstrumentBinding) -> MarketInstrumentBindingDTO:
         company = self._db.get(Company, item.company_id)

@@ -62,6 +62,13 @@ function publicWebUrl(sourceUrl?: string | null): string | null {
 }
 
 type ThesisOption = { id: string; statement: string };
+type KeyFactorCandidateRun = Awaited<
+  ReturnType<typeof researchOsApi.keyFactorCandidateRuns>
+>["items"][number];
+type KeyFactorCandidateDraft = {
+  sourceStatementId: string;
+  candidate: KeyFactorCandidateRun["candidates"][number];
+};
 
 export function MarketExpressionContent({
   caseId,
@@ -90,6 +97,8 @@ export function MarketExpressionContent({
     useState<ActiveResearchRun | null>(null);
   const [activeFactorRunLoading, setActiveFactorRunLoading] = useState(false);
   const [factorRunRevision, setFactorRunRevision] = useState(0);
+  const [candidateForRegistration, setCandidateForRegistration] =
+    useState<KeyFactorCandidateDraft | null>(null);
   const selectedFactor =
     expression?.factors.find((factor) => factor.id === selectedFactorId) ??
     expression?.factors[0] ??
@@ -276,11 +285,19 @@ export function MarketExpressionContent({
       <p className="ros-market-intro">
         研报观点不会自动变成事实；市场窗口只描述观测；基金数据只表示历史披露而非实时仓位。
       </p>
+      <KeyFactorCandidateParser
+        caseId={caseId}
+        onUseCandidate={setCandidateForRegistration}
+      />
       <MarketExpressionRegistration
         caseId={caseId}
         theses={theses}
         claims={expression.claims}
-        onRegistered={() => void reloadExpression()}
+        candidate={candidateForRegistration}
+        onRegistered={() => {
+          setCandidateForRegistration(null);
+          void reloadExpression();
+        }}
       />
       <MarketInstrumentWorkspace
         caseId={caseId}
@@ -1733,15 +1750,134 @@ function MarketObservationRegistration({
   );
 }
 
+function KeyFactorCandidateParser({
+  caseId,
+  onUseCandidate,
+}: {
+  caseId: string;
+  onUseCandidate: (draft: KeyFactorCandidateDraft) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sources, setSources] = useState<SourceStatementOptions["items"]>([]);
+  const [runs, setRuns] = useState<KeyFactorCandidateRun[]>([]);
+  const [sourceId, setSourceId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function begin() {
+    setOpen(true);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const [sourceResult, runResult] = await Promise.all([
+        researchOsApi.sourceStatements(caseId),
+        researchOsApi.keyFactorCandidateRuns(caseId),
+      ]);
+      setSources(sourceResult.items);
+      setRuns(runResult.items);
+      setSourceId(sourceResult.items[0]?.id ?? "");
+    } catch {
+      setMessage("无法读取可解析的冻结原文或既往解析记录；系统没有改用摘要或跨 Case 资料。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function parse() {
+    if (!sourceId || busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await researchOsApi.startKeyFactorCandidateRun(caseId, {
+        source_statement_id: sourceId,
+        requested_by: "human:researcher",
+      });
+      setRuns((current) => [result, ...current.filter((run) => run.id !== result.id)]);
+      setMessage(
+        result.candidate_count
+          ? "解析已完成：候选已保留原文、规则版本和默认核验口径，等待人工确认。"
+          : result.skipped_reason ?? "解析完成，但没有生成可验证候选。",
+      );
+    } catch {
+      setMessage("解析未执行。请确认原文属于当前 Case，且已获处理与展示许可。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedSource = sources.find((item) => item.id === sourceId);
+  const latest = runs[0] ?? null;
+  return (
+    <section className="ros-market-register">
+      <div>
+        <p className="ros-eyebrow">可复现解析 · 候选，不是结论</p>
+        <h3>从冻结原文解析关键因素</h3>
+        <p>只解析当前 Case 已准入原文；每次运行会保留来源、规则版本和未生成候选的原因。</p>
+      </div>
+      {!open ? (
+        <button className="ros-button ros-button--secondary" type="button" onClick={() => void begin()}>
+          从冻结原文解析关键因素
+        </button>
+      ) : (
+        <div className="ros-market-register__body">
+          <label>
+            解析来源原文
+            <select aria-label="解析来源原文" value={sourceId} onChange={(event) => setSourceId(event.target.value)}>
+              <option value="">请选择已准入原文</option>
+              {sources.map((item) => <option key={item.id} value={item.id}>{item.document_title} · {item.text.slice(0, 42)}</option>)}
+            </select>
+          </label>
+          {selectedSource && <p className="ros-note">定位 {JSON.stringify(selectedSource.locator)} · 可得 {new Date(selectedSource.available_at).toLocaleString("zh-CN")} · 已准入</p>}
+          <button className="ros-button ros-button--primary" type="button" disabled={!sourceId || busy} onClick={() => void parse()}>
+            {busy ? "正在按冻结原文解析…" : "生成关键因素候选"}
+          </button>
+          {!sourceId && <p className="ros-note" role="status">请先选择当前 Case 已准入的冻结原文；系统不会从摘要生成候选。</p>}
+          {message && <p className={message.startsWith("解析已完成") ? "ros-success" : "ros-note"} role="status">{message}</p>}
+          {latest && (
+            <section className="ros-market-register__factor">
+              <p className="ros-eyebrow">解析记录 · {new Date(latest.created_at).toLocaleString("zh-CN")}</p>
+              <h4>关键因素候选解析</h4>
+              <p><span>规则 {latest.parser_version}</span> · 发起人 {latest.requested_by} · 来源定位 {latest.source.locator ? JSON.stringify(latest.source.locator) : "未记录"}</p>
+              {latest.candidates.length ? latest.candidates.map((candidate) => (
+                <article className="ros-market-register__source" key={candidate.id}>
+                  <strong>{candidate.name}</strong>
+                  <small>{candidate.metric_name} · {expectedDirectionLabels[candidate.expected_direction] ?? candidate.expected_direction} · 规则 {candidate.rule_id}</small>
+                  <blockquote>{candidate.evidence_excerpt}</blockquote>
+                  <small>验证窗口 {candidate.verification_window_start} 至 {candidate.verification_window_end} · 下一事件：{candidate.next_verification_event}</small>
+                  <p>候选尚未成为正式关键因素；研究员必须在下方登记主张、补齐或确认核验口径并填写审核理由。</p>
+                  {latest.source.source_statement_id && (
+                    <button
+                      className="ros-button ros-button--secondary"
+                      type="button"
+                      onClick={() => onUseCandidate({
+                        sourceStatementId: latest.source.source_statement_id!,
+                        candidate,
+                      })}
+                    >
+                      带入人工登记
+                    </button>
+                  )}
+                </article>
+              )) : <p className="ros-note">{latest.skipped_reason ?? "该次解析没有生成候选。"}</p>}
+            </section>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function MarketExpressionRegistration({
   caseId,
   theses,
   claims,
+  candidate,
   onRegistered,
 }: {
   caseId: string;
   theses: ThesisOption[];
   claims: MarketExpression["claims"];
+  candidate: KeyFactorCandidateDraft | null;
   onRegistered: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1808,6 +1944,49 @@ function MarketExpressionRegistration({
         savedClaim,
       ]
     : claims;
+
+  useEffect(() => {
+    if (!candidate) return;
+    let active = true;
+    setOpen(true);
+    setLoading(true);
+    setMessage(null);
+    researchOsApi
+      .sourceStatements(caseId)
+      .then((response) => {
+        if (!active) return;
+        const source = response.items.find(
+          (item) => item.id === candidate.sourceStatementId,
+        );
+        setSources(response.items);
+        if (!source) {
+          setMessage("候选来源已不在当前 Case 的可用冻结原文中，不能带入登记。");
+          return;
+        }
+        setSourceId(source.id);
+        setClaimText(candidate.candidate.evidence_excerpt);
+        setClaimKind("forecast");
+        setFactorName(candidate.candidate.name);
+        setDirection(candidate.candidate.expected_direction as typeof direction);
+        setMetricName(candidate.candidate.metric_name);
+        setSourceTypes("company_disclosure");
+        setWindowStart(candidate.candidate.verification_window_start);
+        setWindowEnd(candidate.candidate.verification_window_end);
+        setSupport(candidate.candidate.support_condition);
+        setRefutation(candidate.candidate.refutation_condition);
+        setNextEvent(candidate.candidate.next_verification_event);
+        setMessage("候选已带入登记草稿；请补充主张归属、审核理由，并核对后再追加正式记录。");
+      })
+      .catch(() => {
+        if (active) setMessage("候选未带入。无法读取当前 Case 的冻结原文权限。");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [caseId, candidate?.candidate.id]);
 
   async function begin() {
     setOpen(true);
@@ -2067,7 +2246,7 @@ function MarketExpressionRegistration({
                   </select>
                 </label>
               )}
-              {claimId && (
+              {(claimId || candidate) && (
                 <section className="ros-market-register__factor">
                   <p className="ros-eyebrow">
                     下一步 · 从已审核主张拆解可验证因素
@@ -2212,7 +2391,9 @@ function MarketExpressionRegistration({
           {message && (
             <p
               className={
-                message.startsWith("已登记") ? "ros-success" : "ros-error"
+                message.startsWith("已登记") || message.startsWith("候选已带入")
+                  ? "ros-success"
+                  : "ros-error"
               }
             >
               {message}

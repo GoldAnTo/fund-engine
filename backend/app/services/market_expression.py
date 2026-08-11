@@ -9,10 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import CaseDocumentVersion, Company, SourceSpan, SourceStatement, Stock, Thesis, ValidationError
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.models.source_governance import SourceContract
 from app.services.source_admission import source_contract_is_active
 from app.repositories.research import ResearchRepository
+from app.services.key_factor_candidates import KeyFactorCandidateParser
 
 
 def _utcnow() -> datetime:
@@ -156,6 +157,54 @@ class MarketExpressionService:
         self._session.add(record)
         self._session.flush()
         return record
+
+    def parse_key_factor_candidates(
+        self, case_id: uuid.UUID, *, source_statement_id: uuid.UUID, requested_by: str
+    ) -> KeyFactorCandidateRun:
+        """Persist a transparent parse attempt without creating reviewed factors."""
+        self._require_case(case_id)
+        self._require_text(requested_by, "requested_by")
+        statement = self._require_admitted_case_statement(case_id, source_statement_id)
+        span = self._session.get(SourceSpan, statement.source_span_id)
+        if span is None:
+            raise ValidationError("source span not found")
+        parsed = KeyFactorCandidateParser().parse(
+            span.verbatim_text, observed_period=statement.observed_period
+        )
+        now = _utcnow()
+        run = KeyFactorCandidateRun(
+            research_case_id=case_id,
+            source_statement_id=statement.id,
+            requested_by=requested_by.strip(),
+            parser_version=parsed.parser_version,
+            status="completed",
+            candidate_count=len(parsed.candidates),
+            skipped_reason=parsed.skipped_reason,
+            created_at=now,
+        )
+        self._session.add(run)
+        self._session.flush()
+        for ordinal, candidate in enumerate(parsed.candidates, start=1):
+            self._session.add(
+                KeyFactorCandidate(
+                    run_id=run.id,
+                    ordinal=ordinal,
+                    name=candidate.name,
+                    metric_name=candidate.metric_name,
+                    expected_direction=candidate.expected_direction,
+                    verification_window_start=candidate.verification_window_start,
+                    verification_window_end=candidate.verification_window_end,
+                    support_condition=candidate.support_condition,
+                    refutation_condition=candidate.refutation_condition,
+                    next_verification_event=candidate.next_verification_event,
+                    evidence_excerpt=candidate.evidence_excerpt,
+                    rule_id=candidate.rule_id,
+                    review_state="machine_generated",
+                    created_at=now,
+                )
+            )
+        self._session.flush()
+        return run
 
     def register_claim_verification(
         self, case_id: uuid.UUID, factor_id: uuid.UUID, value: ClaimVerificationInput

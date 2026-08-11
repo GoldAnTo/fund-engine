@@ -15,12 +15,15 @@ from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
     FundamentalImpactDTO,
     KeyFactorDTO,
+    KeyFactorCandidateRunDTO,
+    KeyFactorCandidateRunsResponse,
     MarketInstrumentBindingDTO,
     MarketInstrumentBindingsResponse,
     MarketInstrumentCatalogResponse,
     MarketExpressionResponse,
     MarketObservationDTO,
     RegisterKeyFactorRequest,
+    StartKeyFactorCandidateRunRequest,
     RegisterClaimVerificationRequest,
     RegisterFundamentalImpactRequest,
     RegisterMarketObservationRequest,
@@ -55,6 +58,25 @@ def get_market_expression(case_id: uuid.UUID, as_of: date | None = None, cutoff:
 def admitted_source_statements(case_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> SourceStatementOptionsResponse:
     _require_case(db, case_id, tenant_id)
     return MarketExpressionQueries(db).admitted_source_statements(case_id)
+
+
+@router.get("/research-cases/{case_id}/key-factor-candidate-runs", response_model=KeyFactorCandidateRunsResponse)
+def key_factor_candidate_runs(case_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> KeyFactorCandidateRunsResponse:
+    _require_case(db, case_id, tenant_id)
+    return MarketExpressionQueries(db).key_factor_candidate_runs(case_id)
+
+
+@router.post("/research-cases/{case_id}/key-factor-candidate-runs", response_model=KeyFactorCandidateRunDTO, status_code=status.HTTP_201_CREATED)
+def parse_key_factor_candidates(case_id: uuid.UUID, payload: StartKeyFactorCandidateRunRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> KeyFactorCandidateRunDTO:
+    _require_case(db, case_id, tenant_id)
+    record = translate_validation(
+        MarketExpressionService(db).parse_key_factor_candidates,
+        case_id,
+        source_statement_id=payload.source_statement_id,
+        requested_by=payload.requested_by,
+    )
+    commit_or_rollback(db)
+    return MarketExpressionQueries(db)._key_factor_candidate_run(record)
 
 
 @router.get("/research-cases/{case_id}/market-instruments", response_model=MarketInstrumentBindingsResponse)

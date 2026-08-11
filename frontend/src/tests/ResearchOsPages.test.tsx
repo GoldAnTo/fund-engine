@@ -985,6 +985,39 @@ describe("Research OS event entry", () => {
     expect(await screen.findByText(/已登记已审核关键因素/)).toBeVisible();
   });
 
+  it("shows a reproducible key-factor candidate parse before any factor is registered", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "从冻结原文解析关键因素" }),
+    );
+    expect(await screen.findByLabelText("解析来源原文")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "生成关键因素候选" }));
+
+    expect(await screen.findByRole("heading", { name: "关键因素候选解析" })).toBeVisible();
+    expect(screen.getByText("规则 key-factor-rules-v1")).toBeVisible();
+    expect(screen.getByText("2026 年资本开支预测兑现")).toBeVisible();
+    expect(screen.getByText("预计2026年资本开支为200亿元")).toBeVisible();
+    expect(screen.getByText(/候选尚未成为正式关键因素/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "带入人工登记" }));
+    expect(
+      await screen.findByText(/候选已带入登记草稿/),
+    ).toBeVisible();
+    expect(screen.getByLabelText("关键因素名称")).toHaveValue(
+      "2026 年资本开支预测兑现",
+    );
+    expect(screen.getByLabelText("验证指标")).toHaveValue("资本开支");
+  });
+
   it("lets a researcher resume key-factor registration from an existing reviewed claim", async () => {
     const user = userEvent.setup();
     setResearchOsApi(new MockResearchOsApi(new MockResearchAdapter()));

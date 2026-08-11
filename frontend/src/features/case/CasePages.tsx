@@ -19,6 +19,7 @@ import {
   type ResearchNetwork,
   type ResearchWorkerStatus,
 } from "../../app/researchOsApi";
+import { researchConnectionGuidance } from "../../app/researchConnection";
 import { researchClient } from "../../data/researchClient";
 import type {
   EventResearchClient,
@@ -183,7 +184,7 @@ function CaseFrame({
           {loadError ? (
             <>
               <strong>无法读取这个 Case</strong>
-              <p>没有展示替代数据；请检查权限、网络或 Case 标识。</p>
+              <p>{researchConnectionGuidance ?? "没有展示替代数据；请检查权限、网络或 Case 标识。"}</p>
               <button
                 className="ros-button ros-button--secondary"
                 type="button"

@@ -59,6 +59,8 @@ IMMUTABLE_TABLES = frozenset(
         "fund_disclosure_sync_run_events",
         "report_claims",
         "key_factors",
+        "key_factor_candidate_runs",
+        "key_factor_candidates",
         "claim_verifications",
         "market_instrument_bindings",
         "fundamental_impacts",

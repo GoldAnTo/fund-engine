@@ -5831,6 +5831,132 @@
         }
       }
     },
+    "/api/v1/research-cases/{case_id}/key-factor-candidate-runs": {
+      "get": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Key Factor Candidate Runs",
+        "operationId": "key_factor_candidate_runs_api_v1_research_cases__case_id__key_factor_candidate_runs_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyFactorCandidateRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "market-expression-v1"
+        ],
+        "summary": "Parse Key Factor Candidates",
+        "operationId": "parse_key_factor_candidates_api_v1_research_cases__case_id__key_factor_candidate_runs_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartKeyFactorCandidateRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyFactorCandidateRunDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/research-cases/{case_id}/market-instruments": {
       "get": {
         "tags": [
@@ -15998,6 +16124,158 @@
         ],
         "title": "KeyChangeDTO"
       },
+      "KeyFactorCandidateDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "metric_name": {
+            "type": "string",
+            "title": "Metric Name"
+          },
+          "expected_direction": {
+            "type": "string",
+            "title": "Expected Direction"
+          },
+          "verification_window_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Verification Window Start"
+          },
+          "verification_window_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Verification Window End"
+          },
+          "support_condition": {
+            "type": "string",
+            "title": "Support Condition"
+          },
+          "refutation_condition": {
+            "type": "string",
+            "title": "Refutation Condition"
+          },
+          "next_verification_event": {
+            "type": "string",
+            "title": "Next Verification Event"
+          },
+          "evidence_excerpt": {
+            "type": "string",
+            "title": "Evidence Excerpt"
+          },
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "metric_name",
+          "expected_direction",
+          "verification_window_start",
+          "verification_window_end",
+          "support_condition",
+          "refutation_condition",
+          "next_verification_event",
+          "evidence_excerpt",
+          "rule_id",
+          "review_state"
+        ],
+        "title": "KeyFactorCandidateDTO"
+      },
+      "KeyFactorCandidateRunDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "requested_by": {
+            "type": "string",
+            "title": "Requested By"
+          },
+          "parser_version": {
+            "type": "string",
+            "title": "Parser Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "candidate_count": {
+            "type": "integer",
+            "title": "Candidate Count"
+          },
+          "skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ExpressionSourceDTO"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/KeyFactorCandidateDTO"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "requested_by",
+          "parser_version",
+          "status",
+          "candidate_count",
+          "skipped_reason",
+          "created_at",
+          "source",
+          "candidates"
+        ],
+        "title": "KeyFactorCandidateRunDTO"
+      },
+      "KeyFactorCandidateRunsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/KeyFactorCandidateRunDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "KeyFactorCandidateRunsResponse"
+      },
       "KeyFactorDTO": {
         "properties": {
           "id": {
@@ -20522,6 +20800,27 @@
           "key_factor_id"
         ],
         "title": "StartFactorMonitorRunRequest"
+      },
+      "StartKeyFactorCandidateRunRequest": {
+        "properties": {
+          "source_statement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Statement Id"
+          },
+          "requested_by": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Requested By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_statement_id",
+          "requested_by"
+        ],
+        "title": "StartKeyFactorCandidateRunRequest"
       },
       "StartResearchRunRequest": {
         "properties": {

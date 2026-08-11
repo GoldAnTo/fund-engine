@@ -1487,6 +1487,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/key-factor-candidate-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Key Factor Candidate Runs */
+        get: operations["key_factor_candidate_runs_api_v1_research_cases__case_id__key_factor_candidate_runs_get"];
+        put?: never;
+        /** Parse Key Factor Candidates */
+        post: operations["parse_key_factor_candidates_api_v1_research_cases__case_id__key_factor_candidate_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-cases/{case_id}/market-instruments": {
         parameters: {
             query?: never;
@@ -4883,6 +4901,67 @@ export interface components {
             /** Review State */
             review_state: ("machine_generated" | "reviewed" | "rejected") | null;
         };
+        /** KeyFactorCandidateDTO */
+        KeyFactorCandidateDTO: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Metric Name */
+            metric_name: string;
+            /** Expected Direction */
+            expected_direction: string;
+            /**
+             * Verification Window Start
+             * Format: date
+             */
+            verification_window_start: string;
+            /**
+             * Verification Window End
+             * Format: date
+             */
+            verification_window_end: string;
+            /** Support Condition */
+            support_condition: string;
+            /** Refutation Condition */
+            refutation_condition: string;
+            /** Next Verification Event */
+            next_verification_event: string;
+            /** Evidence Excerpt */
+            evidence_excerpt: string;
+            /** Rule Id */
+            rule_id: string;
+            /** Review State */
+            review_state: string;
+        };
+        /** KeyFactorCandidateRunDTO */
+        KeyFactorCandidateRunDTO: {
+            /** Id */
+            id: string;
+            /** Requested By */
+            requested_by: string;
+            /** Parser Version */
+            parser_version: string;
+            /** Status */
+            status: string;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Skipped Reason */
+            skipped_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            source: components["schemas"]["ExpressionSourceDTO"];
+            /** Candidates */
+            candidates: components["schemas"]["KeyFactorCandidateDTO"][];
+        };
+        /** KeyFactorCandidateRunsResponse */
+        KeyFactorCandidateRunsResponse: {
+            /** Items */
+            items: components["schemas"]["KeyFactorCandidateRunDTO"][];
+        };
         /** KeyFactorDTO */
         KeyFactorDTO: {
             /** Id */
@@ -6573,6 +6652,16 @@ export interface components {
         StartFactorMonitorRunRequest: {
             /** Key Factor Id */
             key_factor_id: string;
+        };
+        /** StartKeyFactorCandidateRunRequest */
+        StartKeyFactorCandidateRunRequest: {
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /** Requested By */
+            requested_by: string;
         };
         /** StartResearchRunRequest */
         StartResearchRunRequest: {
@@ -10533,6 +10622,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceStatementOptionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    key_factor_candidate_runs_api_v1_research_cases__case_id__key_factor_candidate_runs_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyFactorCandidateRunsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_key_factor_candidates_api_v1_research_cases__case_id__key_factor_candidate_runs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartKeyFactorCandidateRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyFactorCandidateRunDTO"];
                 };
             };
             /** @description Validation Error */

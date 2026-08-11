@@ -397,6 +397,82 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     assert missing_window.status_code == 422
 
 
+def test_researcher_can_parse_a_source_bound_key_factor_candidate_without_creating_a_factor(
+    cmd_client, cmd_session
+) -> None:
+    """Parsing remains an inspectable proposal until a human registers it."""
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
+    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"forecast-candidate-source").hexdigest(),
+        source_url="https://licensed.example/report/forecast-candidate",
+        title="工业富联预测研报",
+        available_at=now,
+        acquired_at=now,
+        parser_version="docling-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1, "paragraph": 1},
+        verbatim_text=(
+            "海通证券预计工业富联2024年归母净利润为251.49亿元。"
+            "云计算业务收入3193.77亿元，同比增长64.37%；AI服务器收入同比超过150%；"
+            "400G、800G高速交换机同比增长数倍。"
+        ),
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="forecast",
+        normalized_text="海通证券预测与年度业务驱动指标。",
+        observed_period=date(2024, 12, 31),
+        created_at=now,
+    )
+    cmd_session.add(statement)
+    cmd_session.commit()
+
+    parsed = cmd_client.post(
+        f"/api/v1/research-cases/{case_id}/key-factor-candidate-runs",
+        json={"source_statement_id": str(statement.id), "requested_by": "human:researcher"},
+    )
+
+    assert parsed.status_code == 201
+    payload = parsed.json()
+    assert payload["parser_version"] == "key-factor-rules-v1"
+    assert payload["status"] == "completed"
+    assert payload["candidate_count"] == 4
+    assert payload["source"]["source_statement_id"] == str(statement.id)
+    candidate = payload["candidates"][0]
+    assert candidate["name"] == "2024 年归母净利润预测兑现"
+    assert candidate["metric_name"] == "归母净利润"
+    assert candidate["evidence_excerpt"] == "预计工业富联2024年归母净利润为251.49亿元"
+    assert candidate["review_state"] == "machine_generated"
+    assert [item["name"] for item in payload["candidates"][1:]] == [
+        "2024 年云计算业务收入同比增长",
+        "2024 年AI服务器收入同比增长",
+        "2024 年400G、800G高速交换机同比增长",
+    ]
+    assert cmd_session.query(KeyFactor).filter_by(research_case_id=case_id).count() == 0
+
+    history = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/key-factor-candidate-runs"
+    )
+
+    assert history.status_code == 200
+    assert history.json()["items"][0]["id"] == payload["id"]
+
+
 def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
     cmd_client, cmd_session
 ) -> None:

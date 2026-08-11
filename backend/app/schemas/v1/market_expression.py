@@ -64,6 +64,42 @@ class RegisterKeyFactorRequest(V1Model):
     review_reason: str = Field(min_length=1)
 
 
+class StartKeyFactorCandidateRunRequest(V1Model):
+    source_statement_id: uuid.UUID
+    requested_by: str = Field(min_length=1)
+
+
+class KeyFactorCandidateDTO(V1Model):
+    id: str
+    name: str
+    metric_name: str
+    expected_direction: str
+    verification_window_start: date
+    verification_window_end: date
+    support_condition: str
+    refutation_condition: str
+    next_verification_event: str
+    evidence_excerpt: str
+    rule_id: str
+    review_state: str
+
+
+class KeyFactorCandidateRunDTO(V1Model):
+    id: str
+    requested_by: str
+    parser_version: str
+    status: str
+    candidate_count: int
+    skipped_reason: str | None
+    created_at: datetime
+    source: ExpressionSourceDTO
+    candidates: list[KeyFactorCandidateDTO]
+
+
+class KeyFactorCandidateRunsResponse(V1Model):
+    items: list[KeyFactorCandidateRunDTO]
+
+
 class RegisterClaimVerificationRequest(V1Model):
     source_statement_id: uuid.UUID
     outcome: Literal["supported", "contradicted", "insufficient_evidence", "not_due"]
