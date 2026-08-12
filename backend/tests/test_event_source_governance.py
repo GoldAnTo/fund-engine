@@ -399,6 +399,62 @@ def test_legacy_licensed_provider_replay_uses_retrieval_reference_as_declaration
     ]["message"]
 
 
+def test_new_licensed_provider_replay_uses_persisted_retrieval_reference(
+    cmd_session,
+) -> None:
+    """A new contract keeps its declared provider reference over its freeze URL."""
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+    from app.services.source_governance import (
+        DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY,
+        DECLARED_SOURCE_URL_METADATA_KEY,
+        SourceGovernanceService,
+    )
+
+    retrieval_reference = "juyuan://research-report/JRPT-new-001"
+    metadata = {"retrieval_reference": retrieval_reference}
+    document = DocumentService(DocumentRepository(cmd_session)).freeze(
+        raw=b"licensed provider report",
+        source_url="https://licensed.example/report/frozen-copy",
+        parser_version="provider-snapshot-v1",
+        title="provider report",
+        parse_state="partial",
+    )
+    service = SourceGovernanceService(cmd_session)
+
+    created = service.record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata=metadata,
+        declared_by="human:researcher",
+    )
+
+    assert created.intake_metadata["retrieval_reference"] == retrieval_reference
+    assert created.intake_metadata[DECLARED_SOURCE_URL_METADATA_KEY] == retrieval_reference
+    assert created.intake_metadata[DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY] is False
+
+    replay = service.record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata=metadata,
+        declared_by="human:researcher",
+    )
+
+    assert replay.id == created.id
+    with pytest.raises(
+        ValueError,
+        match="deduplicated original has a different source contract",
+    ):
+        service.record_event_intake(
+            document=document,
+            source_type="licensed_provider",
+            source_metadata={
+                "retrieval_reference": "juyuan://research-report/JRPT-new-002"
+            },
+            declared_by="human:researcher",
+        )
+
+
 def test_legacy_licensed_provider_replay_prefers_explicit_document_url(
     cmd_client, cmd_session
 ) -> None:

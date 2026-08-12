@@ -133,10 +133,7 @@ def _existing_declared_source_url(
 ) -> str:
     metadata = existing.intake_metadata if isinstance(existing.intake_metadata, dict) else {}
     declared = metadata.get(DECLARED_SOURCE_URL_METADATA_KEY)
-    if (
-        metadata.get(DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY) is True
-        and isinstance(declared, str)
-    ):
+    if isinstance(declared, str):
         return declared
     if not _is_generated_document_source_url(document.source_url):
         return document.source_url
