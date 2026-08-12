@@ -4,9 +4,11 @@ import hashlib
 import json
 import uuid
 
+import pytest
 from sqlalchemy import select
 
 from app.models.ledger import CaseDocumentVersion, DocumentUploadArtifact, SourceSpan
+from app.models.source_governance import SourceContract
 from app.models.operational import EventResearchLifecycle, ResearchRun
 
 
@@ -28,14 +30,23 @@ def _create_event(cmd_client) -> uuid.UUID:
     return uuid.UUID(response.json()["case_id"])
 
 
-def _upload(cmd_client, case_id: uuid.UUID, *, name: str, raw: bytes, mime: str):
+def _upload(
+    cmd_client,
+    case_id: uuid.UUID,
+    *,
+    name: str,
+    raw: bytes,
+    mime: str,
+    source_metadata: dict[str, object] | None = None,
+):
     return cmd_client.post(
         f"/api/v1/event-research/{case_id}/uploaded-materials",
         files={"file": (name, raw, mime)},
         data={
             "actor": "human:lin",
             "source_metadata": json.dumps(
-                {
+                source_metadata
+                or {
                     "authority_level": "primary_disclosure",
                     "permissions": {"ai_processing": True, "display": True},
                     "retention_policy": "case_retained",
@@ -101,6 +112,107 @@ def test_uploaded_text_original_is_frozen_attached_and_readable_without_a_run(
     assert cmd_session.scalars(
         select(ResearchRun).where(ResearchRun.research_case_id == case_id)
     ).all() == []
+
+
+def test_upload_company_disclosure_uses_the_declared_retrieval_reference(
+    cmd_client, cmd_session
+) -> None:
+    case_id = _create_event(cmd_client)
+    response = _upload(
+        cmd_client,
+        case_id,
+        name="annual-report.txt",
+        raw="公司正式披露年度经营数据。".encode(),
+        mime="text/plain",
+        source_metadata={
+            "research_source_type": "company_disclosure",
+            "retrieval_reference": "https://www.cninfo.com.cn/new/disclosure/detail?stockCode=601138",
+            "permissions": {"ai_processing": True, "display": True},
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    document_id = uuid.UUID(response.json()["document_version_id"])
+    contract = cmd_session.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document_id)
+    )
+    assert contract is not None
+    assert contract.source_type == "uploaded_file"
+    assert contract.research_source_type == "company_disclosure"
+
+
+def test_deduplicated_upload_rejects_a_different_declared_retrieval_reference(
+    cmd_client, cmd_session
+) -> None:
+    raw = "公司正式披露年度经营数据。".encode()
+    first_case_id = _create_event(cmd_client)
+    first_reference = "https://issuer-a.example.com/disclosures/annual-report"
+    first = _upload(
+        cmd_client,
+        first_case_id,
+        name="annual-report.txt",
+        raw=raw,
+        mime="text/plain",
+        source_metadata={
+            "research_source_type": "company_disclosure",
+            "retrieval_reference": first_reference,
+            "permissions": {"ai_processing": True, "display": True},
+        },
+    )
+    second_case_id = _create_event(cmd_client)
+    second = _upload(
+        cmd_client,
+        second_case_id,
+        name="annual-report.txt",
+        raw=raw,
+        mime="text/plain",
+        source_metadata={
+            "research_source_type": "company_disclosure",
+            "retrieval_reference": "https://issuer-b.example.com/disclosures/annual-report",
+            "permissions": {"ai_processing": True, "display": True},
+        },
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 422
+    assert "deduplicated original has a different source contract" in second.json()[
+        "error"
+    ]["message"]
+    first_document_id = uuid.UUID(first.json()["document_version_id"])
+    contract = cmd_session.scalar(
+        select(SourceContract).where(
+            SourceContract.document_version_id == first_document_id
+        )
+    )
+    assert contract is not None
+    assert contract.intake_metadata["retrieval_reference"] == first_reference
+
+
+@pytest.mark.parametrize("retrieval_reference", [None, "event://not-an-http-url"])
+def test_upload_company_disclosure_rejects_a_missing_or_non_http_retrieval_reference(
+    cmd_client, retrieval_reference
+) -> None:
+    case_id = _create_event(cmd_client)
+    metadata: dict[str, object] = {
+        "research_source_type": "company_disclosure",
+        "permissions": {"ai_processing": True, "display": True},
+    }
+    if retrieval_reference is not None:
+        metadata["retrieval_reference"] = retrieval_reference
+
+    response = _upload(
+        cmd_client,
+        case_id,
+        name="annual-report.txt",
+        raw="公司正式披露年度经营数据。".encode(),
+        mime="text/plain",
+        source_metadata=metadata,
+    )
+
+    assert response.status_code == 422
+    assert "company_disclosure requires an HTTP(S) source_url" in response.json()[
+        "error"
+    ]["message"]
 
 
 def test_malformed_pdf_is_kept_as_an_original_and_returns_recovery_state(

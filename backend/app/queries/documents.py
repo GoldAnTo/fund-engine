@@ -442,6 +442,7 @@ class DocumentReadQueries:
         }
         return SourceContractDTO(
             source_type=contract.source_type,
+            research_source_type=contract.research_source_type,
             provider_or_tenant=contract.provider_or_tenant,
             permissions=permissions,
             status=(

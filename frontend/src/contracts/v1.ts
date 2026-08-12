@@ -5655,6 +5655,21 @@ export interface components {
             /** Major Gaps */
             major_gaps: number;
         };
+        /** PendingAssessmentDTO */
+        PendingAssessmentDTO: {
+            /** Assessment Id */
+            assessment_id: string;
+            /** Conclusion */
+            conclusion: string;
+            /** Rationale */
+            rationale: string;
+            /** Gaps */
+            gaps: string[];
+            /** Task Id */
+            task_id: string;
+            /** Task Status */
+            task_status: string;
+        };
         /** PendingProposalDTO */
         PendingProposalDTO: {
             /** Id */
@@ -6255,6 +6270,8 @@ export interface components {
             assessments: ({
                 [key: string]: unknown;
             } | null)[];
+            /** Pending Assessments */
+            pending_assessments: components["schemas"]["PendingAssessmentDTO"][];
             /** Pending Proposals */
             pending_proposals: components["schemas"]["PendingProposalDTO"][];
             /** Review Tasks */
@@ -6583,6 +6600,8 @@ export interface components {
         SourceContractDTO: {
             /** Source Type */
             source_type: string;
+            /** Research Source Type */
+            research_source_type: string;
             /** Provider Or Tenant */
             provider_or_tenant: string;
             /** Permissions */
