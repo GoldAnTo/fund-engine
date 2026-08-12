@@ -2291,6 +2291,7 @@ export function ConclusionReviewTask({
         <textarea
           aria-label="结论草案"
           className="ros-conclusion-review__editor"
+          disabled={submitting}
           value={text}
           onChange={(event) => setText(event.target.value)}
         />

@@ -2098,6 +2098,69 @@ describe("Research OS event entry", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("locks the conclusion editor while publication is in flight", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const publicationGate = deferred<void>();
+    const publishConclusion = adapter.publishEventConclusion.bind(adapter);
+    const publishEventConclusion = vi
+      .spyOn(adapter, "publishEventConclusion")
+      .mockImplementation(async (input) => {
+        await publicationGate.promise;
+        return publishConclusion(input);
+      });
+    setResearchClient(adapter);
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<CaseReviewPage />}
+          />
+          <Route
+            path="/events/:caseId"
+            element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const editor = await screen.findByLabelText("结论草案");
+    await user.clear(editor);
+    await user.type(editor, "  提交瞬间冻结的结论。  ");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    expect(editor).toBeDisabled();
+    expect(screen.getByRole("button", { name: "正在发布结论…" })).toBeDisabled();
+    await user.type(editor, "这段文字不应写入");
+    expect(editor).toHaveValue("  提交瞬间冻结的结论。  ");
+    expect(publishEventConclusion).toHaveBeenCalledWith({
+      caseId: "event-tsm",
+      text: "提交瞬间冻结的结论。",
+      reviewer: "human:researcher",
+    });
+
+    await act(async () => {
+      publicationGate.resolve();
+      await publicationGate.promise;
+    });
+
+    expect(
+      await screen.findByText("结论已发布，当前事件进入持续跟踪。"),
+    ).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(screen.getAllByText("持续跟踪").length).toBeGreaterThan(0);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("resets the editor for a new draft and ignores an older publication response", async () => {
     const adapter = new MockResearchAdapter();
     await confirmTsmEvidence(adapter);
