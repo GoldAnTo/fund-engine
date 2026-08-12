@@ -103,6 +103,7 @@ def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
 def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
     from app.models.research_expression import ActualMetricObservation, ForecastEvaluationCandidate, KeyFactor, ReportClaim
+    from app.queries.time import api_datetime
     from app.services.source_governance import SourceGovernanceService
 
     case_response = cmd_client.post("/api/v1/event-research", json={
@@ -190,6 +191,7 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     )
     cmd_session.add(factor)
     cmd_session.commit()
+    monkeypatch.setattr("app.services.forecast_verdicts._utcnow", lambda: actual_at)
 
     target_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/forecast-targets", json={
         "key_factor_id": str(factor.id), "report_claim_id": str(claim.id),
@@ -222,7 +224,7 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     cmd_session.expire_all()
     stored_actual = cmd_session.get(ActualMetricObservation, actual_id)
     assert stored_actual is not None
-    assert stored_actual.available_at == actual_at.replace(tzinfo=None)
+    assert api_datetime(stored_actual.available_at) == actual_at
 
     not_due_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
         "actual_observation_id": str(actual_id),
@@ -239,10 +241,12 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert candidate["cutoff"] in {
         "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
     }
+    assert candidate["inputs"]["cutoff"] == "2024-04-22T00:00:00+00:00"
+    assert candidate["inputs"]["available_at"] == "2024-04-22T00:00:00+00:00"
     cmd_session.expire_all()
     stored_candidate = cmd_session.get(ForecastEvaluationCandidate, uuid.UUID(candidate["id"]))
     assert stored_candidate is not None
-    assert stored_candidate.cutoff == actual_at.replace(tzinfo=None)
+    assert api_datetime(stored_candidate.cutoff) == actual_at
     verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
         "decision": "confirmed", "outcome": None,
         "reason": "实际值显著低于冻结预测，确认未兑现。",
@@ -253,6 +257,21 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert candidate["outcome"] == "contradicted"
     assert candidate["review_state"] == "machine_generated"
     assert verdict_response.json()["outcome"] == "contradicted"
+    cmd_session.expire_all()
+
+    before_available = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
+        params={"cutoff": "2024-04-22T07:59:00+08:00"},
+    )
+    assert before_available.status_code == 200, before_available.text
+    assert before_available.json()["items"] == []
+    at_available = cmd_client.get(
+        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
+        params={"cutoff": "2024-04-22T08:00:00+08:00"},
+    )
+    assert at_available.status_code == 200, at_available.text
+    assert len(at_available.json()["items"]) == 1
+    assert at_available.json()["items"][0]["actual"]["id"] == str(actual_id)
 
     response = cmd_client.get(
         f"/api/v1/research-cases/{case_id}/forecast-verdicts",

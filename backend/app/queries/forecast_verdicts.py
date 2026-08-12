@@ -31,6 +31,7 @@ class ForecastVerdictQueries:
         self._db = db
 
     def history(self, case_id: uuid.UUID, *, cutoff: datetime) -> ForecastVerdictHistoryResponse:
+        cutoff = api_datetime(cutoff)
         verdicts = self._db.scalars(
             select(ForecastVerdict)
             .join(ForecastEvaluationCandidate, ForecastEvaluationCandidate.id == ForecastVerdict.candidate_id)
