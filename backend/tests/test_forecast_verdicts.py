@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 
@@ -102,7 +102,7 @@ def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
 
 def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
-    from app.models.research_expression import KeyFactor, ReportClaim
+    from app.models.research_expression import ActualMetricObservation, ForecastEvaluationCandidate, KeyFactor, ReportClaim
     from app.services.source_governance import SourceGovernanceService
 
     case_response = cmd_client.post("/api/v1/event-research", json={
@@ -117,7 +117,8 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert case_response.status_code == 201, case_response.text
     case_id = uuid.UUID(case_response.json()["case_id"])
     forecast_at = datetime(2023, 4, 25, 8, 0, tzinfo=timezone.utc)
-    actual_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
+    actual_at = datetime(2024, 4, 22, 0, 0, tzinfo=timezone.utc)
+    actual_at_local = datetime(2024, 4, 22, 8, 0, tzinfo=timezone(timedelta(hours=8)))
     documents = []
     for title, available_at, digest in (
         ("冻结券商预测", forecast_at, "a" * 64),
@@ -209,18 +210,39 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
         "entity_key": "300894.SZ", "observed_value": 247245713.03, "unit": "CNY",
         "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31",
-        "available_at": actual_at.isoformat(), "recorded_by": "human:reviewer",
+        "available_at": actual_at_local.isoformat(), "recorded_by": "human:reviewer",
         "record_reason": "年报第123页审计口径。",
     })
     assert actual_response.status_code == 201, actual_response.text
-    assert actual_response.json()["available_at"].endswith(("Z", "+00:00"))
+    actual_id = uuid.UUID(actual_response.json()["id"])
+    assert actual_response.json()["available_at"] in {
+        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
+    }
     assert actual_response.json()["source"]["available_at"].endswith(("Z", "+00:00"))
+    cmd_session.expire_all()
+    stored_actual = cmd_session.get(ActualMetricObservation, actual_id)
+    assert stored_actual is not None
+    assert stored_actual.available_at == actual_at.replace(tzinfo=None)
+
+    not_due_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
+        "actual_observation_id": str(actual_id),
+        "cutoff": "2024-04-22T07:59:00+08:00",
+    })
+    assert not_due_response.status_code == 201, not_due_response.text
+    assert not_due_response.json()["outcome"] == "not_due"
     candidate_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
-        "actual_observation_id": actual_response.json()["id"],
-        "cutoff": "2024-04-22T23:59:00Z",
+        "actual_observation_id": str(actual_id),
+        "cutoff": "2024-04-22T08:00:00+08:00",
     })
     assert candidate_response.status_code == 201, candidate_response.text
     candidate = candidate_response.json()
+    assert candidate["cutoff"] in {
+        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
+    }
+    cmd_session.expire_all()
+    stored_candidate = cmd_session.get(ForecastEvaluationCandidate, uuid.UUID(candidate["id"]))
+    assert stored_candidate is not None
+    assert stored_candidate.cutoff == actual_at.replace(tzinfo=None)
     verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
         "decision": "confirmed", "outcome": None,
         "reason": "实际值显著低于冻结预测，确认未兑现。",
@@ -253,7 +275,9 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         item["actual"]["source"],
     ):
         assert source["available_at"].endswith(("Z", "+00:00"))
-    assert item["actual"]["available_at"].endswith(("Z", "+00:00"))
+    assert item["actual"]["available_at"] in {
+        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
+    }
 
     monkeypatch.setenv(
         "RESEARCH_TENANT_TOKENS",
