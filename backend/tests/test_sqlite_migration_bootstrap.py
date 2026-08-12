@@ -371,6 +371,93 @@ def test_0051_migration_trigger_enforces_typed_protocol_scope(tmp_path) -> None:
                 session.add(invalid_assessment)
                 session.flush()
 
+        non_string_case = ResearchCase(
+            title="migrated non-string truthy business line",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(non_string_case)
+        session.flush()
+        non_string_thesis = Thesis(
+            research_case_id=non_string_case.id,
+            statement="migrated integer business line thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(non_string_thesis)
+        session.flush()
+        non_string_snapshot = EvidenceSnapshot(
+            thesis_id=non_string_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(non_string_snapshot)
+        session.flush()
+        non_string = seed_protocol_footprint(
+            session,
+            non_string_thesis,
+            business_line=1,
+        )
+        non_string_ready = {
+            "research_protocol_status": "ready",
+            "effective_binding_id": non_string.binding.id,
+            "mechanism_template_version_id": non_string.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in non_string.rules],
+        }
+        for claimed_status, conclusion in (
+            ("ready", "insufficient_evidence"),
+            ("single_metric_monitoring", "supported"),
+        ):
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(
+                    assessment(
+                        non_string_snapshot,
+                        conclusion=conclusion,
+                        **{
+                            **non_string_ready,
+                            "research_protocol_status": claimed_status,
+                        },
+                    )
+                )
+                session.flush()
+
+        scoped_rule = first.rules[0]
+        legacy_rule = VerificationRuleVersion(
+            research_case_id=None,
+            mechanism_edge_id=scoped_rule.mechanism_edge_id,
+            metric_definition_id=scoped_rule.metric_definition_id,
+            expected_direction=scoped_rule.expected_direction,
+            support_predicate=scoped_rule.support_predicate,
+            contradiction_predicate=scoped_rule.contradiction_predicate,
+            allowed_source_roles=list(scoped_rule.allowed_source_roles),
+            observed_period_start=scoped_rule.observed_period_start,
+            observed_period_end=scoped_rule.observed_period_end,
+            available_at_deadline=scoped_rule.available_at_deadline,
+            next_verification_event=scoped_rule.next_verification_event,
+            reviewer="legacy",
+            reason="migrated pre-case-scope rule",
+            created_at=datetime.now(UTC),
+        )
+        session.add(legacy_rule)
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    first_snapshot,
+                    **{
+                        **valid_protocol,
+                        "verification_rule_ids": [
+                            *valid_protocol["verification_rule_ids"],
+                            str(legacy_rule.id),
+                        ],
+                    },
+                )
+            )
+            session.flush()
+
         old_binding = first.binding
         current_binding = OutcomeBindingVersion(
             thesis_id=old_binding.thesis_id,

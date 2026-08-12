@@ -22,6 +22,7 @@ def seed_protocol_footprint(
     *,
     status="single_metric_monitoring",
     counter_hypothesis=True,
+    business_line="test",
 ):
     now = datetime.now(timezone.utc)
     suffix = uuid.uuid4().hex
@@ -73,7 +74,7 @@ def seed_protocol_footprint(
     binding = OutcomeBindingVersion(
         thesis_id=thesis.id,
         metric_definition_id=metric.id,
-        entity_scope={"company_id": "company-a", "business_line": "test"},
+        entity_scope={"company_id": "company-a", "business_line": business_line},
         direction="increase",
         baseline={
             "source_ref": "fixture",

@@ -635,11 +635,13 @@ _SQLITE_ASSESSMENT_PROTOCOL_TRIGGER = DDL(
           ON r.id = replace(lower(j.value), '-', '') AND j.type = 'text'
         LEFT JOIN mechanism_edge_versions e ON e.id = r.mechanism_edge_id
         WHERE r.id IS NULL
+           OR r.research_case_id IS NULL
            OR r.research_case_id <> (
              SELECT t.research_case_id
              FROM evidence_snapshots s JOIN theses t ON t.id = s.thesis_id
              WHERE s.id = NEW.snapshot_id
            )
+           OR e.id IS NULL
            OR e.template_version_id <> NEW.mechanism_template_version_id
            OR EXISTS (
              SELECT 1 FROM verification_rule_versions newer
@@ -720,8 +722,17 @@ _SQLITE_ASSESSMENT_PROTOCOL_TRIGGER = DDL(
       SELECT RAISE(ABORT, 'assessment research protocol status does not match current footprint')
       WHERE NEW.research_protocol_status <> (
         SELECT CASE
-          WHEN json_type(b.entity_scope, '$.business_line') = 'text'
-           AND json_extract(b.entity_scope, '$.business_line') <> ''
+          WHEN CASE json_type(b.entity_scope, '$.business_line')
+            WHEN 'true' THEN 1
+            WHEN 'integer' THEN json_extract(b.entity_scope, '$.business_line') <> 0
+            WHEN 'real' THEN json_extract(b.entity_scope, '$.business_line') <> 0
+            WHEN 'text' THEN json_extract(b.entity_scope, '$.business_line') <> ''
+            WHEN 'array' THEN json_array_length(b.entity_scope, '$.business_line') > 0
+            WHEN 'object' THEN EXISTS (
+              SELECT 1 FROM json_each(b.entity_scope, '$.business_line')
+            )
+            ELSE 0
+          END
            AND (
              SELECT COUNT(DISTINCT r.metric_definition_id)
              FROM mechanism_edge_versions e
@@ -796,11 +807,12 @@ _POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER_FUNCTION = DDL(
           ON r.id::text = lower(j.value)
         LEFT JOIN mechanism_edge_versions e ON e.id = r.mechanism_edge_id
         WHERE r.id IS NULL
-           OR r.research_case_id <> (
+           OR r.research_case_id IS DISTINCT FROM (
              SELECT t.research_case_id
              FROM evidence_snapshots s JOIN theses t ON t.id = s.thesis_id
              WHERE s.id = NEW.snapshot_id
            )
+           OR e.id IS NULL
            OR e.template_version_id <> NEW.mechanism_template_version_id
            OR EXISTS (
              SELECT 1 FROM verification_rule_versions newer
@@ -872,8 +884,17 @@ _POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER_FUNCTION = DDL(
       ) THEN RAISE EXCEPTION 'assessment protocol is missing a counter hypothesis'; END IF;
       IF NEW.research_protocol_status <> (
         SELECT CASE
-          WHEN json_typeof(b.entity_scope -> 'business_line') = 'string'
-           AND b.entity_scope ->> 'business_line' <> ''
+          WHEN COALESCE(
+            (b.entity_scope::jsonb -> 'business_line') NOT IN (
+              'null'::jsonb,
+              'false'::jsonb,
+              '0'::jsonb,
+              '""'::jsonb,
+              '[]'::jsonb,
+              '{}'::jsonb
+            ),
+            FALSE
+          )
            AND (
              SELECT COUNT(DISTINCT r.metric_definition_id)
              FROM mechanism_edge_versions e

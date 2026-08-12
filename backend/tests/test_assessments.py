@@ -678,6 +678,103 @@ def test_database_rejects_protocol_status_that_does_not_match_current_footprint(
         session.flush()
 
 
+@pytest.mark.parametrize(
+    "business_line",
+    [1, ["optics"], {"name": "optics"}],
+    ids=["integer", "nonempty-array", "nonempty-object"],
+)
+def test_truthy_non_string_business_line_is_monitoring_in_service_and_database(
+    assessment_service,
+    research_service,
+    research_case,
+    session,
+    business_line,
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Truthy non-string business line remains single-metric monitoring",
+    )
+    thesis = session.get(Thesis, snapshot.thesis_id)
+    assert thesis is not None
+    footprint = seed_protocol_footprint(
+        session,
+        thesis,
+        status="single_metric_monitoring",
+        business_line=business_line,
+    )
+    result = ResearchProtocolService(session).check_researchability(thesis.id)
+
+    assert result.status == "single_metric_monitoring"
+    for claimed_status, conclusion in (
+        ("ready", "insufficient_evidence"),
+        ("single_metric_monitoring", "supported"),
+    ):
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.add(
+                _bypass_assessment(
+                    snapshot,
+                    conclusion=conclusion,
+                    research_protocol_status=claimed_status,
+                    effective_binding_id=footprint.binding.id,
+                    mechanism_template_version_id=footprint.template.id,
+                    verification_rule_ids=[str(rule.id) for rule in footprint.rules],
+                )
+            )
+            session.flush()
+
+
+@pytest.mark.parametrize(
+    "business_line",
+    [None, False, 0, 0.0, "", [], {}],
+    ids=[
+        "null",
+        "false",
+        "zero-int",
+        "zero-real",
+        "empty-text",
+        "empty-array",
+        "empty-object",
+    ],
+)
+def test_falsy_business_line_is_ready_in_service_and_database(
+    assessment_service,
+    research_service,
+    research_case,
+    session,
+    business_line,
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Falsy business line does not impose single-metric monitoring",
+    )
+    thesis = session.get(Thesis, snapshot.thesis_id)
+    assert thesis is not None
+    footprint = seed_protocol_footprint(
+        session,
+        thesis,
+        status="single_metric_monitoring",
+        business_line=business_line,
+    )
+
+    result = ResearchProtocolService(session).check_researchability(thesis.id)
+    assert result.status == "ready"
+    session.add(
+        _bypass_assessment(
+            snapshot,
+            conclusion="supported",
+            research_protocol_status="ready",
+            effective_binding_id=footprint.binding.id,
+            mechanism_template_version_id=footprint.template.id,
+            verification_rule_ids=[str(rule.id) for rule in footprint.rules],
+        )
+    )
+    session.flush()
+
+
 @pytest.mark.parametrize("mutation", ["omitted", "duplicate"])
 def test_database_requires_exact_unique_current_verification_rule_set(
     assessment_service,
@@ -708,6 +805,54 @@ def test_database_requires_exact_unique_current_verification_rule_set(
                     "mechanism_template_version_id"
                 ],
                 verification_rule_ids=invalid_rule_ids,
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_legacy_null_case_rule_in_typed_protocol_footprint(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Legacy unscoped rule cannot enter typed protocol footprint",
+    )
+    footprint, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    scoped_rule = footprint.rules[0]
+    legacy_rule = VerificationRuleVersion(
+        research_case_id=None,
+        mechanism_edge_id=scoped_rule.mechanism_edge_id,
+        metric_definition_id=scoped_rule.metric_definition_id,
+        expected_direction=scoped_rule.expected_direction,
+        support_predicate=scoped_rule.support_predicate,
+        contradiction_predicate=scoped_rule.contradiction_predicate,
+        allowed_source_roles=list(scoped_rule.allowed_source_roles),
+        observed_period_start=scoped_rule.observed_period_start,
+        observed_period_end=scoped_rule.observed_period_end,
+        available_at_deadline=scoped_rule.available_at_deadline,
+        next_verification_event=scoped_rule.next_verification_event,
+        reviewer="legacy",
+        reason="pre-case-scope rule",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(legacy_rule)
+    session.flush()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    *(str(rule_id) for rule_id in protocol["verification_rule_ids"]),
+                    str(legacy_rule.id),
+                ],
             )
         )
         session.flush()
