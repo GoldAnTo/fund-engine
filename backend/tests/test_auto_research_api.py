@@ -26,7 +26,11 @@ from app.repositories.auto_research import AutoResearchRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
-from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
+from app.services.case_monitor import (
+    CaseMonitorConfig,
+    CaseMonitorService,
+    ResearchRunEventRepository,
+)
 from app.models.research_monitor import ResearchRunEvent
 
 
@@ -244,6 +248,127 @@ def test_auto_research_stops_before_propose_or_assess_when_atomic_claims_await_r
     assert session.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 1
     assert any(event.stage == "claim_review" and "原子陈述" in event.message for event in session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)))
     assert any(task.task_type == "review_atomic_claim" and task.status == "open" for task in session.scalars(select(TaskItem).where(TaskItem.research_case_id == case.id)))
+
+
+def test_run_reconciliation_scopes_atomic_claim_gates_to_each_run(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="run-local claim gate",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://issuer.example.com/run-local-claim",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    session.add_all([case, document])
+    session.flush()
+    source_text = "公司披露订单同比增长20%。"
+    quote = "订单同比增长20%"
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text=source_text,
+    )
+    session.add_all([
+        span,
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=now,
+        ),
+    ])
+    session.flush()
+    candidate = AtomicClaimService(session).admit(
+        AtomicClaimDraft(
+            source_span_id=span.id,
+            quote=quote,
+            quote_start=source_text.index(quote),
+            quote_end=source_text.index(quote) + len(quote),
+            normalized_text="公司披露订单同比增长 20%",
+            claim_type="disclosed_fact",
+            assertion_actor="公司",
+            subject="订单",
+            predicate="同比增长",
+            object_text="20%",
+            numeric_value="20",
+            unit="%",
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="primary_disclosure",
+        run_ref="extract:run-local-gate",
+    )
+    unrelated_run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    claim_run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add_all([unrelated_run, claim_run])
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={},
+        target_context={},
+        proposed_by_type="ai",
+        proposed_by_ref="test-run",
+        proposed_at=now,
+        status="decided",
+        research_case_id=case.id,
+    )
+    session.add(proposal)
+    session.flush()
+    for run in (unrelated_run, claim_run):
+        session.add(
+            ResearchTask(
+                run_id=run.id,
+                research_case_id=case.id,
+                status="done",
+                stage="completed",
+                round=1,
+                task_type="result",
+                query="final review output",
+                result={"proposed_proposal_ids": [str(proposal.id)]},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    ResearchRunEventRepository(session).append(
+        claim_run.id,
+        stage="claim_review",
+        status="waiting_for_review",
+        message="等待此运行的原子陈述审核",
+        payload_json={"candidate_ids": [str(candidate.id)]},
+    )
+
+    service = AutoResearchService(session)
+    assert service.reconcile_runs_for_output(
+        key="proposed_proposal_ids",
+        value=proposal.id,
+        trigger_ref=f"proposal:{proposal.id}",
+    ) == [unrelated_run.id]
+    assert not service.reconcile_run(claim_run.id, trigger_ref=f"proposal:{proposal.id}")
 
 
 def test_budget_stop(session):

@@ -854,7 +854,11 @@ class AutoResearchService:
                     return "waiting_for_review"
             except (TypeError, ValueError):
                 continue
-        return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
+        return (
+            "waiting_for_review"
+            if self._pending_atomic_claims_for_run(run)
+            else "succeeded"
+        )
 
     def run_ids_for_output(self, *, key: str, value: uuid.UUID) -> set[uuid.UUID]:
         """Find runs whose persisted task output references one review item.
@@ -951,7 +955,7 @@ class AutoResearchService:
                 )
                 if review_task is None or review_task.status in {"open", "in_progress"}:
                     return True
-        return bool(self._pending_atomic_claims(run.research_case_id))
+        return bool(self._pending_atomic_claims_for_run(run))
 
     def _run_allowed_source_types(self, run) -> set[str]:
         """Read the immutable source-type boundary from this run's scope event."""
@@ -1057,6 +1061,49 @@ class AutoResearchService:
             and contract.allow_ai_processing
             and source_contract_is_active(contract)
         ]
+
+    def _pending_atomic_claims_for_run(self, run) -> list[AtomicClaimCandidate]:
+        """Return unreviewed candidates explicitly recorded in this run's pause events."""
+        candidate_ids: set[uuid.UUID] = set()
+        events = self.session.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run.id)
+            .where(ResearchRunEvent.stage == "claim_review")
+        )
+        for event in events:
+            payload = event.payload_json
+            if not isinstance(payload, dict):
+                continue
+            raw_ids = payload.get("candidate_ids")
+            if not isinstance(raw_ids, (list, tuple, set)):
+                raw_ids = [raw_ids]
+            for raw_id in raw_ids:
+                try:
+                    candidate_ids.add(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+        if not candidate_ids:
+            return []
+        reviewed = (
+            select(AtomicClaimReview.id)
+            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+            .exists()
+        )
+        return list(
+            self.session.scalars(
+                select(AtomicClaimCandidate)
+                .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+                .join(
+                    CaseDocumentVersion,
+                    CaseDocumentVersion.document_version_id
+                    == SourceSpan.document_version_id,
+                )
+                .where(CaseDocumentVersion.research_case_id == run.research_case_id)
+                .where(AtomicClaimCandidate.id.in_(candidate_ids))
+                .where(~reviewed)
+                .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
+            )
+        )
 
     def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
         """Persist an explicit, replayable stop before any propose/assess work."""
