@@ -112,7 +112,7 @@ def _historical_monitor(
 def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
     cmd_client, cmd_session
 ) -> None:
-    case, _ = _case_with_confirmed_factor(cmd_session)
+    case, first = _case_with_confirmed_factor(cmd_session)
     second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
 
     saved = cmd_client.put(
@@ -124,6 +124,10 @@ def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
     assert detail.status_code == 200
     assert detail.json()["confirmed_factors"] == [
         {"id": str(second.id), "statement": second.statement}
+    ]
+    assert detail.json()["available_confirmed_factors"] == [
+        {"id": str(first.id), "statement": first.statement},
+        {"id": str(second.id), "statement": second.statement},
     ]
 
 
@@ -146,18 +150,85 @@ def test_monitor_returns_only_confirmed_factors_in_the_newest_scope(
     assert detail.json()["confirmed_factors"] == [
         {"id": str(second.id), "statement": second.statement}
     ]
+    assert detail.json()["available_confirmed_factors"] == [
+        {"id": str(first.id), "statement": first.statement},
+        {"id": str(second.id), "statement": second.statement},
+    ]
+
+
+def test_monitor_scope_uses_unique_case_confirmed_factors_in_frozen_order(
+    cmd_client, cmd_session
+) -> None:
+    case, first = _case_with_confirmed_factor(cmd_session)
+    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
+    unconfirmed = Thesis(
+        research_case_id=case.id,
+        statement="尚未确认因素",
+        created_by="human:lin",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="pending_review",
+    )
+    foreign_case = ResearchCase(
+        title="其他 Case",
+        industry_topic="事件研究",
+        created_by="tester",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add_all([unconfirmed, foreign_case])
+    cmd_session.flush()
+    foreign = Thesis(
+        research_case_id=foreign_case.id,
+        statement="其他 Case 的已确认因素",
+        created_by="human:lin",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="confirmed",
+    )
+    cmd_session.add(foreign)
+    cmd_session.flush()
+    cmd_session.add(
+        _historical_monitor(
+            case,
+            version=1,
+            factor_ids=[
+                str(second.id),
+                str(foreign.id),
+                str(second.id),
+                str(first.id),
+                str(unconfirmed.id),
+                "not-a-uuid",
+            ],
+        )
+    )
+    cmd_session.commit()
+
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+
+    assert detail.status_code == 200
+    assert detail.json()["confirmed_factors"] == [
+        {"id": str(second.id), "statement": second.statement},
+        {"id": str(first.id), "statement": first.statement},
+    ]
+    assert detail.json()["available_confirmed_factors"] == [
+        {"id": str(first.id), "statement": first.statement},
+        {"id": str(second.id), "statement": second.statement},
+    ]
 
 
 def test_monitor_with_empty_or_malformed_historical_scope_returns_no_factors(
     cmd_client, cmd_session
 ) -> None:
-    case, _ = _case_with_confirmed_factor(cmd_session)
+    case, factor = _case_with_confirmed_factor(cmd_session)
     cmd_session.add(_historical_monitor(case, version=1, factor_ids=[]))
     cmd_session.commit()
 
     empty_scope = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
     assert empty_scope.status_code == 200
     assert empty_scope.json()["confirmed_factors"] == []
+    assert empty_scope.json()["available_confirmed_factors"] == [
+        {"id": str(factor.id), "statement": factor.statement}
+    ]
 
     cmd_session.add(
         _historical_monitor(
@@ -185,6 +256,7 @@ def test_monitor_without_saved_version_lists_all_confirmed_factors(
         {"id": str(first.id), "statement": first.statement},
         {"id": str(second.id), "statement": second.statement},
     ]
+    assert detail.json()["available_confirmed_factors"] == detail.json()["confirmed_factors"]
 
 
 def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_session) -> None:

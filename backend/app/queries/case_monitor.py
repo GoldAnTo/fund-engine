@@ -41,17 +41,21 @@ class CaseMonitorQuery:
             .limit(1)
         )
 
-    def confirmed_factors(self, case_id: uuid.UUID) -> list[Thesis]:
-        monitor = self.effective(case_id)
+    def available_confirmed_factors(self, case_id: uuid.UUID) -> list[Thesis]:
         statement = (
             select(Thesis)
             .where(Thesis.research_case_id == case_id)
             .where(Thesis.review_state == "confirmed")
         )
+        return list(
+            self._session.scalars(statement.order_by(Thesis.created_at, Thesis.id))
+        )
+
+    def confirmed_factors(
+        self, case_id: uuid.UUID, monitor: CaseMonitorVersion | None
+    ) -> list[Thesis]:
         if monitor is None:
-            return list(
-                self._session.scalars(statement.order_by(Thesis.created_at, Thesis.id))
-            )
+            return self.available_confirmed_factors(case_id)
 
         raw_factor_ids = monitor.factor_ids if isinstance(monitor.factor_ids, list) else []
         factor_ids: list[uuid.UUID] = []
@@ -65,7 +69,12 @@ class CaseMonitorQuery:
         if not factor_ids:
             return []
 
-        factors = self._session.scalars(statement.where(Thesis.id.in_(factor_ids))).all()
+        factors = self._session.scalars(
+            select(Thesis)
+            .where(Thesis.research_case_id == case_id)
+            .where(Thesis.review_state == "confirmed")
+            .where(Thesis.id.in_(factor_ids))
+        ).all()
         factors_by_id = {factor.id: factor for factor in factors}
         return [
             factors_by_id[factor_id]

@@ -3705,11 +3705,16 @@ describe("Research OS event entry", () => {
       confirmed_factors: [
         { id: "event-tsm-factor-1", statement: "资本开支指引" },
       ],
+      available_confirmed_factors: [
+        { id: "event-tsm-factor-1", statement: "资本开支指引" },
+        { id: "event-tsm-factor-2", statement: "订单增长指引" },
+      ],
     };
     const saved = {
       ...initial.monitor,
       id: "monitor-v2",
       version: 2,
+      factor_ids: ["event-tsm-factor-1", "event-tsm-factor-2"],
       allowed_source_types: ["company_disclosure", "licensed_provider"],
       next_verification_event: "下一次财报后补证",
       change_reason: "补充授权来源",
@@ -3744,6 +3749,8 @@ describe("Research OS event entry", () => {
     );
 
     expect(await screen.findByText("当前生效版本 v1")).toBeVisible();
+    expect(screen.getByLabelText("订单增长指引")).not.toBeChecked();
+    await user.click(screen.getByLabelText("订单增长指引"));
     expect(screen.getByRole("status")).toHaveTextContent(
       "变更定时任务前还需填写：填写变更原因",
     );
@@ -3762,11 +3769,15 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByText("当前生效版本 v2")).toBeVisible();
     expect(screen.getByText(/已保存监控版本 v2/)).toBeVisible();
+    expect(screen.getByLabelText("订单增长指引")).toBeChecked();
     expect(await screen.findByText("v2 · 已启用")).toBeVisible();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/v1/research-cases/event-tsm/monitor",
-        expect.objectContaining({ method: "PUT" }),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining("event-tsm-factor-2"),
+        }),
       ),
     );
   });

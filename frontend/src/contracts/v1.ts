@@ -2557,6 +2557,8 @@ export interface components {
             next_scheduled_at?: string | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
+            /** Available Confirmed Factors */
+            available_confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };
         /** CaseRelationCandidateOriginDTO */
         CaseRelationCandidateOriginDTO: {

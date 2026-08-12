@@ -264,7 +264,8 @@ export class MockResearchOsApi implements ResearchOsApi {
               updated_at: now,
             }
           : null,
-      confirmed_factors: factors,
+      confirmed_factors: factors.filter((factor) => monitor.factor_ids.includes(factor.id)),
+      available_confirmed_factors: factors,
     };
   }
 
