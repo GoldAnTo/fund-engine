@@ -399,6 +399,37 @@ describe("MockResearchAdapter scenarios", () => {
     ]);
   });
 
+  it("allows only one concurrent non-TSM conclusion publication", async () => {
+    const adapter = new MockResearchAdapter();
+    const payloads = [
+      {
+        caseId: "event-draft",
+        text: "第一位研究员确认的季度业绩结论。",
+        reviewer: "human:first-reviewer",
+      },
+      {
+        caseId: "event-draft",
+        text: "第二位研究员确认的季度业绩结论。",
+        reviewer: "human:second-reviewer",
+      },
+    ];
+
+    const results = await Promise.allSettled(
+      payloads.map((payload) => adapter.publishEventConclusion(payload)),
+    );
+    const fulfilledIndexes = results.flatMap((result, index) =>
+      result.status === "fulfilled" ? [index] : [],
+    );
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const history = await adapter.getEventConclusionHistory("event-draft");
+    expect(history.filter((version) => version.state === "published")).toHaveLength(1);
+    expect((await adapter.getEventWorkbench("event-draft")).conclusion.text).toBe(
+      payloads[fulfilledIndexes[0]].text,
+    );
+  });
+
   it("freezes custom scope metadata into TSM draft and published versions", async () => {
     const adapter = new MockResearchAdapter();
     const primaryFactor = "自定义资本开支因素";
@@ -502,9 +533,9 @@ describe("MockResearchAdapter scenarios", () => {
     });
 
     expect(nextScope.version).toBe(3);
-    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
-      "continuing",
-    );
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.conclusion.citations[0].factorStatement).toBe(primaryFactor);
     expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
       publishedHistory,
     );

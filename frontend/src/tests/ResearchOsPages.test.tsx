@@ -200,6 +200,41 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("lets an explicit frozen-document target override stale location params", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi());
+    render(
+      <MemoryRouter
+        initialEntries={[
+          "/events/event-tsm/review?document=old-document&span=old-span&client=mock",
+        ]}
+      >
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<CaseReviewPage />}
+          />
+          <Route
+            path="/events/:caseId/documents"
+            element={<CaseLocationProbe />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const frozenClaimLink = (await screen.findAllByRole("link", {
+      name: "定位到冻结原文",
+    })).find((link) => link.getAttribute("href")?.includes("span=sp-tsm-capex"));
+    expect(frozenClaimLink).toBeDefined();
+    await user.click(
+      frozenClaimLink!,
+    );
+
+    expect(await screen.findByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/documents?document=doc-event-tsm-q2&span=sp-tsm-capex&client=mock",
+    );
+  });
+
   it("reveals the remaining research stages from a compact Case menu", async () => {
     const user = userEvent.setup();
     render(

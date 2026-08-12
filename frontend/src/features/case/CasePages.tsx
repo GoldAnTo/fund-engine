@@ -266,7 +266,9 @@ function preserveLocationSearch(to: string, search: string): string {
   const params = new URLSearchParams(
     queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "",
   );
-  new URLSearchParams(search).forEach((value, key) => params.set(key, value));
+  new URLSearchParams(search).forEach((value, key) => {
+    if (!params.has(key)) params.append(key, value);
+  });
   const query = params.toString();
   return `${pathname}${query ? `?${query}` : ""}${hash}`;
 }
@@ -2520,6 +2522,7 @@ function AtomicClaimItem({
   caseId: string;
   claim: AtomicClaimCandidate;
 }) {
+  const location = useLocation();
   const [reason, setReason] = useState("");
   const [editedText, setEditedText] = useState(claim.normalized_text);
   const [editing, setEditing] = useState(false);
@@ -2634,7 +2637,10 @@ function AtomicClaimItem({
         </button>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/documents?document=${encodeURIComponent(claim.document_version_id)}&span=${encodeURIComponent(claim.source_span_id)}`}
+          to={preserveLocationSearch(
+            `/events/${caseId}/documents?document=${encodeURIComponent(claim.document_version_id)}&span=${encodeURIComponent(claim.source_span_id)}`,
+            location.search,
+          )}
         >
           定位到冻结原文
         </Link>

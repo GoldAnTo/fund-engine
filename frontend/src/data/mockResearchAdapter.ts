@@ -3068,6 +3068,7 @@ export class MockResearchAdapter implements ResearchClient {
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
   private eventTsmConclusionVersions: EventConclusionVersion[] = [];
   private eventConclusionVersions = new Map<string, EventConclusionVersion[]>();
+  private eventConclusionPublicationsInFlight = new Set<string>();
   private eventStates = new Map<string, {
     event?: EventResearchListItem;
     lifecycle: EventLifecycle;
@@ -3094,6 +3095,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventTsmReviewDecision = null;
     this.eventTsmConclusionVersions = [];
     this.eventConclusionVersions.clear();
+    this.eventConclusionPublicationsInFlight.clear();
     this.eventStates.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
@@ -4376,6 +4378,12 @@ export class MockResearchAdapter implements ResearchClient {
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: activeFactors[0]?.statement ?? factorStatements[0], role: "supports", reviewState: this.eventTsmReviewDecision?.outcome === "confirmed" ? "reviewed" : "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentVersionId: "doc-event-tsm-q2", sourceVisibleInCase: true, excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
+    const conclusionCitations = publishedConclusion && caseId === "event-tsm"
+      ? evidence.map((citation) => ({
+          ...citation,
+          factorStatement: publishedConclusion.primaryFactor ?? citation.factorStatement,
+        }))
+      : evidence;
     const reviewedCount = tsmProjection?.verified ?? (["draft_ready", "published"].includes(event.status) ? 3 : 0);
     const nextAction: EventWorkbench["nextAction"] = publishedConclusion
       ? { kind: "wait", label: "当前没有需要处理的任务" }
@@ -4393,7 +4401,7 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({
       event, lifecycle,
       conclusion: publishedConclusion
-        ? { state: "published", text: publishedConclusion.text, confidence: "high", citations: evidence }
+        ? { state: "published", text: publishedConclusion.text, confidence: "high", citations: conclusionCitations }
         : tsmProjection?.conclusionState === "ai_draft"
         ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
         : event.status === "published"
@@ -4692,53 +4700,61 @@ export class MockResearchAdapter implements ResearchClient {
     if (this.eventConclusionVersions.has(input.caseId)) {
       throw new Error("unconsumed draft_ready conclusion is required before publication");
     }
-    const workbench = await this.getEventWorkbench(input.caseId);
-    if (
-      workbench.lifecycle.status !== "draft_ready"
-      || workbench.nextAction.kind !== "review_conclusion"
-      || workbench.conclusion.state !== "ai_draft"
-    ) {
+    if (this.eventConclusionPublicationsInFlight.has(input.caseId)) {
       throw new Error("unconsumed draft_ready conclusion is required before publication");
     }
-    const draft: EventConclusionVersion = {
-      id: `draft-${input.caseId}-v1`,
-      sequence: 1,
-      state: "ai_draft",
-      text: workbench.conclusion.text,
-      primaryFactor: workbench.scope.factors[0]?.statement ?? null,
-      scopeVersion: workbench.scope.version,
-      basedOnConclusionId: null,
-      reviewer: null,
-      evidenceCount: workbench.progress.verified,
-      createdAt: "2026-08-07T07:00:00Z",
-    };
-    const published: EventConclusionVersion = {
-      id: `published-${input.caseId}-v1`,
-      sequence: 2,
-      state: "published",
-      text,
-      primaryFactor: draft.primaryFactor,
-      scopeVersion: draft.scopeVersion,
-      basedOnConclusionId: draft.id,
-      reviewer: input.reviewer,
-      evidenceCount: draft.evidenceCount,
-      createdAt: "2026-08-07T08:00:00Z",
-    };
-    this.eventConclusionVersions.set(input.caseId, [draft, published]);
-    const previous = this.eventStates.get(input.caseId);
-    this.eventStates.set(input.caseId, {
-      event: previous?.event,
-      scope: previous?.scope ?? workbench.scope,
-      lifecycle: {
-        status: "published",
-        activeRunId: null,
-        currentRound: workbench.lifecycle.currentRound,
-        summary: "结论已由研究员发布，进入持续跟踪",
-        currentGap: null,
-        nextHumanAction: null,
-      },
-    });
-    return simulateLatency({ conclusionId: published.id, state: "published" });
+    this.eventConclusionPublicationsInFlight.add(input.caseId);
+    try {
+      const workbench = await this.getEventWorkbench(input.caseId);
+      if (
+        workbench.lifecycle.status !== "draft_ready"
+        || workbench.nextAction.kind !== "review_conclusion"
+        || workbench.conclusion.state !== "ai_draft"
+      ) {
+        throw new Error("unconsumed draft_ready conclusion is required before publication");
+      }
+      const draft: EventConclusionVersion = {
+        id: `draft-${input.caseId}-v1`,
+        sequence: 1,
+        state: "ai_draft",
+        text: workbench.conclusion.text,
+        primaryFactor: workbench.scope.factors[0]?.statement ?? null,
+        scopeVersion: workbench.scope.version,
+        basedOnConclusionId: null,
+        reviewer: null,
+        evidenceCount: workbench.progress.verified,
+        createdAt: "2026-08-07T07:00:00Z",
+      };
+      const published: EventConclusionVersion = {
+        id: `published-${input.caseId}-v1`,
+        sequence: 2,
+        state: "published",
+        text,
+        primaryFactor: draft.primaryFactor,
+        scopeVersion: draft.scopeVersion,
+        basedOnConclusionId: draft.id,
+        reviewer: input.reviewer,
+        evidenceCount: draft.evidenceCount,
+        createdAt: "2026-08-07T08:00:00Z",
+      };
+      this.eventConclusionVersions.set(input.caseId, [draft, published]);
+      const previous = this.eventStates.get(input.caseId);
+      this.eventStates.set(input.caseId, {
+        event: previous?.event,
+        scope: previous?.scope ?? workbench.scope,
+        lifecycle: {
+          status: "published",
+          activeRunId: null,
+          currentRound: workbench.lifecycle.currentRound,
+          summary: "结论已由研究员发布，进入持续跟踪",
+          currentGap: null,
+          nextHumanAction: null,
+        },
+      });
+      return await simulateLatency({ conclusionId: published.id, state: "published" });
+    } finally {
+      this.eventConclusionPublicationsInFlight.delete(input.caseId);
+    }
   }
 
   async getConclusionView(
