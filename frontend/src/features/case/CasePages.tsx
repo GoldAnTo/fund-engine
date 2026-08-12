@@ -2122,7 +2122,6 @@ function ReviewContent({ caseId }: { caseId: string }) {
   const actionable = queue.items.filter((item) => item.canAccept);
   const blocked = queue.items.filter((item) => !item.canAccept);
   function handleDecided(outcome: EvidenceReviewOutcome) {
-    window.dispatchEvent(new Event("research-os-workflow-refresh"));
     navigate(`/events/${caseId}${location.search}`, {
       state: { workflowNotice: EVIDENCE_REVIEW_NOTICE[outcome] },
     });
@@ -2484,6 +2483,7 @@ function ReviewItem({
         reviewer_id: "human:researcher",
         expected_version: item.proposalVersion,
       });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
       if (!mounted.current) return;
       onDecided(outcome);
     } catch {

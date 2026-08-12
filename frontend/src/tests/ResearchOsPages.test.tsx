@@ -2003,7 +2003,7 @@ describe("Research OS event entry", () => {
     );
   });
 
-  it("does not redirect or emit a workflow refresh when review succeeds after leaving the page", async () => {
+  it("refreshes global workflow state without redirecting when review succeeds after leaving the page", async () => {
     const adapter = new MockResearchAdapter();
     const pendingReview = deferred<void>();
     const reviewProposal = vi
@@ -2050,7 +2050,7 @@ describe("Research OS event entry", () => {
     expect(screen.getByTestId("case-location")).toHaveTextContent(
       "/events?client=mock",
     );
-    expect(workflowRefresh).not.toHaveBeenCalled();
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
     window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
   });
 
