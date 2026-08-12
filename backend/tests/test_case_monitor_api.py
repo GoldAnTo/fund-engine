@@ -77,6 +77,116 @@ def _monitor_payload(factor_id: uuid.UUID, **overrides) -> dict:
     return payload
 
 
+def _add_confirmed_factor(cmd_session, case: ResearchCase, statement: str) -> Thesis:
+    factor = Thesis(
+        research_case_id=case.id,
+        statement=statement,
+        created_by="human:lin",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="confirmed",
+    )
+    cmd_session.add(factor)
+    cmd_session.commit()
+    return factor
+
+
+def _historical_monitor(
+    case: ResearchCase, version: int, factor_ids: list[str]
+) -> CaseMonitorVersion:
+    return CaseMonitorVersion(
+        research_case_id=case.id,
+        version=version,
+        status="active",
+        frequency="weekday_08_30",
+        factor_ids=factor_ids,
+        allowed_source_types=["licensed_provider"],
+        next_verification_event="2026Q1 财报披露",
+        budget=20,
+        changed_by="human:lin",
+        change_reason="historical fixture",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
+    cmd_client, cmd_session
+) -> None:
+    case, _ = _case_with_confirmed_factor(cmd_session)
+    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
+
+    saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(second.id)
+    )
+
+    assert saved.status_code == 200, saved.text
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+    assert detail.status_code == 200
+    assert detail.json()["confirmed_factors"] == [
+        {"id": str(second.id), "statement": second.statement}
+    ]
+
+
+def test_monitor_returns_only_confirmed_factors_in_the_newest_scope(
+    cmd_client, cmd_session
+) -> None:
+    case, first = _case_with_confirmed_factor(cmd_session)
+    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
+    first_saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(first.id)
+    )
+    second_saved = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(second.id)
+    )
+
+    assert first_saved.status_code == 200, first_saved.text
+    assert second_saved.status_code == 200, second_saved.text
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+    assert detail.json()["monitor"]["id"] == second_saved.json()["id"]
+    assert detail.json()["confirmed_factors"] == [
+        {"id": str(second.id), "statement": second.statement}
+    ]
+
+
+def test_monitor_with_empty_or_malformed_historical_scope_returns_no_factors(
+    cmd_client, cmd_session
+) -> None:
+    case, _ = _case_with_confirmed_factor(cmd_session)
+    cmd_session.add(_historical_monitor(case, version=1, factor_ids=[]))
+    cmd_session.commit()
+
+    empty_scope = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+    assert empty_scope.status_code == 200
+    assert empty_scope.json()["confirmed_factors"] == []
+
+    cmd_session.add(
+        _historical_monitor(
+            case, version=2, factor_ids=["not-a-uuid", "", "not-an-id"]
+        )
+    )
+    cmd_session.commit()
+
+    malformed_scope = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+    assert malformed_scope.status_code == 200
+    assert malformed_scope.json()["confirmed_factors"] == []
+
+
+def test_monitor_without_saved_version_lists_all_confirmed_factors(
+    cmd_client, cmd_session
+) -> None:
+    case, first = _case_with_confirmed_factor(cmd_session)
+    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
+
+    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
+
+    assert detail.status_code == 200
+    assert detail.json()["monitor"] is None
+    assert detail.json()["confirmed_factors"] == [
+        {"id": str(first.id), "statement": first.statement},
+        {"id": str(second.id), "statement": second.statement},
+    ]
+
+
 def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_session) -> None:
     case, factor = _case_with_confirmed_factor(cmd_session)
 
