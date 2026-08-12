@@ -305,6 +305,24 @@ describe("MockResearchAdapter scenarios", () => {
     expect(workbench.nextAction.kind).toBe("edit_factors");
   });
 
+  it("rejects an unsupported modified TSM evidence review without advancing state", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "modified",
+        reason: "尝试修改候选关系。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+        replacement_payload: { role: "contradicts" },
+      }),
+    ).rejects.toThrow("modified evidence review outcome is unsupported");
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("awaiting_key_review");
+    expect(workbench.progress.pending).toBe(1);
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);

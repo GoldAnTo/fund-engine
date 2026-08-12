@@ -3149,7 +3149,7 @@ export class MockResearchAdapter implements ResearchClient {
       };
     }
 
-    if (decision.outcome === "needs_more_evidence" || decision.outcome === "modified") {
+    if (decision.outcome === "needs_more_evidence") {
       return {
         lifecycle: {
           status: "researching",
@@ -3984,6 +3984,9 @@ export class MockResearchAdapter implements ResearchClient {
 
   async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
+    if (proposalId === "proposal-event-tsm" && payload.outcome === "modified") {
+      throw new Error("modified evidence review outcome is unsupported");
+    }
     if (proposalId === "proposal-event-tsm") {
       this.eventTsmReviewDecision = {
         outcome: payload.outcome,
