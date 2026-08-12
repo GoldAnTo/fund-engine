@@ -194,7 +194,12 @@ def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> No
 def test_0051_migration_trigger_enforces_typed_protocol_scope(tmp_path) -> None:
     import app.models  # noqa: F401 - register protocol mappings
     from app.models.ledger import AIAssessment, EvidenceSnapshot, ResearchCase, Thesis
-    from app.models.research_protocol import CaseMechanismSelectionVersion
+    from app.models.research_protocol import (
+        CaseMechanismSelectionVersion,
+        MechanismEdgeVersion,
+        OutcomeBindingVersion,
+        VerificationRuleVersion,
+    )
     from sqlalchemy.orm import Session
     from tests.protocol_provenance import seed_protocol_footprint
 
@@ -213,10 +218,10 @@ def test_0051_migration_trigger_enforces_typed_protocol_scope(tmp_path) -> None:
     engine = sa.create_engine(environment["DATABASE_URL"])
     now = datetime.now(UTC)
 
-    def assessment(snapshot, **protocol):
+    def assessment(snapshot, *, conclusion="insufficient_evidence", **protocol):
         return AIAssessment(
             snapshot_id=snapshot.id,
-            conclusion="insufficient_evidence",
+            conclusion=conclusion,
             rationale="migration trigger probe",
             gaps=[],
             displayed_as_provisional=True,
@@ -296,11 +301,202 @@ def test_0051_migration_trigger_enforces_typed_protocol_scope(tmp_path) -> None:
             },
             {**valid_protocol, "verification_rule_ids": ["not-a-uuid"]},
             {**valid_protocol, "verification_rule_ids": {"not": "an array"}},
+            {
+                **valid_protocol,
+                "research_protocol_status": "single_metric_monitoring",
+            },
+            {
+                **valid_protocol,
+                "verification_rule_ids": valid_protocol[
+                    "verification_rule_ids"
+                ][:-1],
+            },
+            {
+                **valid_protocol,
+                "verification_rule_ids": [
+                    *valid_protocol["verification_rule_ids"],
+                    valid_protocol["verification_rule_ids"][0],
+                ],
+            },
         ]
         for invalid_protocol in invalid_protocols:
             with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
                 session.add(assessment(first_snapshot, **invalid_protocol))
                 session.flush()
+
+        monitoring_case = ResearchCase(
+            title="migrated monitoring scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(monitoring_case)
+        session.flush()
+        monitoring_thesis = Thesis(
+            research_case_id=monitoring_case.id,
+            statement="migrated monitoring thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(monitoring_thesis)
+        session.flush()
+        monitoring_snapshot = EvidenceSnapshot(
+            thesis_id=monitoring_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(monitoring_snapshot)
+        session.flush()
+        monitoring = seed_protocol_footprint(session, monitoring_thesis)
+        monitoring_protocol = {
+            "research_protocol_status": "single_metric_monitoring",
+            "effective_binding_id": monitoring.binding.id,
+            "mechanism_template_version_id": monitoring.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in monitoring.rules],
+        }
+        for invalid_assessment in (
+            assessment(
+                monitoring_snapshot,
+                conclusion="supported",
+                **monitoring_protocol,
+            ),
+            assessment(
+                monitoring_snapshot,
+                **{**monitoring_protocol, "research_protocol_status": "ready"},
+            ),
+        ):
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(invalid_assessment)
+                session.flush()
+
+        old_binding = first.binding
+        current_binding = OutcomeBindingVersion(
+            thesis_id=old_binding.thesis_id,
+            metric_definition_id=old_binding.metric_definition_id,
+            entity_scope=dict(old_binding.entity_scope),
+            direction=old_binding.direction,
+            baseline=dict(old_binding.baseline),
+            horizon_start=old_binding.horizon_start,
+            horizon_end=old_binding.horizon_end,
+            state="approved",
+            supersedes_id=old_binding.id,
+            reviewer="tester",
+            reason="migrated current binding",
+            created_at=datetime.now(UTC),
+        )
+        old_rule = first.rules[0]
+        current_rule = VerificationRuleVersion(
+            research_case_id=old_rule.research_case_id,
+            mechanism_edge_id=old_rule.mechanism_edge_id,
+            metric_definition_id=old_rule.metric_definition_id,
+            expected_direction=old_rule.expected_direction,
+            support_predicate=old_rule.support_predicate,
+            contradiction_predicate=old_rule.contradiction_predicate,
+            allowed_source_roles=list(old_rule.allowed_source_roles),
+            observed_period_start=old_rule.observed_period_start,
+            observed_period_end=old_rule.observed_period_end,
+            available_at_deadline=old_rule.available_at_deadline,
+            next_verification_event=old_rule.next_verification_event,
+            supersedes_id=old_rule.id,
+            reviewer="tester",
+            reason="migrated current rule",
+            created_at=datetime.now(UTC),
+        )
+        session.add_all([current_binding, current_rule])
+        session.flush()
+        current_rule_ids = [
+            str(current_rule.id) if rule.id == old_rule.id else str(rule.id)
+            for rule in first.rules
+        ]
+        stale_protocols = [
+            {
+                **valid_protocol,
+                "effective_binding_id": old_binding.id,
+                "verification_rule_ids": current_rule_ids,
+            },
+            {
+                **valid_protocol,
+                "effective_binding_id": current_binding.id,
+            },
+        ]
+        for stale_protocol in stale_protocols:
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(assessment(first_snapshot, **stale_protocol))
+                session.flush()
+
+        first_edge = session.get(
+            MechanismEdgeVersion,
+            first.rules[0].mechanism_edge_id,
+        )
+        session.add(
+            MechanismEdgeVersion(
+                template_version_id=first.template.id,
+                edge_key="migrated-unruled-required-edge",
+                source_node_id=first_edge.source_node_id,
+                target_node_id=first_edge.target_node_id,
+                created_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    first_snapshot,
+                    **{
+                        **valid_protocol,
+                        "effective_binding_id": current_binding.id,
+                        "verification_rule_ids": current_rule_ids,
+                    },
+                )
+            )
+            session.flush()
+
+        no_counter_case = ResearchCase(
+            title="migrated no-counter scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(no_counter_case)
+        session.flush()
+        no_counter_thesis = Thesis(
+            research_case_id=no_counter_case.id,
+            statement="migrated no-counter thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(no_counter_thesis)
+        session.flush()
+        no_counter_snapshot = EvidenceSnapshot(
+            thesis_id=no_counter_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(no_counter_snapshot)
+        session.flush()
+        no_counter = seed_protocol_footprint(
+            session,
+            no_counter_thesis,
+            status="ready",
+            counter_hypothesis=False,
+        )
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    no_counter_snapshot,
+                    research_protocol_status="ready",
+                    effective_binding_id=no_counter.binding.id,
+                    mechanism_template_version_id=no_counter.template.id,
+                    verification_rule_ids=[
+                        str(rule.id) for rule in no_counter.rules
+                    ],
+                )
+            )
+            session.flush()
 
         session.add(
             CaseMechanismSelectionVersion(

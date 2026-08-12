@@ -526,7 +526,7 @@ def test_assessment_takes_case_lock_before_final_protocol_recheck(
         effective_binding_id=None,
         next_action="assess",
     )
-    footprint = seed_protocol_footprint(session, strict_thesis)
+    footprint = seed_protocol_footprint(session, strict_thesis, status="ready")
     gate = replace(
         gate,
         effective_binding_id=footprint.binding.id,

@@ -16,7 +16,13 @@ from app.models.research_protocol import (
 )
 
 
-def seed_protocol_footprint(session, thesis, *, status="single_metric_monitoring"):
+def seed_protocol_footprint(
+    session,
+    thesis,
+    *,
+    status="single_metric_monitoring",
+    counter_hypothesis=True,
+):
     now = datetime.now(timezone.utc)
     suffix = uuid.uuid4().hex
     metric = MetricDefinitionVersion(
@@ -128,7 +134,9 @@ def seed_protocol_footprint(session, thesis, *, status="single_metric_monitoring
             ),
             expected_direction="increase",
             support_predicate=f"support {index}",
-            contradiction_predicate=f"contradiction {index}",
+            contradiction_predicate=(
+                f"contradiction {index}" if counter_hypothesis else ""
+            ),
             allowed_source_roles=["primary_disclosure"],
             observed_period_start=date(2026, 4, 1),
             observed_period_end=date(2026, 6, 30),

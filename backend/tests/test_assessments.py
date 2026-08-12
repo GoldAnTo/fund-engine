@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import uuid
 
@@ -7,6 +7,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.ledger import AIAssessment, Thesis, ValidationError
+from app.models.research_protocol import (
+    MechanismEdgeVersion,
+    OutcomeBindingVersion,
+    VerificationRuleVersion,
+)
 from app.services.research_protocol import ResearchProtocolService
 from tests.protocol_provenance import seed_protocol_footprint
 
@@ -565,7 +570,7 @@ def test_database_rejects_partial_and_blocked_typed_protocol_provenance(
         research_case,
         statement="Database protocol check constraint",
     )
-    footprint, protocol = _protocol_kwargs(session, snapshot)
+    _, protocol = _protocol_kwargs(session, snapshot)
 
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(
@@ -598,6 +603,319 @@ def test_database_rejects_partial_and_blocked_typed_protocol_provenance(
                 ],
                 verification_rule_ids=[
                     str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_directional_single_metric_assessment(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database monitoring conclusion invariant",
+    )
+    _, protocol = _protocol_kwargs(session, snapshot)
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                conclusion="supported",
+                research_protocol_status="single_metric_monitoring",
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    ("actual_status", "claimed_status"),
+    [
+        ("single_metric_monitoring", "ready"),
+        ("ready", "single_metric_monitoring"),
+    ],
+)
+def test_database_rejects_protocol_status_that_does_not_match_current_footprint(
+    assessment_service,
+    research_service,
+    research_case,
+    session,
+    actual_status,
+    claimed_status,
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement=f"Database rejects {claimed_status} over {actual_status}",
+    )
+    _, protocol = _protocol_kwargs(session, snapshot, status=actual_status)
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status=claimed_status,
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+@pytest.mark.parametrize("mutation", ["omitted", "duplicate"])
+def test_database_requires_exact_unique_current_verification_rule_set(
+    assessment_service,
+    research_service,
+    research_case,
+    session,
+    mutation,
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement=f"Database rejects {mutation} rule footprint",
+    )
+    _, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    rule_ids = [str(rule_id) for rule_id in protocol["verification_rule_ids"]]
+    invalid_rule_ids = (
+        rule_ids[:-1] if mutation == "omitted" else [*rule_ids, rule_ids[0]]
+    )
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=invalid_rule_ids,
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_stale_effective_binding_and_verification_rule(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database rejects stale protocol versions",
+    )
+    footprint, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    later = datetime.now(timezone.utc) + timedelta(seconds=1)
+    stale_binding = footprint.binding
+    current_binding = OutcomeBindingVersion(
+        thesis_id=stale_binding.thesis_id,
+        metric_definition_id=stale_binding.metric_definition_id,
+        entity_scope=dict(stale_binding.entity_scope),
+        direction=stale_binding.direction,
+        baseline=dict(stale_binding.baseline),
+        horizon_start=stale_binding.horizon_start,
+        horizon_end=stale_binding.horizon_end,
+        state="approved",
+        supersedes_id=stale_binding.id,
+        reviewer="tester",
+        reason="new effective binding",
+        created_at=later,
+    )
+    stale_rule = footprint.rules[0]
+    current_rule = VerificationRuleVersion(
+        research_case_id=stale_rule.research_case_id,
+        mechanism_edge_id=stale_rule.mechanism_edge_id,
+        metric_definition_id=stale_rule.metric_definition_id,
+        expected_direction=stale_rule.expected_direction,
+        support_predicate=stale_rule.support_predicate,
+        contradiction_predicate=stale_rule.contradiction_predicate,
+        allowed_source_roles=list(stale_rule.allowed_source_roles),
+        observed_period_start=stale_rule.observed_period_start,
+        observed_period_end=stale_rule.observed_period_end,
+        available_at_deadline=stale_rule.available_at_deadline,
+        next_verification_event=stale_rule.next_verification_event,
+        supersedes_id=stale_rule.id,
+        reviewer="tester",
+        reason="new effective rule",
+        created_at=later,
+    )
+    session.add_all([current_binding, current_rule])
+    session.flush()
+
+    current = {
+        **protocol,
+        "effective_binding_id": current_binding.id,
+        "verification_rule_ids": [
+            current_rule.id if rule_id == stale_rule.id else rule_id
+            for rule_id in protocol["verification_rule_ids"]
+        ],
+    }
+    stale_variants = [
+        {**current, "effective_binding_id": stale_binding.id},
+        {**current, "verification_rule_ids": protocol["verification_rule_ids"]},
+    ]
+    for stale in stale_variants:
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.add(
+                _bypass_assessment(
+                    snapshot,
+                    research_protocol_status="ready",
+                    effective_binding_id=stale["effective_binding_id"],
+                    mechanism_template_version_id=stale[
+                        "mechanism_template_version_id"
+                    ],
+                    verification_rule_ids=[
+                        str(rule_id) for rule_id in stale["verification_rule_ids"]
+                    ],
+                )
+            )
+            session.flush()
+
+    session.add(
+        _bypass_assessment(
+            snapshot,
+            research_protocol_status="ready",
+            effective_binding_id=current["effective_binding_id"],
+            mechanism_template_version_id=current["mechanism_template_version_id"],
+            verification_rule_ids=[
+                str(rule_id) for rule_id in current["verification_rule_ids"]
+            ],
+        )
+    )
+    session.flush()
+
+
+def test_database_rejects_current_unapproved_binding(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database requires an approved effective binding",
+    )
+    footprint, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    approved = footprint.binding
+    draft = OutcomeBindingVersion(
+        thesis_id=approved.thesis_id,
+        metric_definition_id=approved.metric_definition_id,
+        entity_scope=dict(approved.entity_scope),
+        direction=approved.direction,
+        baseline=dict(approved.baseline),
+        horizon_start=approved.horizon_start,
+        horizon_end=approved.horizon_end,
+        state="draft",
+        supersedes_id=approved.id,
+        reviewer="tester",
+        reason="unapproved current binding",
+        created_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+    )
+    session.add(draft)
+    session.flush()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=draft.id,
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_footprint_missing_required_rule(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database rejects missing required rule",
+    )
+    footprint, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    first_edge = session.get(
+        MechanismEdgeVersion, footprint.rules[0].mechanism_edge_id
+    )
+    assert first_edge is not None
+    session.add(
+        MechanismEdgeVersion(
+            template_version_id=footprint.template.id,
+            edge_key=f"unruled-required-{uuid.uuid4().hex}",
+            source_node_id=first_edge.source_node_id,
+            target_node_id=first_edge.target_node_id,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_footprint_missing_counter_hypothesis(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database rejects missing counter hypothesis",
+    )
+    thesis = session.get(Thesis, snapshot.thesis_id)
+    footprint = seed_protocol_footprint(
+        session,
+        thesis,
+        status="ready",
+        counter_hypothesis=False,
+    )
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=footprint.binding.id,
+                mechanism_template_version_id=footprint.template.id,
+                verification_rule_ids=[
+                    str(rule.id) for rule in footprint.rules
                 ],
             )
         )
@@ -755,3 +1073,33 @@ def test_database_accepts_all_null_legacy_and_valid_typed_footprints(
 
     assert legacy.research_protocol_status is None
     assert valid.research_protocol_status == "ready"
+
+
+@pytest.mark.pg_only
+def test_postgres_trigger_rejects_inexact_protocol_footprint(
+    assessment_service, research_service, research_case, session
+):
+    assert session.get_bind().dialect.name == "postgresql"
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="PostgreSQL exact protocol footprint",
+    )
+    _, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    rule_ids = [str(rule_id) for rule_id in protocol["verification_rule_ids"]]
+
+    for invalid_rule_ids in (rule_ids[:-1], [*rule_ids, rule_ids[0]]):
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.add(
+                _bypass_assessment(
+                    snapshot,
+                    research_protocol_status="ready",
+                    effective_binding_id=protocol["effective_binding_id"],
+                    mechanism_template_version_id=protocol[
+                        "mechanism_template_version_id"
+                    ],
+                    verification_rule_ids=invalid_rule_ids,
+                )
+            )
+            session.flush()
