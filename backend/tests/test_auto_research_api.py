@@ -152,7 +152,7 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
         SourceContract(document_version_id=pasted.id, source_type="pasted_snapshot", provider_or_tenant="researcher", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
     ])
     session.flush()
-    AtomicClaimService(session).admit(
+    disclosure_candidate = AtomicClaimService(session).admit(
         AtomicClaimDraft(source_span_id=disclosure_span.id, quote="订单同比增长20%", quote_start=4, quote_end=13, normalized_text="公司披露订单同比增长20%", claim_type="reported_claim", assertion_actor="公司", subject="订单", predicate="同比增长", object_text="20%", numeric_value="20", unit="%", observed_period=None, scope={}),
         authority_level="primary_disclosure",
         run_ref="extract:existing-company-candidate",
@@ -200,6 +200,7 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
             allowed_source_types={"company_disclosure"},
         )
     }
+    assert disclosure_candidate.id in pending_candidate_ids
     assert annual_report_candidate.id in pending_candidate_ids
     assert pasted_candidate.id not in pending_candidate_ids
     events = list(session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id).order_by(ResearchRunEvent.seq)))
