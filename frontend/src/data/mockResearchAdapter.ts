@@ -3042,8 +3042,10 @@ const MOCK_RESEARCH_RUNS: ResearchRunDetail[] = [
   },
 ];
 
+type EventTsmReviewOutcome = "confirmed" | "needs_more_evidence" | "rejected";
+
 type EventTsmReviewDecision = {
-  outcome: ProposalReviewPayload["outcome"];
+  outcome: EventTsmReviewOutcome;
   reason: string;
   reviewerId: string;
 };
@@ -3132,54 +3134,57 @@ export class MockResearchAdapter implements ResearchClient {
       };
     }
 
-    if (decision.outcome === "confirmed") {
-      return {
-        lifecycle: {
-          status: "draft_ready",
-          activeRunId: null,
-          currentRound: 1,
-          summary: "关键证据已审核，等待结论复核",
-          currentGap: null,
-          nextHumanAction: "审核结论草案",
-        },
-        verified: 1,
-        pending: 0,
-        conclusionState: "ai_draft",
-        nextAction: { kind: "review_conclusion", label: "审核结论草案" },
-      };
+    switch (decision.outcome) {
+      case "confirmed":
+        return {
+          lifecycle: {
+            status: "draft_ready",
+            activeRunId: null,
+            currentRound: 1,
+            summary: "关键证据已审核，等待结论复核",
+            currentGap: null,
+            nextHumanAction: "审核结论草案",
+          },
+          verified: 1,
+          pending: 0,
+          conclusionState: "ai_draft",
+          nextAction: { kind: "review_conclusion", label: "审核结论草案" },
+        };
+      case "needs_more_evidence":
+        return {
+          lifecycle: {
+            status: "researching",
+            activeRunId: "run-mock",
+            currentRound: 2,
+            summary: "审核已完成，系统正在按补证要求继续研究",
+            currentGap: decision.reason,
+            nextHumanAction: null,
+          },
+          verified: 0,
+          pending: 0,
+          conclusionState: "cannot_conclude",
+          nextAction: { kind: "wait", label: "系统补证中" },
+        };
+      case "rejected":
+        return {
+          lifecycle: {
+            status: "exhausted",
+            activeRunId: null,
+            currentRound: 1,
+            summary: "当前候选已驳回，需要调整研究范围",
+            currentGap: "当前候选被驳回，需要调整因素或补充来源",
+            nextHumanAction: "编辑并继续自动研究",
+          },
+          verified: 0,
+          pending: 0,
+          conclusionState: "cannot_conclude",
+          nextAction: { kind: "edit_factors", label: "编辑并继续自动研究" },
+        };
+      default: {
+        const unsupportedOutcome: never = decision.outcome;
+        throw new Error(`unsupported TSM review outcome: ${unsupportedOutcome}`);
+      }
     }
-
-    if (decision.outcome === "needs_more_evidence") {
-      return {
-        lifecycle: {
-          status: "researching",
-          activeRunId: "run-mock",
-          currentRound: 2,
-          summary: "审核已完成，系统正在按补证要求继续研究",
-          currentGap: decision.reason,
-          nextHumanAction: null,
-        },
-        verified: 0,
-        pending: 0,
-        conclusionState: "cannot_conclude",
-        nextAction: { kind: "wait", label: "系统补证中" },
-      };
-    }
-
-    return {
-      lifecycle: {
-        status: "exhausted",
-        activeRunId: null,
-        currentRound: 1,
-        summary: "当前候选已驳回，需要调整研究范围",
-        currentGap: "当前候选被驳回，需要调整因素或补充来源",
-        nextHumanAction: "编辑并继续自动研究",
-      },
-      verified: 0,
-      pending: 0,
-      conclusionState: "cannot_conclude",
-      nextAction: { kind: "edit_factors", label: "编辑并继续自动研究" },
-    };
   }
 
   async getOverview(query?: OverviewQuery): Promise<WorkspaceOverview> {
@@ -3984,15 +3989,25 @@ export class MockResearchAdapter implements ResearchClient {
 
   async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
-    if (proposalId === "proposal-event-tsm" && payload.outcome === "modified") {
-      throw new Error("modified evidence review outcome is unsupported");
-    }
     if (proposalId === "proposal-event-tsm") {
-      this.eventTsmReviewDecision = {
-        outcome: payload.outcome,
-        reason: payload.reason,
-        reviewerId: payload.reviewer_id,
-      };
+      switch (payload.outcome) {
+        case "modified":
+          throw new Error("modified evidence review outcome is unsupported");
+        case "confirmed":
+        case "needs_more_evidence":
+        case "rejected":
+          this.eventTsmReviewDecision = {
+            outcome: payload.outcome,
+            reason: payload.reason,
+            reviewerId: payload.reviewer_id,
+          };
+          this.eventStates.delete("event-tsm");
+          break;
+        default: {
+          const unsupportedOutcome: never = payload.outcome;
+          throw new Error(`unsupported TSM review outcome: ${unsupportedOutcome}`);
+        }
+      }
     }
     for (const run of MOCK_RESEARCH_RUNS) {
       for (const item of run.pending_proposals) {
@@ -4241,7 +4256,6 @@ export class MockResearchAdapter implements ResearchClient {
     this.throwIfOffline();
     const events = this.eventResearchItems().map((event) => {
       const state = this.eventStates.get(event.id);
-      if (event.id === "event-tsm" && this.eventTsmReviewDecision) return event;
       return state
         ? {
             ...event,
@@ -4271,12 +4285,11 @@ export class MockResearchAdapter implements ResearchClient {
     const baseEvent = this.eventResearchItems().find((item) => item.id === caseId)
       ?? this.eventResearchItems()[0];
     const saved = this.eventStates.get(baseEvent.id);
-    const tsmProjection = caseId === "event-tsm" && (!saved || this.eventTsmReviewDecision)
-      ? this.eventTsmProjection()
-      : null;
+    const tsmProjection = caseId === "event-tsm" ? this.eventTsmProjection() : null;
+    const reviewOwnsLifecycle = tsmProjection !== null && !saved;
     const currentGap = baseEvent.status === "exhausted"
       ? "缺少能区分主要解释的反证" : null;
-    const lifecycle: EventLifecycle = tsmProjection?.lifecycle ?? saved?.lifecycle ?? {
+    const lifecycle: EventLifecycle = saved?.lifecycle ?? tsmProjection?.lifecycle ?? {
       status: baseEvent.status,
       activeRunId: baseEvent.status === "published" ? null : "run-mock",
       currentRound: 1,
@@ -4296,7 +4309,7 @@ export class MockResearchAdapter implements ResearchClient {
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const reviewedCount = tsmProjection?.verified ?? (["draft_ready", "published"].includes(event.status) ? 3 : 0);
-    const nextAction: EventWorkbench["nextAction"] = tsmProjection?.nextAction ?? (event.status === "awaiting_key_review"
+    const nextAction: EventWorkbench["nextAction"] = reviewOwnsLifecycle ? tsmProjection.nextAction : (event.status === "awaiting_key_review"
       ? lifecycle.activeRunId === null && lifecycle.nextHumanAction === "核验原文资料并完成研究协议"
         ? { kind: "review_intake", label: lifecycle.nextHumanAction }
         : { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
@@ -4316,7 +4329,7 @@ export class MockResearchAdapter implements ResearchClient {
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", confidence: "low", citations: [] },
-      factors: activeFactors.map((factor, index) => { const pendingProposalCount = tsmProjection && index === 0 ? tsmProjection.pending : 0; const reviewedSupportCount = tsmProjection ? index === 0 ? tsmProjection.verified : 0 : reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: index === 0 && lifecycle.currentGap ? lifecycle.currentGap : pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
+      factors: activeFactors.map((factor, index) => { const pendingProposalCount = tsmProjection && index === 0 ? tsmProjection.pending : 0; const reviewedSupportCount = tsmProjection ? index === 0 ? tsmProjection.verified : 0 : reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: reviewOwnsLifecycle && index === 0 && lifecycle.currentGap ? lifecycle.currentGap : pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
       evidence,
       progress: { verified: reviewedCount, pending: tsmProjection?.pending ?? 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },

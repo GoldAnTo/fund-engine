@@ -323,6 +323,68 @@ describe("MockResearchAdapter scenarios", () => {
     expect(workbench.progress.pending).toBe(1);
   });
 
+  it("keeps TSM review counts authoritative when scope state exists before review", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: ["资本开支", "自由现金流", "估值环境"],
+      changedBy: "human:researcher",
+      changeReason: "预先调整研究范围",
+    });
+
+    const queue = await adapter.getEventReviewQueue("event-tsm");
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(queue.summary.pending).toBe(1);
+    expect(workbench.progress.pending).toBe(queue.summary.pending);
+    expect(workbench.factors[0].pendingProposalCount).toBe(1);
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "draft_ready",
+    );
+  });
+
+  it("lets a scope update continue TSM research after rejecting evidence", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "该材料与市场反应缺少直接关联。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: ["新因素甲", "新因素乙", "新因素丙"],
+      changedBy: "human:researcher",
+      changeReason: "驳回后调整研究范围",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-tsm",
+    );
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "系统继续处理",
+    });
+    expect(workbench.progress).toMatchObject({ verified: 0, pending: 0 });
+    expect(workbench.factors[0].pendingProposalCount).toBe(0);
+    expect(event).toMatchObject({
+      status: "continuing",
+      statusSummary: workbench.lifecycle.summary,
+      nextHumanAction: null,
+    });
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);
