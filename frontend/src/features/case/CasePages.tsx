@@ -1801,7 +1801,7 @@ export function CaseConclusionPage() {
               </dl>
               <Link
                 className="ros-button ros-button--primary"
-                to={action.to}
+                to={`${action.to}${location.search}`}
               >
                 {action.buttonLabel}
               </Link>

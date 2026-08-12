@@ -1,6 +1,57 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Event-first Research OS", () => {
+  test("human review advances one event from evidence to a published conclusion", async ({ page }) => {
+    await page.goto("/events/event-tsm?client=mock");
+
+    await expect(page.getByText("你需要做")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "审核 1 条关键证据" })).toBeVisible();
+    const activeRun = page.getByRole("region", { name: "系统正在运行" });
+    await expect(activeRun).toContainText("等待人工审核 · 等待审核");
+
+    await page.getByRole("link", { name: "进入证据审核" }).click();
+    await expect(page).toHaveURL(/\/events\/event-tsm\/review\?client=mock$/);
+    await page.getByLabel("审核理由").fill("已逐字核对冻结原文、定位、时点和来源许可。");
+    await page.getByRole("button", { name: "确认采纳" }).click();
+
+    await expect(page).toHaveURL(/\/events\/event-tsm\?client=mock$/);
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "证据已采纳，系统已生成待复核的结论草案。",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("当前事件研究进展").locator('[aria-current="step"]'),
+    ).toContainText("形成结论");
+    await expect(page.getByText("已审核证据 1")).toBeVisible();
+    await expect(page.getByText("待审核 0")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "审核结论草案" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "复核结论草案" })).toBeVisible();
+    await expect(activeRun).toHaveCount(0);
+
+    await page.getByRole("link", { name: "复核结论草案" }).click();
+    await expect(page).toHaveURL(/\/events\/event-tsm\/review\?client=mock$/);
+    const conclusion = page.getByLabel("结论草案");
+    await expect(conclusion).toHaveValue("当前结论草案等待人工复核。");
+    await conclusion.fill("人工复核后的完整结论：关键证据支持当前判断，后续进入持续跟踪。");
+    await page.getByRole("button", { name: "发布结论并进入持续跟踪" }).click();
+
+    await expect(page).toHaveURL(/\/events\/event-tsm\?client=mock$/);
+    await expect(
+      page.getByRole("status").filter({
+        hasText: "结论已发布，当前事件进入持续跟踪。",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("当前事件研究进展").locator('[aria-current="step"]'),
+    ).toContainText("持续跟踪");
+    await expect(page.getByText("本轮已完成")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "当前没有需要处理的任务" }),
+    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "系统正在运行" })).toHaveCount(0);
+  });
+
   test("event workbench switches the current event without leaving its workspace", async ({ page }) => {
     await page.goto("/events/event-tsm/evidence?client=mock");
 
@@ -240,7 +291,7 @@ test.describe("Event-first Research OS", () => {
     await page.goto("/events/event-tsm?client=mock");
 
     await expect(page.getByRole("heading", { name: /尚不能下结论/ })).toBeVisible();
-    const action = page.getByRole("link", { name: "进入审核" });
+    const action = page.getByRole("link", { name: "进入证据审核" });
     await expect(action).toHaveCount(1);
     await expect(action).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -476,25 +527,19 @@ test.describe("Event-first Research OS", () => {
     await expect(page).toHaveURL(/\/events\/event-tsm/);
   });
 
-  test("global monitoring keeps a terminal run and its frozen scope visible", async ({ page }) => {
-    await page.route("**/api/v1/research-runs/run-tsm/events", async (route) => route.fulfill({ json: {
-      run_id: "run-tsm", items: [{ seq: 1, status: "recorded", stage: "scope", message: "冻结本次范围", details: { allowed_source_types: ["company_disclosure"] }, created_at: "2026-08-09T00:00:00Z" }, { seq: 2, status: "failed", stage: "failed", message: "授权来源返回失败", details: { stop_reason: "task_failed" }, created_at: "2026-08-09T00:04:00Z" }], next_cursor: null, has_more: false,
-    } }));
-    await page.route("**/api/v1/research-runs", async (route) => route.fulfill({ json: {
-      items: [{ run_id: "run-tsm", case_id: "event-tsm", case_title: "台积电 Case", status: "failed", stage: "failed", created_at: "2026-08-09T00:00:00Z", updated_at: "2026-08-09T00:04:00Z", processed_count: 3, stop_reason: "task_failed", next_action: "查看失败原因", scope: { trigger: "schedule", monitor_version_id: "monitor-v2", factor_ids: ["factor-1"], allowed_source_types: ["company_disclosure"], budget: 12 } }], next_cursor: null, has_more: false,
-    } }));
+  test("global monitoring keeps the active run and its frozen scope visible", async ({ page }) => {
     await page.goto("/monitoring?client=mock");
 
     await expect(page.getByRole("heading", { name: "全局运行与监控" })).toBeVisible();
     await expect(page.getByText(/每 15 秒自动刷新/)).toBeVisible();
     await expect(page.getByRole("button", { name: "刷新运行档案" })).toBeVisible();
     await expect(page.getByRole("main")).toContainText("公司披露");
-    await expect(page.getByRole("main")).toContainText("monitor-event-tsm-v1");
+    await expect(page.getByRole("main")).toContainText("event-tsm-scope-v1");
     await expect(page.getByRole("main")).toContainText("等待人工审核");
     await page.getByRole("main").getByRole("button", { name: "展开本次运行记录" }).click();
     await expect(page.getByRole("complementary", { name: "全局运行记录" })).toContainText("候选证据等待人工审核");
     await page.getByRole("button", { name: "关闭全局运行记录" }).click();
-    await page.getByRole("main").getByRole("link", { name: "查看运行详情", exact: true }).click();
+    await page.getByRole("main").getByRole("link", { name: "审核 1 条关键证据", exact: true }).click();
     await expect(page).toHaveURL(/\/events\/event-tsm\/monitor/);
   });
 
