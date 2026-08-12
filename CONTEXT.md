@@ -30,6 +30,26 @@ _Avoid_: Latest state, search snapshot
 
 ## Sources and Evidence
 
+**EvidenceObjective**:
+The explicit purpose of one evidence-collection request: support, contradiction, alternative explanation, or verification-rule evaluation. It constrains search, extraction, and admission without deciding the Thesis outcome.
+_Avoid_: Search query, evidence label, conclusion
+
+**AcquisitionJob**:
+A durable request to find and freeze source material for one EvidenceObjective within a Case and HistoricalBasis. Its progress can be resumed after process failure without changing the research meaning of the request.
+_Avoid_: Search request, crawler run, background task
+
+**SourceReference**:
+A provider- or publisher-identified pointer discovered during search, before its referenced content has been successfully retrieved and frozen.
+_Avoid_: DocumentVersion, search result as evidence
+
+**RetrievalArtifact**:
+The immutable original bytes and acquisition envelope returned for a SourceReference, retained even when parsing, admission, or deduplication fails.
+_Avoid_: Parsed document, temporary download, cache entry
+
+**SourcePolicy**:
+A versioned declaration of which licensed providers and official publishers may be searched, retrieved, processed, displayed, and exported for a research run.
+_Avoid_: URL allowlist, crawler configuration
+
 **DocumentVersion**:
 An immutable version of a source document identified by its content hash, publication time, and acquisition metadata.
 _Avoid_: Document, latest file
@@ -46,6 +66,10 @@ _Avoid_: Fact, evidence, Claim
 A versioned argument that explains why a SourceStatement supports, contradicts, or contextualizes a Thesis for a defined time and scope.
 _Avoid_: Automatic SUPPORTS edge, semantic similarity
 
+**AutomaticAdmissionDecision**:
+An immutable system decision that a machine-extracted statement passed the active SourcePolicy plus source, time, locator, and consistency gates and may enter the formal evidence chain without human review. It never represents a human ReviewDecision and must remain visibly machine-generated.
+_Avoid_: ReviewDecision, auto-approval, trusted fact
+
 **EvidenceSnapshot**:
 The frozen set of DocumentVersions, SourceStatements, and EvidenceLinks visible to one AIAssessment at its cutoff time.
 _Avoid_: Current database state
@@ -53,6 +77,16 @@ _Avoid_: Current database state
 **CausalEdge**:
 A proposed transmission relationship between two domain factors with its own evidence requirements. A positive company result or a source attribution does not by itself establish a CausalEdge.
 _Avoid_: Correlation, supply-chain adjacency
+
+## Identity and Access
+
+**UserPrincipal**:
+The authenticated person identified by a verified identity-provider issuer and subject pair, then mapped to an internal user identity.
+_Avoid_: Client-supplied reviewer, X-Actor, display name
+
+**CaseGrant**:
+An auditable assignment allowing one UserPrincipal to view, research, review, or own one ResearchCase. Tenant membership alone does not imply access to every Case.
+_Avoid_: Tenant ownership, UI role, bearer token
 
 ## Investment Expression
 
