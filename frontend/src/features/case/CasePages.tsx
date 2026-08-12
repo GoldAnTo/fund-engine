@@ -2071,11 +2071,110 @@ function ConclusionHistoryContent({ caseId }: { caseId: string }) {
 export function CaseReviewPage() {
   return (
     <CaseFrame>
-      {(_data, caseId) => <ReviewContent caseId={caseId} />}
+      {(data, caseId) => <ReviewContent caseId={caseId} workbench={data} />}
     </CaseFrame>
   );
 }
-function ReviewContent({ caseId }: { caseId: string }) {
+
+function ReviewContent({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  if (workbench.nextAction.kind === "review_conclusion") {
+    return <ConclusionReviewTask caseId={caseId} workbench={workbench} />;
+  }
+  return <EvidenceReviewTask caseId={caseId} />;
+}
+
+function ConclusionReviewTask({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [text, setText] = useState(workbench.conclusion.text);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const submissionInFlight = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  async function publishConclusion() {
+    const trimmed = text.trim();
+    if (!trimmed || submissionInFlight.current) return;
+    submissionInFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await researchClient.publishEventConclusion({
+        caseId,
+        text: trimmed,
+        reviewer: "human:researcher",
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!mounted.current) return;
+      navigate(`/events/${caseId}${location.search}`, {
+        state: {
+          workflowNotice: "结论已发布，当前事件进入持续跟踪。",
+        },
+      });
+    } catch {
+      if (mounted.current) {
+        setError("发布结论失败；草案未发布，请检查后重试。");
+      }
+    } finally {
+      submissionInFlight.current = false;
+      if (mounted.current) setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="ros-review-workbench" aria-busy={submitting}>
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">人工结论复核</p>
+          <h2>复核并发布结论草案</h2>
+          <p>
+            这是 AI 草案，正式发布需人工确认。编辑只改变本次结论文字，
+            引用/证据边界不会自动扩张。
+          </p>
+        </div>
+        <span className="ros-pill ros-pill--human">AI 草案，未发布</span>
+      </header>
+      <label>
+        结论草案
+        <textarea
+          aria-label="结论草案"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </label>
+      {error && <p className="ros-error" role="alert">{error}</p>}
+      <button
+        className="ros-button ros-button--primary"
+        type="button"
+        disabled={!text.trim() || submitting}
+        onClick={publishConclusion}
+      >
+        {submitting ? "正在发布结论…" : "发布结论并进入持续跟踪"}
+      </button>
+    </section>
+  );
+}
+
+function EvidenceReviewTask({ caseId }: { caseId: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [queue, setQueue] = useState<Awaited<
