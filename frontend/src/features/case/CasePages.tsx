@@ -23,9 +23,15 @@ import { researchConnectionGuidance } from "../../app/researchConnection";
 import { researchClient } from "../../data/researchClient";
 import type {
   EventResearchClient,
+  EventResearchListItem,
   EventSourceType,
   EventWorkbench,
 } from "../../domain/eventResearch";
+import {
+  EVENT_RESEARCH_STAGES,
+  eventActionPresentation,
+  eventResearchStage,
+} from "../../domain/eventResearchPresentation";
 import type {
   ResearchRunDetail,
   ResearchRunSummary,
@@ -130,6 +136,28 @@ const relationLabels: Record<
   shared_material: "共享资料",
 };
 
+const EVENT_STATUS_LABEL: Record<EventResearchListItem["status"], string> = {
+  extracting: "资料识别中",
+  researching: "系统补证中",
+  awaiting_key_review: "等待证据审核",
+  continuing: "继续补证中",
+  awaiting_scope: "等待确认范围",
+  draft_ready: "结论草案待复核",
+  published: "持续跟踪",
+  exhausted: "当前范围已穷尽",
+};
+
+function eventUpdatedLabel(updatedAt: string): string {
+  const value = new Date(updatedAt);
+  if (Number.isNaN(value.getTime())) return "更新时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
 function CaseFrame({
   children,
 }: {
@@ -139,9 +167,8 @@ function CaseFrame({
   const navigate = useNavigate();
   const location = useLocation();
   const [data, setData] = useState<EventWorkbench | null>(null);
-  const [caseOptions, setCaseOptions] = useState<
-    Array<{ id: string; eventTitle: string }>
-  >([]);
+  const [caseOptions, setCaseOptions] = useState<EventResearchListItem[]>([]);
+  const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
@@ -165,9 +192,7 @@ function CaseFrame({
       .listEventResearch()
       .then((items) => {
         if (!active) return;
-        setCaseOptions(
-          items.map((item) => ({ id: item.id, eventTitle: item.eventTitle })),
-        );
+        setCaseOptions(items);
       })
       .catch(() => {
         if (active) setCaseOptions([]);
@@ -178,8 +203,17 @@ function CaseFrame({
     const suffix = location.pathname.startsWith(`/events/${caseId}`)
       ? location.pathname.slice(`/events/${caseId}`.length)
       : "";
+    setEventMenuOpen(false);
     navigate(`/events/${nextCaseId}${suffix}${location.search}`);
   }
+  useEffect(() => {
+    if (!eventMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEventMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [eventMenuOpen]);
   const navigation = caseNavigation(location.pathname, caseId);
   if (!data)
     return (
@@ -206,34 +240,55 @@ function CaseFrame({
   return (
     <main className="ros-page ros-case-page">
       <header className="ros-case-header">
-        <div className="ros-case-header__controls">
-          <Link to="/events" className="ros-button ros-button--secondary">
-            返回研究调度
-          </Link>
-          <label>
-            切换 ResearchCase
-            <select
-              aria-label="切换 ResearchCase"
-              value={caseId}
-              onChange={(event) => switchCase(event.target.value)}
-            >
-              {caseOptions.some((item) => item.id === caseId) ? null : (
-                <option value={caseId}>{data.event.eventTitle}</option>
-              )}
-              {caseOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.eventTitle}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="ros-event-context">
+          <span className="ros-event-context__label">当前事件研究</span>
+          <button
+            aria-expanded={eventMenuOpen}
+            aria-label={`当前事件研究：${data.event.eventTitle}，切换事件`}
+            className="ros-event-switcher"
+            type="button"
+            onClick={() => setEventMenuOpen((value) => !value)}
+          >
+            <strong>{data.event.eventTitle}</strong>
+            <i aria-hidden="true">⌄</i>
+          </button>
+          {eventMenuOpen && (
+            <div className="ros-event-menu">
+              <header>
+                <div><span className="ros-eyebrow">事件研究</span><strong>切换当前研究事件</strong></div>
+                <Link to="/events/new">＋ 新建事件研究</Link>
+              </header>
+              <div aria-label="切换事件研究" role="group">
+                {caseOptions.map((item) => (
+                  <button
+                    aria-pressed={item.id === caseId}
+                    className={item.id === caseId ? "is-current" : ""}
+                    data-event-option
+                    key={item.id}
+                    type="button"
+                    onClick={() => switchCase(item.id)}
+                  >
+                    <span><strong>{item.eventTitle}</strong><small>{[item.companyName, item.ticker].filter(Boolean).join(" · ") || "未绑定标的"} · 更新于 {eventUpdatedLabel(item.updatedAt)}</small></span>
+                    <em className={item.nextHumanAction ? "is-human" : ""}>{item.nextHumanAction || EVENT_STATUS_LABEL[item.status]}</em>
+                  </button>
+                ))}
+              </div>
+              <Link className="ros-event-menu__all" to="/events">查看全部事件研究 →</Link>
+            </div>
+          )}
         </div>
         <p className="ros-eyebrow">
-          ResearchCase v{data.scope.version} ·{" "}
-          {data.event.ticker || "未绑定股票"}
+          {[data.event.companyName, data.event.ticker, `范围版本 v${data.scope.version}`].filter(Boolean).join(" · ")}
         </p>
         <h1>{data.event.eventTitle}</h1>
         <p>{data.lifecycle.summary}</p>
+        <ol className="ros-event-progress" aria-label="当前事件研究进展">
+          {EVENT_RESEARCH_STAGES.map((stage) => {
+            const currentStage = eventResearchStage(data);
+            const state = stage.id < currentStage ? "done" : stage.id === currentStage ? "current" : "upcoming";
+            return <li className={`is-${state}`} key={stage.id} aria-current={state === "current" ? "step" : undefined}><span>{String(stage.id).padStart(2, "0")}</span><strong>{stage.label}</strong></li>;
+          })}
+        </ol>
         <div className="ros-case-header__facts">
           <span>已审核证据 {data.progress.verified}</span>
           <span>待审核 {data.progress.pending}</span>
@@ -247,7 +302,7 @@ function CaseFrame({
           </span>
         </div>
       </header>
-      <nav className="ros-case-primary-tabs" aria-label="Case 研究阶段">
+      <nav className="ros-case-primary-tabs" aria-label="事件研究工作区">
         {caseSections.map((section) => {
           const isActive = section.id === navigation.section.id;
           const pendingLabel = section.id === "evidence" && data.progress.pending > 0
@@ -1605,8 +1660,9 @@ function SupplementRecovery({
 export function CaseConclusionPage() {
   return (
     <CaseFrame>
-      {(data, caseId) => (
-        <section className="ros-case-columns">
+      {(data, caseId) => {
+        const action = eventActionPresentation(data, caseId);
+        return <section className="ros-case-columns">
           <div>
             <article className="ros-panel ros-panel--conclusion">
               <p className="ros-eyebrow">
@@ -1628,25 +1684,22 @@ export function CaseConclusionPage() {
           </div>
           <aside className="ros-case-rail">
             <section className="ros-action-card">
-              <p className="ros-eyebrow">下一步</p>
-              <h2>{data.nextAction.label}</h2>
-              <p>
-                {data.lifecycle.currentGap ||
-                  "先完成当前人工判断，再决定是否创建新的结论或范围版本。"}
-              </p>
+              <div className="ros-action-card__owner"><span>{action.owner}</span><small>{data.nextAction.count ? `${data.nextAction.count} 项待处理` : EVENT_STATUS_LABEL[data.lifecycle.status]}</small></div>
+              <h2>{action.title}</h2>
+              <p>{action.why}</p>
+              <div className="ros-action-card__steps">
+                <span>进入后需要完成</span>
+                <ol>{action.steps.map((step, index) => <li key={step}><b>{index + 1}</b><span>{step}</span></li>)}</ol>
+              </div>
+              <dl className="ros-action-card__outcome">
+                <dt>完成后会发生什么</dt>
+                <dd>{action.unlock}</dd>
+              </dl>
               <Link
                 className="ros-button ros-button--primary"
-                to={`/events/${caseId}/${data.nextAction.kind === "review_intake" ? "documents" : data.nextAction.kind === "review_evidence" || data.nextAction.kind === "review_conclusion" ? "review" : data.nextAction.kind === "view_conclusion_change" ? "history" : data.nextAction.kind === "edit_factors" ? "scope" : "monitor"}`}
+                to={action.to}
               >
-                {data.nextAction.kind === "review_intake"
-                  ? "核验冻结原文"
-                  : data.nextAction.kind.includes("review")
-                    ? "进入审核"
-                    : data.nextAction.kind === "view_conclusion_change"
-                      ? "查看结论版本"
-                      : data.nextAction.kind === "edit_factors"
-                        ? "调整研究范围"
-                        : "查看持续研究"}
+                {action.buttonLabel}
               </Link>
             </section>
             <section className="ros-rail-section">
@@ -1676,8 +1729,8 @@ export function CaseConclusionPage() {
             </section>
             <CaseRelationRail caseId={caseId} />
           </aside>
-        </section>
-      )}
+        </section>;
+      }}
     </CaseFrame>
   );
 }

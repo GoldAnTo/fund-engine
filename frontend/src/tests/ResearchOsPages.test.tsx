@@ -59,6 +59,11 @@ function MonitorLocationProbe() {
   return <output data-testid="monitor-location">{location.search}</output>;
 }
 
+function CaseLocationProbe() {
+  const location = useLocation();
+  return <output data-testid="case-location">{location.pathname}</output>;
+}
+
 function renderMonitorPage(initialEntry: string) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -94,7 +99,7 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    const stages = await screen.findByLabelText("Case 研究阶段");
+    const stages = await screen.findByLabelText("事件研究工作区");
     expect(stages).toHaveTextContent("研究结论");
     expect(stages).toHaveTextContent("证据工作台");
     expect(stages).toHaveTextContent("市场与表达");
@@ -128,7 +133,7 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText("Case 研究阶段");
+    await screen.findByLabelText("事件研究工作区");
     await user.click(screen.getByText("更多研究内容"));
     const more = screen.getByRole("group", { name: "更多研究内容" });
     expect(more).toHaveTextContent("研究结论");
@@ -289,18 +294,41 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
-  it("keeps a Case switcher and a return path visible inside the Case workbench", async () => {
+  it("treats the current event as the workbench subject and switches events in place", async () => {
+    const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+      <MemoryRouter initialEntries={["/events/event-tsm/evidence"]}>
         <Routes>
-          <Route path="/events/:caseId" element={<CaseEvidencePage />} />
+          <Route path="/events/:caseId/evidence" element={<><CaseEvidencePage /><CaseLocationProbe /></>} />
         </Routes>
       </MemoryRouter>,
     );
 
-    await screen.findByLabelText("切换 ResearchCase");
-    expect(screen.getByRole("link", { name: "返回研究调度" })).toHaveAttribute("href", "/events");
-    expect(screen.getByLabelText("切换 ResearchCase")).toHaveValue("event-tsm");
+    const switcher = await screen.findByRole("button", { name: /当前事件研究/ });
+    expect(switcher).toHaveTextContent("台积电上调 CoWoS 指引后下跌");
+    expect(screen.queryByLabelText("切换 ResearchCase")).not.toBeInTheDocument();
+    await user.click(switcher);
+    const eventList = screen.getByRole("group", { name: "切换事件研究" });
+    expect(within(eventList).getAllByRole("button").length).toBeGreaterThan(1);
+    await user.click(within(eventList).getByRole("button", { name: /经营数据披露后的变动/ }));
+    expect(screen.getByTestId("case-location")).toHaveTextContent("/events/event-published/evidence");
+  });
+
+  it("shows the current event's six-stage progress separately from workspaces", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm"]}>
+        <Routes><Route path="/events/:caseId" element={<CaseConclusionPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const progress = await screen.findByLabelText("当前事件研究进展");
+    expect(progress).toHaveTextContent("资料接入");
+    expect(progress).toHaveTextContent("定义研究");
+    expect(progress).toHaveTextContent("执行补证");
+    expect(progress).toHaveTextContent("审核证据");
+    expect(progress).toHaveTextContent("形成结论");
+    expect(progress).toHaveTextContent("持续跟踪");
+    expect(screen.getByLabelText("事件研究工作区")).toHaveTextContent("研究结论");
   });
 
   it("keeps Case navigation visible while the selected Case is loading", () => {
@@ -828,7 +856,7 @@ describe("Research OS event entry", () => {
     );
 
     const navigation = await screen.findByRole("navigation", {
-      name: "Case 研究阶段",
+      name: "事件研究工作区",
     });
     expect(within(navigation).getByRole("link", { name: "研究结论" }))
       .toHaveAttribute("href", "/events/event-tsm");

@@ -1,6 +1,30 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Event-first Research OS", () => {
+  test("event workbench switches the current event without leaving its workspace", async ({ page }) => {
+    await page.goto("/events/event-tsm/evidence?client=mock");
+
+    await expect(page.getByLabel("当前事件研究进展")).toContainText("审核证据");
+    await expect(page.getByLabel("事件研究工作区")).toContainText("证据工作台");
+    await page.getByRole("button", { name: /当前事件研究/ }).click();
+    await expect(page.getByRole("group", { name: "切换事件研究" })).toBeVisible();
+    await page.getByRole("group", { name: "切换事件研究" }).getByRole("button", { name: /经营数据披露后的变动/ }).click();
+
+    await expect(page).toHaveURL(/\/events\/event-published\/evidence\?client=mock/);
+    await expect(page.getByRole("heading", { name: "经营数据披露后的变动" })).toBeVisible();
+    await expect(page.getByLabel("当前事件研究进展").locator('[aria-current="step"]')).toContainText("持续跟踪");
+  });
+
+  test("event switcher stays usable on a narrow screen", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/events/event-tsm?client=mock");
+    await page.getByRole("button", { name: /当前事件研究/ }).click();
+
+    await expect(page.getByRole("group", { name: "切换事件研究" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "切换事件研究" }).getByRole("button", { name: /经营数据披露后的变动/ })).toBeVisible();
+    await expect(page.getByLabel("当前事件研究进展")).toBeVisible();
+  });
+
   test("explicit mock mode renders the Research OS without live API traffic", async ({ page }) => {
     const liveRequests: string[] = [];
     page.on("request", (request) => {

@@ -461,6 +461,61 @@
 .ros-fund-sync input:focus-visible, .ros-fund-sync textarea:focus-visible, .ros-fund-sync select:focus-visible, .ros-fund-sync button:focus-visible { outline: 2px solid var(--ros-blue); outline-offset: 2px; }
 @container (min-width: 460px) { .ros-fund-sync__config { grid-template-columns: 1fr 1fr; } .ros-fund-sync__config > label:first-child, .ros-fund-sync__config > label:nth-child(3), .ros-fund-sync__config > label:nth-child(4), .ros-fund-sync__actions { grid-column: 1 / -1; } .ros-fund-sync__actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
+/* Event-centered Case frame */
+.ros-event-context { position: relative; z-index: 5; margin-bottom: 14px; }
+.ros-event-context__label { display: block; margin-bottom: 3px; color: var(--ros-muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.ros-event-switcher { display: inline-flex; align-items: center; gap: 9px; max-width: min(760px, 80vw); padding: 0; border: 0; background: transparent; color: var(--ros-ink); text-align: left; }
+.ros-event-switcher strong { overflow: hidden; font-size: 15px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.ros-event-switcher i { color: var(--ros-muted); font-size: 15px; font-style: normal; transition: transform 160ms ease-out; }
+.ros-event-switcher[aria-expanded="true"] i { transform: rotate(180deg); }
+.ros-event-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(620px, calc(100vw - 310px)); padding: 8px; border: 1px solid var(--ros-strong); border-radius: 9px; background: var(--ros-surface); box-shadow: 0 18px 42px oklch(.25 .02 65 / .18); }
+.ros-event-menu > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 9px 11px; }
+.ros-event-menu > header strong { font-size: 13px; }
+.ros-event-menu > header a, .ros-event-menu__all { color: var(--ros-blue); font-size: 11px; font-weight: 700; text-decoration: none; }
+.ros-event-menu [role="group"] { max-height: 330px; overflow: auto; border-top: 1px solid var(--ros-rule); }
+.ros-event-menu [data-event-option] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; padding: 12px 10px; border: 0; border-bottom: 1px solid var(--ros-rule); background: transparent; color: var(--ros-ink); text-align: left; }
+.ros-event-menu [data-event-option]:hover, .ros-event-menu [data-event-option].is-current { background: var(--ros-deep); }
+.ros-event-menu [data-event-option] span, .ros-event-menu [data-event-option] strong, .ros-event-menu [data-event-option] small { display: block; min-width: 0; }
+.ros-event-menu [data-event-option] strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ros-event-menu [data-event-option] small { margin-top: 3px; color: var(--ros-muted); font-size: 10px; }
+.ros-event-menu [data-event-option] em { max-width: 155px; padding: 4px 7px; border-radius: 999px; background: var(--ros-moss-soft); color: var(--ros-moss); font-size: 10px; font-style: normal; text-align: right; }
+.ros-event-menu [data-event-option] em.is-human { background: var(--ros-oxide-soft); color: var(--ros-oxide); }
+.ros-event-menu__all { display: block; padding: 10px 9px 5px; }
+.ros-event-progress { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 23px 0 0; padding: 0; border-top: 1px solid var(--ros-rule); list-style: none; }
+.ros-event-progress li { position: relative; display: grid; gap: 2px; padding: 13px 8px 13px 0; color: var(--ros-muted); }
+.ros-event-progress li::before { position: absolute; top: -5px; left: 0; width: 9px; height: 9px; border: 2px solid var(--ros-surface); border-radius: 50%; background: var(--ros-rule); content: ""; }
+.ros-event-progress li span { font-size: 9px; letter-spacing: .05em; }
+.ros-event-progress li strong { font-size: 11px; font-weight: 650; }
+.ros-event-progress li.is-done { color: var(--ros-soft); }
+.ros-event-progress li.is-done::before { background: var(--ros-moss); }
+.ros-event-progress li.is-current { color: var(--ros-ink); }
+.ros-event-progress li.is-current::before { background: var(--ros-oxide); box-shadow: 0 0 0 4px var(--ros-oxide-soft); }
+.ros-action-card__owner { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ros-muted); font-size: 10px; }
+.ros-action-card__owner span { color: var(--ros-oxide); font-weight: 750; letter-spacing: .04em; }
+.ros-action-card__steps { margin: 14px 0; padding: 11px; border: 1px solid var(--ros-rule); border-radius: 7px; background: var(--ros-deep); }
+.ros-action-card__steps > span, .ros-action-card__outcome dt { color: var(--ros-muted); font-size: 10px; }
+.ros-action-card__steps ol { display: grid; gap: 8px; margin: 9px 0 0; padding: 0; list-style: none; }
+.ros-action-card__steps li { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 7px; align-items: start; color: var(--ros-soft); font-size: 11px; line-height: 1.45; }
+.ros-action-card__steps li b { display: grid; width: 18px; height: 18px; place-items: center; border-radius: 50%; background: var(--ros-moss-soft); color: var(--ros-moss); font-size: 9px; }
+.ros-action-card__outcome { margin: 0 0 14px; padding-top: 11px; border-top: 1px solid var(--ros-rule); }
+.ros-action-card__outcome dd { margin: 4px 0 0; color: var(--ros-soft); font-size: 11px; line-height: 1.5; }
+.ros-action-card > .ros-button { width: 100%; }
+
+@media (max-width: 1050px) {
+  .ros-event-menu { width: min(620px, calc(100vw - 44px)); }
+}
+
+@media (max-width: 640px) {
+  .ros-event-context { margin-bottom: 12px; }
+  .ros-event-switcher { max-width: 100%; }
+  .ros-event-switcher strong { overflow: visible; white-space: normal; }
+  .ros-event-menu { position: fixed; top: 72px; left: 12px; right: 12px; width: auto; max-height: calc(100vh - 90px); overflow: auto; }
+  .ros-event-menu [data-event-option] { grid-template-columns: 1fr; gap: 6px; }
+  .ros-event-menu [data-event-option] em { justify-self: start; max-width: none; text-align: left; }
+  .ros-event-progress { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ros-event-progress li:nth-child(n+4) { border-top: 1px solid var(--ros-rule); }
+}
+
 @media (max-width: 640px) {
   .ros-conclusion-history__list > li { grid-template-columns: 1fr; }
   .ros-conclusion-history__list > li::before { display: none; }
