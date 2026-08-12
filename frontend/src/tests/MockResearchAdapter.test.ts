@@ -346,6 +346,59 @@ describe("MockResearchAdapter scenarios", () => {
     });
   });
 
+  it("publishes a non-TSM draft across the workbench, event list, and immutable history", async () => {
+    const adapter = new MockResearchAdapter();
+    const conclusionText = "人工确认：季度业绩变化是本轮波动的主要可验证因素。";
+
+    expect((await adapter.getEventWorkbench("event-draft")).nextAction.kind).toBe(
+      "review_conclusion",
+    );
+
+    const publication = await adapter.publishEventConclusion({
+      caseId: "event-draft",
+      text: conclusionText,
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-draft");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-draft",
+    );
+    const history = await adapter.getEventConclusionHistory("event-draft");
+
+    expect(publication.state).toBe("published");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "published",
+      activeRunId: null,
+      nextHumanAction: null,
+    });
+    expect(workbench.conclusion).toMatchObject({
+      state: "published",
+      text: conclusionText,
+    });
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "当前没有需要处理的任务",
+    });
+    expect(event).toMatchObject({ status: "published", nextHumanAction: null });
+    expect(history).toEqual([
+      expect.objectContaining({
+        state: "ai_draft",
+        sequence: 1,
+        reviewer: null,
+        basedOnConclusionId: null,
+      }),
+      expect.objectContaining({
+        id: publication.conclusionId,
+        state: "published",
+        sequence: 2,
+        text: conclusionText,
+        reviewer: "human:researcher",
+        basedOnConclusionId: history[0]?.id,
+      }),
+    ]);
+  });
+
   it("freezes custom scope metadata into TSM draft and published versions", async () => {
     const adapter = new MockResearchAdapter();
     const primaryFactor = "自定义资本开支因素";
@@ -386,6 +439,35 @@ describe("MockResearchAdapter scenarios", () => {
         scopeVersion: 2,
       }),
     ]);
+  });
+
+  it("reclassifies the reviewed TSM citation onto the current scope factor", async () => {
+    const adapter = new MockResearchAdapter();
+    const primaryFactor = "自定义资本开支与现金流因素";
+
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: [primaryFactor, "盈利预期变化", "估值与市场环境"],
+      changedBy: "human:researcher",
+      changeReason: "用新范围重新映射已审核证据",
+    });
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露在新范围下仍可支持首要因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: "新范围下的人工结论。",
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.scope.unmappedEvidenceCount).toBe(0);
+    expect(workbench.factors[0].statement).toBe(primaryFactor);
+    expect(workbench.evidence[0].factorStatement).toBe(primaryFactor);
+    expect(workbench.conclusion.citations[0].factorStatement).toBe(primaryFactor);
   });
 
   it("keeps published TSM history frozen after a later scope update", async () => {

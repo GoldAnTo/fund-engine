@@ -256,6 +256,21 @@ function eventUpdatedLabel(updatedAt: string): string {
   }).format(value);
 }
 
+function preserveLocationSearch(to: string, search: string): string {
+  if (!search) return to;
+  const hashIndex = to.indexOf("#");
+  const hash = hashIndex >= 0 ? to.slice(hashIndex) : "";
+  const withoutHash = hashIndex >= 0 ? to.slice(0, hashIndex) : to;
+  const queryIndex = withoutHash.indexOf("?");
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const params = new URLSearchParams(
+    queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "",
+  );
+  new URLSearchParams(search).forEach((value, key) => params.set(key, value));
+  const query = params.toString();
+  return `${pathname}${query ? `?${query}` : ""}${hash}`;
+}
+
 function CaseFrame({
   children,
 }: {
@@ -354,7 +369,7 @@ function CaseFrame({
             <div className="ros-event-menu">
               <header>
                 <div><span className="ros-eyebrow">事件研究</span><strong>切换当前研究事件</strong></div>
-                <Link to="/events/new">＋ 新建事件研究</Link>
+                <Link to={preserveLocationSearch("/events/new", location.search)}>＋ 新建事件研究</Link>
               </header>
               <div aria-label="切换事件研究" role="group">
                 {caseOptions.map((item) => (
@@ -371,7 +386,7 @@ function CaseFrame({
                   </button>
                 ))}
               </div>
-              <Link className="ros-event-menu__all" to="/events">查看全部事件研究 →</Link>
+              <Link className="ros-event-menu__all" to={preserveLocationSearch("/events", location.search)}>查看全部事件研究 →</Link>
             </div>
           )}
         </div>
@@ -412,7 +427,7 @@ function CaseFrame({
               aria-label={`${section.label}${pendingLabel}`}
               className={isActive ? "active" : ""}
               key={section.id}
-              to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+              to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
             >
               {section.label}
               {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
@@ -433,7 +448,7 @@ function CaseFrame({
                 <Link
                   aria-label={`${section.label}${pendingLabel}`}
                   key={section.id}
-                  to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+                  to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
                 >
                   {section.label}
                   {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
@@ -452,7 +467,7 @@ function CaseFrame({
               aria-current={navigation.currentSuffix === page.suffix ? "page" : undefined}
               className={navigation.currentSuffix === page.suffix ? "active" : ""}
               key={page.suffix}
-              to={`/events/${caseId}/${page.suffix}`}
+              to={preserveLocationSearch(`/events/${caseId}/${page.suffix}`, location.search)}
             >
               {page.label}
             </Link>
@@ -496,6 +511,7 @@ function FactorList({ data }: { data: EventWorkbench }) {
 }
 
 function CaseRelationRail({ caseId }: { caseId: string }) {
+  const location = useLocation();
   const [relations, setRelations] = useState<ResearchNetwork | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
@@ -518,14 +534,15 @@ function CaseRelationRail({ caseId }: { caseId: string }) {
     <h2>已审核关联</h2>
     {unavailable ? <p>关联状态暂不可读取；不会显示其他 Case 的替代内容。</p> : !relations ? <p>正在读取当前 Case 的关联上下文…</p> : reviewed.length ? <ul>{reviewed.map((relation) => {
       const other = relation.source_case.case_id === caseId ? relation.target_case : relation.source_case;
-      return <li key={relation.id}><Link to={`/events/${other.case_id}`}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
+      return <li key={relation.id}><Link to={preserveLocationSearch(`/events/${other.case_id}`, location.search)}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
     })}</ul> : <p>当前没有已审核关联。</p>}
-    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={`/events/${caseId}/relations`}>审核关联候选 →</Link></p>}
-    <Link to={`/events/${caseId}/relations`}>查看全部关联 →</Link>
+    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>审核关联候选 →</Link></p>}
+    <Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>查看全部关联 →</Link>
   </section>;
 }
 
 export function CaseEvidencePage() {
+  const location = useLocation();
   return (
     <CaseFrame>
       {(data, caseId) => (
@@ -537,7 +554,7 @@ export function CaseEvidencePage() {
             </div>
             <Link
               className="ros-button ros-button--secondary"
-              to={`/events/${caseId}/documents`}
+              to={preserveLocationSearch(`/events/${caseId}/documents`, location.search)}
             >
               原文资料
             </Link>
@@ -595,7 +612,7 @@ export function CaseEvidencePage() {
                     {evidence.sourceVisibleInCase && evidence.documentVersionId ? (
                       <Link
                         className="ros-button ros-button--secondary"
-                        to={`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`}
+                        to={preserveLocationSearch(`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`, location.search)}
                       >
                         定位到冻结原文
                       </Link>
@@ -638,6 +655,7 @@ function CaseDocumentsContent({
   publishedConclusion: string | null;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [documents, setDocuments] = useState<SourceDocumentView[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -767,7 +785,7 @@ function CaseDocumentsContent({
         </div>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/evidence`}
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
         >
           返回命题与证据
         </Link>
@@ -786,7 +804,7 @@ function CaseDocumentsContent({
       {extractionNotice && (
         <p className="ros-success">
           {extractionNotice}{" "}
-          <Link to={`/events/${caseId}/review`}>进入证据审核 →</Link>
+          <Link to={preserveLocationSearch(`/events/${caseId}/review`, location.search)}>进入证据审核 →</Link>
         </p>
       )}
       {!documents ? (
@@ -1801,7 +1819,7 @@ export function CaseConclusionPage() {
               </dl>
               <Link
                 className="ros-button ros-button--primary"
-                to={`${action.to}${location.search}`}
+                to={preserveLocationSearch(action.to, location.search)}
               >
                 {action.buttonLabel}
               </Link>
@@ -1822,7 +1840,7 @@ export function CaseConclusionPage() {
                     ? "发布的结论保持不变；后续单因素补证和定时任务会在“监测与运行”中独立显示。"
                     : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
               </p>
-              <Link to={`/events/${caseId}/monitor`}>查看运行记录 →</Link>
+              <Link to={preserveLocationSearch(`/events/${caseId}/monitor`, location.search)}>查看运行记录 →</Link>
             </section>
             <section className="ros-rail-section">
               <p className="ros-eyebrow">结论依据</p>
@@ -1869,6 +1887,8 @@ function ScopeEditor({
   initialFactors: EventWorkbench["scope"]["factors"];
   currentVersion: number;
 }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [factors, setFactors] = useState(() =>
     initialFactors.map((factor) => factor.statement),
   );
@@ -1880,6 +1900,19 @@ function ScopeEditor({
   const [historyReload, setHistoryReload] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const caseIdRef = useRef(caseId);
+  const generationRef = useRef(0);
+  if (caseIdRef.current !== caseId) {
+    caseIdRef.current = caseId;
+    generationRef.current += 1;
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   useEffect(() => {
     setFactors(initialFactors.map((factor) => factor.statement));
     setNotice(null);
@@ -1919,23 +1952,40 @@ function ScopeEditor({
     if (!scopeSaveReady) return;
     setBusy(true);
     setNotice(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && caseIdRef.current === request.caseId
+      && generationRef.current === request.generation;
     try {
-      const updated = await researchClient.updateEventResearchScope({
+      await researchClient.updateEventResearchScope({
         caseId,
         factors: normalized,
         changedBy: "human:researcher",
         changeReason: reason.trim(),
       });
-      setFactors(updated.factors.map((factor) => factor.statement));
-      setNotice(
-        `已创建范围版本 v${updated.version}；旧版本与其证据映射仍可回放。`,
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!requestIsCurrent()) return;
+      navigate(
+        preserveLocationSearch(`/events/${request.caseId}`, request.search),
+        {
+          state: {
+            workflowNotice: "研究范围已更新，系统已按新范围继续补证。",
+          },
+        },
       );
     } catch {
-      setNotice(
-        "范围未更新。已发布 Case 不能直接改写范围；请先从新材料启动后继研究。 ",
-      );
+      if (requestIsCurrent()) {
+        setNotice(
+          "范围未更新。已发布 Case 不能直接改写范围；请先从新材料启动后继研究。 ",
+        );
+      }
     } finally {
-      setBusy(false);
+      if (requestIsCurrent()) setBusy(false);
     }
   }
   return (
@@ -1950,7 +2000,7 @@ function ScopeEditor({
         </div>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/evidence`}
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
         >
           查看当前证据
         </Link>
