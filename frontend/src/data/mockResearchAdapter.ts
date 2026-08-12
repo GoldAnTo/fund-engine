@@ -3080,7 +3080,7 @@ export class MockResearchAdapter implements ResearchClient {
   // mutable per-instance copies for tests that write review decisions.
   private queue: ReviewQueueItem[];
   private researchRuns: ResearchRunDetail[];
-  private regularProposalDecisions = new Set<string>();
+  private createdResearchRunCount = 0;
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
@@ -3112,7 +3112,6 @@ export class MockResearchAdapter implements ResearchClient {
     this.scenario = scenario;
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.researchRuns = MOCK_RESEARCH_RUNS.map(cloneResearchRun);
-    this.regularProposalDecisions.clear();
     this.decisions = [];
     this.eventTsmReviewDecision = null;
     this.eventTsmConclusionVersions = [];
@@ -3143,14 +3142,7 @@ export class MockResearchAdapter implements ResearchClient {
   }
 
   private projectResearchRun(run: ResearchRunDetail): ResearchRunDetail {
-    const projected = cloneResearchRun(run);
-    projected.pending_proposals = projected.pending_proposals.map((proposal) => ({
-      ...proposal,
-      status: this.regularProposalDecisions.has(proposal.id)
-        ? "decided"
-        : proposal.status,
-    }));
-    return projected;
+    return cloneResearchRun(run);
   }
 
   private eventTsmProjection(): EventTsmProjection {
@@ -4036,7 +4028,19 @@ export class MockResearchAdapter implements ResearchClient {
 
   async startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail> {
     this.throwIfOffline();
-    const run = cloneResearchRun({ ...this.researchRuns[0], id: `run-${Date.now()}`, case_id: caseId, status: options.auto_execute ? "waiting_for_review" : "queued", round: 0 });
+    const runId = `run-created-${++this.createdResearchRunCount}`;
+    const run = cloneResearchRun({
+      ...this.researchRuns[0],
+      id: runId,
+      case_id: caseId,
+      status: options.auto_execute ? "waiting_for_review" : "queued",
+      round: 0,
+      pending_proposals: this.researchRuns[0].pending_proposals.map((proposal, index) => ({
+        ...proposal,
+        id: `proposal-${runId}-${index + 1}`,
+        status: "pending",
+      })),
+    });
     this.researchRuns.push(run);
     return simulateLatency(this.projectResearchRun(run));
   }
@@ -4126,18 +4130,20 @@ export class MockResearchAdapter implements ResearchClient {
       }
       return simulateLatency(undefined);
     }
-    const proposal = this.researchRuns
-      .flatMap((run) => run.pending_proposals)
-      .find((item) => item.id === proposalId);
+    const owningRun = this.researchRuns.find((run) =>
+      run.pending_proposals.some((proposal) => proposal.id === proposalId),
+    );
+    const proposal = owningRun?.pending_proposals.find(
+      (item) => item.id === proposalId,
+    );
     if (
       !proposal
       || proposal.status !== "pending"
-      || this.regularProposalDecisions.has(proposalId)
       || payload.expected_version !== 1
     ) {
       throw new Error("proposal version or state conflict");
     }
-    this.regularProposalDecisions.add(proposalId);
+    proposal.status = "decided";
     return simulateLatency(undefined);
   }
 

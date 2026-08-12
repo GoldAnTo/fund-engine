@@ -418,6 +418,93 @@ describe("MockResearchAdapter scenarios", () => {
     ]);
   });
 
+  it("assigns unique proposal identities to each newly created research run", async () => {
+    const adapter = new MockResearchAdapter();
+    const options = { max_rounds: 3, budget: 10, auto_execute: true };
+
+    const runA = await adapter.startResearchRun("case-multi-run", options);
+    const runB = await adapter.startResearchRun("case-multi-run", options);
+    const proposalA = runA.pending_proposals[0];
+    const proposalB = runB.pending_proposals[0];
+
+    expect(runA.id).not.toBe(runB.id);
+    expect(proposalA.id).not.toBe(proposalB.id);
+    expect(proposalA.id).toContain(runA.id);
+    expect(proposalB.id).toContain(runB.id);
+
+    await adapter.reviewProposal(proposalA.id, {
+      outcome: "confirmed",
+      reason: "只审核运行 A 的提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    expect((await adapter.getResearchRun(runA.id)).pending_proposals[0]).toMatchObject({
+      id: proposalA.id,
+      status: "decided",
+    });
+    expect((await adapter.getResearchRun(runB.id)).pending_proposals[0]).toMatchObject({
+      id: proposalB.id,
+      status: "pending",
+    });
+    expect(await adapter.listReviewProposals("case-multi-run")).toEqual([
+      expect.objectContaining({ id: proposalB.id, status: "pending" }),
+    ]);
+
+    await expect(
+      adapter.reviewProposal(proposalB.id, {
+        outcome: "rejected",
+        reason: "运行 B 的提议仍可独立审核。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).resolves.toBeUndefined();
+    expect((await adapter.getResearchRun(runB.id)).pending_proposals[0]).toMatchObject({
+      id: proposalB.id,
+      status: "decided",
+    });
+  });
+
+  it("keeps proposals from later runs pending after an older proposal is reviewed", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-1", {
+      outcome: "confirmed",
+      reason: "先审核基础运行提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    const newRun = await adapter.startResearchRun("case-after-review", {
+      max_rounds: 3,
+      budget: 10,
+      auto_execute: true,
+    });
+    const newProposal = newRun.pending_proposals[0];
+
+    expect(newProposal.id).not.toBe("proposal-1");
+    expect(newProposal.status).toBe("pending");
+    expect(await adapter.listReviewProposals("case-after-review")).toEqual([
+      expect.objectContaining({ id: newProposal.id, status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("fails closed when a regular proposal id does not belong to any run", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.reviewProposal("proposal-missing-run-source", {
+        outcome: "confirmed",
+        reason: "错误提议 ID 不应被接受。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+
+    expect(await adapter.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
   it("publishes the confirmed TSM conclusion across every event read model", async () => {
     const adapter = new MockResearchAdapter();
     const conclusionText = "资本开支上调构成当前市场担忧的重要可验证因素。";
