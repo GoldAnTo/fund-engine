@@ -325,19 +325,29 @@ describe("MockResearchAdapter scenarios", () => {
 
   it("keeps TSM review counts authoritative when scope state exists before review", async () => {
     const adapter = new MockResearchAdapter();
+    const customFactors = [{
+      statement: "自定义资本开支因素",
+      description: "审核前保存的自定义研究范围",
+    }];
 
     await adapter.updateEventResearchScope({
       caseId: "event-tsm",
-      factors: ["资本开支", "自由现金流", "估值环境"],
+      factors: customFactors,
       changedBy: "human:researcher",
-      changeReason: "预先调整研究范围",
+      changeReason: "审核前变更为自定义因素",
     });
 
     const queue = await adapter.getEventReviewQueue("event-tsm");
     const workbench = await adapter.getEventWorkbench("event-tsm");
+    const savedScope = workbench.scope;
     expect(queue.summary.pending).toBe(1);
     expect(workbench.progress.pending).toBe(queue.summary.pending);
     expect(workbench.factors[0].pendingProposalCount).toBe(1);
+    expect(savedScope).toEqual({
+      version: 2,
+      factors: customFactors,
+      unmappedEvidenceCount: 0,
+    });
 
     await adapter.reviewProposal("proposal-event-tsm", {
       outcome: "confirmed",
@@ -346,9 +356,10 @@ describe("MockResearchAdapter scenarios", () => {
       expected_version: 1,
     });
 
-    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
-      "draft_ready",
-    );
+    const reviewedWorkbench = await adapter.getEventWorkbench("event-tsm");
+    expect(reviewedWorkbench.lifecycle.status).toBe("draft_ready");
+    expect(reviewedWorkbench.nextAction.kind).toBe("review_conclusion");
+    expect(reviewedWorkbench.scope).toEqual(savedScope);
   });
 
   it("lets a scope update continue TSM research after rejecting evidence", async () => {

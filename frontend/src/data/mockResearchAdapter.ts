@@ -3069,6 +3069,7 @@ export class MockResearchAdapter implements ResearchClient {
     event?: EventResearchListItem;
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
+    lifecycleSource?: "tsm_review";
   }>();
   private createdDocuments = new Map<string, {
     document: SourceDocumentView;
@@ -3995,14 +3996,22 @@ export class MockResearchAdapter implements ResearchClient {
           throw new Error("modified evidence review outcome is unsupported");
         case "confirmed":
         case "needs_more_evidence":
-        case "rejected":
+        case "rejected": {
+          const previous = this.eventStates.get("event-tsm");
           this.eventTsmReviewDecision = {
             outcome: payload.outcome,
             reason: payload.reason,
             reviewerId: payload.reviewer_id,
           };
-          this.eventStates.delete("event-tsm");
+          if (previous) {
+            this.eventStates.set("event-tsm", {
+              ...previous,
+              lifecycle: this.eventTsmProjection().lifecycle,
+              lifecycleSource: "tsm_review",
+            });
+          }
           break;
+        }
         default: {
           const unsupportedOutcome: never = payload.outcome;
           throw new Error(`unsupported TSM review outcome: ${unsupportedOutcome}`);
@@ -4286,7 +4295,8 @@ export class MockResearchAdapter implements ResearchClient {
       ?? this.eventResearchItems()[0];
     const saved = this.eventStates.get(baseEvent.id);
     const tsmProjection = caseId === "event-tsm" ? this.eventTsmProjection() : null;
-    const reviewOwnsLifecycle = tsmProjection !== null && !saved;
+    const reviewOwnsLifecycle = tsmProjection !== null
+      && (!saved || saved.lifecycleSource === "tsm_review");
     const currentGap = baseEvent.status === "exhausted"
       ? "缺少能区分主要解释的反证" : null;
     const lifecycle: EventLifecycle = saved?.lifecycle ?? tsmProjection?.lifecycle ?? {
