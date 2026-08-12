@@ -235,7 +235,12 @@ class EventResearchScopeService:
         if current_run is not None and current_run.status in {"queued", "running"}:
             # Preserve the old run and its task/job audit trail, but prevent a
             # worker from continuing to research the superseded thesis set.
-            auto_research.repo.cancel_run(current_run)
+            locked_run = auto_research._lock_run_for_transition(
+                current_run.id,
+                case_locked=True,
+            )
+            if locked_run is not None:
+                auto_research.repo.cancel_run(locked_run)
         blocked_protocols: list[tuple[Thesis, list[str]]] = []
         protocol = ResearchProtocolService(self._session)
         for thesis in active_theses:

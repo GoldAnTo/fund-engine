@@ -251,13 +251,7 @@ class AutoResearchService:
         *,
         reviewer: str,
     ) -> list[uuid.UUID]:
-        """Resume affected runs only once every Case candidate has a verdict.
-
-        Atomic claims may be deduplicated at document level, while run state is
-        Case-scoped.  A human decision therefore checks every admitted Case
-        using the candidate's frozen document and requeues only its runs that
-        were paused specifically at the atomic-claim gate.
-        """
+        """Resume only runs whose recorded atomic-claim gate is now clear."""
         document_id = self.session.scalar(
             select(SourceSpan.document_version_id)
             .where(SourceSpan.id == AtomicClaimCandidate.source_span_id)
@@ -273,32 +267,41 @@ class AutoResearchService:
             )
         )
         resumed: list[uuid.UUID] = []
+        run_ids: set[uuid.UUID] = set()
         for case_id in case_ids:
-            if self._pending_atomic_claims(case_id):
-                continue
-            runs = list(
-                self.session.scalars(
-                    select(ResearchRun)
-                    .where(ResearchRun.research_case_id == case_id)
-                    .where(ResearchRun.status == "waiting_for_review")
-                    .where(ResearchRun.stop_reason == "pending_atomic_claim_review")
-                )
+            # JSON candidate IDs are historical payload, so filter by the
+            # indexed run state in SQL and parse only the projected event data.
+            # A normalized run-output mapping can make this containment lookup
+            # indexable in a later schema phase without changing semantics.
+            events = self.session.execute(
+                select(ResearchRunEvent.run_id, ResearchRunEvent.payload_json)
+                .join(ResearchRun, ResearchRun.id == ResearchRunEvent.run_id)
+                .where(ResearchRun.research_case_id == case_id)
+                .where(ResearchRun.status == "waiting_for_review")
+                .where(ResearchRun.stop_reason == "pending_atomic_claim_review")
+                .where(ResearchRunEvent.stage == "claim_review")
             )
-            for run in runs:
-                if not self.repo.resume_after_claim_review(run):
-                    continue
-                ResearchRunEventRepository(self.session).append(
-                    run.id,
-                    stage="claim_review",
-                    status="completed",
-                    message="原子陈述审核已完成；原冻结范围已重新入队继续执行",
-                    payload_json={
-                        "candidate_id": str(candidate_id),
-                        "reviewer": reviewer.strip(),
-                        "resume_from_round": run.round + 1,
-                    },
-                )
-                resumed.append(run.id)
+            for run_id, payload in events:
+                if candidate_id in self._claim_candidate_ids(payload):
+                    run_ids.add(run_id)
+        for run_id in run_ids:
+            run = self._lock_run_for_transition(run_id)
+            if run is None or self._pending_atomic_claims_for_run(run):
+                continue
+            if not self.repo.resume_after_claim_review(run):
+                continue
+            ResearchRunEventRepository(self.session).append(
+                run.id,
+                stage="claim_review",
+                status="completed",
+                message="原子陈述审核已完成；原冻结范围已重新入队继续执行",
+                payload_json={
+                    "candidate_id": str(candidate_id),
+                    "reviewer": reviewer.strip(),
+                    "resume_from_round": run.round + 1,
+                },
+            )
+            resumed.append(run.id)
         return resumed
 
     def continue_published_event(
@@ -785,18 +788,14 @@ class AutoResearchService:
         proposal_ids: set[uuid.UUID] = set()
         assessment_ids: set[uuid.UUID] = set()
         for research_task in research_tasks:
-            result = research_task.result or {}
-            for raw_id in result.get("proposed_proposal_ids", []):
-                try:
-                    proposal_ids.add(uuid.UUID(str(raw_id)))
-                except (TypeError, ValueError):
-                    continue
-            raw_assessment = result.get("assessment_id")
-            if raw_assessment:
-                try:
-                    assessment_ids.add(uuid.UUID(str(raw_assessment)))
-                except (TypeError, ValueError):
-                    continue
+            proposal_ids.update(
+                self._result_output_ids(
+                    research_task.result, "proposed_proposal_ids"
+                )
+            )
+            assessment_ids.update(
+                self._result_output_ids(research_task.result, "assessment_id")
+            )
         for proposal_id in proposal_ids:
             proposal = self.session.get(Proposal, proposal_id)
             if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
@@ -839,21 +838,14 @@ class AutoResearchService:
     def _successful_terminal_status(self, run) -> str:
         """Require a concrete reviewable output before pausing for a human."""
         for task in self.repo.tasks_for_run(run.id):
-            result = task.result or {}
-            for raw_id in result.get("proposed_proposal_ids", []):
-                try:
-                    proposal_id = uuid.UUID(str(raw_id))
-                except (TypeError, ValueError):
-                    continue
+            for proposal_id in self._result_output_ids(
+                task.result, "proposed_proposal_ids"
+            ):
                 proposal = self.session.get(Proposal, proposal_id)
                 if proposal is not None and proposal.kind == "evidence_link" and proposal.status == "pending":
                     return "waiting_for_review"
-            try:
-                if result.get("assessment_id"):
-                    uuid.UUID(str(result["assessment_id"]))
-                    return "waiting_for_review"
-            except (TypeError, ValueError):
-                continue
+            if self._result_output_ids(task.result, "assessment_id"):
+                return "waiting_for_review"
         return (
             "waiting_for_review"
             if self._pending_atomic_claims_for_run(run)
@@ -868,11 +860,16 @@ class AutoResearchService:
         than letting one bad task block unrelated review decisions.
         """
         run_ids: set[uuid.UUID] = set()
-        for task in self.session.scalars(
-            select(ResearchTask).where(ResearchTask.result.is_not(None))
+        # JSON containment is deliberately parsed in Python for SQLite and
+        # PostgreSQL parity.  Project only the required columns; normalize
+        # outputs into an indexed table when this lookup becomes high-volume.
+        for run_id, result in self.session.execute(
+            select(ResearchTask.run_id, ResearchTask.result).where(
+                ResearchTask.result.is_not(None)
+            )
         ):
-            if value in self._result_output_ids(task.result, key):
-                run_ids.add(task.run_id)
+            if value in self._result_output_ids(result, key):
+                run_ids.add(run_id)
         return run_ids
 
     def reconcile_runs_for_output(
@@ -887,9 +884,7 @@ class AutoResearchService:
 
     def reconcile_run(self, run_id: uuid.UUID, *, trigger_ref: str) -> bool:
         """Finish one waiting run iff it has no remaining run-local review gate."""
-        run = self.session.scalar(
-            select(ResearchRun).where(ResearchRun.id == run_id).with_for_update()
-        )
+        run = self._lock_run_for_transition(run_id)
         if run is None or run.status != "waiting_for_review":
             return False
         if self._has_open_reviewable_output(run):
@@ -931,6 +926,39 @@ class AutoResearchService:
             except (TypeError, ValueError, AttributeError):
                 continue
         return output_ids
+
+    @staticmethod
+    def _claim_candidate_ids(payload: object) -> set[uuid.UUID]:
+        if not isinstance(payload, dict):
+            return set()
+        raw_ids = payload.get("candidate_ids")
+        if not isinstance(raw_ids, (list, tuple, set)):
+            raw_ids = [raw_ids]
+        candidate_ids: set[uuid.UUID] = set()
+        for raw_id in raw_ids:
+            try:
+                candidate_ids.add(uuid.UUID(str(raw_id)))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return candidate_ids
+
+    def _lock_run_for_transition(
+        self, run_id: uuid.UUID, *, case_locked: bool = False
+    ) -> ResearchRun | None:
+        """Lock a mutable run transition in stable Case then ResearchRun order."""
+        case_id = self.session.scalar(
+            select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
+        )
+        if case_id is None:
+            return None
+        if not case_locked:
+            lock_event_scope_case(self.session, case_id)
+        return self.session.scalar(
+            select(ResearchRun)
+            .where(ResearchRun.id == run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
 
     def _has_open_reviewable_output(self, run) -> bool:
         """Check run-local review gates after one human decision is persisted."""
@@ -1071,17 +1099,7 @@ class AutoResearchService:
             .where(ResearchRunEvent.stage == "claim_review")
         )
         for event in events:
-            payload = event.payload_json
-            if not isinstance(payload, dict):
-                continue
-            raw_ids = payload.get("candidate_ids")
-            if not isinstance(raw_ids, (list, tuple, set)):
-                raw_ids = [raw_ids]
-            for raw_id in raw_ids:
-                try:
-                    candidate_ids.add(uuid.UUID(str(raw_id)))
-                except (TypeError, ValueError, AttributeError):
-                    continue
+            candidate_ids.update(self._claim_candidate_ids(event.payload_json))
         if not candidate_ids:
             return []
         reviewed = (
@@ -1279,7 +1297,7 @@ class AutoResearchService:
         return [self._run_summary_dict(run) for run in runs]
 
     def cancel_run(self, run_id: uuid.UUID, *, actor: str, change_reason: str) -> dict:
-        run = self.repo.get_run(run_id)
+        run = self._lock_run_for_transition(run_id)
         if run is None:
             raise ValueError(f"research run {run_id} not found")
         # Already cancelled is idempotent success; other terminal states conflict.

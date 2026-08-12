@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
 import pytest
+from threading import Event, Thread
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session, sessionmaker
@@ -369,6 +370,168 @@ def test_run_reconciliation_scopes_atomic_claim_gates_to_each_run(session):
         trigger_ref=f"proposal:{proposal.id}",
     ) == [unrelated_run.id]
     assert not service.reconcile_run(claim_run.id, trigger_ref=f"proposal:{proposal.id}")
+
+
+def test_historical_scalar_proposal_output_is_a_review_gate(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="scalar result", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=now)
+    session.add(thesis)
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={},
+        target_context={"thesis_id": str(thesis.id)},
+        proposed_by_type="ai",
+        proposed_by_ref="test-run",
+        proposed_at=now,
+        research_case_id=case.id,
+    )
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add_all([proposal, run])
+    session.flush()
+    session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=thesis.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="historical scalar output",
+            result={"proposed_proposal_ids": str(proposal.id)},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    service = AutoResearchService(session)
+    assert service._successful_terminal_status(run) == "waiting_for_review"
+    service._handoff_for_review(run)
+    assert session.scalar(
+        select(TaskItem).where(TaskItem.ref_id == proposal.id)
+    ) is not None
+
+
+def test_non_dict_task_result_is_ignored_by_review_gate_helpers(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="malformed result", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="malformed historical output",
+            result="not a JSON object",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    service = AutoResearchService(session)
+    assert service._successful_terminal_status(run) == "succeeded"
+    service._handoff_for_review(run)
+
+
+@pytest.mark.pg_only
+def test_cancel_wins_over_concurrent_final_review_reconciliation(engine):
+    """A final review cannot append completion after another session cancels."""
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local.begin() as setup:
+        case = ResearchCase(
+            title="reconcile cancellation race",
+            industry_topic="i",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        run = ResearchRun(
+            research_case_id=case.id,
+            status="waiting_for_review",
+            stage="stopped",
+            round=1,
+            max_rounds=1,
+            budget=10,
+            budget_used=1,
+            created_at=now,
+            updated_at=now,
+        )
+        setup.add(run)
+        setup.flush()
+        run_id = run.id
+
+    cancelling = session_local()
+    locked_run = AutoResearchService(cancelling)._lock_run_for_transition(run_id)
+    assert locked_run is not None
+    assert AutoResearchService(cancelling).repo.cancel_run(locked_run)
+    cancelling.flush()
+
+    finished = Event()
+    result: list[bool] = []
+
+    def reconcile_in_second_session() -> None:
+        competing = session_local()
+        try:
+            result.append(
+                AutoResearchService(competing).reconcile_run(
+                    run_id, trigger_ref="proposal:final"
+                )
+            )
+            competing.commit()
+        finally:
+            competing.close()
+            finished.set()
+
+    thread = Thread(target=reconcile_in_second_session)
+    thread.start()
+    assert not finished.wait(0.1)
+    cancelling.commit()
+    thread.join(timeout=5)
+    cancelling.close()
+
+    assert not thread.is_alive()
+    assert result == [False]
+    with session_local() as check:
+        run = check.get(ResearchRun, run_id)
+        assert run is not None and run.status == "cancelled"
+        assert check.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run_id)
+            .where(ResearchRunEvent.stage == "review_complete")
+        ).all() == []
 
 
 def test_budget_stop(session):
