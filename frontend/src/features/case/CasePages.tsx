@@ -147,6 +147,104 @@ const EVENT_STATUS_LABEL: Record<EventResearchListItem["status"], string> = {
   exhausted: "当前范围已穷尽",
 };
 
+type EvidenceReviewOutcome = "confirmed" | "needs_more_evidence" | "rejected";
+
+const EVIDENCE_REVIEW_NOTICE: Record<EvidenceReviewOutcome, string> = {
+  confirmed: "证据已采纳，系统已生成待复核的结论草案。",
+  needs_more_evidence: "补证要求已记录，系统将按冻结范围继续处理。",
+  rejected: "候选已驳回，请调整研究范围或补充来源。",
+};
+
+const UNSAVED_CONCLUSION_MESSAGE =
+  "结论草案有未保存的修改。离开后这些修改将丢失，确定离开吗？";
+
+function useDirtyNavigationGuard(dirty: boolean) {
+  const dirtyRef = useRef(dirty);
+  const safeLocationRef = useRef({
+    href: window.location.href,
+    state: window.history.state,
+  });
+
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    if (!dirty) {
+      safeLocationRef.current = {
+        href: window.location.href,
+        state: window.history.state,
+      };
+    }
+  }, [dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+
+    const confirmLeaving = () => {
+      if (!dirtyRef.current) return true;
+      const confirmed = window.confirm(UNSAVED_CONCLUSION_MESSAGE);
+      if (confirmed) dirtyRef.current = false;
+      return confirmed;
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onDocumentClick = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) return;
+      const element = event.target instanceof Element
+        ? event.target.closest("a[href], [data-event-option]")
+        : null;
+      if (!element) return;
+      if (element instanceof HTMLAnchorElement) {
+        if (element.target && element.target !== "_self") return;
+        const destination = new URL(element.href, window.location.href);
+        if (destination.origin !== window.location.origin) return;
+        if (destination.href === window.location.href) return;
+      } else if (element.getAttribute("aria-pressed") === "true") {
+        return;
+      }
+      if (confirmLeaving()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onPopState = (event: PopStateEvent) => {
+      if (confirmLeaving()) return;
+      event.stopImmediatePropagation();
+      window.history.pushState(
+        safeLocationRef.current.state,
+        "",
+        safeLocationRef.current.href,
+      );
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onDocumentClick, true);
+    window.addEventListener("popstate", onPopState, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onDocumentClick, true);
+      window.removeEventListener("popstate", onPopState, true);
+    };
+  }, [dirty]);
+
+  return function allowNavigation() {
+    dirtyRef.current = false;
+  };
+}
+
+function workflowNoticeFromState(state: unknown): string | null {
+  if (!state || typeof state !== "object") return null;
+  const notice = (state as { workflowNotice?: unknown }).workflowNotice;
+  return typeof notice === "string" ? notice : null;
+}
+
 function eventUpdatedLabel(updatedAt: string): string {
   const value = new Date(updatedAt);
   if (Number.isNaN(value.getTime())) return "更新时间未知";
@@ -156,6 +254,23 @@ function eventUpdatedLabel(updatedAt: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(value);
+}
+
+function preserveLocationSearch(to: string, search: string): string {
+  if (!search) return to;
+  const hashIndex = to.indexOf("#");
+  const hash = hashIndex >= 0 ? to.slice(hashIndex) : "";
+  const withoutHash = hashIndex >= 0 ? to.slice(0, hashIndex) : to;
+  const queryIndex = withoutHash.indexOf("?");
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const params = new URLSearchParams(
+    queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "",
+  );
+  new URLSearchParams(search).forEach((value, key) => {
+    if (!params.has(key)) params.append(key, value);
+  });
+  const query = params.toString();
+  return `${pathname}${query ? `?${query}` : ""}${hash}`;
 }
 
 function CaseFrame({
@@ -256,7 +371,7 @@ function CaseFrame({
             <div className="ros-event-menu">
               <header>
                 <div><span className="ros-eyebrow">事件研究</span><strong>切换当前研究事件</strong></div>
-                <Link to="/events/new">＋ 新建事件研究</Link>
+                <Link to={preserveLocationSearch("/events/new", location.search)}>＋ 新建事件研究</Link>
               </header>
               <div aria-label="切换事件研究" role="group">
                 {caseOptions.map((item) => (
@@ -273,7 +388,7 @@ function CaseFrame({
                   </button>
                 ))}
               </div>
-              <Link className="ros-event-menu__all" to="/events">查看全部事件研究 →</Link>
+              <Link className="ros-event-menu__all" to={preserveLocationSearch("/events", location.search)}>查看全部事件研究 →</Link>
             </div>
           )}
         </div>
@@ -314,7 +429,7 @@ function CaseFrame({
               aria-label={`${section.label}${pendingLabel}`}
               className={isActive ? "active" : ""}
               key={section.id}
-              to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+              to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
             >
               {section.label}
               {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
@@ -335,7 +450,7 @@ function CaseFrame({
                 <Link
                   aria-label={`${section.label}${pendingLabel}`}
                   key={section.id}
-                  to={`/events/${caseId}${section.to ? `/${section.to}` : ""}`}
+                  to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
                 >
                   {section.label}
                   {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
@@ -354,7 +469,7 @@ function CaseFrame({
               aria-current={navigation.currentSuffix === page.suffix ? "page" : undefined}
               className={navigation.currentSuffix === page.suffix ? "active" : ""}
               key={page.suffix}
-              to={`/events/${caseId}/${page.suffix}`}
+              to={preserveLocationSearch(`/events/${caseId}/${page.suffix}`, location.search)}
             >
               {page.label}
             </Link>
@@ -398,6 +513,7 @@ function FactorList({ data }: { data: EventWorkbench }) {
 }
 
 function CaseRelationRail({ caseId }: { caseId: string }) {
+  const location = useLocation();
   const [relations, setRelations] = useState<ResearchNetwork | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
@@ -420,14 +536,15 @@ function CaseRelationRail({ caseId }: { caseId: string }) {
     <h2>已审核关联</h2>
     {unavailable ? <p>关联状态暂不可读取；不会显示其他 Case 的替代内容。</p> : !relations ? <p>正在读取当前 Case 的关联上下文…</p> : reviewed.length ? <ul>{reviewed.map((relation) => {
       const other = relation.source_case.case_id === caseId ? relation.target_case : relation.source_case;
-      return <li key={relation.id}><Link to={`/events/${other.case_id}`}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
+      return <li key={relation.id}><Link to={preserveLocationSearch(`/events/${other.case_id}`, location.search)}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
     })}</ul> : <p>当前没有已审核关联。</p>}
-    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={`/events/${caseId}/relations`}>审核关联候选 →</Link></p>}
-    <Link to={`/events/${caseId}/relations`}>查看全部关联 →</Link>
+    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>审核关联候选 →</Link></p>}
+    <Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>查看全部关联 →</Link>
   </section>;
 }
 
 export function CaseEvidencePage() {
+  const location = useLocation();
   return (
     <CaseFrame>
       {(data, caseId) => (
@@ -439,7 +556,7 @@ export function CaseEvidencePage() {
             </div>
             <Link
               className="ros-button ros-button--secondary"
-              to={`/events/${caseId}/documents`}
+              to={preserveLocationSearch(`/events/${caseId}/documents`, location.search)}
             >
               原文资料
             </Link>
@@ -497,7 +614,7 @@ export function CaseEvidencePage() {
                     {evidence.sourceVisibleInCase && evidence.documentVersionId ? (
                       <Link
                         className="ros-button ros-button--secondary"
-                        to={`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`}
+                        to={preserveLocationSearch(`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`, location.search)}
                       >
                         定位到冻结原文
                       </Link>
@@ -540,6 +657,7 @@ function CaseDocumentsContent({
   publishedConclusion: string | null;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [documents, setDocuments] = useState<SourceDocumentView[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -669,7 +787,7 @@ function CaseDocumentsContent({
         </div>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/evidence`}
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
         >
           返回命题与证据
         </Link>
@@ -688,7 +806,7 @@ function CaseDocumentsContent({
       {extractionNotice && (
         <p className="ros-success">
           {extractionNotice}{" "}
-          <Link to={`/events/${caseId}/review`}>进入证据审核 →</Link>
+          <Link to={preserveLocationSearch(`/events/${caseId}/review`, location.search)}>进入证据审核 →</Link>
         </p>
       )}
       {!documents ? (
@@ -1658,11 +1776,17 @@ function SupplementRecovery({
 }
 
 export function CaseConclusionPage() {
+  const location = useLocation();
+  const workflowNotice = workflowNoticeFromState(location.state);
   return (
     <CaseFrame>
       {(data, caseId) => {
         const action = eventActionPresentation(data, caseId);
-        return <section className="ros-case-columns">
+        return <>
+          {workflowNotice && (
+            <p className="ros-success" role="status">{workflowNotice}</p>
+          )}
+          <section className="ros-case-columns">
           <div>
             <article className="ros-panel ros-panel--conclusion">
               <p className="ros-eyebrow">
@@ -1697,7 +1821,7 @@ export function CaseConclusionPage() {
               </dl>
               <Link
                 className="ros-button ros-button--primary"
-                to={action.to}
+                to={preserveLocationSearch(action.to, location.search)}
               >
                 {action.buttonLabel}
               </Link>
@@ -1718,7 +1842,7 @@ export function CaseConclusionPage() {
                     ? "发布的结论保持不变；后续单因素补证和定时任务会在“监测与运行”中独立显示。"
                     : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
               </p>
-              <Link to={`/events/${caseId}/monitor`}>查看运行记录 →</Link>
+              <Link to={preserveLocationSearch(`/events/${caseId}/monitor`, location.search)}>查看运行记录 →</Link>
             </section>
             <section className="ros-rail-section">
               <p className="ros-eyebrow">结论依据</p>
@@ -1729,7 +1853,8 @@ export function CaseConclusionPage() {
             </section>
             <CaseRelationRail caseId={caseId} />
           </aside>
-        </section>;
+          </section>
+        </>;
       }}
     </CaseFrame>
   );
@@ -1764,6 +1889,8 @@ function ScopeEditor({
   initialFactors: EventWorkbench["scope"]["factors"];
   currentVersion: number;
 }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [factors, setFactors] = useState(() =>
     initialFactors.map((factor) => factor.statement),
   );
@@ -1775,6 +1902,19 @@ function ScopeEditor({
   const [historyReload, setHistoryReload] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const caseIdRef = useRef(caseId);
+  const generationRef = useRef(0);
+  if (caseIdRef.current !== caseId) {
+    caseIdRef.current = caseId;
+    generationRef.current += 1;
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   useEffect(() => {
     setFactors(initialFactors.map((factor) => factor.statement));
     setNotice(null);
@@ -1814,23 +1954,40 @@ function ScopeEditor({
     if (!scopeSaveReady) return;
     setBusy(true);
     setNotice(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && caseIdRef.current === request.caseId
+      && generationRef.current === request.generation;
     try {
-      const updated = await researchClient.updateEventResearchScope({
+      await researchClient.updateEventResearchScope({
         caseId,
         factors: normalized,
         changedBy: "human:researcher",
         changeReason: reason.trim(),
       });
-      setFactors(updated.factors.map((factor) => factor.statement));
-      setNotice(
-        `已创建范围版本 v${updated.version}；旧版本与其证据映射仍可回放。`,
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!requestIsCurrent()) return;
+      navigate(
+        preserveLocationSearch(`/events/${request.caseId}`, request.search),
+        {
+          state: {
+            workflowNotice: "研究范围已更新，系统已按新范围继续补证。",
+          },
+        },
       );
     } catch {
-      setNotice(
-        "范围未更新。已发布 Case 不能直接改写范围；请先从新材料启动后继研究。 ",
-      );
+      if (requestIsCurrent()) {
+        setNotice(
+          "范围未更新。已发布 Case 不能直接改写范围；请先从新材料启动后继研究。 ",
+        );
+      }
     } finally {
-      setBusy(false);
+      if (requestIsCurrent()) setBusy(false);
     }
   }
   return (
@@ -1845,7 +2002,7 @@ function ScopeEditor({
         </div>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/evidence`}
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
         >
           查看当前证据
         </Link>
@@ -2050,11 +2207,163 @@ function ConclusionHistoryContent({ caseId }: { caseId: string }) {
 export function CaseReviewPage() {
   return (
     <CaseFrame>
-      {(_data, caseId) => <ReviewContent caseId={caseId} />}
+      {(data, caseId) => <ReviewContent caseId={caseId} workbench={data} />}
     </CaseFrame>
   );
 }
-function ReviewContent({ caseId }: { caseId: string }) {
+
+function ReviewContent({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  if (workbench.nextAction.kind === "review_conclusion") {
+    const draftIdentity = JSON.stringify([
+      caseId,
+      workbench.scope.version,
+      workbench.conclusion.state,
+      workbench.conclusion.text,
+    ]);
+    return (
+      <ConclusionReviewTask
+        caseId={caseId}
+        key={draftIdentity}
+        workbench={workbench}
+      />
+    );
+  }
+  return <EvidenceReviewTask caseId={caseId} />;
+}
+
+export function ConclusionReviewTask({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const draftIdentity = JSON.stringify([
+    caseId,
+    workbench.scope.version,
+    workbench.conclusion.state,
+    workbench.conclusion.text,
+  ]);
+  const [text, setText] = useState(workbench.conclusion.text);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const submissionInFlight = useRef(false);
+  const identityRef = useRef(draftIdentity);
+  const generationRef = useRef(0);
+
+  if (identityRef.current !== draftIdentity) {
+    identityRef.current = draftIdentity;
+    generationRef.current += 1;
+  }
+
+  const allowNavigation = useDirtyNavigationGuard(
+    text !== workbench.conclusion.text,
+  );
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    submissionInFlight.current = false;
+    setText(workbench.conclusion.text);
+    setError(null);
+    setSubmitting(false);
+  }, [draftIdentity, workbench.conclusion.text]);
+
+  async function publishConclusion() {
+    const trimmed = text.trim();
+    if (!trimmed || submissionInFlight.current) return;
+    submissionInFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      identity: draftIdentity,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && identityRef.current === request.identity
+      && generationRef.current === request.generation;
+    try {
+      await researchClient.publishEventConclusion({
+        caseId,
+        text: trimmed,
+        reviewer: "human:researcher",
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!requestIsCurrent()) return;
+      allowNavigation();
+      navigate(`/events/${request.caseId}${request.search}`, {
+        state: {
+          workflowNotice: "结论已发布，当前事件进入持续跟踪。",
+        },
+      });
+    } catch {
+      if (requestIsCurrent()) {
+        setError("发布结论失败；草案未发布，请检查后重试。");
+      }
+    } finally {
+      if (requestIsCurrent()) {
+        submissionInFlight.current = false;
+        setSubmitting(false);
+      }
+    }
+  }
+
+  return (
+    <section className="ros-review-workbench" aria-busy={submitting}>
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">人工结论复核</p>
+          <h2>复核并发布结论草案</h2>
+          <p>
+            这是 AI 草案，正式发布需人工确认。编辑只改变本次结论文字，
+            引用/证据边界不会自动扩张。
+          </p>
+        </div>
+        <span className="ros-pill ros-pill--human">AI 草案，未发布</span>
+      </header>
+      <label className="ros-conclusion-review__field">
+        结论草案
+        <textarea
+          aria-label="结论草案"
+          className="ros-conclusion-review__editor"
+          disabled={submitting}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </label>
+      {error && <p className="ros-error" role="alert">{error}</p>}
+      <button
+        className="ros-button ros-button--primary"
+        type="button"
+        disabled={!text.trim() || submitting}
+        onClick={publishConclusion}
+      >
+        {submitting ? "正在发布结论…" : "发布结论并进入持续跟踪"}
+      </button>
+    </section>
+  );
+}
+
+function EvidenceReviewTask({ caseId }: { caseId: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [queue, setQueue] = useState<Awaited<
     ReturnType<EventResearchClient["getEventReviewQueue"]>
   > | null>(null);
@@ -2098,6 +2407,11 @@ function ReviewContent({ caseId }: { caseId: string }) {
     );
   const actionable = queue.items.filter((item) => item.canAccept);
   const blocked = queue.items.filter((item) => !item.canAccept);
+  function handleDecided(outcome: EvidenceReviewOutcome) {
+    navigate(`/events/${caseId}${location.search}`, {
+      state: { workflowNotice: EVIDENCE_REVIEW_NOTICE[outcome] },
+    });
+  }
   return (
     <section className="ros-review-workbench">
       <header className="ros-section-heading">
@@ -2113,7 +2427,7 @@ function ReviewContent({ caseId }: { caseId: string }) {
         actionable.map((item) => (
           <ReviewItem
             item={item}
-            onDecided={() => setReload((value) => value + 1)}
+            onDecided={handleDecided}
             key={item.proposalId}
           />
         ))
@@ -2208,6 +2522,7 @@ function AtomicClaimItem({
   caseId: string;
   claim: AtomicClaimCandidate;
 }) {
+  const location = useLocation();
   const [reason, setReason] = useState("");
   const [editedText, setEditedText] = useState(claim.normalized_text);
   const [editing, setEditing] = useState(false);
@@ -2322,7 +2637,10 @@ function AtomicClaimItem({
         </button>
         <Link
           className="ros-button ros-button--secondary"
-          to={`/events/${caseId}/documents?document=${encodeURIComponent(claim.document_version_id)}&span=${encodeURIComponent(claim.source_span_id)}`}
+          to={preserveLocationSearch(
+            `/events/${caseId}/documents?document=${encodeURIComponent(claim.document_version_id)}&span=${encodeURIComponent(claim.source_span_id)}`,
+            location.search,
+          )}
         >
           定位到冻结原文
         </Link>
@@ -2430,13 +2748,20 @@ function ReviewItem({
   item: Awaited<
     ReturnType<EventResearchClient["getEventReviewQueue"]>
   >["items"][number];
-  onDecided: () => void;
+  onDecided: (outcome: EvidenceReviewOutcome) => void;
 }) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   async function decide(
-    outcome: "confirmed" | "rejected" | "needs_more_evidence",
+    outcome: EvidenceReviewOutcome,
   ) {
     if (!reason.trim()) return;
     setSubmitting(true);
@@ -2448,11 +2773,15 @@ function ReviewItem({
         reviewer_id: "human:researcher",
         expected_version: item.proposalVersion,
       });
-      onDecided();
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!mounted.current) return;
+      onDecided(outcome);
     } catch {
-      setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
+      if (mounted.current) {
+        setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
+      }
     } finally {
-      setSubmitting(false);
+      if (mounted.current) setSubmitting(false);
     }
   }
   return (

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
@@ -14,6 +15,7 @@ import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
+  ConclusionReviewTask,
   CaseFundProfilePage,
   CaseMarketPage,
   CaseReviewPage,
@@ -31,7 +33,20 @@ import {
 } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
-import type { EventWorkbench } from "../domain/eventResearch";
+import type {
+  EventResearchListItem,
+  EventWorkbench,
+} from "../domain/eventResearch";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const historicalRunSummaries = [
   {
@@ -61,7 +76,16 @@ function MonitorLocationProbe() {
 
 function CaseLocationProbe() {
   const location = useLocation();
-  return <output data-testid="case-location">{location.pathname}</output>;
+  return <output data-testid="case-location">{location.pathname}{location.search}</output>;
+}
+
+async function confirmTsmEvidence(adapter: MockResearchAdapter) {
+  await adapter.reviewProposal("proposal-event-tsm", {
+    outcome: "confirmed",
+    reason: "冻结原文、定位和来源许可已经人工核验。",
+    reviewer_id: "human:researcher",
+    expected_version: 1,
+  });
 }
 
 function renderMonitorPage(initialEntry: string) {
@@ -121,6 +145,94 @@ describe("Research OS event entry", () => {
     expect(await screen.findByLabelText("证据工作台页面")).toHaveTextContent("命题与证据");
     expect(screen.getByRole("link", { name: /证据工作台/ })).toHaveAttribute("aria-current", "page");
     expect(within(screen.getByLabelText("证据工作台页面")).getByRole("link", { name: "原文资料" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("preserves the selected research client in primary and secondary Case navigation", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/documents?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/documents"
+            element={<><CaseDocumentsPage /><CaseLocationProbe /></>}
+          />
+          <Route
+            path="/events/:caseId/market"
+            element={<><CaseMarketPage /><CaseLocationProbe /></>}
+          />
+          <Route
+            path="/events/:caseId/evidence"
+            element={<><CaseEvidencePage /><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const primaryNavigation = await screen.findByLabelText("事件研究工作区");
+    await user.click(
+      within(primaryNavigation).getByRole("link", { name: "市场与表达" }),
+    );
+    expect(await screen.findByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/market?client=mock",
+    );
+
+    await user.click(
+      within(await screen.findByLabelText("事件研究工作区")).getByRole("link", {
+        name: /证据工作台/,
+      }),
+    );
+    expect(await screen.findByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/evidence?client=mock",
+    );
+    expect(
+      await screen.findByRole("link", { name: "定位到冻结原文" }),
+    ).toHaveAttribute(
+      "href",
+      "/events/event-tsm/documents?document=doc-event-tsm-q2&client=mock",
+    );
+    await user.click(
+      within(screen.getByLabelText("证据工作台页面")).getByRole("link", {
+        name: "原文资料",
+      }),
+    );
+    expect(await screen.findByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/documents?client=mock",
+    );
+  });
+
+  it("lets an explicit frozen-document target override stale location params", async () => {
+    const user = userEvent.setup();
+    setResearchOsApi(new MockResearchOsApi());
+    render(
+      <MemoryRouter
+        initialEntries={[
+          "/events/event-tsm/review?document=old-document&span=old-span&client=mock",
+        ]}
+      >
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<CaseReviewPage />}
+          />
+          <Route
+            path="/events/:caseId/documents"
+            element={<CaseLocationProbe />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const frozenClaimLink = (await screen.findAllByRole("link", {
+      name: "定位到冻结原文",
+    })).find((link) => link.getAttribute("href")?.includes("span=sp-tsm-capex"));
+    expect(frozenClaimLink).toBeDefined();
+    await user.click(
+      frozenClaimLink!,
+    );
+
+    expect(await screen.findByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/documents?document=doc-event-tsm-q2&span=sp-tsm-capex&client=mock",
+    );
   });
 
   it("reveals the remaining research stages from a compact Case menu", async () => {
@@ -1376,6 +1488,7 @@ describe("Research OS event entry", () => {
       <MemoryRouter initialEntries={["/events/event-exhausted/scope"]}>
         <Routes>
           <Route path="/events/:caseId/scope" element={<CaseScopePage />} />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -1391,7 +1504,117 @@ describe("Research OS event entry", () => {
     );
     await user.type(screen.getByLabelText("本次调整原因"), "补足当前验证缺口");
     await user.click(screen.getByRole("button", { name: "保存新的研究范围" }));
-    expect(await screen.findByText(/已创建范围版本 v2/)).toBeVisible();
+    expect(
+      await screen.findByText("研究范围已更新，系统已按新范围继续补证。"),
+    ).toHaveAttribute("role", "status");
+  });
+
+  it("returns a rejected Case to active research immediately after saving a new scope", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "当前候选无法支持已冻结的研究因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/scope?client=mock"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events/:caseId/scope" element={<CaseScopePage />} />
+            <Route
+              path="/events/:caseId"
+              element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "调整关键因素，创建新的研究范围",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("region", { name: "系统正在运行" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存新的研究范围" }));
+
+    expect(
+      await screen.findByText("研究范围已更新，系统已按新范围继续补证。"),
+    ).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(
+      within(screen.getByRole("list", { name: "当前事件研究进展" }))
+        .getByText("执行补证")
+        .closest("li"),
+    ).toHaveAttribute("aria-current", "step");
+    expect(screen.getByText("现在不用做")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "系统继续处理" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "系统正在运行" })).toHaveTextContent(
+      "运行中 · 采集资料",
+    );
+  });
+
+  it("refreshes global workflow without redirecting after a late scope save", async () => {
+    const adapter = new MockResearchAdapter();
+    const updateScope = adapter.updateEventResearchScope.bind(adapter);
+    const pendingScope = deferred<Awaited<ReturnType<typeof updateScope>>>();
+    vi.spyOn(adapter, "updateEventResearchScope").mockImplementationOnce(
+      async (input) => {
+        await pendingScope.promise;
+        return updateScope(input);
+      },
+    );
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-exhausted/scope?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/scope"
+            element={<><CaseScopePage /><Link to="/events?client=mock">离开范围页</Link></>}
+          />
+          <Route
+            path="/events"
+            element={<><p>已离开范围页</p><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", {
+      name: "调整关键因素，创建新的研究范围",
+    });
+    await user.click(screen.getByRole("button", { name: "保存新的研究范围" }));
+    await user.click(screen.getByRole("link", { name: "离开范围页" }));
+    expect(await screen.findByText("已离开范围页")).toBeVisible();
+
+    await act(async () => {
+      pendingScope.resolve({
+        version: 2,
+        factors: [],
+        reclassifiedEvidenceCount: 0,
+        unmappedEvidenceCount: 0,
+      });
+      await pendingScope.promise;
+    });
+
+    await waitFor(() => expect(workflowRefresh).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("已离开范围页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
   });
 
   it("shows drafts and human-published conclusions as a replayable version chain", async () => {
@@ -1877,29 +2100,464 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
-  it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
+  it.each([
+    {
+      button: "确认采纳",
+      reason: "原文来自冻结的一手公司披露，支持当前因素。",
+      notice: "证据已采纳，系统已生成待复核的结论草案。",
+      stage: "形成结论",
+      lifecycle: "结论草案待复核",
+      nextTask: "审核结论草案",
+      verified: 1,
+      pending: 0,
+    },
+    {
+      button: "要求补充证据",
+      reason: "还需要同一期间的反证和实际经营数据。",
+      notice: "补证要求已记录，系统将按冻结范围继续处理。",
+      stage: "执行补证",
+      lifecycle: "系统补证中",
+      nextTask: "系统补证中",
+      verified: 0,
+      pending: 0,
+    },
+    {
+      button: "驳回候选",
+      reason: "当前候选无法支持已冻结的研究因素。",
+      notice: "候选已驳回，请调整研究范围或补充来源。",
+      stage: "形成结论",
+      lifecycle: "当前范围已穷尽",
+      nextTask: "编辑并继续自动研究",
+      verified: 0,
+      pending: 0,
+    },
+  ])("returns $button to the refreshed event workbench", async ({
+    button,
+    reason,
+    notice,
+    stage,
+    lifecycle,
+    nextTask,
+    verified,
+    pending,
+  }) => {
     const user = userEvent.setup();
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
     render(
-      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
         <Routes>
           <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+          <Route
+            path="/events/:caseId"
+            element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+          />
         </Routes>
       </MemoryRouter>,
     );
 
     await screen.findByRole("heading", { name: /条待审核关系/ });
-    expect(screen.getByRole("button", { name: "确认采纳" })).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("审核理由"),
-      "原文来自冻结的一手公司披露，支持当前因素。",
-    );
-    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+    expect(screen.getByRole("button", { name: button })).toBeDisabled();
+    await user.type(screen.getByLabelText("审核理由"), reason);
+    await user.click(screen.getByRole("button", { name: button }));
 
-    expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
+    expect(await screen.findByText(notice)).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    expect(
+      within(screen.getByRole("list", { name: "当前事件研究进展" }))
+        .getByText(stage)
+        .closest("li"),
+    ).toHaveAttribute("aria-current", "step");
+    expect(screen.getByText(`已审核证据 ${verified}`)).toBeVisible();
+    expect(screen.getByText(`待审核 ${pending}`)).toBeVisible();
+    expect(screen.getAllByText(lifecycle).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: nextTask })).toBeVisible();
+
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
   });
 
-  it("lets a reviewer request more evidence without accepting the candidate", async () => {
+  it("keeps the review reason and stays on the review page when submission fails", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "reviewProposal").mockRejectedValueOnce(
+      new Error("review unavailable"),
+    );
+    setResearchClient(adapter);
     const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<><CaseReviewPage /><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    const reason = screen.getByLabelText("审核理由");
+    await user.type(reason, "原文口径仍需人工确认。");
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+
+    expect(
+      await screen.findByText("提交审核决定失败；候选未被自动采纳。请刷新后重试。"),
+    ).toBeVisible();
+    expect(reason).toHaveValue("原文口径仍需人工确认。");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+  });
+
+  it("shows the AI conclusion draft without reading the evidence queue", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const getEventReviewQueue = vi.spyOn(adapter, "getEventReviewQueue");
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText("结论草案")).toHaveClass(
+      "ros-conclusion-review__editor",
+    );
+    expect(screen.getByLabelText("结论草案")).toHaveValue(
+      "当前结论草案等待人工复核。",
+    );
+    expect(getEventReviewQueue).not.toHaveBeenCalled();
+    expect(screen.getByText("AI 草案，未发布")).toBeVisible();
+    expect(screen.getByText(/正式发布需人工确认/)).toBeVisible();
+    expect(screen.getByText(/引用\/证据边界不会自动扩张/)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    ).toBeEnabled();
+  });
+
+  it("publishes the edited conclusion and refreshes the whole event workflow", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const api = new MockResearchOsApi(adapter);
+    const publishEventConclusion = vi.spyOn(adapter, "publishEventConclusion");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+            <Route
+              path="/events/:caseId"
+              element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("link", { name: "待我审核 2" })).toBeVisible();
+    const draft = await screen.findByLabelText("结论草案");
+    await user.clear(draft);
+    await user.type(draft, "  人工复核后的结论。  ");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    expect(publishEventConclusion).toHaveBeenCalledWith({
+      caseId: "event-tsm",
+      text: "人工复核后的结论。",
+      reviewer: "human:researcher",
+    });
+    expect(
+      await screen.findByText("结论已发布，当前事件进入持续跟踪。"),
+    ).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(screen.getAllByText("持续跟踪").length).toBeGreaterThan(0);
+    expect(screen.getByText("本轮已完成")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "当前没有需要处理的任务" }),
+    ).toBeVisible();
+    expect(await screen.findByRole("link", { name: "待我审核 1" })).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "系统正在运行" }),
+    ).not.toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("publishes a switched non-TSM draft without returning to the same review task", async () => {
+    const adapter = new MockResearchAdapter();
+    setResearchClient(adapter);
+    setResearchOsApi(new MockResearchOsApi(adapter));
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-draft/review?client=mock"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+            <Route
+              path="/events/:caseId"
+              element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const draft = await screen.findByLabelText("结论草案");
+    await user.clear(draft);
+    await user.type(draft, "季度业绩变化是本轮波动的主要可验证因素。");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    expect(
+      await screen.findByText("结论已发布，当前事件进入持续跟踪。"),
+    ).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-draft?client=mock",
+    );
+    expect(screen.getByText("本轮已完成")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "当前没有需要处理的任务" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: "复核结论草案" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("locks the conclusion editor while publication is in flight", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const publicationGate = deferred<void>();
+    const publishConclusion = adapter.publishEventConclusion.bind(adapter);
+    const publishEventConclusion = vi
+      .spyOn(adapter, "publishEventConclusion")
+      .mockImplementation(async (input) => {
+        await publicationGate.promise;
+        return publishConclusion(input);
+      });
+    setResearchClient(adapter);
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<CaseReviewPage />}
+          />
+          <Route
+            path="/events/:caseId"
+            element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const editor = await screen.findByLabelText("结论草案");
+    await user.clear(editor);
+    await user.type(editor, "  提交瞬间冻结的结论。  ");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    expect(editor).toBeDisabled();
+    expect(screen.getByRole("button", { name: "正在发布结论…" })).toBeDisabled();
+    await user.type(editor, "这段文字不应写入");
+    expect(editor).toHaveValue("  提交瞬间冻结的结论。  ");
+    expect(publishEventConclusion).toHaveBeenCalledWith({
+      caseId: "event-tsm",
+      text: "提交瞬间冻结的结论。",
+      reviewer: "human:researcher",
+    });
+
+    await act(async () => {
+      publicationGate.resolve();
+      await publicationGate.promise;
+    });
+
+    expect(
+      await screen.findByText("结论已发布，当前事件进入持续跟踪。"),
+    ).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(screen.getAllByText("持续跟踪").length).toBeGreaterThan(0);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("resets the editor for a new draft and ignores an older publication response", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const firstWorkbench = await adapter.getEventWorkbench("event-tsm");
+    const secondWorkbench: EventWorkbench = {
+      ...firstWorkbench,
+      event: {
+        ...firstWorkbench.event,
+        id: "event-next-draft",
+        eventTitle: "另一事件的新结论草案",
+      },
+      scope: { ...firstWorkbench.scope, version: 2 },
+      conclusion: {
+        ...firstWorkbench.conclusion,
+        text: "另一事件的 AI 草案。",
+      },
+    };
+    const pendingPublication = deferred<{
+      conclusionId: string;
+      state: "published";
+    }>();
+    vi.spyOn(adapter, "publishEventConclusion").mockReturnValueOnce(
+      pendingPublication.promise,
+    );
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+
+    const view = render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <ConclusionReviewTask caseId="event-tsm" workbench={firstWorkbench} />
+        <CaseLocationProbe />
+      </MemoryRouter>,
+    );
+
+    const editor = screen.getByLabelText("结论草案");
+    await user.clear(editor);
+    await user.type(editor, "旧事件的人工编辑");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    view.rerender(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <ConclusionReviewTask
+          caseId="event-next-draft"
+          workbench={secondWorkbench}
+        />
+        <CaseLocationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText("结论草案")).toHaveValue(
+      "另一事件的 AI 草案。",
+    );
+    expect(screen.getByRole("button", {
+      name: "发布结论并进入持续跟踪",
+    })).toBeEnabled();
+
+    await act(async () => {
+      pendingPublication.resolve({ conclusionId: "old-publication", state: "published" });
+      await pendingPublication.promise;
+    });
+
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+    expect(screen.getByLabelText("结论草案")).toHaveValue(
+      "另一事件的 AI 草案。",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
+  it("guards an edited conclusion from internal navigation until confirmed", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    setResearchClient(adapter);
+    const confirm = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={
+              <>
+                <CaseReviewPage />
+                <Link to="/events?client=mock">返回事件列表</Link>
+                <CaseLocationProbe />
+              </>
+            }
+          />
+          <Route
+            path="/events"
+            element={<><p>事件列表页</p><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const editor = await screen.findByLabelText("结论草案");
+    await user.type(editor, "人工补充");
+    await user.click(screen.getByRole("link", { name: "返回事件列表" }));
+
+    expect(confirm).toHaveBeenLastCalledWith(
+      "结论草案有未保存的修改。离开后这些修改将丢失，确定离开吗？",
+    );
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+    expect(editor).toHaveValue("当前结论草案等待人工复核。人工补充");
+
+    await user.click(screen.getByRole("link", { name: "返回事件列表" }));
+    expect(await screen.findByText("事件列表页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("registers and removes the browser unload guard for dirty conclusion text", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    setResearchClient(adapter);
+    const user = userEvent.setup();
+    const view = render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(await screen.findByLabelText("结论草案"), "人工修改");
+    const blockedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(blockedUnload);
+    expect(blockedUnload.defaultPrevented).toBe(true);
+
+    view.unmount();
+    const cleanUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(cleanUnload);
+    expect(cleanUnload.defaultPrevented).toBe(false);
+  });
+
+  it("disables conclusion publication when the edited draft is blank", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    setResearchClient(adapter);
+    const user = userEvent.setup();
+
     render(
       <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
         <Routes>
@@ -1908,15 +2566,199 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole("heading", { name: /条待审核关系/ });
-    expect(screen.getByRole("button", { name: "要求补充证据" })).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("审核理由"),
-      "还需要同一期间的反证和实际经营数据。",
-    );
-    await user.click(screen.getByRole("button", { name: "要求补充证据" }));
+    await user.clear(await screen.findByLabelText("结论草案"));
+    expect(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    ).toBeDisabled();
+  });
 
-    expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
+  it("keeps the edited conclusion on screen when publication fails", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const publishEventConclusion = vi
+      .spyOn(adapter, "publishEventConclusion")
+      .mockRejectedValueOnce(new Error("publication unavailable"));
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={<><CaseReviewPage /><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const draft = await screen.findByLabelText("结论草案");
+    await user.clear(draft);
+    await user.type(draft, "保留这版人工编辑。 ");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    expect(publishEventConclusion).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "发布结论失败；草案未发布，请检查后重试。",
+    );
+    expect(draft).toHaveValue("保留这版人工编辑。 ");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+    expect(workflowRefresh).not.toHaveBeenCalled();
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
+  it("refreshes global workflow without redirecting after a late conclusion publication", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const pendingPublication = deferred<{ conclusionId: string; state: "published" }>();
+    const publishEventConclusion = vi
+      .spyOn(adapter, "publishEventConclusion")
+      .mockReturnValueOnce(pendingPublication.promise);
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={
+              <>
+                <CaseReviewPage />
+                <Link to="/events?client=mock">离开结论审核页</Link>
+              </>
+            }
+          />
+          <Route
+            path="/events"
+            element={<><p>已离开结论审核页</p><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByLabelText("结论草案");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+    await waitFor(() => expect(publishEventConclusion).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: "离开结论审核页" }));
+
+    await act(async () => {
+      pendingPublication.resolve({
+        conclusionId: "published-event-tsm-v1",
+        state: "published",
+      });
+      await pendingPublication.promise;
+    });
+
+    expect(screen.getByText("已离开结论审核页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
+  it("continues to read the evidence queue outside conclusion review", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventReviewQueue = vi.spyOn(adapter, "getEventReviewQueue");
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: /条待审核关系/ })).toBeVisible();
+    expect(getEventReviewQueue).toHaveBeenCalledWith("event-tsm");
+    expect(screen.queryByLabelText("结论草案")).not.toBeInTheDocument();
+  });
+
+  it("refreshes global workflow state without redirecting when review succeeds after leaving the page", async () => {
+    const adapter = new MockResearchAdapter();
+    const pendingReview = deferred<void>();
+    const reviewProposal = vi
+      .spyOn(adapter, "reviewProposal")
+      .mockReturnValueOnce(pendingReview.promise);
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={
+              <>
+                <CaseReviewPage />
+                <Link to="/events?client=mock">离开审核页</Link>
+              </>
+            }
+          />
+          <Route
+            path="/events"
+            element={<><p>已离开审核页</p><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    await user.type(screen.getByLabelText("审核理由"), "原文已经人工核验。");
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+    await waitFor(() => expect(reviewProposal).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: "离开审核页" }));
+    expect(await screen.findByText("已离开审核页")).toBeVisible();
+
+    await act(async () => {
+      pendingReview.resolve();
+      await pendingReview.promise;
+    });
+
+    expect(screen.getByText("已离开审核页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
+  it("ignores an invalid workflow notice route state", async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[{
+          pathname: "/events/event-tsm",
+          state: { workflowNotice: 42 },
+        }]}
+      >
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "尚不能下结论：系统正在核验不同解释及其反证。",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("does not expose a dead original-source action when an extracted claim has no web source URL", async () => {
@@ -2216,6 +3058,254 @@ describe("Research OS event entry", () => {
     const strip = await screen.findByRole("region", { name: "系统正在运行" });
     expect(strip).toHaveTextContent("等待人工审核 · 提出候选");
     expect(strip).not.toHaveTextContent("系统正在运行 ·");
+  });
+
+  it("refreshes the global run strip and event review count after workflow writes", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const listEventResearch = vi.spyOn(adapter, "listEventResearch");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核 · 等待审核");
+    expect(await screen.findByRole("link", { name: "待我审核 2" })).toBeVisible();
+    const initialEventReads = listEventResearch.mock.calls.length;
+
+    await act(async () => {
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "confirmed",
+        reason: "原始披露足以支持该因素。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    await waitFor(() => {
+      expect(listEventResearch).toHaveBeenCalledTimes(initialEventReads + 1);
+      expect(
+        screen.queryByText("等待人工审核 · 等待审核"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("link", { name: "待我审核 2" })).toBeVisible();
+
+    await act(async () => {
+      await adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+        reviewer: "human:researcher",
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    expect(await screen.findByRole("link", { name: "待我审核 1" })).toBeVisible();
+    expect(
+      screen.queryByText("等待人工审核 · 等待审核"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("refreshes the AppShell run strip from the real evidence-review producer", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const activeRuns = vi.spyOn(api, "activeRuns");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+    const user = userEvent.setup();
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+          <ResearchOsRoutes />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核 · 等待审核");
+    const initialActiveRunReads = activeRuns.mock.calls.length;
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    await user.type(
+      screen.getByLabelText("审核理由"),
+      "冻结原文和定位已经人工核验。",
+    );
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+
+    expect(
+      await screen.findByText("证据已采纳，系统已生成待复核的结论草案。"),
+    ).toHaveAttribute("role", "status");
+    await waitFor(() => {
+      expect(activeRuns.mock.calls.length).toBeGreaterThan(initialActiveRunReads);
+      expect(
+        screen.queryByText("等待人工审核 · 等待审核"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "系统正在运行" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("refreshes run events when workflow state changes without changing the active run ID", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const runEvents = vi.spyOn(api, "runEvents");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    await waitFor(() => {
+      expect(strip).toHaveTextContent("候选证据等待人工审核，未写入结论");
+    });
+    const initialRunEventReads = runEvents.mock.calls.length;
+
+    await act(async () => {
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "needs_more_evidence",
+        reason: "需要补充资本开支与自由现金流的季度桥接数据。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    await waitFor(() => {
+      expect(runEvents).toHaveBeenCalledTimes(initialRunEventReads + 1);
+      expect(strip).toHaveTextContent("运行中 · 采集资料");
+      expect(strip).toHaveTextContent("审核要求已记录，系统继续补证");
+    });
+  });
+
+  it("keeps the latest workflow event-list response when an older poll resolves last", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const oldRequest = deferred<EventResearchListItem[]>();
+    const freshEvents: EventResearchListItem[] = [{
+      id: "event-fresh",
+      eventTitle: "最新审核任务",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "draft_ready",
+      statusSummary: "最新状态",
+      nextHumanAction: "审核最新结论",
+      updatedAt: "2026-08-12T10:00:00Z",
+    }];
+    const staleEvents: EventResearchListItem[] = [
+      ...freshEvents,
+      {
+        ...freshEvents[0],
+        id: "event-stale",
+        eventTitle: "过期审核任务",
+      },
+    ];
+    const listEventResearch = vi
+      .spyOn(adapter, "listEventResearch")
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockResolvedValue(freshEvents);
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listEventResearch).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+    expect(await screen.findByRole("link", { name: "待我审核 1" })).toBeVisible();
+
+    await act(async () => {
+      oldRequest.resolve(staleEvents);
+      await oldRequest.promise;
+    });
+
+    expect(screen.getByRole("link", { name: "待我审核 1" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "待我审核 2" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the latest active-run response when an older poll resolves last", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const oldRequest = deferred<Awaited<ReturnType<typeof api.activeRuns>>>();
+    const run = (caseTitle: string, status: string, stage: string) => ({
+      has_more: false,
+      items: [{
+        run_id: "run-race",
+        case_id: "event-tsm",
+        case_title: caseTitle,
+        status,
+        stage,
+        updated_at: "2026-08-12T10:00:00Z",
+        processed_count: 1,
+        next_action: "查看运行详情",
+        scope: {
+          trigger: "schedule",
+          allowed_source_types: ["company_disclosure"],
+        },
+      }],
+    });
+    const activeRuns = vi
+      .spyOn(api, "activeRuns")
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockResolvedValue(run("最新运行状态", "running", "retrieve"));
+    vi.spyOn(api, "runEvents").mockResolvedValue({
+      run_id: "run-race",
+      has_more: false,
+      items: [],
+    });
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(activeRuns).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+    expect(await screen.findByText(/最新运行状态/)).toBeVisible();
+
+    await act(async () => {
+      oldRequest.resolve(run("过期运行状态", "awaiting_review", "review"));
+      await oldRequest.promise;
+    });
+
+    expect(screen.getByText(/最新运行状态/)).toBeVisible();
+    expect(screen.queryByText(/过期运行状态/)).not.toBeInTheDocument();
   });
 
   it("removes stale active-run strips when their live status can no longer be confirmed", async () => {

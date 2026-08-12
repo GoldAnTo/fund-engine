@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
+import { eventActionPresentation } from "../domain/eventResearchPresentation";
 import { PageStateError } from "../domain/types";
 
 describe("MockResearchAdapter scenarios", () => {
@@ -182,6 +183,971 @@ describe("MockResearchAdapter scenarios", () => {
       },
     });
     expect(detail.spans).toEqual([]);
+  });
+
+  it.each([
+    {
+      outcome: "confirmed",
+      expectedStatus: "draft_ready",
+      expectedNextAction: "review_conclusion",
+      expectedVerified: 1,
+    },
+    {
+      outcome: "needs_more_evidence",
+      expectedStatus: "researching",
+      expectedNextAction: "wait",
+      expectedVerified: 0,
+    },
+    {
+      outcome: "rejected",
+      expectedStatus: "exhausted",
+      expectedNextAction: "edit_factors",
+      expectedVerified: 0,
+    },
+  ] as const)(
+    "projects a $outcome TSM evidence decision across every event read model",
+    async ({ outcome, expectedStatus, expectedNextAction, expectedVerified }) => {
+      const adapter = new MockResearchAdapter();
+
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome,
+        reason: `review reason for ${outcome}`,
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+
+      const queue = await adapter.getEventReviewQueue("event-tsm");
+      const workbench = await adapter.getEventWorkbench("event-tsm");
+      const event = (await adapter.listEventResearch()).find(
+        (item) => item.id === "event-tsm",
+      );
+
+      expect(queue.summary).toMatchObject({ reviewed: 1, pending: 0 });
+      expect(
+        queue.items.filter((item) => item.status === "pending" && item.canAccept),
+      ).toEqual([]);
+      expect(workbench.lifecycle.status).toBe(expectedStatus);
+      expect(workbench.nextAction.kind).toBe(expectedNextAction);
+      expect(workbench.progress).toMatchObject({
+        verified: expectedVerified,
+        pending: 0,
+      });
+      expect(workbench.factors[0].pendingProposalCount).toBe(0);
+      expect(event).toMatchObject({
+        status: workbench.lifecycle.status,
+        statusSummary: workbench.lifecycle.summary,
+        nextHumanAction: workbench.lifecycle.nextHumanAction,
+      });
+    },
+  );
+
+  it("turns a confirmed TSM evidence review into a conclusion draft", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.conclusion.state).toBe("ai_draft");
+    expect(workbench.factors[0]).toMatchObject({
+      reviewedSupportCount: 1,
+      pendingProposalCount: 0,
+      currentGap: null,
+    });
+    expect(workbench.lifecycle).toMatchObject({
+      activeRunId: null,
+      nextHumanAction: "审核结论草案",
+    });
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual([
+      expect.objectContaining({
+        id: "draft-event-tsm-v1",
+        sequence: 1,
+        state: "ai_draft",
+        reviewer: null,
+        evidenceCount: 1,
+        scopeVersion: workbench.scope.version,
+        basedOnConclusionId: null,
+      }),
+    ]);
+  });
+
+  it.each(["rejected", "needs_more_evidence"] as const)(
+    "rejects a second %s decision without replacing a confirmed TSM review",
+    async (outcome) => {
+      const adapter = new MockResearchAdapter();
+
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "confirmed",
+        reason: "原始披露足以支持该因素。",
+        reviewer_id: "human:first-reviewer",
+        expected_version: 1,
+      });
+      const beforeHistory = await adapter.getEventConclusionHistory("event-tsm");
+
+      await expect(
+        adapter.reviewProposal("proposal-event-tsm", {
+          outcome,
+          reason: "迟到的冲突审核结果。",
+          reviewer_id: "human:late-reviewer",
+          expected_version: 1,
+        }),
+      ).rejects.toThrow("proposal version or state conflict");
+
+      const workbench = await adapter.getEventWorkbench("event-tsm");
+      const queue = await adapter.getEventReviewQueue("event-tsm");
+      expect(workbench.lifecycle.status).toBe("draft_ready");
+      expect(workbench.progress).toMatchObject({ verified: 1, pending: 0 });
+      expect(workbench.evidence[0].reviewState).toBe("reviewed");
+      expect(queue.summary).toMatchObject({ reviewed: 1, pending: 0 });
+      expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
+        beforeHistory,
+      );
+    },
+  );
+
+  it("rejects an initial TSM review with the wrong expected version", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "confirmed",
+        reason: "使用了过期的提议版本。",
+        reviewer_id: "human:researcher",
+        expected_version: 2,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const queue = await adapter.getEventReviewQueue("event-tsm");
+    expect(workbench.lifecycle.status).toBe("awaiting_key_review");
+    expect(workbench.progress).toMatchObject({ verified: 0, pending: 1 });
+    expect(workbench.evidence[0].reviewState).toBe("machine_generated");
+    expect(queue.summary).toMatchObject({ reviewed: 0, pending: 1 });
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual([]);
+  });
+
+  it("fails closed when a regular run proposal uses a stale expected version", async () => {
+    const adapter = new MockResearchAdapter();
+    const proposal = (await adapter.listReviewProposals("RC-AIC-2025-01"))[0];
+    expect(proposal).toMatchObject({ id: "proposal-1", status: "pending", version: 1 });
+
+    await expect(
+      adapter.reviewProposal(proposal.id, {
+        outcome: "confirmed",
+        reason: "使用了过期的普通提议版本。",
+        reviewer_id: "human:researcher",
+        expected_version: 2,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+
+    expect(await adapter.listReviewProposals("RC-AIC-2025-01")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: proposal.id, status: "pending", version: 1 }),
+      ]),
+    );
+  });
+
+  it("keeps regular proposal decisions inside one adapter and resets them with the scenario", async () => {
+    const adapterA = new MockResearchAdapter();
+    const adapterB = new MockResearchAdapter();
+
+    await adapterA.reviewProposal("proposal-1", {
+      outcome: "confirmed",
+      reason: "仅审核 adapter A 的普通提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    await expect(
+      adapterA.reviewProposal("proposal-1", {
+        outcome: "confirmed",
+        reason: "重复提交同一普通提议。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect((await adapterA.getResearchRun("run-aic-001")).pending_proposals).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "decided" }),
+    ]);
+
+    expect(await adapterB.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+    expect((await adapterB.getResearchRun("run-aic-001")).pending_proposals).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending" }),
+    ]);
+
+    adapterA.setScenario("typical");
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("lets parallel adapters decide the same regular proposal independently", async () => {
+    const adapterA = new MockResearchAdapter();
+    const adapterB = new MockResearchAdapter();
+
+    const decisions = await Promise.allSettled([
+      adapterA.reviewProposal("proposal-1", {
+        outcome: "confirmed",
+        reason: "adapter A 独立审核。",
+        reviewer_id: "human:researcher-a",
+        expected_version: 1,
+      }),
+      adapterB.reviewProposal("proposal-1", {
+        outcome: "rejected",
+        reason: "adapter B 独立审核。",
+        reviewer_id: "human:researcher-b",
+        expected_version: 1,
+      }),
+    ]);
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ status: "fulfilled" }),
+      expect.objectContaining({ status: "fulfilled" }),
+    ]);
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect(await adapterB.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect(await new MockResearchAdapter().listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("assigns unique proposal identities to each newly created research run", async () => {
+    const adapter = new MockResearchAdapter();
+    const options = { max_rounds: 3, budget: 10, auto_execute: true };
+
+    const runA = await adapter.startResearchRun("case-multi-run", options);
+    const runB = await adapter.startResearchRun("case-multi-run", options);
+    const proposalA = runA.pending_proposals[0];
+    const proposalB = runB.pending_proposals[0];
+
+    expect(runA.id).not.toBe(runB.id);
+    expect(proposalA.id).not.toBe(proposalB.id);
+    expect(proposalA.id).toContain(runA.id);
+    expect(proposalB.id).toContain(runB.id);
+
+    await adapter.reviewProposal(proposalA.id, {
+      outcome: "confirmed",
+      reason: "只审核运行 A 的提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    expect((await adapter.getResearchRun(runA.id)).pending_proposals[0]).toMatchObject({
+      id: proposalA.id,
+      status: "decided",
+    });
+    expect((await adapter.getResearchRun(runB.id)).pending_proposals[0]).toMatchObject({
+      id: proposalB.id,
+      status: "pending",
+    });
+    expect(await adapter.listReviewProposals("case-multi-run")).toEqual([
+      expect.objectContaining({ id: proposalB.id, status: "pending" }),
+    ]);
+
+    await expect(
+      adapter.reviewProposal(proposalB.id, {
+        outcome: "rejected",
+        reason: "运行 B 的提议仍可独立审核。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).resolves.toBeUndefined();
+    expect((await adapter.getResearchRun(runB.id)).pending_proposals[0]).toMatchObject({
+      id: proposalB.id,
+      status: "decided",
+    });
+  });
+
+  it("keeps proposals from later runs pending after an older proposal is reviewed", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-1", {
+      outcome: "confirmed",
+      reason: "先审核基础运行提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    const newRun = await adapter.startResearchRun("case-after-review", {
+      max_rounds: 3,
+      budget: 10,
+      auto_execute: true,
+    });
+    const newProposal = newRun.pending_proposals[0];
+
+    expect(newProposal.id).not.toBe("proposal-1");
+    expect(newProposal.status).toBe("pending");
+    expect(await adapter.listReviewProposals("case-after-review")).toEqual([
+      expect.objectContaining({ id: newProposal.id, status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("fails closed when a regular proposal id does not belong to any run", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.reviewProposal("proposal-missing-run-source", {
+        outcome: "confirmed",
+        reason: "错误提议 ID 不应被接受。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+
+    expect(await adapter.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("publishes the confirmed TSM conclusion across every event read model", async () => {
+    const adapter = new MockResearchAdapter();
+    const conclusionText = "资本开支上调构成当前市场担忧的重要可验证因素。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    const publication = await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: conclusionText,
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const history = await adapter.getEventConclusionHistory("event-tsm");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-tsm",
+    );
+
+    expect(publication).toEqual({
+      conclusionId: "published-event-tsm-v1",
+      state: "published",
+    });
+    expect(workbench.lifecycle).toMatchObject({
+      status: "published",
+      activeRunId: null,
+      nextHumanAction: null,
+    });
+    expect(workbench.conclusion).toMatchObject({
+      state: "published",
+      text: conclusionText,
+      confidence: "high",
+    });
+    expect(workbench.progress).toMatchObject({ verified: 1, pending: 0 });
+    expect(workbench.evidence[0].reviewState).toBe("reviewed");
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "当前没有需要处理的任务",
+    });
+    expect(eventActionPresentation(workbench, "event-tsm").owner).toBe(
+      "本轮已完成",
+    );
+    expect(event).toMatchObject({
+      status: "published",
+      nextHumanAction: null,
+    });
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject({
+      id: "draft-event-tsm-v1",
+      sequence: 1,
+      state: "ai_draft",
+      reviewer: null,
+      evidenceCount: 1,
+      scopeVersion: workbench.scope.version,
+      basedOnConclusionId: null,
+    });
+    expect(history[1]).toMatchObject({
+      id: publication.conclusionId,
+      sequence: 2,
+      state: "published",
+      text: conclusionText,
+      reviewer: "human:researcher",
+      evidenceCount: 1,
+      scopeVersion: workbench.scope.version,
+      basedOnConclusionId: history[0].id,
+    });
+  });
+
+  it("publishes a non-TSM draft across the workbench, event list, and immutable history", async () => {
+    const adapter = new MockResearchAdapter();
+    const conclusionText = "人工确认：季度业绩变化是本轮波动的主要可验证因素。";
+
+    expect((await adapter.getEventWorkbench("event-draft")).nextAction.kind).toBe(
+      "review_conclusion",
+    );
+
+    const publication = await adapter.publishEventConclusion({
+      caseId: "event-draft",
+      text: conclusionText,
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-draft");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-draft",
+    );
+    const history = await adapter.getEventConclusionHistory("event-draft");
+
+    expect(publication.state).toBe("published");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "published",
+      activeRunId: null,
+      nextHumanAction: null,
+    });
+    expect(workbench.conclusion).toMatchObject({
+      state: "published",
+      text: conclusionText,
+    });
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "当前没有需要处理的任务",
+    });
+    expect(event).toMatchObject({ status: "published", nextHumanAction: null });
+    expect(history).toEqual([
+      expect.objectContaining({
+        state: "ai_draft",
+        sequence: 1,
+        reviewer: null,
+        basedOnConclusionId: null,
+      }),
+      expect.objectContaining({
+        id: publication.conclusionId,
+        state: "published",
+        sequence: 2,
+        text: conclusionText,
+        reviewer: "human:researcher",
+        basedOnConclusionId: history[0]?.id,
+      }),
+    ]);
+  });
+
+  it("allows only one concurrent non-TSM conclusion publication", async () => {
+    const adapter = new MockResearchAdapter();
+    const payloads = [
+      {
+        caseId: "event-draft",
+        text: "第一位研究员确认的季度业绩结论。",
+        reviewer: "human:first-reviewer",
+      },
+      {
+        caseId: "event-draft",
+        text: "第二位研究员确认的季度业绩结论。",
+        reviewer: "human:second-reviewer",
+      },
+    ];
+
+    const results = await Promise.allSettled(
+      payloads.map((payload) => adapter.publishEventConclusion(payload)),
+    );
+    const fulfilledIndexes = results.flatMap((result, index) =>
+      result.status === "fulfilled" ? [index] : [],
+    );
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const history = await adapter.getEventConclusionHistory("event-draft");
+    expect(history.filter((version) => version.state === "published")).toHaveLength(1);
+    expect((await adapter.getEventWorkbench("event-draft")).conclusion.text).toBe(
+      payloads[fulfilledIndexes[0]].text,
+    );
+  });
+
+  it("rejects a non-TSM publication when its scope revision changes before commit", async () => {
+    const adapter = new MockResearchAdapter();
+    const publication = adapter.publishEventConclusion({
+      caseId: "event-draft",
+      text: "基于旧研究范围准备发布的结论。",
+      reviewer: "human:reviewer",
+    });
+    const scopeUpdate = adapter.updateEventResearchScope({
+      caseId: "event-draft",
+      factors: ["新的竞争格局因素", "新的盈利预期因素"],
+      changedBy: "human:scope-editor",
+      changeReason: "发布过程中调整研究范围",
+    });
+
+    const results = await Promise.allSettled([publication, scopeUpdate]);
+
+    expect(results[0]).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        message: "event research state changed during publication",
+      }),
+    });
+    expect(results[1]).toMatchObject({ status: "fulfilled" });
+    const workbench = await adapter.getEventWorkbench("event-draft");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.scope).toMatchObject({
+      version: 2,
+      factors: [
+        { statement: "新的竞争格局因素" },
+        { statement: "新的盈利预期因素" },
+      ],
+    });
+    expect(await adapter.getEventConclusionHistory("event-draft")).toEqual([]);
+  });
+
+  it("allows a non-TSM scope update after publication has committed", async () => {
+    const adapter = new MockResearchAdapter();
+    await adapter.publishEventConclusion({
+      caseId: "event-draft",
+      text: "已经原子发布的季度业绩结论。",
+      reviewer: "human:reviewer",
+    });
+    const publishedHistory = await adapter.getEventConclusionHistory("event-draft");
+
+    const results = await Promise.allSettled([
+      adapter.updateEventResearchScope({
+        caseId: "event-draft",
+        factors: ["发布后的持续跟踪因素"],
+        changedBy: "human:scope-editor",
+        changeReason: "开启后续研究周期",
+      }),
+    ]);
+
+    expect(results).toMatchObject([{ status: "fulfilled" }]);
+    const workbench = await adapter.getEventWorkbench("event-draft");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.scope.version).toBe(2);
+    expect(workbench.conclusion.text).toBe("已经原子发布的季度业绩结论。");
+    expect(await adapter.getEventConclusionHistory("event-draft")).toEqual(
+      publishedHistory,
+    );
+  });
+
+  it("freezes custom scope metadata into TSM draft and published versions", async () => {
+    const adapter = new MockResearchAdapter();
+    const primaryFactor = "自定义资本开支因素";
+
+    const scope = await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: [
+        { statement: primaryFactor, description: "自定义验证边界" },
+        "盈利预期变化",
+      ],
+      changedBy: "human:researcher",
+      changeReason: "发布前冻结自定义研究范围",
+    });
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "自定义范围下的原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: "自定义资本开支因素构成当前市场担忧的重要可验证因素。",
+      reviewer: "human:researcher",
+    });
+
+    expect(scope.version).toBe(2);
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual([
+      expect.objectContaining({
+        id: "draft-event-tsm-v1",
+        state: "ai_draft",
+        primaryFactor,
+        scopeVersion: 2,
+      }),
+      expect.objectContaining({
+        id: "published-event-tsm-v1",
+        state: "published",
+        primaryFactor,
+        scopeVersion: 2,
+      }),
+    ]);
+  });
+
+  it("reclassifies the reviewed TSM citation onto the current scope factor", async () => {
+    const adapter = new MockResearchAdapter();
+    const primaryFactor = "自定义资本开支与现金流因素";
+
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: [primaryFactor, "盈利预期变化", "估值与市场环境"],
+      changedBy: "human:researcher",
+      changeReason: "用新范围重新映射已审核证据",
+    });
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露在新范围下仍可支持首要因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: "新范围下的人工结论。",
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.scope.unmappedEvidenceCount).toBe(0);
+    expect(workbench.factors[0].statement).toBe(primaryFactor);
+    expect(workbench.evidence[0].factorStatement).toBe(primaryFactor);
+    expect(workbench.conclusion.citations[0].factorStatement).toBe(primaryFactor);
+  });
+
+  it("keeps published TSM history frozen after a later scope update", async () => {
+    const adapter = new MockResearchAdapter();
+    const primaryFactor = "自定义资本开支因素";
+    const conclusionText = "自定义资本开支因素构成当前市场担忧的重要可验证因素。";
+
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: [primaryFactor],
+      changedBy: "human:researcher",
+      changeReason: "发布前冻结自定义研究范围",
+    });
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "自定义范围下的原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: conclusionText,
+      reviewer: "human:researcher",
+    });
+    const publishedHistory = await adapter.getEventConclusionHistory("event-tsm");
+
+    const nextScope = await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: ["新的资本开支跟踪因素"],
+      changedBy: "human:researcher",
+      changeReason: "发布后进入下一轮持续跟踪",
+    });
+
+    expect(nextScope.version).toBe(3);
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.conclusion.citations[0].factorStatement).toBe(primaryFactor);
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
+      publishedHistory,
+    );
+    expect(publishedHistory.map((version) => version.scopeVersion)).toEqual([2, 2]);
+    expect(publishedHistory.map((version) => version.primaryFactor)).toEqual([
+      primaryFactor,
+      primaryFactor,
+    ]);
+    expect(publishedHistory[1]).toMatchObject({
+      id: "published-event-tsm-v1",
+      text: conclusionText,
+    });
+  });
+
+  it("rejects duplicate TSM publication without replacing the first version", async () => {
+    const adapter = new MockResearchAdapter();
+    const originalText = "资本开支上调构成当前市场担忧的重要可验证因素。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: originalText,
+      reviewer: "human:researcher",
+    });
+    const originalHistory = await adapter.getEventConclusionHistory("event-tsm");
+
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "试图覆盖首次发布的结论。",
+        reviewer: "human:second-reviewer",
+      }),
+    ).rejects.toThrow("unconsumed draft_ready conclusion is required");
+
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
+      originalHistory,
+    );
+    expect((await adapter.getEventWorkbench("event-tsm")).conclusion.text).toBe(
+      originalText,
+    );
+  });
+
+  it("rejects a review after TSM publication without changing published projections", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:first-reviewer",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+      reviewer: "human:first-reviewer",
+    });
+    const before = await adapter.getEventWorkbench("event-tsm");
+    const beforeHistory = await adapter.getEventConclusionHistory("event-tsm");
+
+    await expect(
+      adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "rejected",
+        reason: "发布后到达的冲突审核结果。",
+        reviewer_id: "human:late-reviewer",
+        expected_version: 1,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+
+    const after = await adapter.getEventWorkbench("event-tsm");
+    expect(after.lifecycle).toEqual(before.lifecycle);
+    expect(after.progress).toEqual(before.progress);
+    expect(after.evidence[0].reviewState).toBe("reviewed");
+    expect(after.conclusion.citations[0].reviewState).toBe("reviewed");
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
+      beforeHistory,
+    );
+  });
+
+  it("rejects stale TSM publication after scope continuation", async () => {
+    const adapter = new MockResearchAdapter();
+    const originalText = "资本开支上调构成当前市场担忧的重要可验证因素。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: originalText,
+      reviewer: "human:researcher",
+    });
+    const originalHistory = await adapter.getEventConclusionHistory("event-tsm");
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: ["新的持续跟踪因素"],
+      changedBy: "human:researcher",
+      changeReason: "发布后进入下一轮持续跟踪",
+    });
+
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "试图用旧草案覆盖已发布结论。",
+        reviewer: "human:researcher",
+      }),
+    ).rejects.toThrow("unconsumed draft_ready conclusion is required");
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.conclusion.text).toBe(originalText);
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual(
+      originalHistory,
+    );
+  });
+
+  it("resets TSM conclusion snapshots without leaking them between adapters", async () => {
+    const adapter = new MockResearchAdapter();
+    const isolatedAdapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+      reviewer: "human:researcher",
+    });
+
+    expect(await isolatedAdapter.getEventConclusionHistory("event-tsm")).toEqual([]);
+    expect((await isolatedAdapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "awaiting_key_review",
+    );
+
+    adapter.setScenario("typical");
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual([]);
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "awaiting_key_review",
+    );
+  });
+
+  it("rejects publishing the TSM conclusion before evidence confirmation", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+        reviewer: "human:researcher",
+      }),
+    ).rejects.toThrow("confirmed evidence review is required");
+
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "awaiting_key_review",
+    );
+  });
+
+  it("rejects a blank TSM conclusion without changing the confirmed draft", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "   ",
+        reviewer: "human:researcher",
+      }),
+    ).rejects.toThrow("conclusion text is required");
+
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "draft_ready",
+    );
+  });
+
+  it("continues TSM research with the review reason as the current gap", async () => {
+    const adapter = new MockResearchAdapter();
+    const reason = "需要补充资本开支与自由现金流的季度桥接数据。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "needs_more_evidence",
+      reason,
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "researching",
+      currentGap: reason,
+      nextHumanAction: null,
+    });
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "系统补证中",
+    });
+  });
+
+  it("exhausts TSM research after rejecting the current candidate", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "该材料与市场反应缺少直接关联。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "exhausted",
+      activeRunId: null,
+      nextHumanAction: "编辑并继续自动研究",
+    });
+    expect(workbench.nextAction.kind).toBe("edit_factors");
+  });
+
+  it("rejects an unsupported modified TSM evidence review without advancing state", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "modified",
+        reason: "尝试修改候选关系。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+        replacement_payload: { role: "contradicts" },
+      }),
+    ).rejects.toThrow("modified evidence review outcome is unsupported");
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("awaiting_key_review");
+    expect(workbench.progress.pending).toBe(1);
+  });
+
+  it("keeps TSM review counts authoritative when scope state exists before review", async () => {
+    const adapter = new MockResearchAdapter();
+    const customFactors = [{
+      statement: "自定义资本开支因素",
+      description: "审核前保存的自定义研究范围",
+    }];
+
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: customFactors,
+      changedBy: "human:researcher",
+      changeReason: "审核前变更为自定义因素",
+    });
+
+    const queue = await adapter.getEventReviewQueue("event-tsm");
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const savedScope = workbench.scope;
+    expect(queue.summary.pending).toBe(1);
+    expect(workbench.progress.pending).toBe(queue.summary.pending);
+    expect(workbench.factors[0].pendingProposalCount).toBe(1);
+    expect(savedScope).toEqual({
+      version: 2,
+      factors: customFactors,
+      unmappedEvidenceCount: 0,
+    });
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const reviewedWorkbench = await adapter.getEventWorkbench("event-tsm");
+    expect(reviewedWorkbench.lifecycle.status).toBe("draft_ready");
+    expect(reviewedWorkbench.nextAction.kind).toBe("review_conclusion");
+    expect(reviewedWorkbench.scope).toEqual(savedScope);
+  });
+
+  it("lets a scope update continue TSM research after rejecting evidence", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "该材料与市场反应缺少直接关联。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: ["新因素甲", "新因素乙", "新因素丙"],
+      changedBy: "human:researcher",
+      changeReason: "驳回后调整研究范围",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-tsm",
+    );
+    expect(workbench.lifecycle.status).toBe("continuing");
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "系统继续处理",
+    });
+    expect(workbench.progress).toMatchObject({ verified: 0, pending: 0 });
+    expect(workbench.factors[0].pendingProposalCount).toBe(0);
+    expect(event).toMatchObject({
+      status: "continuing",
+      statusSummary: workbench.lifecycle.summary,
+      nextHumanAction: null,
+    });
   });
 
   it("returns review queue items with AI provenance and dated scope", async () => {

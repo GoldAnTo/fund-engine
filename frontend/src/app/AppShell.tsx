@@ -102,14 +102,36 @@ export function AppShell() {
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [session, setSession] = useState<ResearchSession | null>(null);
   useEffect(() => {
-    const load = () =>
-      researchClient
+    let live = true;
+    let latestRequest = 0;
+    const load = () => {
+      const request = ++latestRequest;
+      return researchClient
         .listEventResearch()
-        .then(setEvents)
-        .catch(() => setEvents([]));
+        .then((items) => {
+          if (live && request === latestRequest) setEvents(items);
+        })
+        .catch(() => {
+          if (live && request === latestRequest) setEvents([]);
+        });
+    };
     load();
     const refresh = window.setInterval(load, 20_000);
-    return () => window.clearInterval(refresh);
+    const refreshAfterWorkflow = () => {
+      void load();
+    };
+    window.addEventListener(
+      "research-os-workflow-refresh",
+      refreshAfterWorkflow,
+    );
+    return () => {
+      live = false;
+      window.clearInterval(refresh);
+      window.removeEventListener(
+        "research-os-workflow-refresh",
+        refreshAfterWorkflow,
+      );
+    };
   }, []);
   useEffect(() => {
     const query = searchQuery.trim();
@@ -142,23 +164,26 @@ export function AppShell() {
   }, [searchQuery]);
   useEffect(() => {
     let live = true;
-    const load = () =>
-      researchOsApi
+    let latestRequest = 0;
+    const load = () => {
+      const request = ++latestRequest;
+      return researchOsApi
         .activeRuns()
         .then((response) => {
-          if (live) {
+          if (live && request === latestRequest) {
             setActiveRuns(response.items);
             setRunLoadError(false);
           }
         })
         .catch(() => {
-          if (live) {
+          if (live && request === latestRequest) {
             setActiveRuns([]);
             setActiveRunEvents({});
             setActiveRunEventErrors({});
             setRunLoadError(true);
           }
         });
+    };
     load();
     const refresh = window.setInterval(load, 15_000);
     const refreshAfterRunStart = () => {
@@ -168,11 +193,22 @@ export function AppShell() {
       // making researchers wait for the normal background poll.
       window.setTimeout(load, 350);
     };
+    const refreshAfterWorkflow = () => {
+      void load();
+    };
     window.addEventListener("research-os-run-refresh", refreshAfterRunStart);
+    window.addEventListener(
+      "research-os-workflow-refresh",
+      refreshAfterWorkflow,
+    );
     return () => {
       live = false;
       window.clearInterval(refresh);
       window.removeEventListener("research-os-run-refresh", refreshAfterRunStart);
+      window.removeEventListener(
+        "research-os-workflow-refresh",
+        refreshAfterWorkflow,
+      );
     };
   }, [runReload]);
   useEffect(() => {
@@ -250,12 +286,14 @@ export function AppShell() {
   const activeRunIds = activeRuns.map((run) => run.run_id).join(",");
   useEffect(() => {
     let live = true;
+    let latestRequest = 0;
     if (!activeRunIds) {
       setActiveRunEvents({});
       setActiveRunEventErrors({});
       return;
     }
     const load = async () => {
+      const request = ++latestRequest;
       const results = await Promise.all(
         activeRuns.map(async (run) => {
           try {
@@ -277,7 +315,7 @@ export function AppShell() {
           }
         }),
       );
-      if (!live) return;
+      if (!live || request !== latestRequest) return;
       setActiveRunEvents(
         Object.fromEntries(results.map((result) => [result.runId, result.events])),
       );
@@ -287,9 +325,20 @@ export function AppShell() {
     };
     load();
     const refresh = window.setInterval(load, 15_000);
+    const refreshAfterWorkflow = () => {
+      void load();
+    };
+    window.addEventListener(
+      "research-os-workflow-refresh",
+      refreshAfterWorkflow,
+    );
     return () => {
       live = false;
       window.clearInterval(refresh);
+      window.removeEventListener(
+        "research-os-workflow-refresh",
+        refreshAfterWorkflow,
+      );
     };
   }, [activeRunIds]);
   const needsReview = events.filter((event) => event.nextHumanAction).length;

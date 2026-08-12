@@ -1,5 +1,6 @@
 import type { components } from "../contracts/v1";
 import type { ResearchOsApi } from "../app/researchOsApi";
+import type { EventWorkbench } from "../domain/eventResearch";
 
 type Schemas = components["schemas"];
 type Monitor = Schemas["CaseMonitorDTO"];
@@ -110,7 +111,16 @@ export interface MockDocumentSupplementStore {
     extractionAllowed: boolean;
   }>;
   getAtomicClaimCandidates(caseId: string): AtomicClaim[];
+  getEventWorkbench?(caseId: string): Promise<EventWorkbench>;
 }
+
+type EventRunProjection = {
+  active: boolean;
+  status: string;
+  stage: string;
+  workbench: EventWorkbench | null;
+  finalEvent: Schemas["ResearchRunEventsItemDTO"];
+};
 
 function monitorFor(
   caseId: string,
@@ -223,6 +233,133 @@ export class MockResearchOsApi implements ResearchOsApi {
 
   constructor(private readonly documentStore?: MockDocumentSupplementStore) {}
 
+  private async eventRunProjection(): Promise<EventRunProjection> {
+    const workbench = await this.documentStore?.getEventWorkbench?.("event-tsm");
+
+    switch (workbench?.lifecycle.status) {
+      case "researching":
+      case "continuing":
+        return {
+          active: true,
+          status: "running",
+          stage: "retrieve",
+          workbench,
+          finalEvent: {
+            seq: 3,
+            stage: "retrieve",
+            status: "running",
+            message: "审核要求已记录，系统继续补证",
+            details: workbench.lifecycle.currentGap
+              ? { review_reason: workbench.lifecycle.currentGap }
+              : {},
+            created_at: now,
+          },
+        };
+      case "draft_ready":
+        return {
+          active: false,
+          status: "succeeded",
+          stage: "complete",
+          workbench,
+          finalEvent: {
+            seq: 3,
+            stage: "review",
+            status: "completed",
+            message: "关键证据已由研究员确认，结论草案待复核",
+            details: {},
+            created_at: now,
+          },
+        };
+      case "exhausted":
+        return {
+          active: false,
+          status: "succeeded",
+          stage: "complete",
+          workbench,
+          finalEvent: {
+            seq: 3,
+            stage: "review",
+            status: "completed",
+            message: "候选已处理，当前范围需要调整",
+            details: workbench.lifecycle.currentGap
+              ? { review_reason: workbench.lifecycle.currentGap }
+              : {},
+            created_at: now,
+          },
+        };
+      case "published":
+        return {
+          active: false,
+          status: "succeeded",
+          stage: "complete",
+          workbench,
+          finalEvent: {
+            seq: 3,
+            stage: "complete",
+            status: "completed",
+            message: "结论已发布，进入持续跟踪",
+            details: {},
+            created_at: now,
+          },
+        };
+      case "awaiting_key_review":
+      default:
+        return {
+          active: true,
+          status: "awaiting_review",
+          stage: "review",
+          workbench: workbench ?? null,
+          finalEvent: {
+            seq: 3,
+            stage: "review",
+            status: "awaiting_review",
+            message: "候选证据等待人工审核，未写入结论",
+            details: { pending_review: workbench?.progress.pending ?? 1 },
+            created_at: now,
+          },
+        };
+    }
+  }
+
+  private eventRunRecord(projection: EventRunProjection) {
+    const workbench = projection.workbench;
+    return {
+      run_id: "run-demo-1",
+      case_id: "event-tsm",
+      case_title:
+        workbench?.event.eventTitle ?? "TSM 资本开支与自由现金流验证",
+      status: projection.status,
+      stage: projection.stage,
+      updated_at: now,
+      processed_count: workbench
+        ? workbench.progress.verified + workbench.progress.pending
+        : 2,
+      next_action: workbench?.nextAction.label ?? "查看运行详情",
+      scope: this.eventRunScope(projection),
+    } satisfies Schemas["ActiveResearchRunDTO"];
+  }
+
+  private eventRunScope(
+    projection: EventRunProjection,
+  ): Schemas["FrozenRunScopeDTO"] {
+    const workbench = projection.workbench;
+    return {
+      trigger: "schedule",
+      monitor_version_id: workbench
+        ? `event-tsm-scope-v${workbench.scope.version}`
+        : "monitor-event-tsm-v1",
+      factor_ids:
+        workbench?.factors.map(
+          (factor, index) => factor.thesisId ?? `factor-${index + 1}`,
+        ) ?? factors.map((factor) => factor.id),
+      factor_statements:
+        workbench?.factors.map((factor) => factor.statement) ??
+        factors.map((factor) => factor.statement),
+      allowed_source_types: ["licensed_provider", "company_disclosure"],
+      budget: 20,
+    };
+  }
+
   async session(): ReturnType<ResearchOsApi["session"]> {
     // Demo mode deliberately remains a researcher session; it must not expose
     // a privileged migration queue merely because it is running locally.
@@ -252,18 +389,20 @@ export class MockResearchOsApi implements ResearchOsApi {
     this.monitors.set(caseId, monitor);
     const history = this.monitorHistory.get(caseId) ?? [monitor];
     this.monitorHistory.set(caseId, history);
+    const projection = caseId === "event-tsm"
+      ? await this.eventRunProjection()
+      : null;
     return {
       monitor,
       history,
-      latest_run:
-        caseId === "event-tsm"
-          ? {
-              id: "run-demo-1",
-              status: "awaiting_review",
-              stage: "review",
-              updated_at: now,
-            }
-          : null,
+      latest_run: projection
+        ? {
+            id: "run-demo-1",
+            status: projection.status,
+            stage: projection.stage,
+            updated_at: now,
+          }
+        : null,
       confirmed_factors: factors,
     };
   }
@@ -468,6 +607,7 @@ export class MockResearchOsApi implements ResearchOsApi {
         ],
       };
     }
+    const projection = await this.eventRunProjection();
     return {
       run_id: runId,
       has_more: false,
@@ -477,14 +617,7 @@ export class MockResearchOsApi implements ResearchOsApi {
           stage: "scope",
           status: "completed",
           message: "已冻结本次运行范围",
-          details: {
-            trigger: "schedule",
-            monitor_version_id: "monitor-event-tsm-v1",
-            factor_ids: factors.map((factor) => factor.id),
-            factor_statements: factors.map((factor) => factor.statement),
-            allowed_source_types: ["licensed_provider", "company_disclosure"],
-            budget: 20,
-          },
+          details: this.eventRunScope(projection),
           created_at: now,
         },
         {
@@ -499,41 +632,16 @@ export class MockResearchOsApi implements ResearchOsApi {
           },
           created_at: now,
         },
-        {
-          seq: 3,
-          stage: "review",
-          status: "awaiting_review",
-          message: "候选证据等待人工审核，未写入结论",
-          details: { pending_review: 1 },
-          created_at: now,
-        },
+        projection.finalEvent,
       ],
     };
   }
 
   async activeRuns(): ReturnType<ResearchOsApi["activeRuns"]> {
+    const projection = await this.eventRunProjection();
     return {
       has_more: false,
-      items: [
-        {
-          run_id: "run-demo-1",
-          case_id: "event-tsm",
-          case_title: "TSM 资本开支与自由现金流验证",
-          status: "awaiting_review",
-          stage: "review",
-          updated_at: now,
-          processed_count: 2,
-          next_action: "查看运行详情",
-          scope: {
-            trigger: "schedule",
-            monitor_version_id: "monitor-event-tsm-v1",
-            factor_ids: factors.map((factor) => factor.id),
-            factor_statements: factors.map((factor) => factor.statement),
-            allowed_source_types: ["licensed_provider", "company_disclosure"],
-            budget: 20,
-          },
-        },
-      ],
+      items: projection.active ? [this.eventRunRecord(projection)] : [],
     };
   }
 
@@ -554,11 +662,12 @@ export class MockResearchOsApi implements ResearchOsApi {
   }
 
   async runs(): ReturnType<ResearchOsApi["runs"]> {
-    const active = (await this.activeRuns()).items[0];
+    const projection = await this.eventRunProjection();
+    const run = this.eventRunRecord(projection);
     return {
       has_more: false,
       items: [
-        { ...active, created_at: "2026-08-09T08:30:00Z", stop_reason: null },
+        { ...run, created_at: "2026-08-09T08:30:00Z", stop_reason: null },
       ],
     };
   }
