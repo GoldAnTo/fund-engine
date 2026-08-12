@@ -206,6 +206,7 @@ class EventResearchListItemDTO(V1Model):
     lifecycle_status: str
     status_summary: str
     next_human_action: str | None
+    next_action_kind: str | None
     updated_at: datetime
 
 

@@ -358,6 +358,7 @@ class EventResearchQueries:
     def _list_item(
         brief: EventResearchBrief, lifecycle: EventResearchLifecycle
     ) -> EventResearchListItemDTO:
+        next_action = EventResearchQueries._next_action(lifecycle)
         return EventResearchListItemDTO(
             case_id=str(brief.research_case_id),
             event_title=brief.event_title,
@@ -367,6 +368,7 @@ class EventResearchQueries:
             lifecycle_status=lifecycle.status,
             status_summary=lifecycle.status_summary,
             next_human_action=lifecycle.next_human_action,
+            next_action_kind=next_action.kind,
             updated_at=lifecycle.updated_at,
         )
 
@@ -743,6 +745,14 @@ class EventResearchQueries:
             )
         if lifecycle.status == "draft_ready":
             return EventNextActionDTO(kind="review_conclusion", label="审核结论草案")
+        if (
+            lifecycle.status == "awaiting_scope"
+            and lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
+        ):
+            return EventNextActionDTO(
+                kind="complete_research_protocol",
+                label=lifecycle.next_human_action,
+            )
         if lifecycle.status in {"awaiting_scope", "exhausted", "cannot_conclude"}:
             return EventNextActionDTO(
                 kind="edit_factors",

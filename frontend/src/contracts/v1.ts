@@ -3779,6 +3779,8 @@ export interface components {
             status_summary: string;
             /** Next Human Action */
             next_human_action: string | null;
+            /** Next Action Kind */
+            next_action_kind: string | null;
             /**
              * Updated At
              * Format: date-time

@@ -80,6 +80,19 @@ describe("event research presentation", () => {
     expect(presentation.buttonLabel).toBe("进入证据审核");
   });
 
+  it("routes protocol completion to the Case protocol page", () => {
+    const presentation = eventActionPresentation(
+      workbench("awaiting_scope", {
+        kind: "complete_research_protocol",
+        label: "完成新增因素的研究协议后再启动补证",
+      }),
+      "event-1",
+    );
+
+    expect(presentation.to).toBe("/events/event-1/protocol");
+    expect(presentation.buttonLabel).toBe("完成研究协议");
+  });
+
   it("makes automatic work explicit without inventing a human action", () => {
     const presentation = eventActionPresentation(
       workbench("researching", { kind: "wait", label: "系统正在补证" }),

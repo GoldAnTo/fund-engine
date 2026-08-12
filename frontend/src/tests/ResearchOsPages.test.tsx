@@ -31,7 +31,7 @@ import {
 } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
-import type { EventWorkbench } from "../domain/eventResearch";
+import type { EventResearchListItem, EventWorkbench } from "../domain/eventResearch";
 
 const historicalRunSummaries = [
   {
@@ -168,6 +168,33 @@ describe("Research OS event entry", () => {
       screen.getAllByRole("link", { name: /Alphabet 财报超预期后股价下跌/ })
         .length,
     ).toBeGreaterThan(0);
+  });
+
+  it("routes protocol-blocked desk work to the Case protocol page", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockResolvedValue([{
+      id: "protocol-case",
+      eventTitle: "新增因素等待研究协议",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_scope",
+      statusSummary: "研究范围已更新，新增因素需先完成研究协议",
+      nextHumanAction: "完成新增因素的研究协议后再启动补证",
+      nextActionKind: "complete_research_protocol",
+      updatedAt: "2026-08-12T08:00:00Z",
+    } as EventResearchListItem]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: /当前优先/ }),
+    ).toHaveAttribute("href", "/events/protocol-case/protocol");
   });
 
   it("does not call active Case work running when the execution worker is unavailable", async () => {

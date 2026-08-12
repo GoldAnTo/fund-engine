@@ -243,6 +243,13 @@ def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session
             select(ResearchRun).where(ResearchRun.research_case_id == case_id)
         )
     ) == []
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert workbench.status_code == 200
+    assert workbench.json()["next_action"] == {
+        "kind": "complete_research_protocol",
+        "label": "完成新增因素的研究协议后再启动补证",
+        "count": None,
+    }
 
 
 def test_scope_update_preserves_reused_thesis_protocol_requirement(
@@ -677,8 +684,15 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             .where(Thesis.research_case_id == case_id)
         ) is None
         assert lifecycle is not None
-        assert lifecycle.status == "continuing"
-        assert lifecycle.active_run_id != old_run_id
+        assert lifecycle.status == "awaiting_scope"
+        assert lifecycle.active_run_id is None
+        assert lifecycle.current_round == 0
+        assert verify.scalar(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == case_id,
+                ResearchRun.id != old_run_id,
+            )
+        ) is None
     finally:
         verify.close()
 
@@ -827,6 +841,10 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
         lifecycle.next_human_action = "Update factors"
         _cover_current_scope(bootstrap, case_id)
         EventConclusionService(bootstrap).create_draft(case_id)
+        # Preserve this stale-publish test's successor-specific contract by
+        # reusing legacy, non-required theses for the added scope factors.
+        _add_legacy_thesis(bootstrap, case_id, "New factor two")
+        _add_legacy_thesis(bootstrap, case_id, "New factor three")
         bootstrap.commit()
     finally:
         bootstrap.close()

@@ -61,8 +61,18 @@ export interface EventResearchListItem {
   status: EventLifecycleStatus;
   statusSummary: string;
   nextHumanAction: string | null;
+  nextActionKind?: EventNextActionKind | null;
   updatedAt: string;
 }
+
+export type EventNextActionKind =
+  | "wait"
+  | "review_intake"
+  | "review_evidence"
+  | "review_conclusion"
+  | "edit_factors"
+  | "complete_research_protocol"
+  | "view_conclusion_change";
 
 export interface EventFactor {
   thesisId?: string;
@@ -167,7 +177,7 @@ export interface EventWorkbench {
   evidence: EventEvidenceCitation[];
   progress: WorkbenchProgress;
   scope: EventResearchScope;
-  nextAction: { kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number };
+  nextAction: { kind: EventNextActionKind; label: string; count?: number };
 }
 
 export interface EventConclusionVersion {
