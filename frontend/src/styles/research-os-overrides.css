@@ -84,6 +84,9 @@
 .ros-review-decision textarea { min-height: 4.2rem; width: 100%; resize: vertical; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .35rem; padding: .5rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); }
 .ros-review-decision > div { display: flex; gap: .5rem; flex-wrap: wrap; }
 .ros-review-decision .ros-error { grid-column: 1 / -1; margin: 0; }
+.ros-conclusion-review__field { display: grid; gap: .42rem; max-width: 65rem; margin: 1rem 0; color: var(--ros-soft, #59615d); font-size: .78rem; font-weight: 650; }
+.ros-conclusion-review__editor { width: 100%; min-height: 12rem; resize: vertical; padding: .72rem .78rem; border: 1px solid var(--ros-strong, #cfc9bd); border-radius: .42rem; background: var(--ros-surface, #fffdf8); color: var(--ros-ink, #30332f); font: inherit; font-weight: 400; line-height: 1.65; }
+@media (max-width: 640px) { .ros-conclusion-review__editor { min-height: 10rem; } }
 .ros-atomic-review { margin-top: 2rem; padding-top: 1.25rem; border-top: 2px solid var(--ros-strong, #cfc9bd); }
 .ros-atomic-review .ros-section-heading { align-items: start; }
 .ros-atomic-review .ros-section-heading p:not(.ros-eyebrow) { max-width: 46rem; margin: .35rem 0 0; color: var(--ros-soft, #59615d); font-size: .78rem; line-height: 1.55; }

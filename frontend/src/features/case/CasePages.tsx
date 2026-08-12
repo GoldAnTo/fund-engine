@@ -155,6 +155,90 @@ const EVIDENCE_REVIEW_NOTICE: Record<EvidenceReviewOutcome, string> = {
   rejected: "候选已驳回，请调整研究范围或补充来源。",
 };
 
+const UNSAVED_CONCLUSION_MESSAGE =
+  "结论草案有未保存的修改。离开后这些修改将丢失，确定离开吗？";
+
+function useDirtyNavigationGuard(dirty: boolean) {
+  const dirtyRef = useRef(dirty);
+  const safeLocationRef = useRef({
+    href: window.location.href,
+    state: window.history.state,
+  });
+
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    if (!dirty) {
+      safeLocationRef.current = {
+        href: window.location.href,
+        state: window.history.state,
+      };
+    }
+  }, [dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+
+    const confirmLeaving = () => {
+      if (!dirtyRef.current) return true;
+      const confirmed = window.confirm(UNSAVED_CONCLUSION_MESSAGE);
+      if (confirmed) dirtyRef.current = false;
+      return confirmed;
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onDocumentClick = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) return;
+      const element = event.target instanceof Element
+        ? event.target.closest("a[href], [data-event-option]")
+        : null;
+      if (!element) return;
+      if (element instanceof HTMLAnchorElement) {
+        if (element.target && element.target !== "_self") return;
+        const destination = new URL(element.href, window.location.href);
+        if (destination.origin !== window.location.origin) return;
+        if (destination.href === window.location.href) return;
+      } else if (element.getAttribute("aria-pressed") === "true") {
+        return;
+      }
+      if (confirmLeaving()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onPopState = (event: PopStateEvent) => {
+      if (confirmLeaving()) return;
+      event.stopImmediatePropagation();
+      window.history.pushState(
+        safeLocationRef.current.state,
+        "",
+        safeLocationRef.current.href,
+      );
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onDocumentClick, true);
+    window.addEventListener("popstate", onPopState, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onDocumentClick, true);
+      window.removeEventListener("popstate", onPopState, true);
+    };
+  }, [dirty]);
+
+  return function allowNavigation() {
+    dirtyRef.current = false;
+  };
+}
+
 function workflowNoticeFromState(state: unknown): string | null {
   if (!state || typeof state !== "object") return null;
   const notice = (state as { workflowNotice?: unknown }).workflowNotice;
@@ -2084,12 +2168,24 @@ function ReviewContent({
   workbench: EventWorkbench;
 }) {
   if (workbench.nextAction.kind === "review_conclusion") {
-    return <ConclusionReviewTask caseId={caseId} workbench={workbench} />;
+    const draftIdentity = JSON.stringify([
+      caseId,
+      workbench.scope.version,
+      workbench.conclusion.state,
+      workbench.conclusion.text,
+    ]);
+    return (
+      <ConclusionReviewTask
+        caseId={caseId}
+        key={draftIdentity}
+        workbench={workbench}
+      />
+    );
   }
   return <EvidenceReviewTask caseId={caseId} />;
 }
 
-function ConclusionReviewTask({
+export function ConclusionReviewTask({
   caseId,
   workbench,
 }: {
@@ -2098,11 +2194,28 @@ function ConclusionReviewTask({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const draftIdentity = JSON.stringify([
+    caseId,
+    workbench.scope.version,
+    workbench.conclusion.state,
+    workbench.conclusion.text,
+  ]);
   const [text, setText] = useState(workbench.conclusion.text);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
   const submissionInFlight = useRef(false);
+  const identityRef = useRef(draftIdentity);
+  const generationRef = useRef(0);
+
+  if (identityRef.current !== draftIdentity) {
+    identityRef.current = draftIdentity;
+    generationRef.current += 1;
+  }
+
+  const allowNavigation = useDirtyNavigationGuard(
+    text !== workbench.conclusion.text,
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -2111,12 +2224,29 @@ function ConclusionReviewTask({
     };
   }, []);
 
+  useEffect(() => {
+    submissionInFlight.current = false;
+    setText(workbench.conclusion.text);
+    setError(null);
+    setSubmitting(false);
+  }, [draftIdentity, workbench.conclusion.text]);
+
   async function publishConclusion() {
     const trimmed = text.trim();
     if (!trimmed || submissionInFlight.current) return;
     submissionInFlight.current = true;
     setSubmitting(true);
     setError(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      identity: draftIdentity,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && identityRef.current === request.identity
+      && generationRef.current === request.generation;
     try {
       await researchClient.publishEventConclusion({
         caseId,
@@ -2124,19 +2254,22 @@ function ConclusionReviewTask({
         reviewer: "human:researcher",
       });
       window.dispatchEvent(new Event("research-os-workflow-refresh"));
-      if (!mounted.current) return;
-      navigate(`/events/${caseId}${location.search}`, {
+      if (!requestIsCurrent()) return;
+      allowNavigation();
+      navigate(`/events/${request.caseId}${request.search}`, {
         state: {
           workflowNotice: "结论已发布，当前事件进入持续跟踪。",
         },
       });
     } catch {
-      if (mounted.current) {
+      if (requestIsCurrent()) {
         setError("发布结论失败；草案未发布，请检查后重试。");
       }
     } finally {
-      submissionInFlight.current = false;
-      if (mounted.current) setSubmitting(false);
+      if (requestIsCurrent()) {
+        submissionInFlight.current = false;
+        setSubmitting(false);
+      }
     }
   }
 
@@ -2153,10 +2286,11 @@ function ConclusionReviewTask({
         </div>
         <span className="ros-pill ros-pill--human">AI 草案，未发布</span>
       </header>
-      <label>
+      <label className="ros-conclusion-review__field">
         结论草案
         <textarea
           aria-label="结论草案"
+          className="ros-conclusion-review__editor"
           value={text}
           onChange={(event) => setText(event.target.value)}
         />

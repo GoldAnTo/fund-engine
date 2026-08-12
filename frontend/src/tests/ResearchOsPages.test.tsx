@@ -15,6 +15,7 @@ import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
+  ConclusionReviewTask,
   CaseFundProfilePage,
   CaseMarketPage,
   CaseReviewPage,
@@ -2026,7 +2027,10 @@ describe("Research OS event entry", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByLabelText("结论草案")).toHaveValue(
+    expect(await screen.findByLabelText("结论草案")).toHaveClass(
+      "ros-conclusion-review__editor",
+    );
+    expect(screen.getByLabelText("结论草案")).toHaveValue(
       "当前结论草案等待人工复核。",
     );
     expect(getEventReviewQueue).not.toHaveBeenCalled();
@@ -2045,6 +2049,8 @@ describe("Research OS event entry", () => {
     const publishEventConclusion = vi.spyOn(adapter, "publishEventConclusion");
     setResearchClient(adapter);
     setResearchOsApi(api);
+    const confirm = vi.fn();
+    vi.stubGlobal("confirm", confirm);
     const user = userEvent.setup();
 
     render(
@@ -2089,6 +2095,157 @@ describe("Research OS event entry", () => {
     expect(
       screen.queryByRole("region", { name: "系统正在运行" }),
     ).not.toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("resets the editor for a new draft and ignores an older publication response", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    const firstWorkbench = await adapter.getEventWorkbench("event-tsm");
+    const secondWorkbench: EventWorkbench = {
+      ...firstWorkbench,
+      event: {
+        ...firstWorkbench.event,
+        id: "event-next-draft",
+        eventTitle: "另一事件的新结论草案",
+      },
+      scope: { ...firstWorkbench.scope, version: 2 },
+      conclusion: {
+        ...firstWorkbench.conclusion,
+        text: "另一事件的 AI 草案。",
+      },
+    };
+    const pendingPublication = deferred<{
+      conclusionId: string;
+      state: "published";
+    }>();
+    vi.spyOn(adapter, "publishEventConclusion").mockReturnValueOnce(
+      pendingPublication.promise,
+    );
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+
+    const view = render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <ConclusionReviewTask caseId="event-tsm" workbench={firstWorkbench} />
+        <CaseLocationProbe />
+      </MemoryRouter>,
+    );
+
+    const editor = screen.getByLabelText("结论草案");
+    await user.clear(editor);
+    await user.type(editor, "旧事件的人工编辑");
+    await user.click(
+      screen.getByRole("button", { name: "发布结论并进入持续跟踪" }),
+    );
+
+    view.rerender(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <ConclusionReviewTask
+          caseId="event-next-draft"
+          workbench={secondWorkbench}
+        />
+        <CaseLocationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText("结论草案")).toHaveValue(
+      "另一事件的 AI 草案。",
+    );
+    expect(screen.getByRole("button", {
+      name: "发布结论并进入持续跟踪",
+    })).toBeEnabled();
+
+    await act(async () => {
+      pendingPublication.resolve({ conclusionId: "old-publication", state: "published" });
+      await pendingPublication.promise;
+    });
+
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+    expect(screen.getByLabelText("结论草案")).toHaveValue(
+      "另一事件的 AI 草案。",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
+  it("guards an edited conclusion from internal navigation until confirmed", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    setResearchClient(adapter);
+    const confirm = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={
+              <>
+                <CaseReviewPage />
+                <Link to="/events?client=mock">返回事件列表</Link>
+                <CaseLocationProbe />
+              </>
+            }
+          />
+          <Route
+            path="/events"
+            element={<><p>事件列表页</p><CaseLocationProbe /></>}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const editor = await screen.findByLabelText("结论草案");
+    await user.type(editor, "人工补充");
+    await user.click(screen.getByRole("link", { name: "返回事件列表" }));
+
+    expect(confirm).toHaveBeenLastCalledWith(
+      "结论草案有未保存的修改。离开后这些修改将丢失，确定离开吗？",
+    );
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+    expect(editor).toHaveValue("当前结论草案等待人工复核。人工补充");
+
+    await user.click(screen.getByRole("link", { name: "返回事件列表" }));
+    expect(await screen.findByText("事件列表页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("registers and removes the browser unload guard for dirty conclusion text", async () => {
+    const adapter = new MockResearchAdapter();
+    await confirmTsmEvidence(adapter);
+    setResearchClient(adapter);
+    const user = userEvent.setup();
+    const view = render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(await screen.findByLabelText("结论草案"), "人工修改");
+    const blockedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(blockedUnload);
+    expect(blockedUnload.defaultPrevented).toBe(true);
+
+    view.unmount();
+    const cleanUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(cleanUnload);
+    expect(cleanUnload.defaultPrevented).toBe(false);
   });
 
   it("disables conclusion publication when the edited draft is blank", async () => {
