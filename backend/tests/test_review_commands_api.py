@@ -452,7 +452,7 @@ def test_assessment_review_completes_final_run_gate(cmd_client, cmd_seeded):
     assert run.stop_reason == "max_rounds_reached"
     assert any(
         event.stage == "review_complete"
-        and event.payload_json["assessment_id"] == str(assessment.id)
+        and event.payload_json["trigger_ref"] == f"assessment:{assessment.id}"
         for event in cmd_seeded.scalars(
             select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)
         )

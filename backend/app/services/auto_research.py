@@ -856,47 +856,83 @@ class AutoResearchService:
                 continue
         return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
 
-    def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
-        """Close only runs whose last outstanding human gate was this assessment."""
-        matching_runs: set[uuid.UUID] = set()
+    def run_ids_for_output(self, *, key: str, value: uuid.UUID) -> set[uuid.UUID]:
+        """Find runs whose persisted task output references one review item.
+
+        Historical task results are JSON and can contain a scalar where newer
+        writers use a list.  Treat malformed result values as no match rather
+        than letting one bad task block unrelated review decisions.
+        """
+        run_ids: set[uuid.UUID] = set()
         for task in self.session.scalars(
             select(ResearchTask).where(ResearchTask.result.is_not(None))
         ):
-            if str((task.result or {}).get("assessment_id") or "") == str(assessment_id):
-                matching_runs.add(task.run_id)
+            if value in self._result_output_ids(task.result, key):
+                run_ids.add(task.run_id)
+        return run_ids
 
-        completed: list[uuid.UUID] = []
-        for run_id in matching_runs:
-            run = self.session.scalar(
-                select(ResearchRun).where(ResearchRun.id == run_id).with_for_update()
-            )
-            if run is None or run.status != "waiting_for_review":
+    def reconcile_runs_for_output(
+        self, *, key: str, value: uuid.UUID, trigger_ref: str
+    ) -> list[uuid.UUID]:
+        """Complete every run for which this decision removed the final gate."""
+        return [
+            run_id
+            for run_id in self.run_ids_for_output(key=key, value=value)
+            if self.reconcile_run(run_id, trigger_ref=trigger_ref)
+        ]
+
+    def reconcile_run(self, run_id: uuid.UUID, *, trigger_ref: str) -> bool:
+        """Finish one waiting run iff it has no remaining run-local review gate."""
+        run = self.session.scalar(
+            select(ResearchRun).where(ResearchRun.id == run_id).with_for_update()
+        )
+        if run is None or run.status != "waiting_for_review":
+            return False
+        if self._has_open_reviewable_output(run):
+            return False
+        self.repo.update_run(run, status="succeeded", stage="complete")
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="review_complete",
+            status="completed",
+            message="人工审核已完成；本次运行没有剩余待审项。",
+            payload_json={
+                "trigger_ref": trigger_ref,
+                "status": "succeeded",
+            },
+        )
+        return True
+
+    def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
+        """Compatibility wrapper for the assessment command's existing seam."""
+        return self.reconcile_runs_for_output(
+            key="assessment_id",
+            value=assessment_id,
+            trigger_ref=f"assessment:{assessment_id}",
+        )
+
+    @staticmethod
+    def _result_output_ids(result: object, key: str) -> set[uuid.UUID]:
+        if not isinstance(result, dict):
+            return set()
+        raw_value = result.get(key)
+        if isinstance(raw_value, (list, tuple, set)):
+            raw_values = raw_value
+        else:
+            raw_values = [raw_value]
+        output_ids: set[uuid.UUID] = set()
+        for raw_value in raw_values:
+            try:
+                output_ids.add(uuid.UUID(str(raw_value)))
+            except (TypeError, ValueError, AttributeError):
                 continue
-            if self._has_open_reviewable_output(run):
-                continue
-            self.repo.update_run(run, status="succeeded", stage="complete")
-            ResearchRunEventRepository(self.session).append(
-                run.id,
-                stage="review_complete",
-                status="completed",
-                message="人工已完成临时 AI 评估审核；本次运行没有剩余待审项。",
-                payload_json={
-                    "assessment_id": str(assessment_id),
-                    "status": "succeeded",
-                },
-            )
-            completed.append(run.id)
-        return completed
+        return output_ids
 
     def _has_open_reviewable_output(self, run) -> bool:
         """Check run-local review gates after one human decision is persisted."""
         for task in self.repo.tasks_for_run(run.id):
-            result = task.result or {}
-            for raw_id in result.get("proposed_proposal_ids", []):
-                try:
-                    proposal_id = uuid.UUID(str(raw_id))
-                except (TypeError, ValueError):
-                    continue
+            result = task.result
+            for proposal_id in self._result_output_ids(result, "proposed_proposal_ids"):
                 proposal = self.session.get(Proposal, proposal_id)
                 if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
                     continue
@@ -905,21 +941,16 @@ class AutoResearchService:
                 )
                 if review_task is None or review_task.status in {"open", "in_progress"}:
                     return True
-            raw_assessment = result.get("assessment_id")
-            if not raw_assessment:
-                continue
-            try:
-                assessment_id = uuid.UUID(str(raw_assessment))
-            except (TypeError, ValueError):
-                continue
-            assessment = self.session.get(AIAssessment, assessment_id)
-            if assessment is None:
-                continue
-            review_task = self.task_repo.find_by_ref(
-                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
-            )
-            if review_task is None or review_task.status in {"open", "in_progress"}:
-                return True
+            assessment_ids = self._result_output_ids(result, "assessment_id")
+            for assessment_id in assessment_ids:
+                assessment = self.session.get(AIAssessment, assessment_id)
+                if assessment is None:
+                    continue
+                review_task = self.task_repo.find_by_ref(
+                    task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
+                )
+                if review_task is None or review_task.status in {"open", "in_progress"}:
+                    return True
         return bool(self._pending_atomic_claims(run.research_case_id))
 
     def _run_allowed_source_types(self, run) -> set[str]:

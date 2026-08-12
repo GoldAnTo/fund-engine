@@ -97,7 +97,11 @@ def review_assessment(
         ref_type="ai_assessment",
         ref_id=assessment_id,
     )
-    AutoResearchService(db).complete_runs_after_assessment_review(assessment_id)
+    AutoResearchService(db).reconcile_runs_for_output(
+        key="assessment_id",
+        value=assessment_id,
+        trigger_ref=f"assessment:{assessment_id}",
+    )
     commit_or_rollback(db)
     return AssessmentReviewResponse(
         id=str(review.id),
