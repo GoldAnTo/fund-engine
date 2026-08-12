@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
@@ -2002,6 +2003,57 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("does not redirect or emit a workflow refresh when review succeeds after leaving the page", async () => {
+    const adapter = new MockResearchAdapter();
+    const pendingReview = deferred<void>();
+    const reviewProposal = vi
+      .spyOn(adapter, "reviewProposal")
+      .mockReturnValueOnce(pendingReview.promise);
+    setResearchClient(adapter);
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/review"
+            element={
+              <>
+                <CaseReviewPage />
+                <Link to="/events?client=mock">离开审核页</Link>
+              </>
+            }
+          />
+          <Route
+            path="/events"
+            element={<><p>已离开审核页</p><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    await user.type(screen.getByLabelText("审核理由"), "原文已经人工核验。");
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+    await waitFor(() => expect(reviewProposal).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: "离开审核页" }));
+    expect(await screen.findByText("已离开审核页")).toBeVisible();
+
+    await act(async () => {
+      pendingReview.resolve();
+      await pendingReview.promise;
+    });
+
+    expect(screen.getByText("已离开审核页")).toBeVisible();
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events?client=mock",
+    );
+    expect(workflowRefresh).not.toHaveBeenCalled();
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
+  });
+
   it("ignores an invalid workflow notice route state", async () => {
     render(
       <MemoryRouter
@@ -2376,6 +2428,46 @@ describe("Research OS event entry", () => {
     expect(
       screen.queryByText("等待人工审核 · 等待审核"),
     ).not.toBeInTheDocument();
+  });
+
+  it("refreshes the AppShell run strip from the real evidence-review producer", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const activeRuns = vi.spyOn(api, "activeRuns");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+    const user = userEvent.setup();
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
+          <ResearchOsRoutes />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核 · 等待审核");
+    const initialActiveRunReads = activeRuns.mock.calls.length;
+    await screen.findByRole("heading", { name: /条待审核关系/ });
+    await user.type(
+      screen.getByLabelText("审核理由"),
+      "冻结原文和定位已经人工核验。",
+    );
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+
+    expect(
+      await screen.findByText("证据已采纳，系统已生成待复核的结论草案。"),
+    ).toHaveAttribute("role", "status");
+    await waitFor(() => {
+      expect(activeRuns.mock.calls.length).toBeGreaterThan(initialActiveRunReads);
+      expect(
+        screen.queryByText("等待人工审核 · 等待审核"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("region", { name: "系统正在运行" }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("refreshes run events when workflow state changes without changing the active run ID", async () => {

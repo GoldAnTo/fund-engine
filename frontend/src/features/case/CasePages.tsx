@@ -2464,6 +2464,13 @@ function ReviewItem({
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   async function decide(
     outcome: EvidenceReviewOutcome,
   ) {
@@ -2477,11 +2484,14 @@ function ReviewItem({
         reviewer_id: "human:researcher",
         expected_version: item.proposalVersion,
       });
+      if (!mounted.current) return;
       onDecided(outcome);
     } catch {
-      setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
+      if (mounted.current) {
+        setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
+      }
     } finally {
-      setSubmitting(false);
+      if (mounted.current) setSubmitting(false);
     }
   }
   return (
