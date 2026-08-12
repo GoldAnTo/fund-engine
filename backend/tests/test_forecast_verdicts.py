@@ -45,6 +45,61 @@ def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
     }
 
 
+def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
+    cmd_client, cmd_session
+) -> None:
+    from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
+    from app.services.source_governance import SourceGovernanceService
+
+    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json={
+        "raw_input": "验证实际披露来源时间", "event_title": "火星人年报验证",
+        "company_name": "火星人", "ticker": "300894.SZ",
+        "research_question": "实际值何时可得？", "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
+        "created_by": "tester",
+    }).json()["case_id"])
+    available_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
+    document = DocumentVersion(
+        content_sha256="c" * 64,
+        source_url="https://example.test/actual-report",
+        title="冻结公司年报",
+        available_at=available_at,
+        acquired_at=available_at,
+        parser_version="fixture-v1",
+        parse_state="success",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={"provider_name": "fixture", "permissions": {"ai_processing": True, "display": True}},
+        declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(
+        research_case_id=case_id, document_version_id=document.id, linked_at=available_at,
+    ))
+    span = SourceSpan(
+        document_version_id=document.id, locator={"page": 123},
+        verbatim_text="归母净利润247245713.03元",
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id, kind="disclosed_fact",
+        normalized_text="2023年归母净利润247245713.03元", created_at=available_at,
+    )
+    cmd_session.add(statement)
+    cmd_session.commit()
+    cmd_session.expire_all()
+
+    response = cmd_client.get(f"/api/v1/research-cases/{case_id}/source-statements")
+
+    assert response.status_code == 200, response.text
+    actual_source = response.json()["items"][0]
+    assert actual_source["id"] == str(statement.id)
+    assert actual_source["available_at"].endswith(("Z", "+00:00"))
+
+
 def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
     from app.models.research_expression import KeyFactor, ReportClaim

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -34,6 +34,12 @@ from app.schemas.v1.market_expression import (
     SourceStatementOptionDTO,
     SourceStatementOptionsResponse,
 )
+
+
+def _api_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class MarketExpressionQueries:
@@ -78,7 +84,7 @@ class MarketExpressionQueries:
                 document_version_id=str(document.id),
                 document_title=document.title or document.source_url or "未命名冻结资料",
                 source_url=document.source_url, locator=span.locator,
-                available_at=document.available_at, permission_status="admitted",
+                available_at=_api_datetime(document.available_at), permission_status="admitted",
             )
             for statement, span, document in rows
         ])
@@ -148,7 +154,7 @@ class MarketExpressionQueries:
         document = self._db.get(DocumentVersion, span.document_version_id) if span else None
         contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
         permission_status = "not_recorded" if contract is None else "admitted" if contract.allow_ai_processing and contract.allow_display else "restricted"
-        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status=permission_status)
+        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=_api_datetime(document.available_at) if document else None, permission_status=permission_status)
 
     def _case_has_source(self, case_id: uuid.UUID, statement_id: uuid.UUID | None) -> bool:
         if statement_id is None:
