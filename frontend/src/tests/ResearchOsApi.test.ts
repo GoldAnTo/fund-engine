@@ -61,6 +61,90 @@ describe("research OS API selection", () => {
 });
 
 describe("mock Research OS event run projection", () => {
+  it("projects the TSM monitor latest run from the authoritative event lifecycle", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+
+    expect((await api.monitor("event-tsm")).latest_run).toMatchObject({
+      id: "run-demo-1",
+      status: "awaiting_review",
+      stage: "review",
+    });
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "needs_more_evidence",
+      reason: "需要补充资本开支与自由现金流的季度桥接数据。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    expect((await api.monitor("event-tsm")).latest_run).toMatchObject({
+      id: "run-demo-1",
+      status: "running",
+      stage: "retrieve",
+    });
+    expect((await api.monitor("event-alphabet")).latest_run).toBeNull();
+
+    const archivedAdapter = new MockResearchAdapter();
+    const archivedApi = new MockResearchOsApi(archivedAdapter);
+    await archivedAdapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    expect((await archivedApi.monitor("event-tsm")).latest_run).toMatchObject({
+      id: "run-demo-1",
+      status: "succeeded",
+      stage: "complete",
+    });
+  });
+
+  it("uses the continuing workbench scope in the frozen run event", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const customFactors = [
+      {
+        statement: "自定义资本开支因素",
+        description: "调整后的首要补证范围",
+      },
+      {
+        statement: "自定义现金流因素",
+        description: "调整后的次要补证范围",
+      },
+    ];
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "该材料与市场反应缺少直接关联。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await adapter.updateEventResearchScope({
+      caseId: "event-tsm",
+      factors: customFactors,
+      changedBy: "human:researcher",
+      changeReason: "驳回后调整研究范围",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle.status).toBe("continuing");
+    const scopeEvent = (await api.runEvents("run-demo-1")).items[0];
+    expect(scopeEvent.details).toMatchObject({
+      monitor_version_id: `event-tsm-scope-v${workbench.scope.version}`,
+      factor_ids: workbench.factors.map((factor) => factor.thesisId),
+      factor_statements: customFactors.map((factor) => factor.statement),
+    });
+
+    const fallbackScope = (await new MockResearchOsApi().runEvents("run-demo-1"))
+      .items[0].details;
+    expect(fallbackScope).toMatchObject({
+      monitor_version_id: "monitor-event-tsm-v1",
+      factor_ids: ["factor-capex", "factor-margin"],
+    });
+  });
+
   it("archives the TSM run after a researcher confirms its key evidence", async () => {
     const adapter = new MockResearchAdapter();
     const api = new MockResearchOsApi(adapter);

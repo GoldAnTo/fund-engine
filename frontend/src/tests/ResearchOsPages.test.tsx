@@ -31,7 +31,20 @@ import {
 } from "../features/case/CasePages";
 import { AppShell } from "../app/AppShell";
 import { ResearchOsRoutes } from "../app/routes";
-import type { EventWorkbench } from "../domain/eventResearch";
+import type {
+  EventResearchListItem,
+  EventWorkbench,
+} from "../domain/eventResearch";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const historicalRunSummaries = [
   {
@@ -2271,6 +2284,159 @@ describe("Research OS event entry", () => {
     expect(
       screen.queryByText("等待人工审核 · 等待审核"),
     ).not.toBeInTheDocument();
+  });
+
+  it("refreshes run events when workflow state changes without changing the active run ID", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const runEvents = vi.spyOn(api, "runEvents");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    await waitFor(() => {
+      expect(strip).toHaveTextContent("候选证据等待人工审核，未写入结论");
+    });
+    const initialRunEventReads = runEvents.mock.calls.length;
+
+    await act(async () => {
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "needs_more_evidence",
+        reason: "需要补充资本开支与自由现金流的季度桥接数据。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    await waitFor(() => {
+      expect(runEvents).toHaveBeenCalledTimes(initialRunEventReads + 1);
+      expect(strip).toHaveTextContent("运行中 · 采集资料");
+      expect(strip).toHaveTextContent("审核要求已记录，系统继续补证");
+    });
+  });
+
+  it("keeps the latest workflow event-list response when an older poll resolves last", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const oldRequest = deferred<EventResearchListItem[]>();
+    const freshEvents: EventResearchListItem[] = [{
+      id: "event-fresh",
+      eventTitle: "最新审核任务",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "draft_ready",
+      statusSummary: "最新状态",
+      nextHumanAction: "审核最新结论",
+      updatedAt: "2026-08-12T10:00:00Z",
+    }];
+    const staleEvents: EventResearchListItem[] = [
+      ...freshEvents,
+      {
+        ...freshEvents[0],
+        id: "event-stale",
+        eventTitle: "过期审核任务",
+      },
+    ];
+    const listEventResearch = vi
+      .spyOn(adapter, "listEventResearch")
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockResolvedValue(freshEvents);
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listEventResearch).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+    expect(await screen.findByRole("link", { name: "待我审核 1" })).toBeVisible();
+
+    await act(async () => {
+      oldRequest.resolve(staleEvents);
+      await oldRequest.promise;
+    });
+
+    expect(screen.getByRole("link", { name: "待我审核 1" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "待我审核 2" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the latest active-run response when an older poll resolves last", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const oldRequest = deferred<Awaited<ReturnType<typeof api.activeRuns>>>();
+    const run = (caseTitle: string, status: string, stage: string) => ({
+      has_more: false,
+      items: [{
+        run_id: "run-race",
+        case_id: "event-tsm",
+        case_title: caseTitle,
+        status,
+        stage,
+        updated_at: "2026-08-12T10:00:00Z",
+        processed_count: 1,
+        next_action: "查看运行详情",
+        scope: {
+          trigger: "schedule",
+          allowed_source_types: ["company_disclosure"],
+        },
+      }],
+    });
+    const activeRuns = vi
+      .spyOn(api, "activeRuns")
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockResolvedValue(run("最新运行状态", "running", "retrieve"));
+    vi.spyOn(api, "runEvents").mockResolvedValue({
+      run_id: "run-race",
+      has_more: false,
+      items: [],
+    });
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(activeRuns).toHaveBeenCalledTimes(1));
+    act(() => {
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+    expect(await screen.findByText(/最新运行状态/)).toBeVisible();
+
+    await act(async () => {
+      oldRequest.resolve(run("过期运行状态", "awaiting_review", "review"));
+      await oldRequest.promise;
+    });
+
+    expect(screen.getByText(/最新运行状态/)).toBeVisible();
+    expect(screen.queryByText(/过期运行状态/)).not.toBeInTheDocument();
   });
 
   it("removes stale active-run strips when their live status can no longer be confirmed", async () => {

@@ -335,22 +335,29 @@ export class MockResearchOsApi implements ResearchOsApi {
         ? workbench.progress.verified + workbench.progress.pending
         : 2,
       next_action: workbench?.nextAction.label ?? "查看运行详情",
-      scope: {
-        trigger: "schedule",
-        monitor_version_id: workbench
-          ? `event-tsm-scope-v${workbench.scope.version}`
-          : "monitor-event-tsm-v1",
-        factor_ids:
-          workbench?.factors.map(
-            (factor, index) => factor.thesisId ?? `factor-${index + 1}`,
-          ) ?? factors.map((factor) => factor.id),
-        factor_statements:
-          workbench?.factors.map((factor) => factor.statement) ??
-          factors.map((factor) => factor.statement),
-        allowed_source_types: ["licensed_provider", "company_disclosure"],
-        budget: 20,
-      },
+      scope: this.eventRunScope(projection),
     } satisfies Schemas["ActiveResearchRunDTO"];
+  }
+
+  private eventRunScope(
+    projection: EventRunProjection,
+  ): Schemas["FrozenRunScopeDTO"] {
+    const workbench = projection.workbench;
+    return {
+      trigger: "schedule",
+      monitor_version_id: workbench
+        ? `event-tsm-scope-v${workbench.scope.version}`
+        : "monitor-event-tsm-v1",
+      factor_ids:
+        workbench?.factors.map(
+          (factor, index) => factor.thesisId ?? `factor-${index + 1}`,
+        ) ?? factors.map((factor) => factor.id),
+      factor_statements:
+        workbench?.factors.map((factor) => factor.statement) ??
+        factors.map((factor) => factor.statement),
+      allowed_source_types: ["licensed_provider", "company_disclosure"],
+      budget: 20,
+    };
   }
 
   async session(): ReturnType<ResearchOsApi["session"]> {
@@ -382,18 +389,20 @@ export class MockResearchOsApi implements ResearchOsApi {
     this.monitors.set(caseId, monitor);
     const history = this.monitorHistory.get(caseId) ?? [monitor];
     this.monitorHistory.set(caseId, history);
+    const projection = caseId === "event-tsm"
+      ? await this.eventRunProjection()
+      : null;
     return {
       monitor,
       history,
-      latest_run:
-        caseId === "event-tsm"
-          ? {
-              id: "run-demo-1",
-              status: "awaiting_review",
-              stage: "review",
-              updated_at: now,
-            }
-          : null,
+      latest_run: projection
+        ? {
+            id: "run-demo-1",
+            status: projection.status,
+            stage: projection.stage,
+            updated_at: now,
+          }
+        : null,
       confirmed_factors: factors,
     };
   }
@@ -608,14 +617,7 @@ export class MockResearchOsApi implements ResearchOsApi {
           stage: "scope",
           status: "completed",
           message: "已冻结本次运行范围",
-          details: {
-            trigger: "schedule",
-            monitor_version_id: "monitor-event-tsm-v1",
-            factor_ids: factors.map((factor) => factor.id),
-            factor_statements: factors.map((factor) => factor.statement),
-            allowed_source_types: ["licensed_provider", "company_disclosure"],
-            budget: 20,
-          },
+          details: this.eventRunScope(projection),
           created_at: now,
         },
         {
