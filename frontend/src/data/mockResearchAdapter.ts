@@ -3069,6 +3069,7 @@ export class MockResearchAdapter implements ResearchClient {
   private eventTsmConclusionVersions: EventConclusionVersion[] = [];
   private eventConclusionVersions = new Map<string, EventConclusionVersion[]>();
   private eventConclusionPublicationsInFlight = new Set<string>();
+  private eventMutationRevisions = new Map<string, number>();
   private eventStates = new Map<string, {
     event?: EventResearchListItem;
     lifecycle: EventLifecycle;
@@ -3096,6 +3097,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventTsmConclusionVersions = [];
     this.eventConclusionVersions.clear();
     this.eventConclusionPublicationsInFlight.clear();
+    this.eventMutationRevisions.clear();
     this.eventStates.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
@@ -3235,6 +3237,17 @@ export class MockResearchAdapter implements ResearchClient {
       evidenceCount: 1,
       createdAt: "2026-08-07T09:30:00Z",
     };
+  }
+
+  private eventMutationRevision(caseId: string): number {
+    return this.eventMutationRevisions.get(caseId) ?? 0;
+  }
+
+  private advanceEventMutationRevision(caseId: string): void {
+    this.eventMutationRevisions.set(
+      caseId,
+      this.eventMutationRevision(caseId) + 1,
+    );
   }
 
   async getOverview(query?: OverviewQuery): Promise<WorkspaceOverview> {
@@ -4040,6 +4053,13 @@ export class MockResearchAdapter implements ResearchClient {
   async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
     if (proposalId === "proposal-event-tsm") {
+      if (
+        payload.expected_version !== 1
+        || this.eventTsmReviewDecision !== null
+        || this.eventTsmPublishedConclusion() !== null
+      ) {
+        throw new Error("proposal version or state conflict");
+      }
       switch (payload.outcome) {
         case "modified":
           throw new Error("modified evidence review outcome is unsupported");
@@ -4072,12 +4092,19 @@ export class MockResearchAdapter implements ResearchClient {
           throw new Error(`unsupported TSM review outcome: ${unsupportedOutcome}`);
         }
       }
+      return simulateLatency(undefined);
     }
-    for (const run of MOCK_RESEARCH_RUNS) {
-      for (const item of run.pending_proposals) {
-        if (item.id === proposalId) item.status = "decided";
-      }
+    const proposal = MOCK_RESEARCH_RUNS
+      .flatMap((run) => run.pending_proposals)
+      .find((item) => item.id === proposalId);
+    if (
+      !proposal
+      || proposal.status !== "pending"
+      || payload.expected_version !== 1
+    ) {
+      throw new Error("proposal version or state conflict");
     }
+    proposal.status = "decided";
     return simulateLatency(undefined);
   }
 
@@ -4597,6 +4624,7 @@ export class MockResearchAdapter implements ResearchClient {
         nextHumanAction: null,
       },
     });
+    this.advanceEventMutationRevision(event.id);
     void input.changedBy; void input.changeReason;
     return simulateLatency({
       version: scope.version,
@@ -4704,6 +4732,7 @@ export class MockResearchAdapter implements ResearchClient {
       throw new Error("unconsumed draft_ready conclusion is required before publication");
     }
     this.eventConclusionPublicationsInFlight.add(input.caseId);
+    const startingRevision = this.eventMutationRevision(input.caseId);
     try {
       const workbench = await this.getEventWorkbench(input.caseId);
       if (
@@ -4712,6 +4741,12 @@ export class MockResearchAdapter implements ResearchClient {
         || workbench.conclusion.state !== "ai_draft"
       ) {
         throw new Error("unconsumed draft_ready conclusion is required before publication");
+      }
+      if (
+        this.eventMutationRevision(input.caseId) !== startingRevision
+        || this.eventConclusionVersions.has(input.caseId)
+      ) {
+        throw new Error("event research state changed during publication");
       }
       const draft: EventConclusionVersion = {
         id: `draft-${input.caseId}-v1`,
@@ -4751,6 +4786,7 @@ export class MockResearchAdapter implements ResearchClient {
           nextHumanAction: null,
         },
       });
+      this.advanceEventMutationRevision(input.caseId);
       return await simulateLatency({ conclusionId: published.id, state: "published" });
     } finally {
       this.eventConclusionPublicationsInFlight.delete(input.caseId);
