@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import re
 from types import SimpleNamespace
 import uuid
 
@@ -14,6 +16,18 @@ from app.models.research_protocol import (
 )
 from app.services.research_protocol import ResearchProtocolService
 from tests.protocol_provenance import seed_protocol_footprint
+
+
+def test_postgres_protocol_trigger_raises_check_violation_sqlstate():
+    backend = Path(__file__).parents[1]
+    for path in (
+        backend / "app/models/ledger.py",
+        backend / "alembic/versions/0051_assessment_protocol_provenance.py",
+    ):
+        source = path.read_text()
+        raises = re.findall(r"RAISE EXCEPTION[^;]+;", source)
+        assert raises
+        assert all("USING ERRCODE = '23514'" in statement for statement in raises)
 
 
 def _protocol_kwargs(session, snapshot, *, status="single_metric_monitoring"):

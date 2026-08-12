@@ -296,7 +296,7 @@ def _create_protocol_scope_trigger() -> None:
                 WHERE newer.thesis_id = b.thesis_id
                   AND (newer.created_at, newer.id) > (b.created_at, b.id)
               )
-          ) THEN RAISE EXCEPTION 'assessment binding does not match snapshot thesis'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment binding does not match snapshot thesis' USING ERRCODE = '23514'; END IF;
           IF NOT EXISTS (
             SELECT 1 FROM evidence_snapshots s
             JOIN theses t ON t.id = s.thesis_id
@@ -309,14 +309,14 @@ def _create_protocol_scope_trigger() -> None:
                 WHERE newer.research_case_id = c.research_case_id
                   AND (newer.created_at, newer.id) > (c.created_at, c.id)
               )
-          ) THEN RAISE EXCEPTION 'assessment template is not current for snapshot case'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment template is not current for snapshot case' USING ERRCODE = '23514'; END IF;
           IF json_typeof(NEW.verification_rule_ids) <> 'array' THEN
-            RAISE EXCEPTION 'assessment verification rules must be a JSON array';
+            RAISE EXCEPTION 'assessment verification rules must be a JSON array' USING ERRCODE = '23514';
           END IF;
           IF json_array_length(NEW.verification_rule_ids) <> (
             SELECT COUNT(DISTINCT lower(j.value))
             FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
-          ) THEN RAISE EXCEPTION 'assessment verification rules must be unique'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment verification rules must be unique' USING ERRCODE = '23514'; END IF;
           IF EXISTS (
             SELECT 1 FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
             LEFT JOIN verification_rule_versions r
@@ -336,7 +336,7 @@ def _create_protocol_scope_trigger() -> None:
                    AND newer.mechanism_edge_id = r.mechanism_edge_id
                    AND (newer.created_at, newer.id) > (r.created_at, r.id)
                )
-          ) THEN RAISE EXCEPTION 'assessment verification rule is not current in snapshot protocol scope'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment verification rule is not current in snapshot protocol scope' USING ERRCODE = '23514'; END IF;
           IF EXISTS (
             SELECT 1
             FROM evidence_snapshots s
@@ -357,7 +357,7 @@ def _create_protocol_scope_trigger() -> None:
                 SELECT 1 FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
                 WHERE lower(j.value) = r.id::text
               )
-          ) THEN RAISE EXCEPTION 'assessment verification rules omit current protocol rules'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment verification rules omit current protocol rules' USING ERRCODE = '23514'; END IF;
           IF EXISTS (
             SELECT 1
             FROM mechanism_edge_versions e
@@ -379,7 +379,7 @@ def _create_protocol_scope_trigger() -> None:
                       AND (newer.created_at, newer.id) > (r.created_at, r.id)
                   )
               )
-          ) THEN RAISE EXCEPTION 'assessment protocol is missing a required verification rule'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment protocol is missing a required verification rule' USING ERRCODE = '23514'; END IF;
           IF NOT EXISTS (
             SELECT 1
             FROM evidence_snapshots s
@@ -397,7 +397,7 @@ def _create_protocol_scope_trigger() -> None:
                   AND newer.mechanism_edge_id = r.mechanism_edge_id
                   AND (newer.created_at, newer.id) > (r.created_at, r.id)
               )
-          ) THEN RAISE EXCEPTION 'assessment protocol is missing a counter hypothesis'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment protocol is missing a counter hypothesis' USING ERRCODE = '23514'; END IF;
           IF NEW.research_protocol_status <> (
             SELECT CASE
               WHEN COALESCE(
@@ -433,7 +433,7 @@ def _create_protocol_scope_trigger() -> None:
             JOIN theses t ON t.id = s.thesis_id
             JOIN outcome_binding_versions b ON b.id = NEW.effective_binding_id
             WHERE s.id = NEW.snapshot_id
-          ) THEN RAISE EXCEPTION 'assessment research protocol status does not match current footprint'; END IF;
+          ) THEN RAISE EXCEPTION 'assessment research protocol status does not match current footprint' USING ERRCODE = '23514'; END IF;
           RETURN NEW;
         END $$
         """
