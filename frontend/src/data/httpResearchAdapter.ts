@@ -31,6 +31,7 @@ import type {
   EventExtraction,
   EventLifecycle,
   EventLifecycleStatus,
+  EventNextActionKind,
   EventResearchListItem,
   EventResearchScope,
   EventReviewQueue,
@@ -2683,17 +2684,15 @@ export class HttpResearchAdapter implements ActiveResearchClient {
 
   async listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]> {
     const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
-    const dto = await this.get<{ items: Array<{
-      case_id: string; event_title: string; company_name: string | null; ticker: string | null;
-      event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string;
-      next_human_action: string | null; updated_at: string;
-    }> }>(`/event-research${suffix}`);
+    const dto = await this.get<components["schemas"]["EventResearchListResponse"]>(
+      `/event-research${suffix}`,
+    );
     return dto.items.map((item) => this.mapEventListItem(item));
   }
 
   async getEventWorkbench(caseId: string): Promise<EventWorkbench> {
     const dto = await this.get<{
-      event: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string };
+      event: components["schemas"]["EventResearchListItemDTO"];
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
       conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
       factors: Array<{ thesis_id: string; statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
@@ -2705,7 +2704,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       }>;
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
-      next_action: { kind: "wait" | "review_evidence" | "review_conclusion" | "edit_factors" | "view_conclusion_change"; label: string; count?: number | null };
+      next_action: { kind: EventNextActionKind; label: string; count?: number | null };
     }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
@@ -2871,8 +2870,8 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return { status: value.status, activeRunId: value.active_run_id, currentRound: value.current_round, summary: value.status_summary, currentGap: value.current_gap, nextHumanAction: value.next_human_action };
   }
 
-  private mapEventListItem(value: { case_id: string; event_title: string; company_name: string | null; ticker: string | null; event_at: string | null; lifecycle_status: EventLifecycleStatus; status_summary: string; next_human_action: string | null; updated_at: string }): EventResearchListItem {
-    return { id: value.case_id, eventTitle: value.event_title, companyName: value.company_name, ticker: value.ticker, eventAt: value.event_at, status: value.lifecycle_status, statusSummary: value.status_summary, nextHumanAction: value.next_human_action, updatedAt: value.updated_at };
+  private mapEventListItem(value: components["schemas"]["EventResearchListItemDTO"]): EventResearchListItem {
+    return { id: value.case_id, eventTitle: value.event_title, companyName: value.company_name, ticker: value.ticker, eventAt: value.event_at, status: value.lifecycle_status as EventLifecycleStatus, statusSummary: value.status_summary, nextHumanAction: value.next_human_action, nextActionKind: value.next_action_kind, updatedAt: value.updated_at };
   }
 
   async getConclusionView(

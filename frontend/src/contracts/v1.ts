@@ -2557,6 +2557,8 @@ export interface components {
             next_scheduled_at?: string | null;
             /** Confirmed Factors */
             confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
+            /** Available Confirmed Factors */
+            available_confirmed_factors: components["schemas"]["ConfirmedFactorOptionDTO"][];
         };
         /** CaseRelationCandidateOriginDTO */
         CaseRelationCandidateOriginDTO: {
@@ -3720,8 +3722,11 @@ export interface components {
         };
         /** EventNextActionDTO */
         EventNextActionDTO: {
-            /** Kind */
-            kind: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
             /** Label */
             label: string;
             /** Count */
@@ -3779,6 +3784,11 @@ export interface components {
             status_summary: string;
             /** Next Human Action */
             next_human_action: string | null;
+            /**
+             * Next Action Kind
+             * @enum {string}
+             */
+            next_action_kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
             /**
              * Updated At
              * Format: date-time

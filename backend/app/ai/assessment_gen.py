@@ -75,15 +75,16 @@ class AssessmentGenerator:
         thesis = session.get(Thesis, thesis_id)
         if thesis is None:
             raise ValueError(f"thesis {thesis_id} not found")
-        gate = ResearchProtocolService(session).check_researchability(thesis_id)
-        if thesis.research_protocol_required and gate.status == "blocked":
+        initial_gate = ResearchProtocolService(session).check_researchability(thesis_id)
+        if thesis.research_protocol_required and initial_gate.status == "blocked":
             raise ValidationError(
-                f"researchability gate blocked: {', '.join(gate.reason_codes)}"
+                f"researchability gate blocked: {', '.join(initial_gate.reason_codes)}"
             )
 
         input_ref = {
             "thesis_id": str(thesis_id),
             "cutoff": cutoff.isoformat(),
+            "initial_protocol_status": initial_gate.status,
         }
 
         try:
@@ -123,7 +124,6 @@ class AssessmentGenerator:
             conclusion = result["conclusion"]
             rationale = result["rationale"]
             gaps = result.get("gaps", [])
-
             # Non-investment-advice gate (with one bounded rewrite attempt
             # for REWRITE-category hits): refused text never reaches the
             # ledger; the failure is recorded on the AIRun below.
@@ -134,6 +134,48 @@ class AssessmentGenerator:
             # leave no immutable snapshot, assessment, or AI audit output.
             if before_persist is not None and not before_persist():
                 return None
+
+            # Provider/compliance work can outlive a protocol change. Reload
+            # the thesis and effective protocol at the final write boundary.
+            session.expire(thesis)
+            thesis = session.get(Thesis, thesis_id)
+            if thesis is None:
+                raise ValidationError("thesis not found")
+            final_gate = ResearchProtocolService(session).check_researchability(
+                thesis_id
+            )
+            input_ref["final_protocol_status"] = final_gate.status
+            input_ref["effective_binding_id"] = (
+                str(final_gate.effective_binding_id)
+                if final_gate.effective_binding_id is not None
+                else None
+            )
+            if thesis.research_protocol_required and final_gate.status == "blocked":
+                raise ValidationError(
+                    "researchability gate blocked: "
+                    + ", ".join(final_gate.reason_codes)
+                )
+            if thesis.research_protocol_required:
+                allowed_conclusions = (
+                    ResearchProtocolService.allowed_assessment_conclusions(final_gate)
+                )
+                if conclusion not in allowed_conclusions:
+                    if final_gate.status == "single_metric_monitoring":
+                        conclusion = "insufficient_evidence"
+                    else:
+                        raise ValidationError(
+                            f"researchability gate disallows conclusion: {conclusion}"
+                        )
+            if (
+                thesis.research_protocol_required
+                and final_gate.status == "single_metric_monitoring"
+            ):
+                # This protocol-derived machine reason is intentionally
+                # independent of model prose and compliance rewrites.
+                gaps = [
+                    gap for gap in gaps if gap != "insufficient_primary_metrics"
+                ]
+                gaps.append("insufficient_primary_metrics")
 
             snapshot = assessment_service.freeze_snapshot(
                 thesis_id, cutoff=cutoff

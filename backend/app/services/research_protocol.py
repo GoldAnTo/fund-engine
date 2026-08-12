@@ -111,6 +111,16 @@ class ResearchProtocolService:
         self._session = session
         self._repo = ResearchProtocolRepository(session)
 
+    @staticmethod
+    def allowed_assessment_conclusions(
+        result: ResearchabilityResult,
+    ) -> set[str]:
+        if result.status == "ready":
+            return {"supported", "contradicted", "insufficient_evidence"}
+        if result.status == "single_metric_monitoring":
+            return {"insufficient_evidence"}
+        return set()
+
     def add_metric_version(
         self,
         value: MetricDefinitionInput,

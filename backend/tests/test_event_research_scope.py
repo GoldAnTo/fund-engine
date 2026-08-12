@@ -78,6 +78,21 @@ def _create_event(client) -> dict:
     return response.json()
 
 
+def _add_legacy_thesis(session, case_id: uuid.UUID, statement: str) -> Thesis:
+    thesis = Thesis(
+        research_case_id=case_id,
+        statement=statement,
+        research_protocol_required=False,
+        created_by="tester",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="confirmed",
+    )
+    session.add(thesis)
+    session.flush()
+    return thesis
+
+
 def _start_case_run(client, session, case_id: uuid.UUID) -> uuid.UUID:
     """Scope-replacement tests need an explicitly authorized prior run."""
     response = client.post(
@@ -193,6 +208,94 @@ def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_sessi
     assert versions[0].version == 1
     assert versions[0].changed_by == "tester"
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
+
+
+def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    new_factor = "新增因素必须先完成研究协议"
+
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        [*INITIAL_FACTORS, new_factor],
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == new_factor,
+        )
+    )
+
+    assert thesis is not None
+    assert thesis.research_protocol_required is True
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.status == "awaiting_scope"
+    assert lifecycle.active_run_id is None
+    assert lifecycle.current_round == 0
+    assert lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
+    assert new_factor in lifecycle.current_gap
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+        )
+    ) == []
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+    assert workbench.status_code == 200
+    assert workbench.json()["next_action"] == {
+        "kind": "complete_research_protocol",
+        "label": "完成新增因素的研究协议后再启动补证",
+        "count": None,
+    }
+    listed = cmd_client.get("/api/v1/event-research")
+    assert listed.status_code == 200
+    assert listed.json()["items"] == [
+        {
+            "case_id": str(case_id),
+            "event_title": "Alphabet 财报后股价下跌",
+            "company_name": "Alphabet",
+            "ticker": "GOOGL",
+            "event_at": None,
+            "lifecycle_status": "awaiting_scope",
+            "status_summary": "研究范围已更新，新增因素需先完成研究协议",
+            "next_human_action": "完成新增因素的研究协议后再启动补证",
+            "next_action_kind": "complete_research_protocol",
+            "updated_at": listed.json()["items"][0]["updated_at"],
+        }
+    ]
+
+
+def test_scope_update_preserves_reused_thesis_protocol_requirement(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    reused_factor = INITIAL_FACTORS[0]
+    existing = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == reused_factor,
+        )
+    )
+    assert existing is not None
+    assert existing.research_protocol_required is False
+
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        INITIAL_FACTORS,
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    cmd_session.refresh(existing)
+    assert existing.research_protocol_required is False
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.status == "continuing"
+    assert lifecycle.active_run_id is not None
 
 
 def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:
@@ -597,8 +700,15 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             .where(Thesis.research_case_id == case_id)
         ) is None
         assert lifecycle is not None
-        assert lifecycle.status == "continuing"
-        assert lifecycle.active_run_id != old_run_id
+        assert lifecycle.status == "awaiting_scope"
+        assert lifecycle.active_run_id is None
+        assert lifecycle.current_round == 0
+        assert verify.scalar(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == case_id,
+                ResearchRun.id != old_run_id,
+            )
+        ) is None
     finally:
         verify.close()
 
@@ -747,6 +857,10 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
         lifecycle.next_human_action = "Update factors"
         _cover_current_scope(bootstrap, case_id)
         EventConclusionService(bootstrap).create_draft(case_id)
+        # Preserve this stale-publish test's successor-specific contract by
+        # reusing legacy, non-required theses for the added scope factors.
+        _add_legacy_thesis(bootstrap, case_id, "New factor two")
+        _add_legacy_thesis(bootstrap, case_id, "New factor three")
         bootstrap.commit()
     finally:
         bootstrap.close()
@@ -1239,10 +1353,10 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
         removed_link.id: (INITIAL_FACTORS[1], "mapped"),
     }
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle.status == "continuing"
-    assert lifecycle.status_summary == "已更新因素，正在重新归类证据并继续检索"
-    assert lifecycle.current_gap == "已更新因素，正在重新归类证据"
-    assert lifecycle.next_human_action is None
+    assert lifecycle.status == "awaiting_scope"
+    assert lifecycle.active_run_id is None
+    assert lifecycle.status_summary == "研究范围已更新，新增因素需先完成研究协议"
+    assert lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
 
 
 @pytest.mark.parametrize("paused_status", ["awaiting_scope", "exhausted"])
@@ -1263,6 +1377,9 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
         "广告业务增长弱于市场预期",
         "AI 投入回报周期可能拉长",
     ]
+    _add_legacy_thesis(cmd_session, case_id, active_factors[1])
+    _add_legacy_thesis(cmd_session, case_id, active_factors[2])
+    cmd_session.commit()
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
@@ -1332,7 +1449,7 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
     assert workbench.json()["conclusion"]["state"] == "cannot_conclude"
 
 
-@pytest.mark.parametrize("old_status", ["queued", "running"])
+@pytest.mark.parametrize("old_status", ["queued", "running", "waiting_for_review"])
 def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     cmd_client, cmd_session, old_status: str
 ) -> None:
@@ -1358,6 +1475,9 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
         "广告业务增长弱于市场预期",
         "AI 投入回报周期可能拉长",
     ]
+    _add_legacy_thesis(cmd_session, case_id, latest_factors[1])
+    _add_legacy_thesis(cmd_session, case_id, latest_factors[2])
+    cmd_session.commit()
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
@@ -1381,6 +1501,14 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     )
     assert old_tasks
     assert {task.status for task in old_tasks} == {"cancelled"}
+    # Proposal and assessment decisions both reconcile through this state
+    # transition, while atomic-claim decisions use the resume transition.
+    # Neither may revive a run retired by the scope replacement.
+    service = AutoResearchService(cmd_session)
+    assert not service.reconcile_run(
+        old_run_id, trigger_ref="proposal-or-assessment:reviewed"
+    )
+    assert not service.repo.resume_after_claim_review(old_run)
 
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
@@ -1481,6 +1609,9 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
         ref_id=proposal.id,
         research_case_id=case_id,
     )
+    session.commit()
+    _add_legacy_thesis(session, case_id, "New factor two")
+    _add_legacy_thesis(session, case_id, "New factor three")
     session.commit()
 
     EventResearchScopeService(session).update(

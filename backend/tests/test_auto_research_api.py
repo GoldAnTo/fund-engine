@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
 import pytest
+from threading import Event, Thread
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,7 +27,11 @@ from app.repositories.auto_research import AutoResearchRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
-from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
+from app.services.case_monitor import (
+    CaseMonitorConfig,
+    CaseMonitorService,
+    ResearchRunEventRepository,
+)
 from app.models.research_monitor import ResearchRunEvent
 
 
@@ -270,6 +275,351 @@ def test_auto_research_stops_before_propose_or_assess_when_atomic_claims_await_r
     assert session.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 1
     assert any(event.stage == "claim_review" and "原子陈述" in event.message for event in session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)))
     assert any(task.task_type == "review_atomic_claim" and task.status == "open" for task in session.scalars(select(TaskItem).where(TaskItem.research_case_id == case.id)))
+
+
+def test_run_reconciliation_scopes_atomic_claim_gates_to_each_run(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="run-local claim gate",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://issuer.example.com/run-local-claim",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    session.add_all([case, document])
+    session.flush()
+    source_text = "公司披露订单同比增长20%。"
+    quote = "订单同比增长20%"
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text=source_text,
+    )
+    session.add_all([
+        span,
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=now,
+        ),
+    ])
+    session.flush()
+    candidate = AtomicClaimService(session).admit(
+        AtomicClaimDraft(
+            source_span_id=span.id,
+            quote=quote,
+            quote_start=source_text.index(quote),
+            quote_end=source_text.index(quote) + len(quote),
+            normalized_text="公司披露订单同比增长 20%",
+            claim_type="disclosed_fact",
+            assertion_actor="公司",
+            subject="订单",
+            predicate="同比增长",
+            object_text="20%",
+            numeric_value="20",
+            unit="%",
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="primary_disclosure",
+        run_ref="extract:run-local-gate",
+    )
+    unrelated_run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    claim_run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add_all([unrelated_run, claim_run])
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={},
+        target_context={},
+        proposed_by_type="ai",
+        proposed_by_ref="test-run",
+        proposed_at=now,
+        status="decided",
+        research_case_id=case.id,
+    )
+    session.add(proposal)
+    session.flush()
+    for run in (unrelated_run, claim_run):
+        session.add(
+            ResearchTask(
+                run_id=run.id,
+                research_case_id=case.id,
+                status="done",
+                stage="completed",
+                round=1,
+                task_type="result",
+                query="final review output",
+                result={"proposed_proposal_ids": [str(proposal.id)]},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    ResearchRunEventRepository(session).append(
+        claim_run.id,
+        stage="claim_review",
+        status="waiting_for_review",
+        message="等待此运行的原子陈述审核",
+        payload_json={"candidate_ids": [str(candidate.id)]},
+    )
+
+    service = AutoResearchService(session)
+    assert service.reconcile_runs_for_output(
+        key="proposed_proposal_ids",
+        value=proposal.id,
+        trigger_ref=f"proposal:{proposal.id}",
+    ) == [unrelated_run.id]
+    assert not service.reconcile_run(claim_run.id, trigger_ref=f"proposal:{proposal.id}")
+
+
+def test_historical_scalar_proposal_output_is_a_review_gate(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="scalar result", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=now)
+    session.add(thesis)
+    session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={},
+        target_context={"thesis_id": str(thesis.id)},
+        proposed_by_type="ai",
+        proposed_by_ref="test-run",
+        proposed_at=now,
+        research_case_id=case.id,
+    )
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add_all([proposal, run])
+    session.flush()
+    session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=thesis.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="historical scalar output",
+            result={"proposed_proposal_ids": str(proposal.id)},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    service = AutoResearchService(session)
+    assert service._successful_terminal_status(run) == "waiting_for_review"
+    service._handoff_for_review(run)
+    assert session.scalar(
+        select(TaskItem).where(TaskItem.ref_id == proposal.id)
+    ) is not None
+    detail = service.detail(run.id)
+    assert detail is not None
+    assert detail["pending_proposals"][0]["id"] == str(proposal.id)
+
+
+def test_non_dict_task_result_is_ignored_by_review_gate_helpers(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(title="malformed result", industry_topic="i", created_by="u", created_at=now)
+    session.add(case)
+    session.flush()
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_review",
+        stage="stopped",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="malformed historical output",
+            result="not a JSON object",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    service = AutoResearchService(session)
+    assert service._successful_terminal_status(run) == "succeeded"
+    service._handoff_for_review(run)
+    detail = service.detail(run.id)
+    assert detail is not None
+    assert detail["assessments"] == []
+    assert detail["pending_assessments"] == []
+
+
+@pytest.mark.parametrize("malformed_result", ["not a JSON object", ["bad"]])
+def test_run_detail_and_archive_ignore_malformed_historical_results(
+    cmd_client, cmd_session, malformed_result
+):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="historical archive",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    _admit_case(cmd_session, case)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="succeeded",
+        stage="complete",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_session.add(run)
+    cmd_session.flush()
+    cmd_session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="malformed historical output",
+            result=malformed_result,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    cmd_session.commit()
+
+    detail = cmd_client.get(f"/api/v1/research-runs/{run.id}")
+    archive = cmd_client.get("/api/v1/research-runs")
+    case_archive = cmd_client.get(f"/api/v1/research-cases/{case.id}/runs")
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["assessments"] == []
+    assert archive.status_code == 200, archive.text
+    assert archive.json()["items"][0]["run_id"] == str(run.id)
+    assert case_archive.status_code == 200, case_archive.text
+    assert case_archive.json()["items"][0]["id"] == str(run.id)
+
+
+@pytest.mark.pg_only
+def test_cancel_wins_over_concurrent_final_review_reconciliation(engine):
+    """A final review cannot append completion after another session cancels."""
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local.begin() as setup:
+        case = ResearchCase(
+            title="reconcile cancellation race",
+            industry_topic="i",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        run = ResearchRun(
+            research_case_id=case.id,
+            status="waiting_for_review",
+            stage="stopped",
+            round=1,
+            max_rounds=1,
+            budget=10,
+            budget_used=1,
+            created_at=now,
+            updated_at=now,
+        )
+        setup.add(run)
+        setup.flush()
+        run_id = run.id
+
+    cancelling = session_local()
+    locked_run = AutoResearchService(cancelling)._lock_run_for_transition(run_id)
+    assert locked_run is not None
+    assert AutoResearchService(cancelling).repo.cancel_run(locked_run)
+    cancelling.flush()
+
+    finished = Event()
+    result: list[bool] = []
+
+    def reconcile_in_second_session() -> None:
+        competing = session_local()
+        try:
+            result.append(
+                AutoResearchService(competing).reconcile_run(
+                    run_id, trigger_ref="proposal:final"
+                )
+            )
+            competing.commit()
+        finally:
+            competing.close()
+            finished.set()
+
+    thread = Thread(target=reconcile_in_second_session)
+    thread.start()
+    assert not finished.wait(0.1)
+    cancelling.commit()
+    thread.join(timeout=5)
+    cancelling.close()
+
+    assert not thread.is_alive()
+    assert result == [False]
+    with session_local() as check:
+        run = check.get(ResearchRun, run_id)
+        assert run is not None and run.status == "cancelled"
+        assert check.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run_id)
+            .where(ResearchRunEvent.stage == "review_complete")
+        ).all() == []
 
 
 def test_budget_stop(session):

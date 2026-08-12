@@ -403,7 +403,8 @@ export class MockResearchOsApi implements ResearchOsApi {
             updated_at: now,
           }
         : null,
-      confirmed_factors: factors,
+      confirmed_factors: factors.filter((factor) => monitor.factor_ids.includes(factor.id)),
+      available_confirmed_factors: factors,
     };
   }
 
@@ -501,6 +502,7 @@ export class MockResearchOsApi implements ResearchOsApi {
       gap_tasks: [],
       failed_tasks: [],
       assessments: [],
+      pending_assessments: [],
       pending_proposals: [],
       review_tasks: [],
       next_action: "查看运行详情",
@@ -542,6 +544,7 @@ export class MockResearchOsApi implements ResearchOsApi {
       gap_tasks: [],
       failed_tasks: [],
       assessments: [],
+      pending_assessments: [],
       pending_proposals: [],
       review_tasks: [],
       next_action: "查看运行详情",

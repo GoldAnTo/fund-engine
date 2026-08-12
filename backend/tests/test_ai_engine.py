@@ -6,6 +6,7 @@ full pipeline can be exercised offline.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -25,8 +26,11 @@ from app.models.ledger import (
     AIAssessment,
     AIRun,
     EvidenceLink,
+    EvidenceSnapshot,
     SourceStatement,
+    ValidationError,
 )
+from app.services.research_protocol import ResearchabilityResult
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +254,211 @@ def test_assessment_releases_read_transaction_before_provider(
             thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
         )
     assert assessment is not None
+
+
+def test_single_metric_monitoring_coerces_assessment_to_insufficient_evidence(
+    session, research_service, thesis, statement
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="GPU demand will grow under the strict protocol",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    research_service.link_evidence(
+        strict_thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    model_output = {
+        "conclusion": "supported",
+        "rationale": "The evidence supports the thesis.",
+        "gaps": [
+            "insufficient_primary_metrics",
+            "missing raw data",
+            "insufficient_primary_metrics",
+        ],
+    }
+    gate = ResearchabilityResult(
+        status="single_metric_monitoring",
+        reason_codes=["insufficient_primary_metrics"],
+        effective_binding_id=None,
+        next_action="monitor only",
+    )
+
+    with (
+        patch.object(client, "chat_json", return_value=model_output),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            return_value=gate,
+        ),
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment.conclusion == "insufficient_evidence"
+    assert assessment.gaps == ["missing raw data", "insufficient_primary_metrics"]
+    run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
+    assert run is not None
+    assert "conclusion=insufficient_evidence" in run.output_summary
+
+
+def test_single_metric_monitoring_preserves_protocol_gap_after_compliance_rewrite(
+    session, research_service, thesis, statement
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="GPU demand will grow under the strict protocol",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    research_service.link_evidence(
+        strict_thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    model_output = {
+        "conclusion": "insufficient_evidence",
+        "rationale": "Evidence remains incomplete.",
+        "gaps": ["目标价 85 元"],
+    }
+    gate = ResearchabilityResult(
+        status="single_metric_monitoring",
+        reason_codes=["insufficient_primary_metrics"],
+        effective_binding_id=None,
+        next_action="monitor only",
+    )
+
+    def model_then_rewrite(_messages, schema_hint=""):
+        if schema_hint == "assess":
+            return model_output
+        assert schema_hint == "rewrite"
+        return {
+            "texts": [
+                "Evidence remains incomplete.",
+                "More operating data is needed.",
+            ]
+        }
+
+    with (
+        patch.object(client, "chat_json", side_effect=model_then_rewrite),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            return_value=gate,
+        ),
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment.gaps == [
+        "More operating data is needed.",
+        "insufficient_primary_metrics",
+    ]
+
+
+def test_assessment_rechecks_protocol_after_provider_and_constrains_stale_result(
+    session, research_service, thesis
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="Protocol can change while the provider is running",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    ready = ResearchabilityResult(
+        status="ready",
+        reason_codes=[],
+        effective_binding_id=None,
+        next_action="assess",
+    )
+    binding_id = uuid.uuid4()
+    single_metric = ResearchabilityResult(
+        status="single_metric_monitoring",
+        reason_codes=["insufficient_primary_metrics"],
+        effective_binding_id=binding_id,
+        next_action="monitor only",
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    with (
+        patch.object(
+            client,
+            "chat_json",
+            return_value={
+                "conclusion": "supported",
+                "rationale": "The stale model result is directional.",
+                "gaps": [],
+            },
+        ),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            side_effect=[ready, single_metric],
+        ) as check,
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert check.call_count == 2
+    assert assessment is not None
+    assert assessment.conclusion == "insufficient_evidence"
+    assert assessment.gaps == ["insufficient_primary_metrics"]
+    run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
+    assert run.input_ref["initial_protocol_status"] == "ready"
+    assert run.input_ref["final_protocol_status"] == "single_metric_monitoring"
+    assert run.input_ref["effective_binding_id"] == str(binding_id)
+
+
+def test_assessment_rechecks_protocol_after_provider_and_blocks_persistence(
+    session, research_service, thesis
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="Protocol can become blocked while the provider is running",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    ready = ResearchabilityResult("ready", [], None, "assess")
+    blocked = ResearchabilityResult(
+        "blocked", ["missing_outcome_binding"], None, "complete protocol"
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    with (
+        patch.object(
+            client,
+            "chat_json",
+            return_value={
+                "conclusion": "supported",
+                "rationale": "The stale model result must not persist.",
+                "gaps": [],
+            },
+        ),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            side_effect=[ready, blocked],
+        ),
+        pytest.raises(ValidationError, match="researchability gate blocked"),
+    ):
+        AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert session.scalar(
+        select(EvidenceSnapshot.id).where(EvidenceSnapshot.thesis_id == strict_thesis.id)
+    ) is None
+    assert session.scalar(select(AIAssessment.id)) is None
+    run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
+    assert run is not None and run.status == "failed"
+    assert run.input_ref["final_protocol_status"] == "blocked"
 
 
 # ---------------------------------------------------------------------------

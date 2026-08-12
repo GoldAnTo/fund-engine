@@ -9374,6 +9374,13 @@
             },
             "type": "array",
             "title": "Confirmed Factors"
+          },
+          "available_confirmed_factors": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmedFactorOptionDTO"
+            },
+            "type": "array",
+            "title": "Available Confirmed Factors"
           }
         },
         "additionalProperties": false,
@@ -9382,7 +9389,8 @@
           "monitor",
           "history",
           "latest_run",
-          "confirmed_factors"
+          "confirmed_factors",
+          "available_confirmed_factors"
         ],
         "title": "CaseMonitorDetailResponse"
       },
@@ -12658,6 +12666,15 @@
         "properties": {
           "kind": {
             "type": "string",
+            "enum": [
+              "wait",
+              "review_intake",
+              "review_evidence",
+              "review_conclusion",
+              "edit_factors",
+              "complete_research_protocol",
+              "view_conclusion_change"
+            ],
             "title": "Kind"
           },
           "label": {
@@ -12869,6 +12886,19 @@
             ],
             "title": "Next Human Action"
           },
+          "next_action_kind": {
+            "type": "string",
+            "enum": [
+              "wait",
+              "review_intake",
+              "review_evidence",
+              "review_conclusion",
+              "edit_factors",
+              "complete_research_protocol",
+              "view_conclusion_change"
+            ],
+            "title": "Next Action Kind"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time",
@@ -12886,6 +12916,7 @@
           "lifecycle_status",
           "status_summary",
           "next_human_action",
+          "next_action_kind",
           "updated_at"
         ],
         "title": "EventResearchListItemDTO"

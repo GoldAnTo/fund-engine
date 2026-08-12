@@ -8,6 +8,7 @@ from sqlalchemy import delete, select, update
 from app.models.ledger import ImmutableLedgerError, ResearchCase, Thesis
 from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion
+from app.queries.case_monitor import CaseMonitorQuery
 from app.services.case_monitor import (
     CaseMonitorConfig,
     CaseMonitorService,
@@ -133,6 +134,27 @@ def test_pausing_and_resuming_append_new_monitor_versions(session) -> None:
 
     assert (first.version, paused.version, resumed.version) == (1, 2, 3)
     assert (first.status, paused.status, resumed.status) == ("active", "paused", "active")
+
+
+def test_confirmed_factors_uses_the_monitor_instance_passed_by_the_detail_query(session) -> None:
+    case, first_factor = _case_with_confirmed_factor(session)
+    second_factor = Thesis(
+        research_case_id=case.id,
+        statement="第二个已确认因素",
+        created_by="human:lin",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="confirmed",
+    )
+    session.add(second_factor)
+    session.flush()
+    service = CaseMonitorService(session)
+    first_monitor = service.save(case.id, actor="human:lin", config=_monitor_config(first_factor.id))
+    service.save(case.id, actor="human:lin", config=_monitor_config(second_factor.id))
+
+    factors = CaseMonitorQuery(session).confirmed_factors(case.id, first_monitor)
+
+    assert factors == [first_factor]
 
 
 def test_run_events_are_ordered_and_append_only(session) -> None:
