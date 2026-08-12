@@ -273,7 +273,11 @@ def test_single_metric_monitoring_coerces_assessment_to_insufficient_evidence(
     model_output = {
         "conclusion": "supported",
         "rationale": "The evidence supports the thesis.",
-        "gaps": [],
+        "gaps": [
+            "insufficient_primary_metrics",
+            "missing raw data",
+            "insufficient_primary_metrics",
+        ],
     }
     gate = ResearchabilityResult(
         status="single_metric_monitoring",
@@ -294,10 +298,67 @@ def test_single_metric_monitoring_coerces_assessment_to_insufficient_evidence(
         )
 
     assert assessment.conclusion == "insufficient_evidence"
-    assert assessment.gaps.count("insufficient_primary_metrics") == 1
+    assert assessment.gaps == ["missing raw data", "insufficient_primary_metrics"]
     run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
     assert run is not None
     assert "conclusion=insufficient_evidence" in run.output_summary
+
+
+def test_single_metric_monitoring_preserves_protocol_gap_after_compliance_rewrite(
+    session, research_service, thesis, statement
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="GPU demand will grow under the strict protocol",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    research_service.link_evidence(
+        strict_thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    model_output = {
+        "conclusion": "insufficient_evidence",
+        "rationale": "Evidence remains incomplete.",
+        "gaps": ["目标价 85 元"],
+    }
+    gate = ResearchabilityResult(
+        status="single_metric_monitoring",
+        reason_codes=["insufficient_primary_metrics"],
+        effective_binding_id=None,
+        next_action="monitor only",
+    )
+
+    def model_then_rewrite(_messages, schema_hint=""):
+        if schema_hint == "assess":
+            return model_output
+        assert schema_hint == "rewrite"
+        return {
+            "texts": [
+                "Evidence remains incomplete.",
+                "More operating data is needed.",
+            ]
+        }
+
+    with (
+        patch.object(client, "chat_json", side_effect=model_then_rewrite),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            return_value=gate,
+        ),
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment.gaps == [
+        "More operating data is needed.",
+        "insufficient_primary_metrics",
+    ]
 
 
 # ---------------------------------------------------------------------------

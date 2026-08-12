@@ -123,6 +123,10 @@ class AssessmentGenerator:
             conclusion = result["conclusion"]
             rationale = result["rationale"]
             gaps = result.get("gaps", [])
+            strict_single_metric = (
+                thesis.research_protocol_required
+                and gate.status == "single_metric_monitoring"
+            )
 
             if thesis.research_protocol_required:
                 allowed_conclusions = (
@@ -131,8 +135,6 @@ class AssessmentGenerator:
                 if conclusion not in allowed_conclusions:
                     if gate.status == "single_metric_monitoring":
                         conclusion = "insufficient_evidence"
-                        if "insufficient_primary_metrics" not in gaps:
-                            gaps.append("insufficient_primary_metrics")
                     else:
                         raise ValidationError(
                             f"researchability gate disallows conclusion: {conclusion}"
@@ -142,6 +144,13 @@ class AssessmentGenerator:
             # for REWRITE-category hits): refused text never reaches the
             # ledger; the failure is recorded on the AIRun below.
             rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
+            if strict_single_metric:
+                # This protocol-derived machine reason is intentionally
+                # independent of model prose and compliance rewrites.
+                gaps = [
+                    gap for gap in gaps if gap != "insufficient_primary_metrics"
+                ]
+                gaps.append("insufficient_primary_metrics")
 
             # Auto research supplies a case/run/task output slot here.  If a
             # scope replacement committed while the provider was in flight,
