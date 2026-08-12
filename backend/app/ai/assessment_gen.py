@@ -46,6 +46,7 @@ from app.models.ledger import (
 )
 from app.repositories.research import ResearchRepository
 from app.services.assessment import AssessmentService
+from app.services.event_research_scope_evidence import lock_event_scope_case
 from app.services.research_protocol import ResearchProtocolService
 from app.services.compliance import (
     ComplianceAction,
@@ -135,8 +136,11 @@ class AssessmentGenerator:
             if before_persist is not None and not before_persist():
                 return None
 
-            # Provider/compliance work can outlive a protocol change. Reload
-            # the thesis and effective protocol at the final write boundary.
+            # Provider/compliance work can outlive a protocol change. Serialize
+            # the final protocol footprint and immutable ledger writes with all
+            # protocol mutations. Lock order is Case -> protocol rows; the
+            # caller retains this lock through its outer commit.
+            lock_event_scope_case(session, thesis.research_case_id)
             session.expire(thesis)
             thesis = session.get(Thesis, thesis_id)
             if thesis is None:
@@ -150,6 +154,15 @@ class AssessmentGenerator:
                 if final_gate.effective_binding_id is not None
                 else None
             )
+            input_ref["mechanism_template_version_id"] = (
+                str(final_gate.mechanism_template_version_id)
+                if final_gate.mechanism_template_version_id is not None
+                else None
+            )
+            frozen_rule_ids = sorted(
+                str(rule_id) for rule_id in final_gate.verification_rule_ids
+            )
+            input_ref["verification_rule_ids"] = frozen_rule_ids
             if thesis.research_protocol_required and final_gate.status == "blocked":
                 raise ValidationError(
                     "researchability gate blocked: "
@@ -185,6 +198,22 @@ class AssessmentGenerator:
                 conclusion=conclusion,
                 rationale=rationale,
                 gaps=gaps,
+                research_protocol_status=(
+                    final_gate.status if thesis.research_protocol_required else None
+                ),
+                effective_binding_id=(
+                    final_gate.effective_binding_id
+                    if thesis.research_protocol_required
+                    else None
+                ),
+                mechanism_template_version_id=(
+                    final_gate.mechanism_template_version_id
+                    if thesis.research_protocol_required
+                    else None
+                ),
+                verification_rule_ids=(
+                    frozen_rule_ids if thesis.research_protocol_required else None
+                ),
             )
 
             input_ref["snapshot_id"] = str(snapshot.id)

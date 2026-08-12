@@ -6,6 +6,7 @@ full pipeline can be exercised offline.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -31,6 +32,7 @@ from app.models.ledger import (
     ValidationError,
 )
 from app.services.research_protocol import ResearchabilityResult
+from tests.protocol_provenance import seed_protocol_footprint
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +290,13 @@ def test_single_metric_monitoring_coerces_assessment_to_insufficient_evidence(
         effective_binding_id=None,
         next_action="monitor only",
     )
+    footprint = seed_protocol_footprint(session, strict_thesis)
+    gate = replace(
+        gate,
+        effective_binding_id=footprint.binding.id,
+        mechanism_template_version_id=footprint.template.id,
+        verification_rule_ids=tuple(rule.id for rule in footprint.rules),
+    )
 
     with (
         patch.object(client, "chat_json", return_value=model_output),
@@ -335,6 +344,13 @@ def test_single_metric_monitoring_preserves_protocol_gap_after_compliance_rewrit
         effective_binding_id=None,
         next_action="monitor only",
     )
+    footprint = seed_protocol_footprint(session, strict_thesis)
+    gate = replace(
+        gate,
+        effective_binding_id=footprint.binding.id,
+        mechanism_template_version_id=footprint.template.id,
+        verification_rule_ids=tuple(rule.id for rule in footprint.rules),
+    )
 
     def model_then_rewrite(_messages, schema_hint=""):
         if schema_hint == "assess":
@@ -379,12 +395,17 @@ def test_assessment_rechecks_protocol_after_provider_and_constrains_stale_result
         effective_binding_id=None,
         next_action="assess",
     )
-    binding_id = uuid.uuid4()
+    footprint = seed_protocol_footprint(session, strict_thesis)
+    binding_id = footprint.binding.id
+    template_id = footprint.template.id
+    rule_ids = [rule.id for rule in footprint.rules]
     single_metric = ResearchabilityResult(
         status="single_metric_monitoring",
         reason_codes=["insufficient_primary_metrics"],
         effective_binding_id=binding_id,
         next_action="monitor only",
+        mechanism_template_version_id=template_id,
+        verification_rule_ids=tuple(reversed(rule_ids)),
     )
     client = LLMClient(model_version="mock-test", mock=True)
 
@@ -411,10 +432,77 @@ def test_assessment_rechecks_protocol_after_provider_and_constrains_stale_result
     assert assessment is not None
     assert assessment.conclusion == "insufficient_evidence"
     assert assessment.gaps == ["insufficient_primary_metrics"]
+    assert assessment.research_protocol_status == "single_metric_monitoring"
+    assert assessment.effective_binding_id == binding_id
+    assert assessment.mechanism_template_version_id == template_id
+    assert assessment.verification_rule_ids == sorted(
+        [str(rule_id) for rule_id in rule_ids]
+    )
     run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
     assert run.input_ref["initial_protocol_status"] == "ready"
     assert run.input_ref["final_protocol_status"] == "single_metric_monitoring"
     assert run.input_ref["effective_binding_id"] == str(binding_id)
+    assert run.input_ref["mechanism_template_version_id"] == str(template_id)
+    assert run.input_ref["verification_rule_ids"] == sorted(
+        [str(rule_id) for rule_id in rule_ids]
+    )
+
+
+def test_assessment_takes_case_lock_before_final_protocol_recheck(
+    session, research_service, thesis
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="Final protocol check must be serialized with persistence",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    gate = ResearchabilityResult(
+        status="ready",
+        reason_codes=[],
+        effective_binding_id=None,
+        next_action="assess",
+    )
+    footprint = seed_protocol_footprint(session, strict_thesis)
+    gate = replace(
+        gate,
+        effective_binding_id=footprint.binding.id,
+        mechanism_template_version_id=footprint.template.id,
+        verification_rule_ids=tuple(rule.id for rule in footprint.rules),
+    )
+    events: list[str] = []
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    def check(_service, _thesis_id):
+        events.append("check")
+        return gate
+
+    with (
+        patch.object(
+            client,
+            "chat_json",
+            return_value={
+                "conclusion": "supported",
+                "rationale": "The final gate is ready.",
+                "gaps": [],
+            },
+        ),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            autospec=True,
+            side_effect=check,
+        ),
+        patch(
+            "app.ai.assessment_gen.lock_event_scope_case",
+            side_effect=lambda _session, _case_id: events.append("lock"),
+        ),
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment is not None
+    assert events == ["check", "lock", "check"]
 
 
 def test_assessment_rechecks_protocol_after_provider_and_blocks_persistence(

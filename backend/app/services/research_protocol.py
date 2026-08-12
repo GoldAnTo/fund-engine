@@ -17,6 +17,7 @@ from app.models.research_protocol import (
 )
 from app.models.source_governance import ProviderRecord, SourceContract
 from app.repositories.research_protocol import ResearchProtocolRepository
+from app.services.event_research_scope_evidence import lock_event_scope_case
 
 
 _METRIC_ROLES = frozenset({"outcome", "driver", "mediator", "context"})
@@ -75,6 +76,8 @@ class ResearchabilityResult:
     reason_codes: list[str]
     effective_binding_id: uuid.UUID | None
     next_action: str
+    mechanism_template_version_id: uuid.UUID | None = None
+    verification_rule_ids: tuple[uuid.UUID, ...] = ()
 
 
 def validate_metric_definition(value: MetricDefinitionInput) -> None:
@@ -143,9 +146,14 @@ class ResearchProtocolService:
             raise ValidationError(str(exc)) from exc
 
     def create_outcome_binding(self, thesis_id: uuid.UUID, value: OutcomeBindingInput) -> OutcomeBindingVersion:
+        # The immutable thesis is read only to discover the stable Case lock.
+        # All protocol rows are read/written after locking in Case -> protocol
+        # row order, shared with the assessment final-persistence boundary.
         thesis = self._session.get(Thesis, thesis_id)
         if thesis is None:
             raise ValidationError("thesis not found")
+        lock_event_scope_case(self._session, thesis.research_case_id)
+        self._session.refresh(thesis)
         metric = self._session.get(MetricDefinitionVersion, value.metric_definition_id)
         if metric is None:
             raise ValidationError("metric definition not found")
@@ -242,6 +250,7 @@ class ResearchProtocolService:
         reviewer: str,
         reason: str,
     ):
+        lock_event_scope_case(self._session, research_case_id)
         if self._session.get(ResearchCase, research_case_id) is None:
             raise ValidationError("research case not found")
         if self._repo.template(template_version_id) is None:
@@ -259,6 +268,7 @@ class ResearchProtocolService:
     def add_verification_rule(
         self, research_case_id: uuid.UUID, mechanism_edge_id: uuid.UUID, value: VerificationRuleInput
     ):
+        lock_event_scope_case(self._session, research_case_id)
         research_case = self._session.get(ResearchCase, research_case_id)
         edge = self._session.get(MechanismEdgeVersion, mechanism_edge_id)
         metric = self._session.get(MetricDefinitionVersion, value.metric_definition_id)
@@ -301,11 +311,22 @@ class ResearchProtocolService:
     def approve_outcome_binding(
         self, binding_id: uuid.UUID, *, reviewer: str, reason: str
     ) -> OutcomeBindingVersion:
+        # The immutable binding/thesis lookup discovers the Case. Once the
+        # Case lock is held, reload and revalidate that the draft is still the
+        # effective binding before appending its approved successor.
         draft = self._session.get(OutcomeBindingVersion, binding_id)
         if draft is None:
             raise ValidationError("outcome binding not found")
+        thesis = self._session.get(Thesis, draft.thesis_id)
+        if thesis is None:
+            raise ValidationError("thesis not found")
+        lock_event_scope_case(self._session, thesis.research_case_id)
+        self._session.refresh(draft)
         if draft.state != "draft":
             raise ValidationError("only a draft outcome binding can be approved")
+        effective = self._repo.effective_binding(draft.thesis_id)
+        if effective is None or effective.id != draft.id:
+            raise ValidationError("only the effective draft outcome binding can be approved")
         if not reviewer.strip() or not reason.strip():
             raise ValidationError("binding reviewer and reason must not be empty")
         return self._repo.add_outcome_binding_version(
@@ -364,6 +385,12 @@ class ResearchProtocolService:
         }
         required_edges = [edge for edge in edges if node_roles.get(edge.target_node_id) in {"required_for_outcome", "required_for_attribution"}]
         rules = {edge.id: self._repo.effective_rule(thesis.research_case_id, edge.id) for edge in edges}
+        rule_ids = tuple(
+            sorted(
+                (rule.id for rule in rules.values() if rule is not None),
+                key=str,
+            )
+        )
         reasons: list[str] = []
         if any(rules.get(edge.id) is None for edge in required_edges):
             reasons.append("missing_verification_rule")
@@ -375,6 +402,27 @@ class ResearchProtocolService:
             reasons.append("missing_counter_hypothesis")
         if reasons:
             if reasons == ["insufficient_primary_metrics"]:
-                return ResearchabilityResult("single_metric_monitoring", reasons, binding.id, "仅可持续监测；正式判断只能为证据不足或未到验证时点")
-            return ResearchabilityResult("blocked", reasons, binding.id, "补齐机制边的验证规则与竞争解释")
-        return ResearchabilityResult("ready", [], binding.id, "研究协议完整；仍须按规则采集并人工审核证据")
+                return ResearchabilityResult(
+                    "single_metric_monitoring",
+                    reasons,
+                    binding.id,
+                    "仅可持续监测；正式判断只能为证据不足或未到验证时点",
+                    selection.template_version_id,
+                    rule_ids,
+                )
+            return ResearchabilityResult(
+                "blocked",
+                reasons,
+                binding.id,
+                "补齐机制边的验证规则与竞争解释",
+                selection.template_version_id,
+                rule_ids,
+            )
+        return ResearchabilityResult(
+            "ready",
+            [],
+            binding.id,
+            "研究协议完整；仍须按规则采集并人工审核证据",
+            selection.template_version_id,
+            rule_ids,
+        )

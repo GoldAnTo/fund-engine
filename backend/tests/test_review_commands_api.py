@@ -367,6 +367,7 @@ def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
     from app.repositories.research import ResearchRepository
     from app.services.assessment import AssessmentService
     from app.services.research import ResearchService
+    from tests.protocol_provenance import seed_protocol_footprint
 
     case = cmd_seeded.scalar(select(ResearchCase))
     assert case is not None
@@ -381,18 +382,23 @@ def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
     snapshot = service.freeze_snapshot(
         thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc)
     )
+    footprint = seed_protocol_footprint(cmd_seeded, thesis)
     assessment = service.create_ai_assessment(
         snapshot.id,
         conclusion="insufficient_evidence",
         rationale="Protocol limits the conclusion.",
         gaps=["insufficient_primary_metrics"],
+        research_protocol_status="single_metric_monitoring",
+        effective_binding_id=footprint.binding.id,
+        mechanism_template_version_id=footprint.template.id,
+        verification_rule_ids=[rule.id for rule in footprint.rules],
     )
     cmd_seeded.commit()
 
     response = cmd_client.post(
         f"/api/v1/assessments/{assessment.id}/reviews",
         json={
-            "outcome": "modified",
+            "outcome": "rejected",
             "conclusion": "contradicted",
             "reason": "attempted override",
             "reviewer": "human:researcher",
@@ -401,6 +407,21 @@ def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
 
     assert response.status_code == 422, response.text
     assert _error_code(response) == "validation_failed"
+
+    # The rejected+directional decision was not persisted: the read model,
+    # which consumes review.conclusion regardless of outcome, remains safely
+    # non-directional.
+    from app.queries.basis import HistoricalBasis
+    from app.queries.conclusion import ConclusionQueries
+
+    cmd_seeded.expire_all()
+    conclusion = ConclusionQueries(cmd_seeded).load(
+        case_id=case.id,
+        basis=HistoricalBasis.from_cutoff(
+            datetime(2027, 1, 1, tzinfo=timezone.utc)
+        ),
+    )
+    assert conclusion.header.conclusion_status == "insufficient_evidence"
 
 
 def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):

@@ -22,6 +22,13 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
+from app.models.research_protocol import (
+    CaseMechanismSelectionVersion,
+    MechanismEdgeVersion,
+    MechanismTemplateVersion,
+    OutcomeBindingVersion,
+    VerificationRuleVersion,
+)
 
 
 def _utcnow() -> datetime:
@@ -404,6 +411,10 @@ class ResearchRepository:
         conclusion: str,
         rationale: str,
         gaps: list[str],
+        research_protocol_status: str | None = None,
+        effective_binding_id: uuid.UUID | None = None,
+        mechanism_template_version_id: uuid.UUID | None = None,
+        verification_rule_ids: list[str] | None = None,
         displayed_as_provisional: bool = True,
         creator_type: str = "ai",
         model_version: str | None = None,
@@ -413,6 +424,10 @@ class ResearchRepository:
             conclusion=conclusion,
             rationale=rationale,
             gaps=gaps,
+            research_protocol_status=research_protocol_status,
+            effective_binding_id=effective_binding_id,
+            mechanism_template_version_id=mechanism_template_version_id,
+            verification_rule_ids=verification_rule_ids,
             displayed_as_provisional=displayed_as_provisional,
             creator_type=creator_type,
             model_version=model_version,
@@ -421,6 +436,101 @@ class ResearchRepository:
         self._session.add(assessment)
         self._session.flush()
         return assessment
+
+    def assessment_protocol_footprint_is_consistent(
+        self,
+        *,
+        snapshot_id: uuid.UUID,
+        effective_binding_id: uuid.UUID,
+        mechanism_template_version_id: uuid.UUID,
+        verification_rule_ids: list[uuid.UUID],
+    ) -> bool:
+        """Validate that frozen protocol IDs belong to the assessment scope."""
+        snapshot = self._session.get(EvidenceSnapshot, snapshot_id)
+        if snapshot is None:
+            return False
+        thesis = self._session.get(Thesis, snapshot.thesis_id)
+        binding = self._session.get(OutcomeBindingVersion, effective_binding_id)
+        template = self._session.get(
+            MechanismTemplateVersion, mechanism_template_version_id
+        )
+        if (
+            thesis is None
+            or binding is None
+            or binding.thesis_id != thesis.id
+            or template is None
+        ):
+            return False
+        effective_binding = self._session.scalar(
+            select(OutcomeBindingVersion)
+            .where(OutcomeBindingVersion.thesis_id == thesis.id)
+            .order_by(
+                OutcomeBindingVersion.created_at.desc(),
+                OutcomeBindingVersion.id.desc(),
+            )
+            .limit(1)
+        )
+        effective_selection = self._session.scalar(
+            select(CaseMechanismSelectionVersion)
+            .where(
+                CaseMechanismSelectionVersion.research_case_id
+                == thesis.research_case_id
+            )
+            .order_by(
+                CaseMechanismSelectionVersion.created_at.desc(),
+                CaseMechanismSelectionVersion.id.desc(),
+            )
+            .limit(1)
+        )
+        if (
+            effective_binding is None
+            or effective_binding.id != effective_binding_id
+            or effective_selection is None
+            or effective_selection.template_version_id
+            != mechanism_template_version_id
+        ):
+            return False
+        rules = list(
+            self._session.scalars(
+                select(VerificationRuleVersion).where(
+                    VerificationRuleVersion.id.in_(verification_rule_ids)
+                )
+            )
+        )
+        if len(rules) != len(verification_rule_ids):
+            return False
+        edges = list(
+            self._session.scalars(
+                select(MechanismEdgeVersion).where(
+                    MechanismEdgeVersion.template_version_id
+                    == mechanism_template_version_id
+                )
+            )
+        )
+        effective_rule_ids = {
+            rule.id
+            for edge in edges
+            if (
+                rule := self._session.scalar(
+                    select(VerificationRuleVersion)
+                    .where(
+                        VerificationRuleVersion.research_case_id
+                        == thesis.research_case_id,
+                        VerificationRuleVersion.mechanism_edge_id == edge.id,
+                    )
+                    .order_by(
+                        VerificationRuleVersion.created_at.desc(),
+                        VerificationRuleVersion.id.desc(),
+                    )
+                    .limit(1)
+                )
+            )
+            is not None
+        }
+        return (
+            all(rule.research_case_id == thesis.research_case_id for rule in rules)
+            and effective_rule_ids == set(verification_rule_ids)
+        )
 
     def insert_review(
         self,

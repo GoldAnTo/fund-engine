@@ -516,6 +516,13 @@ class EvidenceSnapshot(Base):
 
 class AIAssessment(Base):
     __tablename__ = "ai_assessments"
+    __table_args__ = (
+        CheckConstraint(
+            "research_protocol_status IS NULL OR research_protocol_status IN "
+            "('blocked', 'single_metric_monitoring', 'ready')",
+            name="ck_ai_assessments_research_protocol_status",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
@@ -524,6 +531,20 @@ class AIAssessment(Base):
     conclusion: Mapped[str] = mapped_column(String(32), nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     gaps: Mapped[list] = mapped_column(JSON, nullable=False)
+    # Frozen protocol footprint at the strict assessment write boundary.
+    # Legacy and non-strict assessments retain NULL provenance.
+    research_protocol_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    effective_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("outcome_binding_versions.id"), nullable=True
+    )
+    mechanism_template_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("mechanism_template_versions.id"), nullable=True
+    )
+    verification_rule_ids: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True
+    )
     displayed_as_provisional: Mapped[bool] = mapped_column(
         nullable=False, default=True
     )
