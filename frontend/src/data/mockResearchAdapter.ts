@@ -3043,6 +3043,22 @@ const MOCK_RESEARCH_RUNS: ResearchRunDetail[] = [
   },
 ];
 
+function cloneResearchRun(run: ResearchRunDetail): ResearchRunDetail {
+  return {
+    ...run,
+    progress: { ...run.progress },
+    evidence: { ...run.evidence },
+    pending_proposals: run.pending_proposals.map((proposal) => ({ ...proposal })),
+    pending_assessments: run.pending_assessments.map((assessment) => ({
+      ...assessment,
+      gaps: [...assessment.gaps],
+    })),
+    review_tasks: run.review_tasks.map((task) => ({ ...task })),
+    gap_tasks: run.gap_tasks.map((task) => ({ ...task })),
+    failed_tasks: run.failed_tasks.map((task) => ({ ...task })),
+  };
+}
+
 type EventTsmReviewOutcome = "confirmed" | "needs_more_evidence" | "rejected";
 
 type EventTsmReviewDecision = {
@@ -3063,6 +3079,8 @@ export class MockResearchAdapter implements ResearchClient {
   private scenario: MockScenario;
   // mutable per-instance copies for tests that write review decisions.
   private queue: ReviewQueueItem[];
+  private researchRuns: ResearchRunDetail[];
+  private regularProposalDecisions = new Set<string>();
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
@@ -3087,11 +3105,14 @@ export class MockResearchAdapter implements ResearchClient {
   constructor(opts: { scenario?: MockScenario } = {}) {
     this.scenario = opts.scenario ?? "typical";
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
+    this.researchRuns = MOCK_RESEARCH_RUNS.map(cloneResearchRun);
   }
 
   setScenario(scenario: MockScenario): void {
     this.scenario = scenario;
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
+    this.researchRuns = MOCK_RESEARCH_RUNS.map(cloneResearchRun);
+    this.regularProposalDecisions.clear();
     this.decisions = [];
     this.eventTsmReviewDecision = null;
     this.eventTsmConclusionVersions = [];
@@ -3119,6 +3140,17 @@ export class MockResearchAdapter implements ResearchClient {
     if (this.scenario === "permission") {
       throw new PageStateError("permission_denied", "权限不足");
     }
+  }
+
+  private projectResearchRun(run: ResearchRunDetail): ResearchRunDetail {
+    const projected = cloneResearchRun(run);
+    projected.pending_proposals = projected.pending_proposals.map((proposal) => ({
+      ...proposal,
+      status: this.regularProposalDecisions.has(proposal.id)
+        ? "decided"
+        : proposal.status,
+    }));
+    return projected;
   }
 
   private eventTsmProjection(): EventTsmProjection {
@@ -3992,26 +4024,26 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listResearchRuns(caseId: string): Promise<ResearchRunSummary[]> {
     this.throwIfOffline();
-    return simulateLatency(MOCK_RESEARCH_RUNS.filter((run) => run.case_id === caseId).map(({ id, status, stage, round, stop_reason, created_at, next_action }) => ({ id, status, stage, round, stop_reason, created_at, next_action })));
+    return simulateLatency(this.researchRuns.filter((run) => run.case_id === caseId).map(({ id, status, stage, round, stop_reason, created_at, next_action }) => ({ id, status, stage, round, stop_reason, created_at, next_action })));
   }
 
   async getResearchRun(runId: string): Promise<ResearchRunDetail> {
     this.throwIfOffline();
-    const run = MOCK_RESEARCH_RUNS.find((item) => item.id === runId);
+    const run = this.researchRuns.find((item) => item.id === runId);
     if (!run) throw new PageStateError("parse_failed", "研究运行不存在");
-    return simulateLatency(run);
+    return simulateLatency(this.projectResearchRun(run));
   }
 
   async startResearchRun(caseId: string, options: StartResearchRunOptions): Promise<ResearchRunDetail> {
     this.throwIfOffline();
-    const run = { ...MOCK_RESEARCH_RUNS[0], id: `run-${Date.now()}`, case_id: caseId, status: options.auto_execute ? "waiting_for_review" : "queued", round: 0 };
-    MOCK_RESEARCH_RUNS.push(run);
-    return simulateLatency(run);
+    const run = cloneResearchRun({ ...this.researchRuns[0], id: `run-${Date.now()}`, case_id: caseId, status: options.auto_execute ? "waiting_for_review" : "queued", round: 0 });
+    this.researchRuns.push(run);
+    return simulateLatency(this.projectResearchRun(run));
   }
 
   async cancelResearchRun(runId: string): Promise<ResearchRunSummary> {
     this.throwIfOffline();
-    const run = MOCK_RESEARCH_RUNS.find((item) => item.id === runId);
+    const run = this.researchRuns.find((item) => item.id === runId);
     if (!run) throw new PageStateError("parse_failed", "研究运行不存在");
     run.status = "cancelled";
     return simulateLatency({ id: run.id, status: run.status, stage: run.stage, round: run.round, stop_reason: "cancelled", created_at: run.created_at, next_action: "查看取消前进度" });
@@ -4029,24 +4061,24 @@ export class MockResearchAdapter implements ResearchClient {
         }]
       : [];
     return simulateLatency(
-      [...eventProposal, ...MOCK_RESEARCH_RUNS.flatMap((run) =>
-        !caseId || run.case_id === caseId
-          ? run.pending_proposals
-              .filter((proposal) => proposal.status === "pending")
-              .map((proposal) => ({
-                id: proposal.id,
-                kind: "evidence_link",
-                payload: { source_statement_id: "mock-statement", role: "supports", reason: "Mock 自动研究提议" },
-                target_context: { thesis_id: proposal.thesis_id ?? "" },
-                proposed_by_type: "ai",
-                proposed_by_ref: "mock-auto-research",
-                proposed_at: run.created_at,
-                basis_cutoff: null,
-                status: proposal.status,
-                version: 1,
-              }))
-          : [],
-      )],
+      [...eventProposal, ...this.researchRuns.flatMap((rawRun) => {
+        const run = this.projectResearchRun(rawRun);
+        if (caseId && run.case_id !== caseId) return [];
+        return run.pending_proposals
+          .filter((proposal) => proposal.status === "pending")
+          .map((proposal) => ({
+            id: proposal.id,
+            kind: "evidence_link",
+            payload: { source_statement_id: "mock-statement", role: "supports", reason: "Mock 自动研究提议" },
+            target_context: { thesis_id: proposal.thesis_id ?? "" },
+            proposed_by_type: "ai",
+            proposed_by_ref: "mock-auto-research",
+            proposed_at: run.created_at,
+            basis_cutoff: null,
+            status: proposal.status,
+            version: 1,
+          }));
+      })],
     );
   }
 
@@ -4094,17 +4126,18 @@ export class MockResearchAdapter implements ResearchClient {
       }
       return simulateLatency(undefined);
     }
-    const proposal = MOCK_RESEARCH_RUNS
+    const proposal = this.researchRuns
       .flatMap((run) => run.pending_proposals)
       .find((item) => item.id === proposalId);
     if (
       !proposal
       || proposal.status !== "pending"
+      || this.regularProposalDecisions.has(proposalId)
       || payload.expected_version !== 1
     ) {
       throw new Error("proposal version or state conflict");
     }
-    proposal.status = "decided";
+    this.regularProposalDecisions.add(proposalId);
     return simulateLatency(undefined);
   }
 

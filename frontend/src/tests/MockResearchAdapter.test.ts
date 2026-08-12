@@ -351,6 +351,73 @@ describe("MockResearchAdapter scenarios", () => {
     );
   });
 
+  it("keeps regular proposal decisions inside one adapter and resets them with the scenario", async () => {
+    const adapterA = new MockResearchAdapter();
+    const adapterB = new MockResearchAdapter();
+
+    await adapterA.reviewProposal("proposal-1", {
+      outcome: "confirmed",
+      reason: "仅审核 adapter A 的普通提议。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    await expect(
+      adapterA.reviewProposal("proposal-1", {
+        outcome: "confirmed",
+        reason: "重复提交同一普通提议。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      }),
+    ).rejects.toThrow("proposal version or state conflict");
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect((await adapterA.getResearchRun("run-aic-001")).pending_proposals).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "decided" }),
+    ]);
+
+    expect(await adapterB.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+    expect((await adapterB.getResearchRun("run-aic-001")).pending_proposals).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending" }),
+    ]);
+
+    adapterA.setScenario("typical");
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
+  it("lets parallel adapters decide the same regular proposal independently", async () => {
+    const adapterA = new MockResearchAdapter();
+    const adapterB = new MockResearchAdapter();
+
+    const decisions = await Promise.allSettled([
+      adapterA.reviewProposal("proposal-1", {
+        outcome: "confirmed",
+        reason: "adapter A 独立审核。",
+        reviewer_id: "human:researcher-a",
+        expected_version: 1,
+      }),
+      adapterB.reviewProposal("proposal-1", {
+        outcome: "rejected",
+        reason: "adapter B 独立审核。",
+        reviewer_id: "human:researcher-b",
+        expected_version: 1,
+      }),
+    ]);
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ status: "fulfilled" }),
+      expect.objectContaining({ status: "fulfilled" }),
+    ]);
+    expect(await adapterA.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect(await adapterB.listReviewProposals("RC-AIC-2025-01")).toEqual([]);
+    expect(await new MockResearchAdapter().listReviewProposals("RC-AIC-2025-01")).toEqual([
+      expect.objectContaining({ id: "proposal-1", status: "pending", version: 1 }),
+    ]);
+  });
+
   it("publishes the confirmed TSM conclusion across every event read model", async () => {
     const adapter = new MockResearchAdapter();
     const conclusionText = "资本开支上调构成当前市场担忧的重要可验证因素。";
