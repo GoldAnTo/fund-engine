@@ -3042,13 +3042,27 @@ const MOCK_RESEARCH_RUNS: ResearchRunDetail[] = [
   },
 ];
 
+type EventTsmReviewDecision = {
+  outcome: ProposalReviewPayload["outcome"];
+  reason: string;
+  reviewerId: string;
+};
+
+type EventTsmProjection = {
+  lifecycle: EventLifecycle;
+  verified: number;
+  pending: number;
+  conclusionState: EventWorkbench["conclusion"]["state"];
+  nextAction: EventWorkbench["nextAction"];
+};
+
 export class MockResearchAdapter implements ResearchClient {
   private scenario: MockScenario;
   // mutable per-instance copies for tests that write review decisions.
   private queue: ReviewQueueItem[];
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
-  private eventTsmProposalPending = true;
+  private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
   private eventStates = new Map<string, {
     event?: EventResearchListItem;
     lifecycle: EventLifecycle;
@@ -3071,7 +3085,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.scenario = scenario;
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.decisions = [];
-    this.eventTsmProposalPending = true;
+    this.eventTsmReviewDecision = null;
     this.eventStates.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
@@ -3093,6 +3107,79 @@ export class MockResearchAdapter implements ResearchClient {
     if (this.scenario === "permission") {
       throw new PageStateError("permission_denied", "权限不足");
     }
+  }
+
+  private eventTsmProjection(): EventTsmProjection {
+    const decision = this.eventTsmReviewDecision;
+    if (!decision) {
+      return {
+        lifecycle: {
+          status: "awaiting_key_review",
+          activeRunId: "run-mock",
+          currentRound: 1,
+          summary: "已筛出 1 条可处理的关键证据，等待审核",
+          currentGap: null,
+          nextHumanAction: "审核 1 条关键证据",
+        },
+        verified: 0,
+        pending: 1,
+        conclusionState: "cannot_conclude",
+        nextAction: {
+          kind: "review_evidence",
+          label: "审核 1 条关键证据",
+          count: 1,
+        },
+      };
+    }
+
+    if (decision.outcome === "confirmed") {
+      return {
+        lifecycle: {
+          status: "draft_ready",
+          activeRunId: null,
+          currentRound: 1,
+          summary: "关键证据已审核，等待结论复核",
+          currentGap: null,
+          nextHumanAction: "审核结论草案",
+        },
+        verified: 1,
+        pending: 0,
+        conclusionState: "ai_draft",
+        nextAction: { kind: "review_conclusion", label: "审核结论草案" },
+      };
+    }
+
+    if (decision.outcome === "needs_more_evidence" || decision.outcome === "modified") {
+      return {
+        lifecycle: {
+          status: "researching",
+          activeRunId: "run-mock",
+          currentRound: 2,
+          summary: "审核已完成，系统正在按补证要求继续研究",
+          currentGap: decision.reason,
+          nextHumanAction: null,
+        },
+        verified: 0,
+        pending: 0,
+        conclusionState: "cannot_conclude",
+        nextAction: { kind: "wait", label: "系统补证中" },
+      };
+    }
+
+    return {
+      lifecycle: {
+        status: "exhausted",
+        activeRunId: null,
+        currentRound: 1,
+        summary: "当前候选已驳回，需要调整研究范围",
+        currentGap: "当前候选被驳回，需要调整因素或补充来源",
+        nextHumanAction: "编辑并继续自动研究",
+      },
+      verified: 0,
+      pending: 0,
+      conclusionState: "cannot_conclude",
+      nextAction: { kind: "edit_factors", label: "编辑并继续自动研究" },
+    };
   }
 
   async getOverview(query?: OverviewQuery): Promise<WorkspaceOverview> {
@@ -3864,7 +3951,7 @@ export class MockResearchAdapter implements ResearchClient {
 
   async listReviewProposals(caseId?: string): Promise<ProposalReviewItem[]> {
     this.throwIfOffline();
-    const eventProposal: ProposalReviewItem[] = caseId === "event-tsm" && this.eventTsmProposalPending
+    const eventProposal: ProposalReviewItem[] = caseId === "event-tsm" && !this.eventTsmReviewDecision
       ? [{
           id: "proposal-event-tsm", kind: "evidence_link",
           payload: { source_statement_id: "event-tsm-statement", role: "supports", reason: "资本开支与现金流担忧的原始披露" },
@@ -3895,9 +3982,15 @@ export class MockResearchAdapter implements ResearchClient {
     );
   }
 
-  async reviewProposal(proposalId: string, _payload: ProposalReviewPayload): Promise<void> {
+  async reviewProposal(proposalId: string, payload: ProposalReviewPayload): Promise<void> {
     this.throwIfOffline();
-    if (proposalId === "proposal-event-tsm") this.eventTsmProposalPending = false;
+    if (proposalId === "proposal-event-tsm") {
+      this.eventTsmReviewDecision = {
+        outcome: payload.outcome,
+        reason: payload.reason,
+        reviewerId: payload.reviewer_id,
+      };
+    }
     for (const run of MOCK_RESEARCH_RUNS) {
       for (const item of run.pending_proposals) {
         if (item.id === proposalId) item.status = "decided";
@@ -4145,6 +4238,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.throwIfOffline();
     const events = this.eventResearchItems().map((event) => {
       const state = this.eventStates.get(event.id);
+      if (event.id === "event-tsm" && this.eventTsmReviewDecision) return event;
       return state
         ? {
             ...event,
@@ -4158,9 +4252,10 @@ export class MockResearchAdapter implements ResearchClient {
   }
 
   private eventResearchItems(): EventResearchListItem[] {
+    const tsmLifecycle = this.eventTsmProjection().lifecycle;
     return [
       { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
-      { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: "awaiting_key_review", statusSummary: "已筛出 2 条关键证据，等待审核", nextHumanAction: "审核 2 条关键证据", updatedAt: "2026-08-07T09:00:00Z" },
+      { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: tsmLifecycle.status, statusSummary: tsmLifecycle.summary, nextHumanAction: tsmLifecycle.nextHumanAction, updatedAt: "2026-08-07T09:00:00Z" },
       { id: "event-cannot-conclude", eventTitle: "公司上调投入指引后下跌", companyName: "样例公司", ticker: null, eventAt: "2026-08-05T00:00:00Z", status: "exhausted", statusSummary: "当前证据不足以区分主要解释", nextHumanAction: null, updatedAt: "2026-08-07T08:30:00Z" },
       { id: "event-exhausted", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
       { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
@@ -4173,9 +4268,12 @@ export class MockResearchAdapter implements ResearchClient {
     const baseEvent = this.eventResearchItems().find((item) => item.id === caseId)
       ?? this.eventResearchItems()[0];
     const saved = this.eventStates.get(baseEvent.id);
+    const tsmProjection = caseId === "event-tsm" && (!saved || this.eventTsmReviewDecision)
+      ? this.eventTsmProjection()
+      : null;
     const currentGap = baseEvent.status === "exhausted"
       ? "缺少能区分主要解释的反证" : null;
-    const lifecycle: EventLifecycle = saved?.lifecycle ?? {
+    const lifecycle: EventLifecycle = tsmProjection?.lifecycle ?? saved?.lifecycle ?? {
       status: baseEvent.status,
       activeRunId: baseEvent.status === "published" ? null : "run-mock",
       currentRound: 1,
@@ -4191,11 +4289,11 @@ export class MockResearchAdapter implements ResearchClient {
           nextHumanAction: lifecycle.nextHumanAction,
         }
       : baseEvent;
-    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentVersionId: "doc-event-tsm-q2", sourceVisibleInCase: true, excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
+    const evidence = caseId === "event-tsm" ? [{ caseId, factorStatement: "资本开支 / 自由现金流担忧", role: "supports", reviewState: this.eventTsmReviewDecision?.outcome === "confirmed" ? "reviewed" : "machine_generated", sourceTitle: "公司季度财报与电话会", sourceUrl: "https://investor.tsmc.com/english/quarterly-results/2026/q2", documentVersionId: "doc-event-tsm-q2", sourceVisibleInCase: true, excerpt: "公司上调全年资本开支指引，同时市场关注自由现金流承压。", locator: { page: 12, section: "资本开支" }, availableAt: "2026-08-07T09:00:00Z" }] : [];
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
-    const reviewedCount = ["draft_ready", "published"].includes(event.status) ? 3 : 0;
-    const nextAction: EventWorkbench["nextAction"] = event.status === "awaiting_key_review"
+    const reviewedCount = tsmProjection?.verified ?? (["draft_ready", "published"].includes(event.status) ? 3 : 0);
+    const nextAction: EventWorkbench["nextAction"] = tsmProjection?.nextAction ?? (event.status === "awaiting_key_review"
       ? lifecycle.activeRunId === null && lifecycle.nextHumanAction === "核验原文资料并完成研究协议"
         ? { kind: "review_intake", label: lifecycle.nextHumanAction }
         : { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
@@ -4205,17 +4303,19 @@ export class MockResearchAdapter implements ResearchClient {
           ? { kind: "view_conclusion_change", label: "查看结论变更" }
           : ["awaiting_scope", "exhausted"].includes(event.status)
             ? { kind: "edit_factors", label: "编辑并继续自动研究" }
-            : { kind: "wait", label: "系统继续处理" };
+            : { kind: "wait", label: "系统继续处理" });
     return simulateLatency({
       event, lifecycle,
-      conclusion: event.status === "published"
+      conclusion: tsmProjection?.conclusionState === "ai_draft"
+        ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
+        : event.status === "published"
         ? { state: "published", text: "人工确认：当前材料不足以断定唯一原因。", confidence: "high", citations: [] }
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", confidence: "low", citations: [] },
-      factors: activeFactors.map((factor, index) => { const pendingProposalCount = caseId === "event-tsm" && index === 0 ? 1 : 0; const reviewedSupportCount = reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
+      factors: activeFactors.map((factor, index) => { const pendingProposalCount = tsmProjection && index === 0 ? tsmProjection.pending : 0; const reviewedSupportCount = tsmProjection ? index === 0 ? tsmProjection.verified : 0 : reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: index === 0 && lifecycle.currentGap ? lifecycle.currentGap : pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
       evidence,
-      progress: { verified: reviewedCount, pending: caseId === "event-tsm" ? 1 : 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
+      progress: { verified: reviewedCount, pending: tsmProjection?.pending ?? 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },
       nextAction,
     });
@@ -4404,7 +4504,8 @@ export class MockResearchAdapter implements ResearchClient {
   async getEventReviewQueue(caseId: string): Promise<EventReviewQueue> {
     this.throwIfOffline();
     const isTsm = caseId === "event-tsm";
-    const hasPending = isTsm && this.eventTsmProposalPending;
+    const projection = isTsm ? this.eventTsmProjection() : null;
+    const hasPending = projection?.pending === 1;
     const items: EventReviewQueue["items"] = isTsm ? [
       ...(hasPending ? [{
         proposalId: "proposal-event-tsm", proposalVersion: 1, status: "pending", proposedAt: "2026-08-07T09:00:00Z", linkId: "link-event-tsm", thesisId: "thesis-event-tsm", caseId,
@@ -4428,10 +4529,10 @@ export class MockResearchAdapter implements ResearchClient {
       summary: {
         total: isTsm ? 3 : 0,
         reviewed: isTsm && !hasPending ? 1 : 0,
-        pending: hasPending ? 1 : 0,
+        pending: projection?.pending ?? 0,
         invalidSource: isTsm ? 1 : 0,
-        currentRound: isTsm ? 1 : 0,
-        nextAction: isTsm ? "审核 1 条关键证据" : null,
+        currentRound: projection?.lifecycle.currentRound ?? 0,
+        nextAction: hasPending ? "审核 1 条关键证据" : null,
       },
       items,
     });

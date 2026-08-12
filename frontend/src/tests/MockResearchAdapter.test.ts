@@ -184,6 +184,127 @@ describe("MockResearchAdapter scenarios", () => {
     expect(detail.spans).toEqual([]);
   });
 
+  it.each([
+    {
+      outcome: "confirmed",
+      expectedStatus: "draft_ready",
+      expectedNextAction: "review_conclusion",
+      expectedVerified: 1,
+    },
+    {
+      outcome: "needs_more_evidence",
+      expectedStatus: "researching",
+      expectedNextAction: "wait",
+      expectedVerified: 0,
+    },
+    {
+      outcome: "rejected",
+      expectedStatus: "exhausted",
+      expectedNextAction: "edit_factors",
+      expectedVerified: 0,
+    },
+  ] as const)(
+    "projects a $outcome TSM evidence decision across every event read model",
+    async ({ outcome, expectedStatus, expectedNextAction, expectedVerified }) => {
+      const adapter = new MockResearchAdapter();
+
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome,
+        reason: `review reason for ${outcome}`,
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+
+      const queue = await adapter.getEventReviewQueue("event-tsm");
+      const workbench = await adapter.getEventWorkbench("event-tsm");
+      const event = (await adapter.listEventResearch()).find(
+        (item) => item.id === "event-tsm",
+      );
+
+      expect(queue.summary).toMatchObject({ reviewed: 1, pending: 0 });
+      expect(
+        queue.items.filter((item) => item.status === "pending" && item.canAccept),
+      ).toEqual([]);
+      expect(workbench.lifecycle.status).toBe(expectedStatus);
+      expect(workbench.nextAction.kind).toBe(expectedNextAction);
+      expect(workbench.progress).toMatchObject({
+        verified: expectedVerified,
+        pending: 0,
+      });
+      expect(workbench.factors[0].pendingProposalCount).toBe(0);
+      expect(event).toMatchObject({
+        status: workbench.lifecycle.status,
+        statusSummary: workbench.lifecycle.summary,
+        nextHumanAction: workbench.lifecycle.nextHumanAction,
+      });
+    },
+  );
+
+  it("turns a confirmed TSM evidence review into a conclusion draft", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.conclusion.state).toBe("ai_draft");
+    expect(workbench.factors[0]).toMatchObject({
+      reviewedSupportCount: 1,
+      pendingProposalCount: 0,
+      currentGap: null,
+    });
+    expect(workbench.lifecycle).toMatchObject({
+      activeRunId: null,
+      nextHumanAction: "审核结论草案",
+    });
+  });
+
+  it("continues TSM research with the review reason as the current gap", async () => {
+    const adapter = new MockResearchAdapter();
+    const reason = "需要补充资本开支与自由现金流的季度桥接数据。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "needs_more_evidence",
+      reason,
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "researching",
+      currentGap: reason,
+      nextHumanAction: null,
+    });
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "系统补证中",
+    });
+  });
+
+  it("exhausts TSM research after rejecting the current candidate", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "rejected",
+      reason: "该材料与市场反应缺少直接关联。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    expect(workbench.lifecycle).toMatchObject({
+      status: "exhausted",
+      activeRunId: null,
+      nextHumanAction: "编辑并继续自动研究",
+    });
+    expect(workbench.nextAction.kind).toBe("edit_factors");
+  });
+
   it("returns review queue items with AI provenance and dated scope", async () => {
     const queue = await typical.getReviewQueue();
     expect(queue.length).toBeGreaterThan(0);
