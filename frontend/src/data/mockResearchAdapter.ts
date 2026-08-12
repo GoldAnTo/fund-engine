@@ -3065,11 +3065,12 @@ export class MockResearchAdapter implements ResearchClient {
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
+  private eventTsmConclusion: { text: string; reviewer: string } | null = null;
   private eventStates = new Map<string, {
     event?: EventResearchListItem;
     lifecycle: EventLifecycle;
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
-    lifecycleSource?: "tsm_review";
+    lifecycleSource?: "tsm_review" | "tsm_publication";
   }>();
   private createdDocuments = new Map<string, {
     document: SourceDocumentView;
@@ -3089,6 +3090,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.decisions = [];
     this.eventTsmReviewDecision = null;
+    this.eventTsmConclusion = null;
     this.eventStates.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
@@ -3113,6 +3115,26 @@ export class MockResearchAdapter implements ResearchClient {
   }
 
   private eventTsmProjection(): EventTsmProjection {
+    if (this.eventTsmConclusion) {
+      return {
+        lifecycle: {
+          status: "published",
+          activeRunId: null,
+          currentRound: 1,
+          summary: "结论已由研究员发布，进入持续跟踪",
+          currentGap: null,
+          nextHumanAction: null,
+        },
+        verified: 1,
+        pending: 0,
+        conclusionState: "published",
+        nextAction: {
+          kind: "wait",
+          label: "当前没有需要处理的任务",
+        },
+      };
+    }
+
     const decision = this.eventTsmReviewDecision;
     if (!decision) {
       return {
@@ -4295,8 +4317,8 @@ export class MockResearchAdapter implements ResearchClient {
       ?? this.eventResearchItems()[0];
     const saved = this.eventStates.get(baseEvent.id);
     const tsmProjection = caseId === "event-tsm" ? this.eventTsmProjection() : null;
-    const reviewOwnsLifecycle = tsmProjection !== null
-      && (!saved || saved.lifecycleSource === "tsm_review");
+    const tsmProjectionOwnsLifecycle = tsmProjection !== null
+      && (!saved || saved.lifecycleSource === "tsm_review" || saved.lifecycleSource === "tsm_publication");
     const currentGap = baseEvent.status === "exhausted"
       ? "缺少能区分主要解释的反证" : null;
     const lifecycle: EventLifecycle = saved?.lifecycle ?? tsmProjection?.lifecycle ?? {
@@ -4319,7 +4341,7 @@ export class MockResearchAdapter implements ResearchClient {
     const factorStatements = ["资本开支 / 自由现金流担忧", "盈利预期变化", "估值与市场环境"];
     const activeFactors = saved?.scope.factors ?? factorStatements.map((statement) => ({ statement, description: null }));
     const reviewedCount = tsmProjection?.verified ?? (["draft_ready", "published"].includes(event.status) ? 3 : 0);
-    const nextAction: EventWorkbench["nextAction"] = reviewOwnsLifecycle ? tsmProjection.nextAction : (event.status === "awaiting_key_review"
+    const nextAction: EventWorkbench["nextAction"] = tsmProjectionOwnsLifecycle ? tsmProjection.nextAction : (event.status === "awaiting_key_review"
       ? lifecycle.activeRunId === null && lifecycle.nextHumanAction === "核验原文资料并完成研究协议"
         ? { kind: "review_intake", label: lifecycle.nextHumanAction }
         : { kind: "review_evidence", label: event.nextHumanAction || "审核关键证据", count: 2 }
@@ -4332,14 +4354,16 @@ export class MockResearchAdapter implements ResearchClient {
             : { kind: "wait", label: "系统继续处理" });
     return simulateLatency({
       event, lifecycle,
-      conclusion: tsmProjection?.conclusionState === "ai_draft"
+      conclusion: this.eventTsmConclusion && caseId === "event-tsm"
+        ? { state: "published", text: this.eventTsmConclusion.text, confidence: "high", citations: evidence }
+        : tsmProjection?.conclusionState === "ai_draft"
         ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
         : event.status === "published"
         ? { state: "published", text: "人工确认：当前材料不足以断定唯一原因。", confidence: "high", citations: [] }
         : event.status === "draft_ready"
           ? { state: "ai_draft", text: "当前结论草案等待人工复核。", confidence: "medium", citations: [] }
           : { state: "cannot_conclude", text: "尚不能下结论：系统正在核验不同解释及其反证。", confidence: "low", citations: [] },
-      factors: activeFactors.map((factor, index) => { const pendingProposalCount = tsmProjection && index === 0 ? tsmProjection.pending : 0; const reviewedSupportCount = tsmProjection ? index === 0 ? tsmProjection.verified : 0 : reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: reviewOwnsLifecycle && index === 0 && lifecycle.currentGap ? lifecycle.currentGap : pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
+      factors: activeFactors.map((factor, index) => { const pendingProposalCount = tsmProjection && index === 0 ? tsmProjection.pending : 0; const reviewedSupportCount = tsmProjection ? index === 0 ? tsmProjection.verified : 0 : reviewedCount ? 1 : 0; return { thesisId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, statement: factor.statement, description: factor.description, position: index + 1, reviewedSupportCount, reviewedContradictionCount: 0, pendingProposalCount, currentGap: tsmProjectionOwnsLifecycle && index === 0 && lifecycle.currentGap ? lifecycle.currentGap : pendingProposalCount ? "有关键证据待审核" : reviewedSupportCount ? null : "尚缺少可采纳证据" }; }),
       evidence,
       progress: { verified: reviewedCount, pending: tsmProjection?.pending ?? 0, invalidSource: caseId === "event-tsm" ? 1 : 0, currentGap: lifecycle.currentGap },
       scope: saved?.scope ?? { version: 1, factors: activeFactors, unmappedEvidenceCount: 0 },
@@ -4349,6 +4373,39 @@ export class MockResearchAdapter implements ResearchClient {
 
   async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
     this.throwIfOffline();
+    if (caseId === "event-tsm") {
+      if (this.eventTsmReviewDecision?.outcome !== "confirmed") {
+        return simulateLatency([]);
+      }
+      const scopeVersion = this.eventStates.get(caseId)?.scope.version ?? 1;
+      const draft = {
+        id: "draft-event-tsm-v1",
+        sequence: 1,
+        state: "ai_draft" as const,
+        text: "当前结论草案等待人工复核。",
+        primaryFactor: "资本开支 / 自由现金流担忧",
+        scopeVersion,
+        basedOnConclusionId: null,
+        reviewer: null,
+        evidenceCount: 1,
+        createdAt: "2026-08-07T09:30:00Z",
+      };
+      return simulateLatency(this.eventTsmConclusion ? [
+        draft,
+        {
+          id: "published-event-tsm-v1",
+          sequence: 2,
+          state: "published" as const,
+          text: this.eventTsmConclusion.text,
+          primaryFactor: "资本开支 / 自由现金流担忧",
+          scopeVersion,
+          basedOnConclusionId: draft.id,
+          reviewer: this.eventTsmConclusion.reviewer,
+          evidenceCount: 1,
+          createdAt: "2026-08-07T10:00:00Z",
+        },
+      ] : [draft]);
+    }
     const isPublished = (await this.getEventWorkbench(caseId)).conclusion.state === "published";
     return simulateLatency(isPublished ? [
       { id: `draft-${caseId}-v1`, sequence: 1, state: "ai_draft" as const, text: "当前结论草案等待人工复核。", primaryFactor: "资本开支 / 自由现金流担忧", scopeVersion: 1, basedOnConclusionId: null, reviewer: null, evidenceCount: 3, createdAt: "2026-08-07T07:00:00Z" },
@@ -4566,7 +4623,26 @@ export class MockResearchAdapter implements ResearchClient {
 
   async publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }> {
     this.throwIfOffline();
-    void input;
+    if (input.caseId === "event-tsm") {
+      if (this.eventTsmReviewDecision?.outcome !== "confirmed") {
+        throw new Error("confirmed evidence review is required before publication");
+      }
+      const text = input.text.trim();
+      if (!text) {
+        throw new Error("conclusion text is required");
+      }
+
+      this.eventTsmConclusion = { text, reviewer: input.reviewer };
+      const previous = this.eventStates.get(input.caseId);
+      if (previous) {
+        this.eventStates.set(input.caseId, {
+          ...previous,
+          lifecycle: this.eventTsmProjection().lifecycle,
+          lifecycleSource: "tsm_publication",
+        });
+      }
+      return simulateLatency({ conclusionId: "published-event-tsm-v1", state: "published" });
+    }
     return simulateLatency({ conclusionId: "event-conclusion-mock", state: "published" });
   }
 

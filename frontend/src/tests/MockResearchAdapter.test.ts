@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
+import { eventActionPresentation } from "../domain/eventResearchPresentation";
 import { PageStateError } from "../domain/types";
 
 describe("MockResearchAdapter scenarios", () => {
@@ -261,6 +262,126 @@ describe("MockResearchAdapter scenarios", () => {
       activeRunId: null,
       nextHumanAction: "审核结论草案",
     });
+    expect(await adapter.getEventConclusionHistory("event-tsm")).toEqual([
+      expect.objectContaining({
+        id: "draft-event-tsm-v1",
+        sequence: 1,
+        state: "ai_draft",
+        reviewer: null,
+        evidenceCount: 1,
+        scopeVersion: workbench.scope.version,
+        basedOnConclusionId: null,
+      }),
+    ]);
+  });
+
+  it("publishes the confirmed TSM conclusion across every event read model", async () => {
+    const adapter = new MockResearchAdapter();
+    const conclusionText = "资本开支上调构成当前市场担忧的重要可验证因素。";
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    const publication = await adapter.publishEventConclusion({
+      caseId: "event-tsm",
+      text: conclusionText,
+      reviewer: "human:researcher",
+    });
+
+    const workbench = await adapter.getEventWorkbench("event-tsm");
+    const history = await adapter.getEventConclusionHistory("event-tsm");
+    const event = (await adapter.listEventResearch()).find(
+      (item) => item.id === "event-tsm",
+    );
+
+    expect(publication).toEqual({
+      conclusionId: "published-event-tsm-v1",
+      state: "published",
+    });
+    expect(workbench.lifecycle).toMatchObject({
+      status: "published",
+      activeRunId: null,
+      nextHumanAction: null,
+    });
+    expect(workbench.conclusion).toMatchObject({
+      state: "published",
+      text: conclusionText,
+      confidence: "high",
+    });
+    expect(workbench.progress).toMatchObject({ verified: 1, pending: 0 });
+    expect(workbench.evidence[0].reviewState).toBe("reviewed");
+    expect(workbench.nextAction).toEqual({
+      kind: "wait",
+      label: "当前没有需要处理的任务",
+    });
+    expect(eventActionPresentation(workbench, "event-tsm").owner).toBe(
+      "本轮已完成",
+    );
+    expect(event).toMatchObject({
+      status: "published",
+      nextHumanAction: null,
+    });
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject({
+      id: "draft-event-tsm-v1",
+      sequence: 1,
+      state: "ai_draft",
+      reviewer: null,
+      evidenceCount: 1,
+      scopeVersion: workbench.scope.version,
+      basedOnConclusionId: null,
+    });
+    expect(history[1]).toMatchObject({
+      id: publication.conclusionId,
+      sequence: 2,
+      state: "published",
+      text: conclusionText,
+      reviewer: "human:researcher",
+      evidenceCount: 1,
+      scopeVersion: workbench.scope.version,
+      basedOnConclusionId: history[0].id,
+    });
+  });
+
+  it("rejects publishing the TSM conclusion before evidence confirmation", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+        reviewer: "human:researcher",
+      }),
+    ).rejects.toThrow("confirmed evidence review is required");
+
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "awaiting_key_review",
+    );
+  });
+
+  it("rejects a blank TSM conclusion without changing the confirmed draft", async () => {
+    const adapter = new MockResearchAdapter();
+
+    await adapter.reviewProposal("proposal-event-tsm", {
+      outcome: "confirmed",
+      reason: "原始披露足以支持该因素。",
+      reviewer_id: "human:researcher",
+      expected_version: 1,
+    });
+    await expect(
+      adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "   ",
+        reviewer: "human:researcher",
+      }),
+    ).rejects.toThrow("conclusion text is required");
+
+    expect((await adapter.getEventWorkbench("event-tsm")).lifecycle.status).toBe(
+      "draft_ready",
+    );
   });
 
   it("continues TSM research with the review reason as the current gap", async () => {
