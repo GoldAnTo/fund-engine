@@ -65,14 +65,7 @@ export interface EventResearchListItem {
   updatedAt: string;
 }
 
-export type EventNextActionKind =
-  | "wait"
-  | "review_intake"
-  | "review_evidence"
-  | "review_conclusion"
-  | "edit_factors"
-  | "complete_research_protocol"
-  | "view_conclusion_change";
+export type EventNextActionKind = import("../contracts/v1").components["schemas"]["EventNextActionDTO"]["kind"];
 
 export interface EventFactor {
   thesisId?: string;

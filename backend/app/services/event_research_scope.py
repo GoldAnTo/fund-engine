@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_research import (
     EventResearchBrief,
@@ -254,7 +255,7 @@ class EventResearchScopeService:
             lifecycle.active_run_id = None
             lifecycle.status_summary = "研究范围已更新，新增因素需先完成研究协议"
             lifecycle.current_gap = f"研究协议未完成：{blocked_details}"
-            lifecycle.next_human_action = "完成新增因素的研究协议后再启动补证"
+            lifecycle.next_human_action = PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
             lifecycle.updated_at = now
             return
         successor = auto_research.start(

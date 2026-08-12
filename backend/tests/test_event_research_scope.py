@@ -250,6 +250,22 @@ def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session
         "label": "完成新增因素的研究协议后再启动补证",
         "count": None,
     }
+    listed = cmd_client.get("/api/v1/event-research")
+    assert listed.status_code == 200
+    assert listed.json()["items"] == [
+        {
+            "case_id": str(case_id),
+            "event_title": "Alphabet 财报后股价下跌",
+            "company_name": "Alphabet",
+            "ticker": "GOOGL",
+            "event_at": None,
+            "lifecycle_status": "awaiting_scope",
+            "status_summary": "研究范围已更新，新增因素需先完成研究协议",
+            "next_human_action": "完成新增因素的研究协议后再启动补证",
+            "next_action_kind": "complete_research_protocol",
+            "updated_at": listed.json()["items"][0]["updated_at"],
+        }
+    ]
 
 
 def test_scope_update_preserves_reused_thesis_protocol_requirement(

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 from pydantic import Field, model_validator
 
+from app.domain.event_research import EventNextActionKind
 from app.schemas.v1.common import V1Model
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
@@ -206,7 +207,7 @@ class EventResearchListItemDTO(V1Model):
     lifecycle_status: str
     status_summary: str
     next_human_action: str | None
-    next_action_kind: str | None
+    next_action_kind: EventNextActionKind
     updated_at: datetime
 
 
@@ -407,7 +408,7 @@ class PublishedMaterialDecisionResponse(V1Model):
 
 
 class EventNextActionDTO(V1Model):
-    kind: str
+    kind: EventNextActionKind
     label: str
     count: int | None = None
 

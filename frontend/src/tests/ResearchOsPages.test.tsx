@@ -183,7 +183,18 @@ describe("Research OS event entry", () => {
       nextHumanAction: "完成新增因素的研究协议后再启动补证",
       nextActionKind: "complete_research_protocol",
       updatedAt: "2026-08-12T08:00:00Z",
-    } as EventResearchListItem]);
+    }, {
+      id: "ordinary-case",
+      eventTitle: "普通证据审核",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_key_review",
+      statusSummary: "等待审核",
+      nextHumanAction: "审核 1 条关键证据",
+      nextActionKind: "review_evidence",
+      updatedAt: "2026-08-12T07:00:00Z",
+    }] as EventResearchListItem[]);
     setResearchClient(adapter);
 
     render(
@@ -195,6 +206,8 @@ describe("Research OS event entry", () => {
     expect(
       await screen.findByRole("link", { name: /当前优先/ }),
     ).toHaveAttribute("href", "/events/protocol-case/protocol");
+    expect(screen.getByRole("link", { name: "普通证据审核" }))
+      .toHaveAttribute("href", "/events/ordinary-case/review");
   });
 
   it("does not call active Case work running when the execution worker is unavailable", async () => {

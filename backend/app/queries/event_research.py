@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError
 from app.models.event_research import (
     CaseRelation,
@@ -747,7 +748,7 @@ class EventResearchQueries:
             return EventNextActionDTO(kind="review_conclusion", label="审核结论草案")
         if (
             lifecycle.status == "awaiting_scope"
-            and lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
+            and lifecycle.next_human_action == PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
         ):
             return EventNextActionDTO(
                 kind="complete_research_protocol",
