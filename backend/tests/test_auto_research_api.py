@@ -121,7 +121,7 @@ def test_pending_documents_exclude_a_frozen_contract_that_forbids_ai_processing(
 
 
 def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monkeypatch):
-    """A company-disclosure run must not extract an in-Case pasted snapshot."""
+    """Frozen scope uses research category, not the document intake channel."""
     now = datetime.now(timezone.utc)
     case = ResearchCase(title="source-scoped run", industry_topic="i", created_by="u", created_at=now)
     session.add(case)
@@ -130,19 +130,25 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
     session.add(thesis)
     session.flush()
     disclosure = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://issuer.example.com/report", available_at=now, acquired_at=now, parser_version="test")
+    pasted_annual_report = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="https://static.cninfo.com.cn/finalpage/2026-03-20/annual-report.pdf", available_at=now, acquired_at=now, parser_version="test")
     pasted = DocumentVersion(content_sha256=uuid.uuid4().hex, source_url="event://pasted", available_at=now, acquired_at=now, parser_version="test")
-    session.add_all([disclosure, pasted])
+    session.add_all([disclosure, pasted_annual_report, pasted])
     session.flush()
     disclosure_text = "公司披露订单同比增长20%，并说明收入确认进度、客户验收节奏、产能准备情况及下一季度收入确认安排，相关指标均可回到本页公告原文核对。"
+    pasted_annual_report_text = "工业富联年报披露营业收入同比增长15%，并列明客户结构、交付节奏和下一年度产能规划，原始年报已从巨潮资讯网冻结留档。"
     pasted_text = "研究员粘贴的事件摘要，不属于本次公司披露补证范围；它只用于记录最初的问题和背景，不能替代有明确主体、期间、来源许可及原文定位的公司披露材料。"
     disclosure_span = SourceSpan(document_version_id=disclosure.id, locator={"page": 1}, verbatim_text=disclosure_text)
+    pasted_annual_report_span = SourceSpan(document_version_id=pasted_annual_report.id, locator={"page": 1}, verbatim_text=pasted_annual_report_text)
     pasted_span = SourceSpan(document_version_id=pasted.id, locator={"paragraph": 1}, verbatim_text=pasted_text)
     session.add_all([
         disclosure_span,
+        pasted_annual_report_span,
         pasted_span,
         CaseDocumentVersion(research_case_id=case.id, document_version_id=disclosure.id, linked_at=now),
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=pasted_annual_report.id, linked_at=now),
         CaseDocumentVersion(research_case_id=case.id, document_version_id=pasted.id, linked_at=now),
         SourceContract(document_version_id=disclosure.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
+        SourceContract(document_version_id=pasted_annual_report.id, source_type="pasted_snapshot", research_source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
         SourceContract(document_version_id=pasted.id, source_type="pasted_snapshot", provider_or_tenant="researcher", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="not_recorded", downstream_restrictions=[], contract_version="v1", intake_metadata={}, declared_by="human", created_at=now),
     ])
     session.flush()
@@ -150,6 +156,16 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
         AtomicClaimDraft(source_span_id=disclosure_span.id, quote="订单同比增长20%", quote_start=4, quote_end=13, normalized_text="公司披露订单同比增长20%", claim_type="reported_claim", assertion_actor="公司", subject="订单", predicate="同比增长", object_text="20%", numeric_value="20", unit="%", observed_period=None, scope={}),
         authority_level="primary_disclosure",
         run_ref="extract:existing-company-candidate",
+    )
+    annual_report_candidate = AtomicClaimService(session).admit(
+        AtomicClaimDraft(source_span_id=pasted_annual_report_span.id, quote="营业收入同比增长15%", quote_start=8, quote_end=19, normalized_text="工业富联营业收入同比增长15%", claim_type="reported_claim", assertion_actor="工业富联", subject="营业收入", predicate="同比增长", object_text="15%", numeric_value="15", unit="%", observed_period=None, scope={}),
+        authority_level="primary_disclosure",
+        run_ref="extract:existing-pasted-annual-report-candidate",
+    )
+    pasted_candidate = AtomicClaimService(session).admit(
+        AtomicClaimDraft(source_span_id=pasted_span.id, quote="事件摘要", quote_start=6, quote_end=10, normalized_text="研究员粘贴事件摘要", claim_type="reported_claim", assertion_actor="研究员", subject="事件", predicate="摘要", object_text="背景", numeric_value=None, unit=None, observed_period=None, scope={}),
+        authority_level="user_supplied",
+        run_ref="extract:existing-pasted-candidate",
     )
     CaseMonitorService(session).save(
         case.id,
@@ -176,7 +192,16 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
 
     service.execute(run)
 
-    assert extracted == [disclosure.id]
+    assert set(extracted) == {disclosure.id, pasted_annual_report.id}
+    pending_candidate_ids = {
+        candidate.id
+        for candidate in service._pending_atomic_claims(
+            case.id,
+            allowed_source_types={"company_disclosure"},
+        )
+    }
+    assert annual_report_candidate.id in pending_candidate_ids
+    assert pasted_candidate.id not in pending_candidate_ids
     events = list(session.scalars(select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id).order_by(ResearchRunEvent.seq)))
     assert any(
         event.stage == "source_scope" and event.payload_json["excluded_count"] == 1

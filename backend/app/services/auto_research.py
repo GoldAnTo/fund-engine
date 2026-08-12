@@ -923,7 +923,7 @@ class AutoResearchService:
         return bool(self._pending_atomic_claims(run.research_case_id))
 
     def _run_allowed_source_types(self, run) -> set[str]:
-        """Read the immutable source-type boundary from this run's scope event."""
+        """Read the immutable research-source-category boundary from run scope."""
         scope = self.session.scalar(
             select(ResearchRunEvent)
             .where(ResearchRunEvent.run_id == run.id)
@@ -958,7 +958,7 @@ class AutoResearchService:
             contract = contracts.get(document.id)
             if contract is None:
                 reason = "missing_source_contract"
-            elif contract.source_type not in allowed_source_types:
+            elif contract.research_source_type not in allowed_source_types:
                 reason = "source_type_not_in_frozen_scope"
             elif not contract.allow_ai_processing or not source_contract_is_active(contract):
                 reason = "source_contract_not_usable"
@@ -1022,7 +1022,7 @@ class AutoResearchService:
             candidate
             for candidate in candidates
             if (contract := contracts.get(document_ids.get(candidate.source_span_id))) is not None
-            and contract.source_type in allowed_source_types
+            and contract.research_source_type in allowed_source_types
             and contract.allow_ai_processing
             and source_contract_is_active(contract)
         ]
