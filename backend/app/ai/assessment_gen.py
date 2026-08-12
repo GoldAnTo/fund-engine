@@ -124,6 +124,20 @@ class AssessmentGenerator:
             rationale = result["rationale"]
             gaps = result.get("gaps", [])
 
+            if thesis.research_protocol_required:
+                allowed_conclusions = (
+                    ResearchProtocolService.allowed_assessment_conclusions(gate)
+                )
+                if conclusion not in allowed_conclusions:
+                    if gate.status == "single_metric_monitoring":
+                        conclusion = "insufficient_evidence"
+                        if "insufficient_primary_metrics" not in gaps:
+                            gaps.append("insufficient_primary_metrics")
+                    else:
+                        raise ValidationError(
+                            f"researchability gate disallows conclusion: {conclusion}"
+                        )
+
             # Non-investment-advice gate (with one bounded rewrite attempt
             # for REWRITE-category hits): refused text never reaches the
             # ledger; the failure is recorded on the AIRun below.

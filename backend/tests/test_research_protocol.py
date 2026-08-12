@@ -10,7 +10,12 @@ from sqlalchemy import update
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
 from app.models.source_governance import SourceContract
-from app.services.research_protocol import MetricDefinitionInput, OutcomeBindingInput, ResearchProtocolService
+from app.services.research_protocol import (
+    MetricDefinitionInput,
+    OutcomeBindingInput,
+    ResearchabilityResult,
+    ResearchProtocolService,
+)
 
 
 def test_metric_versions_and_outcome_bindings_are_append_only(session, thesis) -> None:
@@ -164,6 +169,31 @@ def test_researchability_is_not_applicable_to_legacy_thesis(session, thesis) -> 
 
     assert result.status == "not_applicable"
     assert result.reason_codes == []
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (ResearchabilityResult("blocked", [], None, "complete protocol"), set()),
+        (
+            ResearchabilityResult(
+                "single_metric_monitoring",
+                ["insufficient_primary_metrics"],
+                None,
+                "monitor only",
+            ),
+            {"insufficient_evidence"},
+        ),
+        (
+            ResearchabilityResult("ready", [], None, "assess"),
+            {"supported", "contradicted", "insufficient_evidence"},
+        ),
+    ],
+)
+def test_single_metric_researchability_status_defines_allowed_assessment_conclusions(
+    result: ResearchabilityResult, expected: set[str]
+) -> None:
+    assert ResearchProtocolService.allowed_assessment_conclusions(result) == expected
 
 
 def test_protocol_thesis_without_outcome_binding_is_explicitly_blocked(session) -> None:

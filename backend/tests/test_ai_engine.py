@@ -27,6 +27,7 @@ from app.models.ledger import (
     EvidenceLink,
     SourceStatement,
 )
+from app.services.research_protocol import ResearchabilityResult
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +251,53 @@ def test_assessment_releases_read_transaction_before_provider(
             thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
         )
     assert assessment is not None
+
+
+def test_single_metric_monitoring_coerces_assessment_to_insufficient_evidence(
+    session, research_service, thesis, statement
+):
+    strict_thesis = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="GPU demand will grow under the strict protocol",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    research_service.link_evidence(
+        strict_thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    model_output = {
+        "conclusion": "supported",
+        "rationale": "The evidence supports the thesis.",
+        "gaps": [],
+    }
+    gate = ResearchabilityResult(
+        status="single_metric_monitoring",
+        reason_codes=["insufficient_primary_metrics"],
+        effective_binding_id=None,
+        next_action="monitor only",
+    )
+
+    with (
+        patch.object(client, "chat_json", return_value=model_output),
+        patch(
+            "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+            return_value=gate,
+        ),
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment.conclusion == "insufficient_evidence"
+    assert assessment.gaps.count("insufficient_primary_metrics") == 1
+    run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
+    assert run is not None
+    assert "conclusion=insufficient_evidence" in run.output_summary
 
 
 # ---------------------------------------------------------------------------
