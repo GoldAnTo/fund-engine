@@ -2218,6 +2218,61 @@ describe("Research OS event entry", () => {
     expect(strip).not.toHaveTextContent("系统正在运行 ·");
   });
 
+  it("refreshes the global run strip and event review count after workflow writes", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    const listEventResearch = vi.spyOn(adapter, "listEventResearch");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/events" element={<p>工作台内容</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核 · 等待审核");
+    expect(await screen.findByRole("link", { name: "待我审核 2" })).toBeVisible();
+    const initialEventReads = listEventResearch.mock.calls.length;
+
+    await act(async () => {
+      await adapter.reviewProposal("proposal-event-tsm", {
+        outcome: "confirmed",
+        reason: "原始披露足以支持该因素。",
+        reviewer_id: "human:researcher",
+        expected_version: 1,
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    await waitFor(() => {
+      expect(listEventResearch).toHaveBeenCalledTimes(initialEventReads + 1);
+      expect(
+        screen.queryByText("等待人工审核 · 等待审核"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("link", { name: "待我审核 2" })).toBeVisible();
+
+    await act(async () => {
+      await adapter.publishEventConclusion({
+        caseId: "event-tsm",
+        text: "资本开支上调构成当前市场担忧的重要可验证因素。",
+        reviewer: "human:researcher",
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    });
+
+    expect(await screen.findByRole("link", { name: "待我审核 1" })).toBeVisible();
+    expect(
+      screen.queryByText("等待人工审核 · 等待审核"),
+    ).not.toBeInTheDocument();
+  });
+
   it("removes stale active-run strips when their live status can no longer be confirmed", async () => {
     vi.useFakeTimers();
     let activeRunRequests = 0;

@@ -102,14 +102,33 @@ export function AppShell() {
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [session, setSession] = useState<ResearchSession | null>(null);
   useEffect(() => {
+    let live = true;
     const load = () =>
       researchClient
         .listEventResearch()
-        .then(setEvents)
-        .catch(() => setEvents([]));
+        .then((items) => {
+          if (live) setEvents(items);
+        })
+        .catch(() => {
+          if (live) setEvents([]);
+        });
     load();
     const refresh = window.setInterval(load, 20_000);
-    return () => window.clearInterval(refresh);
+    const refreshAfterWorkflow = () => {
+      void load();
+    };
+    window.addEventListener(
+      "research-os-workflow-refresh",
+      refreshAfterWorkflow,
+    );
+    return () => {
+      live = false;
+      window.clearInterval(refresh);
+      window.removeEventListener(
+        "research-os-workflow-refresh",
+        refreshAfterWorkflow,
+      );
+    };
   }, []);
   useEffect(() => {
     const query = searchQuery.trim();
@@ -168,11 +187,22 @@ export function AppShell() {
       // making researchers wait for the normal background poll.
       window.setTimeout(load, 350);
     };
+    const refreshAfterWorkflow = () => {
+      void load();
+    };
     window.addEventListener("research-os-run-refresh", refreshAfterRunStart);
+    window.addEventListener(
+      "research-os-workflow-refresh",
+      refreshAfterWorkflow,
+    );
     return () => {
       live = false;
       window.clearInterval(refresh);
       window.removeEventListener("research-os-run-refresh", refreshAfterRunStart);
+      window.removeEventListener(
+        "research-os-workflow-refresh",
+        refreshAfterWorkflow,
+      );
     };
   }, [runReload]);
   useEffect(() => {
