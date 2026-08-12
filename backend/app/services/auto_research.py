@@ -912,9 +912,7 @@ class AutoResearchService:
 
     @staticmethod
     def _result_output_ids(result: object, key: str) -> set[uuid.UUID]:
-        if not isinstance(result, dict):
-            return set()
-        raw_value = result.get(key)
+        raw_value = AutoResearchService._result_dict(result).get(key)
         if isinstance(raw_value, (list, tuple, set)):
             raw_values = raw_value
         else:
@@ -1340,11 +1338,11 @@ class AutoResearchService:
             next_action = "继续执行"
         proposal_ids: set[uuid.UUID] = set()
         for research_task in tasks:
-            for raw_id in (research_task.result or {}).get("proposed_proposal_ids", []):
-                try:
-                    proposal_ids.add(uuid.UUID(str(raw_id)))
-                except (TypeError, ValueError):
-                    pass
+            proposal_ids.update(
+                self._result_output_ids(
+                    research_task.result, "proposed_proposal_ids"
+                )
+            )
         pending_proposals = []
         review_tasks = []
         for proposal_id in proposal_ids:
@@ -1363,45 +1361,41 @@ class AutoResearchService:
             if review_task:
                 review_tasks.append(self._review_task_dict(review_task))
         for research_task in tasks:
-            raw_id = (research_task.result or {}).get("assessment_id")
-            if not raw_id:
-                continue
-            try:
-                assessment_id = uuid.UUID(str(raw_id))
-            except (TypeError, ValueError):
-                continue
-            review_task = self.task_repo.find_by_ref(
-                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id
-            )
-            if review_task:
-                review_tasks.append(self._review_task_dict(review_task))
+            for assessment_id in self._result_output_ids(
+                research_task.result, "assessment_id"
+            ):
+                review_task = self.task_repo.find_by_ref(
+                    task_type="review_assessment",
+                    ref_type="ai_assessment",
+                    ref_id=assessment_id,
+                )
+                if review_task:
+                    review_tasks.append(self._review_task_dict(review_task))
         pending_assessments = []
         for research_task in tasks:
-            raw_id = (research_task.result or {}).get("assessment_id")
-            if not raw_id:
-                continue
-            try:
-                assessment_id = uuid.UUID(str(raw_id))
-            except (TypeError, ValueError):
-                continue
-            review_task = self.task_repo.find_by_ref(
-                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id
-            )
-            assessment = self.session.get(AIAssessment, assessment_id)
-            if (
-                assessment is None
-                or review_task is None
-                or review_task.status not in {"open", "in_progress"}
+            for assessment_id in self._result_output_ids(
+                research_task.result, "assessment_id"
             ):
-                continue
-            pending_assessments.append({
-                "assessment_id": str(assessment.id),
-                "conclusion": assessment.conclusion,
-                "rationale": assessment.rationale,
-                "gaps": list(assessment.gaps or []),
-                "task_id": str(review_task.id),
-                "task_status": review_task.status,
-            })
+                review_task = self.task_repo.find_by_ref(
+                    task_type="review_assessment",
+                    ref_type="ai_assessment",
+                    ref_id=assessment_id,
+                )
+                assessment = self.session.get(AIAssessment, assessment_id)
+                if (
+                    assessment is None
+                    or review_task is None
+                    or review_task.status not in {"open", "in_progress"}
+                ):
+                    continue
+                pending_assessments.append({
+                    "assessment_id": str(assessment.id),
+                    "conclusion": assessment.conclusion,
+                    "rationale": assessment.rationale,
+                    "gaps": list(assessment.gaps or []),
+                    "task_id": str(review_task.id),
+                    "task_status": review_task.status,
+                })
         return {
             "id": str(run.id),
             "case_id": str(run.research_case_id),
@@ -1422,7 +1416,11 @@ class AutoResearchService:
             "gaps": [t.query for t in gaps],
             "gap_tasks": [self._task_dict(t) for t in gaps],
             "failed_tasks": [self._task_dict(t) for t in failed_tasks],
-            "assessments": [t.result for t in tasks if t.result and t.result.get("assessment_id")],
+            "assessments": [
+                result
+                for task in tasks
+                if (result := self._result_dict(task.result)).get("assessment_id")
+            ],
             "pending_assessments": pending_assessments,
             "pending_proposals": pending_proposals,
             "review_tasks": review_tasks,
@@ -1448,6 +1446,10 @@ class AutoResearchService:
         }
 
     @staticmethod
+    def _result_dict(result: object) -> dict:
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
     def _review_task_dict(task: TaskItem) -> dict:
         return {
             "id": str(task.id),
@@ -1469,5 +1471,5 @@ class AutoResearchService:
             "query": task.query,
             "evidence_count": task.evidence_count,
             "gap_reason": task.gap_reason,
-            "result": task.result,
+            "result": AutoResearchService._result_dict(task.result) or None,
         }

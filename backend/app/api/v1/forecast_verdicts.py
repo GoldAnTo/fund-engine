@@ -14,6 +14,7 @@ from app.db import get_db
 from app.errors import NotFoundError
 from app.models.research_expression import ForecastEvaluationCandidate, ForecastTargetVersion
 from app.queries.forecast_verdicts import ForecastVerdictQueries
+from app.queries.time import api_datetime
 from app.schemas.v1.forecast_verdicts import (
     ActualMetricObservationDTO,
     CreateForecastTargetRequest,
@@ -106,7 +107,7 @@ def create_forecast_target(
         expected_value=float(record.expected_value), unit=record.unit,
         forecast_period_start=record.forecast_period_start, forecast_period_end=record.forecast_period_end,
         comparator=record.comparator, relative_tolerance=float(record.relative_tolerance) if record.relative_tolerance is not None else None,
-        reviewed_by=record.reviewed_by, review_reason=record.review_reason, reviewed_at=record.reviewed_at,
+        reviewed_by=record.reviewed_by, review_reason=record.review_reason, reviewed_at=api_datetime(record.reviewed_at),
         forecast_source=source,
         baseline_source=ForecastVerdictQueries(db)._source(record.baseline_source_statement_id) if record.baseline_source_statement_id else None,
     )
@@ -132,7 +133,7 @@ def record_actual_metric_observation(
         id=str(record.id), forecast_target_id=str(record.forecast_target_id), entity_key=record.entity_key,
         observed_value=float(record.observed_value), unit=record.unit,
         observed_period_start=record.observed_period_start, observed_period_end=record.observed_period_end,
-        available_at=record.available_at, recorded_by=record.recorded_by, record_reason=record.record_reason,
+        available_at=api_datetime(record.available_at), recorded_by=record.recorded_by, record_reason=record.record_reason,
         source=ForecastVerdictQueries(db)._source(record.source_statement_id),
     )
 
@@ -152,8 +153,8 @@ def evaluate_forecast_target(
     commit_or_rollback(db)
     return ForecastEvaluationCandidateDTO(
         id=str(record.id), forecast_target_id=str(record.forecast_target_id), actual_observation_id=str(record.actual_observation_id),
-        cutoff=record.cutoff, outcome=record.outcome, rule_version=record.rule_version,
-        inputs=dict(record.inputs), rationale=record.rationale, review_state=record.review_state, created_at=record.created_at,
+        cutoff=api_datetime(record.cutoff), outcome=record.outcome, rule_version=record.rule_version,
+        inputs=dict(record.inputs), rationale=record.rationale, review_state=record.review_state, created_at=api_datetime(record.created_at),
     )
 
 

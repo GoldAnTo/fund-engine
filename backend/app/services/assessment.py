@@ -66,6 +66,22 @@ class AssessmentService:
         reason: str,
         reviewer: str = "reviewer",
     ) -> ReviewDecision:
+        assessment = self._repo.get_ai_assessment(assessment_id)
+        thesis = self._repo.assessment_thesis(assessment_id)
+        effective_conclusion = conclusion or (
+            assessment.conclusion if assessment is not None else None
+        )
+        if (
+            outcome in {"confirmed", "modified"}
+            and effective_conclusion in {"supported", "contradicted"}
+            and assessment is not None
+            and thesis is not None
+            and thesis.research_protocol_required
+            and "insufficient_primary_metrics" in (assessment.gaps or [])
+        ):
+            raise ValidationError(
+                "strict single-metric assessments require an insufficient_evidence review conclusion"
+            )
         return self._repo.insert_review(
             ai_assessment_id=assessment_id,
             outcome=outcome,

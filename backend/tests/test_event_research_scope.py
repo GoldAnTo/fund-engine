@@ -1449,7 +1449,7 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
     assert workbench.json()["conclusion"]["state"] == "cannot_conclude"
 
 
-@pytest.mark.parametrize("old_status", ["queued", "running"])
+@pytest.mark.parametrize("old_status", ["queued", "running", "waiting_for_review"])
 def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     cmd_client, cmd_session, old_status: str
 ) -> None:
@@ -1501,6 +1501,14 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
     )
     assert old_tasks
     assert {task.status for task in old_tasks} == {"cancelled"}
+    # Proposal and assessment decisions both reconcile through this state
+    # transition, while atomic-claim decisions use the resume transition.
+    # Neither may revive a run retired by the scope replacement.
+    service = AutoResearchService(cmd_session)
+    assert not service.reconcile_run(
+        old_run_id, trigger_ref="proposal-or-assessment:reviewed"
+    )
+    assert not service.repo.resume_after_claim_review(old_run)
 
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None

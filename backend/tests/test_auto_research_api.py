@@ -424,6 +424,9 @@ def test_historical_scalar_proposal_output_is_a_review_gate(session):
     assert session.scalar(
         select(TaskItem).where(TaskItem.ref_id == proposal.id)
     ) is not None
+    detail = service.detail(run.id)
+    assert detail is not None
+    assert detail["pending_proposals"][0]["id"] == str(proposal.id)
 
 
 def test_non_dict_task_result_is_ignored_by_review_gate_helpers(session):
@@ -462,6 +465,65 @@ def test_non_dict_task_result_is_ignored_by_review_gate_helpers(session):
     service = AutoResearchService(session)
     assert service._successful_terminal_status(run) == "succeeded"
     service._handoff_for_review(run)
+    detail = service.detail(run.id)
+    assert detail is not None
+    assert detail["assessments"] == []
+    assert detail["pending_assessments"] == []
+
+
+@pytest.mark.parametrize("malformed_result", ["not a JSON object", ["bad"]])
+def test_run_detail_and_archive_ignore_malformed_historical_results(
+    cmd_client, cmd_session, malformed_result
+):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="historical archive",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    _admit_case(cmd_session, case)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="succeeded",
+        stage="complete",
+        round=1,
+        max_rounds=1,
+        budget=10,
+        budget_used=1,
+        created_at=now,
+        updated_at=now,
+    )
+    cmd_session.add(run)
+    cmd_session.flush()
+    cmd_session.add(
+        ResearchTask(
+            run_id=run.id,
+            research_case_id=case.id,
+            status="done",
+            stage="completed",
+            round=1,
+            task_type="result",
+            query="malformed historical output",
+            result=malformed_result,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    cmd_session.commit()
+
+    detail = cmd_client.get(f"/api/v1/research-runs/{run.id}")
+    archive = cmd_client.get("/api/v1/research-runs")
+    case_archive = cmd_client.get(f"/api/v1/research-cases/{case.id}/runs")
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["assessments"] == []
+    assert archive.status_code == 200, archive.text
+    assert archive.json()["items"][0]["run_id"] == str(run.id)
+    assert case_archive.status_code == 200, case_archive.text
+    assert case_archive.json()["items"][0]["id"] == str(run.id)
 
 
 @pytest.mark.pg_only

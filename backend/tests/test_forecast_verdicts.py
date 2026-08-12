@@ -201,6 +201,9 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
     })
     assert target_response.status_code == 201, target_response.text
+    target_body = target_response.json()
+    for source_name in ("forecast_source", "baseline_source"):
+        assert target_body[source_name]["available_at"].endswith(("Z", "+00:00"))
     target_id = target_response.json()["id"]
     actual_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/actual-metric-observations", json={
         "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
@@ -210,6 +213,8 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "record_reason": "年报第123页审计口径。",
     })
     assert actual_response.status_code == 201, actual_response.text
+    assert actual_response.json()["available_at"].endswith(("Z", "+00:00"))
+    assert actual_response.json()["source"]["available_at"].endswith(("Z", "+00:00"))
     candidate_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
         "actual_observation_id": actual_response.json()["id"],
         "cutoff": "2024-04-22T23:59:00Z",
@@ -239,6 +244,16 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert payload["items"][0]["outcome"] == "contradicted"
     assert payload["items"][0]["rule_version"] == "forecast-numeric-v1"
     assert payload["items"][0]["forecast_source"]["document_title"] == "冻结券商预测"
+    item = payload["items"][0]
+    for source in (
+        item["forecast_source"],
+        item["target"]["forecast_source"],
+        item["target"]["baseline_source"],
+        item["actual_source"],
+        item["actual"]["source"],
+    ):
+        assert source["available_at"].endswith(("Z", "+00:00"))
+    assert item["actual"]["available_at"].endswith(("Z", "+00:00"))
 
     monkeypatch.setenv(
         "RESEARCH_TENANT_TOKENS",

@@ -232,7 +232,11 @@ class EventResearchScopeService:
             else None
         )
         auto_research = AutoResearchService(self._session)
-        if current_run is not None and current_run.status in {"queued", "running"}:
+        if current_run is not None and current_run.status in {
+            "queued",
+            "running",
+            "waiting_for_review",
+        }:
             # Preserve the old run and its task/job audit trail, but prevent a
             # worker from continuing to research the superseded thesis set.
             locked_run = auto_research._lock_run_for_transition(

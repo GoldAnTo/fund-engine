@@ -486,6 +486,14 @@ class ResearchRepository:
             select(AIAssessment).where(AIAssessment.id == assessment_id)
         )
 
+    def assessment_thesis(self, assessment_id: uuid.UUID) -> Thesis | None:
+        return self._session.scalar(
+            select(Thesis)
+            .join(EvidenceSnapshot, EvidenceSnapshot.thesis_id == Thesis.id)
+            .join(AIAssessment, AIAssessment.snapshot_id == EvidenceSnapshot.id)
+            .where(AIAssessment.id == assessment_id)
+        )
+
     # ------------------------------------------------------------------ readers (workbench / projection)
 
     def get_case(

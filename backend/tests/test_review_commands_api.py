@@ -360,6 +360,49 @@ def test_assessment_review_missing_is_404(cmd_client, cmd_seeded):
     assert _error_code(response) == "not_found"
 
 
+def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
+    cmd_client, cmd_seeded
+):
+    from app.models.ledger import ResearchCase
+    from app.repositories.research import ResearchRepository
+    from app.services.assessment import AssessmentService
+    from app.services.research import ResearchService
+
+    case = cmd_seeded.scalar(select(ResearchCase))
+    assert case is not None
+    repo = ResearchRepository(cmd_seeded)
+    thesis = ResearchService(repo).add_thesis(
+        case.id,
+        statement="Only one primary metric is available",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    service = AssessmentService(repo)
+    snapshot = service.freeze_snapshot(
+        thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc)
+    )
+    assessment = service.create_ai_assessment(
+        snapshot.id,
+        conclusion="insufficient_evidence",
+        rationale="Protocol limits the conclusion.",
+        gaps=["insufficient_primary_metrics"],
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/assessments/{assessment.id}/reviews",
+        json={
+            "outcome": "modified",
+            "conclusion": "contradicted",
+            "reason": "attempted override",
+            "reviewer": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_code(response) == "validation_failed"
+
+
 def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
     from app.models.ledger import AIAssessment
     from app.repositories.operational import TaskRepository
