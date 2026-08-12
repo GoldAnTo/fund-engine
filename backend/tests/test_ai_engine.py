@@ -421,14 +421,14 @@ def test_assessment_rechecks_protocol_after_provider_and_constrains_stale_result
         ),
         patch(
             "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
-            side_effect=[ready, single_metric],
+            side_effect=[ready, single_metric, single_metric],
         ) as check,
     ):
         assessment = AssessmentGenerator(client).generate(
             strict_thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
         )
 
-    assert check.call_count == 2
+    assert check.call_count == 3
     assert assessment is not None
     assert assessment.conclusion == "insufficient_evidence"
     assert assessment.gaps == ["insufficient_primary_metrics"]
@@ -502,7 +502,7 @@ def test_assessment_takes_case_lock_before_final_protocol_recheck(
         )
 
     assert assessment is not None
-    assert events == ["check", "lock", "check"]
+    assert events == ["check", "lock", "check", "check"]
 
 
 def test_assessment_rechecks_protocol_after_provider_and_blocks_persistence(

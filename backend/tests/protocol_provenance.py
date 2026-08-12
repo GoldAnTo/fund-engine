@@ -16,7 +16,7 @@ from app.models.research_protocol import (
 )
 
 
-def seed_protocol_footprint(session, thesis):
+def seed_protocol_footprint(session, thesis, *, status="single_metric_monitoring"):
     now = datetime.now(timezone.utc)
     suffix = uuid.uuid4().hex
     metric = MetricDefinitionVersion(
@@ -45,6 +45,25 @@ def seed_protocol_footprint(session, thesis):
     )
     session.add_all([metric, template])
     session.flush()
+    second_metric = None
+    if status == "ready":
+        second_metric = MetricDefinitionVersion(
+            metric_id=f"assessment_protocol_secondary_{suffix}",
+            version=1,
+            display_name="Secondary assessment protocol metric",
+            canonical_definition="An independent test-only protocol metric",
+            entity_scope="business_line",
+            unit="yuan",
+            frequency="quarterly",
+            period_semantics="period_end",
+            allowed_source_roles=["primary_disclosure"],
+            role_eligibility=["driver"],
+            approved_by="tester",
+            reason="assessment provenance fixture",
+            created_at=now,
+        )
+        session.add(second_metric)
+        session.flush()
     binding = OutcomeBindingVersion(
         thesis_id=thesis.id,
         metric_definition_id=metric.id,
@@ -104,7 +123,9 @@ def seed_protocol_footprint(session, thesis):
         rule = VerificationRuleVersion(
             research_case_id=thesis.research_case_id,
             mechanism_edge_id=edge.id,
-            metric_definition_id=metric.id,
+            metric_definition_id=(
+                second_metric.id if index == 1 and second_metric is not None else metric.id
+            ),
             expected_direction="increase",
             support_predicate=f"support {index}",
             contradiction_predicate=f"contradiction {index}",

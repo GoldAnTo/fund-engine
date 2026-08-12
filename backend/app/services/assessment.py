@@ -7,9 +7,12 @@ from app.models.ledger import (
     AIAssessment,
     EvidenceSnapshot,
     ReviewDecision,
+    Thesis,
     ValidationError,
 )
 from app.repositories.research import ResearchRepository
+from app.services.event_research_scope_evidence import lock_event_scope_case
+from app.services.research_protocol import ResearchProtocolService
 
 _ASSESSMENT_STATUSES = frozenset(
     {"supported", "contradicted", "insufficient_evidence"}
@@ -54,6 +57,20 @@ class AssessmentService:
         mechanism_template_version_id: uuid.UUID | None = None,
         verification_rule_ids: list[uuid.UUID | str] | None = None,
     ) -> AIAssessment:
+        session = self._repo.session
+        snapshot = session.get(EvidenceSnapshot, snapshot_id)
+        if snapshot is None:
+            raise ValidationError("evidence snapshot not found")
+        thesis = session.get(Thesis, snapshot.thesis_id)
+        if thesis is None:
+            raise ValidationError("snapshot thesis not found")
+
+        # Creation is an independently safe persistence boundary. Resolve the
+        # immutable snapshot/thesis only to discover the stable root, then use
+        # the same Case -> protocol row lock order as every protocol mutation.
+        lock_event_scope_case(session, thesis.research_case_id)
+        session.refresh(snapshot)
+        session.refresh(thesis)
         if conclusion not in _ASSESSMENT_STATUSES:
             raise ValidationError(f"invalid conclusion: {conclusion}")
         if (
@@ -63,57 +80,59 @@ class AssessmentService:
             raise ValidationError(
                 f"invalid research protocol status: {research_protocol_status}"
             )
-        if (
-            research_protocol_status == "single_metric_monitoring"
-            and conclusion in {"supported", "contradicted"}
-        ):
-            raise ValidationError(
-                "strict single-metric assessments require an insufficient_evidence conclusion"
-            )
-        if research_protocol_status == "blocked":
-            raise ValidationError(
-                "blocked research protocols cannot persist an AI assessment"
-            )
         provenance_values = (
+            research_protocol_status,
             effective_binding_id,
             mechanism_template_version_id,
             verification_rule_ids,
         )
-        if research_protocol_status is None:
+        if not thesis.research_protocol_required:
             if any(value is not None for value in provenance_values):
                 raise ValidationError(
-                    "legacy assessments cannot persist partial protocol provenance"
+                    "non-strict assessments cannot persist protocol provenance"
                 )
             normalized_rule_ids = None
         else:
-            if (
-                effective_binding_id is None
-                or mechanism_template_version_id is None
-                or not verification_rule_ids
-            ):
+            if research_protocol_status is None:
                 raise ValidationError(
-                    "strict assessments require a complete protocol provenance footprint"
+                    "strict assessments require typed protocol provenance"
+                )
+            current = ResearchProtocolService(session).check_researchability(thesis.id)
+            if current.status == "blocked":
+                raise ValidationError(
+                    "blocked research protocols cannot persist an AI assessment"
                 )
             try:
                 parsed_rule_ids = {
-                    uuid.UUID(str(rule_id)) for rule_id in verification_rule_ids
+                    uuid.UUID(str(rule_id))
+                    for rule_id in (verification_rule_ids or [])
                 }
             except (TypeError, ValueError, AttributeError) as exc:
                 raise ValidationError(
                     "verification_rule_ids must contain UUID values"
                 ) from exc
             normalized_rule_uuids = sorted(parsed_rule_ids, key=str)
-            if not self._repo.assessment_protocol_footprint_is_consistent(
-                snapshot_id=snapshot_id,
-                effective_binding_id=effective_binding_id,
-                mechanism_template_version_id=mechanism_template_version_id,
-                verification_rule_ids=normalized_rule_uuids,
+            current_rule_uuids = sorted(
+                set(current.verification_rule_ids), key=str
+            )
+            if (
+                research_protocol_status != current.status
+                or effective_binding_id != current.effective_binding_id
+                or mechanism_template_version_id
+                != current.mechanism_template_version_id
+                or normalized_rule_uuids != current_rule_uuids
             ):
                 raise ValidationError(
-                    "assessment protocol provenance does not match the snapshot thesis"
+                    "assessment provenance does not match the current research protocol"
+                )
+            if conclusion not in ResearchProtocolService.allowed_assessment_conclusions(
+                current
+            ):
+                raise ValidationError(
+                    "strict single-metric assessments require an insufficient_evidence conclusion"
                 )
             normalized_rule_ids = [
-                str(rule_id) for rule_id in normalized_rule_uuids
+                str(rule_id) for rule_id in current_rule_uuids
             ]
         return self._repo.insert_ai_assessment(
             snapshot_id=snapshot_id,
@@ -142,33 +161,20 @@ class AssessmentService:
         )
         if (
             assessment is not None
+            and effective_conclusion in {"supported", "contradicted"}
             and assessment.research_protocol_status
             == "single_metric_monitoring"
-            and effective_conclusion in {"supported", "contradicted"}
         ):
             raise ValidationError(
                 "strict single-metric assessments require an insufficient_evidence review conclusion"
             )
-
-        # Compatibility for strict assessments written before typed protocol
-        # provenance existed. New assessments never infer protocol state from
-        # model-controlled gap prose.
-        thesis = (
-            self._repo.assessment_thesis(assessment_id)
-            if assessment is not None
-            and assessment.research_protocol_status is None
-            else None
-        )
         if (
-            outcome in {"confirmed", "modified"}
+            assessment is not None
             and effective_conclusion in {"supported", "contradicted"}
-            and assessment is not None
-            and thesis is not None
-            and thesis.research_protocol_required
-            and "insufficient_primary_metrics" in (assessment.gaps or [])
+            and assessment.research_protocol_status == "blocked"
         ):
             raise ValidationError(
-                "strict single-metric assessments require an insufficient_evidence review conclusion"
+                "blocked protocol assessments require a non-directional review conclusion"
             )
         return self._repo.insert_review(
             ai_assessment_id=assessment_id,
