@@ -74,7 +74,7 @@ function MonitorLocationProbe() {
 
 function CaseLocationProbe() {
   const location = useLocation();
-  return <output data-testid="case-location">{location.pathname}</output>;
+  return <output data-testid="case-location">{location.pathname}{location.search}</output>;
 }
 
 function renderMonitorPage(initialEntry: string) {
@@ -1890,46 +1890,138 @@ describe("Research OS event entry", () => {
     ).toBeVisible();
   });
 
-  it("requires a reason before a reviewer can confirm a candidate and then advances the queue", async () => {
+  it.each([
+    {
+      button: "确认采纳",
+      reason: "原文来自冻结的一手公司披露，支持当前因素。",
+      notice: "证据已采纳，系统已生成待复核的结论草案。",
+      stage: "形成结论",
+      lifecycle: "结论草案待复核",
+      nextTask: "审核结论草案",
+      verified: 1,
+      pending: 0,
+    },
+    {
+      button: "要求补充证据",
+      reason: "还需要同一期间的反证和实际经营数据。",
+      notice: "补证要求已记录，系统将按冻结范围继续处理。",
+      stage: "执行补证",
+      lifecycle: "系统补证中",
+      nextTask: "系统补证中",
+      verified: 0,
+      pending: 0,
+    },
+    {
+      button: "驳回候选",
+      reason: "当前候选无法支持已冻结的研究因素。",
+      notice: "候选已驳回，请调整研究范围或补充来源。",
+      stage: "形成结论",
+      lifecycle: "当前范围已穷尽",
+      nextTask: "编辑并继续自动研究",
+      verified: 0,
+      pending: 0,
+    },
+  ])("returns $button to the refreshed event workbench", async ({
+    button,
+    reason,
+    notice,
+    stage,
+    lifecycle,
+    nextTask,
+    verified,
+    pending,
+  }) => {
     const user = userEvent.setup();
+    const workflowRefresh = vi.fn();
+    window.addEventListener("research-os-workflow-refresh", workflowRefresh);
     render(
-      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
         <Routes>
           <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+          <Route
+            path="/events/:caseId"
+            element={<><CaseConclusionPage /><CaseLocationProbe /></>}
+          />
         </Routes>
       </MemoryRouter>,
     );
 
     await screen.findByRole("heading", { name: /条待审核关系/ });
-    expect(screen.getByRole("button", { name: "确认采纳" })).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("审核理由"),
-      "原文来自冻结的一手公司披露，支持当前因素。",
-    );
-    await user.click(screen.getByRole("button", { name: "确认采纳" }));
+    expect(screen.getByRole("button", { name: button })).toBeDisabled();
+    await user.type(screen.getByLabelText("审核理由"), reason);
+    await user.click(screen.getByRole("button", { name: button }));
 
-    expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
+    expect(await screen.findByText(notice)).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm?client=mock",
+    );
+    expect(workflowRefresh).toHaveBeenCalledTimes(1);
+    expect(
+      within(screen.getByRole("list", { name: "当前事件研究进展" }))
+        .getByText(stage)
+        .closest("li"),
+    ).toHaveAttribute("aria-current", "step");
+    expect(screen.getByText(`已审核证据 ${verified}`)).toBeVisible();
+    expect(screen.getByText(`待审核 ${pending}`)).toBeVisible();
+    expect(screen.getAllByText(lifecycle).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: nextTask })).toBeVisible();
+
+    window.removeEventListener("research-os-workflow-refresh", workflowRefresh);
   });
 
-  it("lets a reviewer request more evidence without accepting the candidate", async () => {
+  it("keeps the review reason and stays on the review page when submission fails", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "reviewProposal").mockRejectedValueOnce(
+      new Error("review unavailable"),
+    );
+    setResearchClient(adapter);
     const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={["/events/event-tsm/review"]}>
+      <MemoryRouter initialEntries={["/events/event-tsm/review?client=mock"]}>
         <Routes>
-          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+          <Route
+            path="/events/:caseId/review"
+            element={<><CaseReviewPage /><CaseLocationProbe /></>}
+          />
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
         </Routes>
       </MemoryRouter>,
     );
 
     await screen.findByRole("heading", { name: /条待审核关系/ });
-    expect(screen.getByRole("button", { name: "要求补充证据" })).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("审核理由"),
-      "还需要同一期间的反证和实际经营数据。",
-    );
-    await user.click(screen.getByRole("button", { name: "要求补充证据" }));
+    const reason = screen.getByLabelText("审核理由");
+    await user.type(reason, "原文口径仍需人工确认。");
+    await user.click(screen.getByRole("button", { name: "确认采纳" }));
 
-    expect(await screen.findByText("当前没有待审核候选。")).toBeVisible();
+    expect(
+      await screen.findByText("提交审核决定失败；候选未被自动采纳。请刷新后重试。"),
+    ).toBeVisible();
+    expect(reason).toHaveValue("原文口径仍需人工确认。");
+    expect(screen.getByTestId("case-location")).toHaveTextContent(
+      "/events/event-tsm/review?client=mock",
+    );
+  });
+
+  it("ignores an invalid workflow notice route state", async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[{
+          pathname: "/events/event-tsm",
+          state: { workflowNotice: 42 },
+        }]}
+      >
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "尚不能下结论：系统正在核验不同解释及其反证。",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("does not expose a dead original-source action when an extracted claim has no web source URL", async () => {

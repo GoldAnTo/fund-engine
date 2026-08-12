@@ -147,6 +147,20 @@ const EVENT_STATUS_LABEL: Record<EventResearchListItem["status"], string> = {
   exhausted: "当前范围已穷尽",
 };
 
+type EvidenceReviewOutcome = "confirmed" | "needs_more_evidence" | "rejected";
+
+const EVIDENCE_REVIEW_NOTICE: Record<EvidenceReviewOutcome, string> = {
+  confirmed: "证据已采纳，系统已生成待复核的结论草案。",
+  needs_more_evidence: "补证要求已记录，系统将按冻结范围继续处理。",
+  rejected: "候选已驳回，请调整研究范围或补充来源。",
+};
+
+function workflowNoticeFromState(state: unknown): string | null {
+  if (!state || typeof state !== "object") return null;
+  const notice = (state as { workflowNotice?: unknown }).workflowNotice;
+  return typeof notice === "string" ? notice : null;
+}
+
 function eventUpdatedLabel(updatedAt: string): string {
   const value = new Date(updatedAt);
   if (Number.isNaN(value.getTime())) return "更新时间未知";
@@ -1658,11 +1672,17 @@ function SupplementRecovery({
 }
 
 export function CaseConclusionPage() {
+  const location = useLocation();
+  const workflowNotice = workflowNoticeFromState(location.state);
   return (
     <CaseFrame>
       {(data, caseId) => {
         const action = eventActionPresentation(data, caseId);
-        return <section className="ros-case-columns">
+        return <>
+          {workflowNotice && (
+            <p className="ros-success" role="status">{workflowNotice}</p>
+          )}
+          <section className="ros-case-columns">
           <div>
             <article className="ros-panel ros-panel--conclusion">
               <p className="ros-eyebrow">
@@ -1729,7 +1749,8 @@ export function CaseConclusionPage() {
             </section>
             <CaseRelationRail caseId={caseId} />
           </aside>
-        </section>;
+          </section>
+        </>;
       }}
     </CaseFrame>
   );
@@ -2055,6 +2076,8 @@ export function CaseReviewPage() {
   );
 }
 function ReviewContent({ caseId }: { caseId: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [queue, setQueue] = useState<Awaited<
     ReturnType<EventResearchClient["getEventReviewQueue"]>
   > | null>(null);
@@ -2098,6 +2121,12 @@ function ReviewContent({ caseId }: { caseId: string }) {
     );
   const actionable = queue.items.filter((item) => item.canAccept);
   const blocked = queue.items.filter((item) => !item.canAccept);
+  function handleDecided(outcome: EvidenceReviewOutcome) {
+    window.dispatchEvent(new Event("research-os-workflow-refresh"));
+    navigate(`/events/${caseId}${location.search}`, {
+      state: { workflowNotice: EVIDENCE_REVIEW_NOTICE[outcome] },
+    });
+  }
   return (
     <section className="ros-review-workbench">
       <header className="ros-section-heading">
@@ -2113,7 +2142,7 @@ function ReviewContent({ caseId }: { caseId: string }) {
         actionable.map((item) => (
           <ReviewItem
             item={item}
-            onDecided={() => setReload((value) => value + 1)}
+            onDecided={handleDecided}
             key={item.proposalId}
           />
         ))
@@ -2430,13 +2459,13 @@ function ReviewItem({
   item: Awaited<
     ReturnType<EventResearchClient["getEventReviewQueue"]>
   >["items"][number];
-  onDecided: () => void;
+  onDecided: (outcome: EvidenceReviewOutcome) => void;
 }) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function decide(
-    outcome: "confirmed" | "rejected" | "needs_more_evidence",
+    outcome: EvidenceReviewOutcome,
   ) {
     if (!reason.trim()) return;
     setSubmitting(true);
@@ -2448,7 +2477,7 @@ function ReviewItem({
         reviewer_id: "human:researcher",
         expected_version: item.proposalVersion,
       });
-      onDecided();
+      onDecided(outcome);
     } catch {
       setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
     } finally {
