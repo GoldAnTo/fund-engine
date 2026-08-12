@@ -71,24 +71,36 @@ class AssessmentGenerator:
     ) -> AIAssessment | None:
         started_at = datetime.now(timezone.utc)
         repo = ResearchRepository(session)
-        assessment_service = AssessmentService(repo)
-
-        thesis = session.get(Thesis, thesis_id)
-        if thesis is None:
-            raise ValueError(f"thesis {thesis_id} not found")
-        initial_gate = ResearchProtocolService(session).check_researchability(thesis_id)
-        if thesis.research_protocol_required and initial_gate.status == "blocked":
-            raise ValidationError(
-                f"researchability gate blocked: {', '.join(initial_gate.reason_codes)}"
-            )
-
+        assessment_service = AssessmentService(repo, session)
         input_ref = {
             "thesis_id": str(thesis_id),
             "cutoff": cutoff.isoformat(),
-            "initial_protocol_status": initial_gate.status,
+            "initial_protocol_status": None,
+            "research_protocol_status": None,
+            "effective_binding_id": None,
+            "mechanism_template_version_id": None,
+            "verification_rule_ids": None,
+            "evidence_link_ids": None,
+            "link_count": None,
         }
 
         try:
+            thesis = session.get(Thesis, thesis_id)
+            if thesis is None:
+                raise ValueError(f"thesis {thesis_id} not found")
+            initial_gate = ResearchProtocolService(session).check_researchability(
+                thesis_id
+            )
+            input_ref["initial_protocol_status"] = (
+                initial_gate.status if thesis.research_protocol_required else None
+            )
+            if thesis.research_protocol_required:
+                self._capture_protocol_footprint(input_ref, initial_gate)
+            if thesis.research_protocol_required and initial_gate.status == "blocked":
+                raise ValidationError(
+                    "researchability gate blocked: "
+                    + ", ".join(initial_gate.reason_codes)
+                )
             # Compliance BEFORE persistence: gather the visible links and
             # run the model + non-investment-advice gate first.  Only when
             # the text passes do we freeze the snapshot and append the
@@ -96,6 +108,11 @@ class AssessmentGenerator:
             # the failed AIRun recorded below (the ledger's immutability
             # guard forbids deleting a half-frozen snapshot).
             links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
+            prompt_link_ids = [link.id for link in links]
+            input_ref["evidence_link_ids"] = [
+                str(link_id) for link_id in prompt_link_ids
+            ]
+            input_ref["link_count"] = len(prompt_link_ids)
             links_data: list[dict] = []
             for link in links:
                 statement = session.get(SourceStatement, link.source_statement_id)
@@ -148,21 +165,14 @@ class AssessmentGenerator:
             final_gate = ResearchProtocolService(session).check_researchability(
                 thesis_id
             )
-            input_ref["final_protocol_status"] = final_gate.status
-            input_ref["effective_binding_id"] = (
-                str(final_gate.effective_binding_id)
-                if final_gate.effective_binding_id is not None
-                else None
-            )
-            input_ref["mechanism_template_version_id"] = (
-                str(final_gate.mechanism_template_version_id)
-                if final_gate.mechanism_template_version_id is not None
-                else None
+            input_ref["final_protocol_status"] = (
+                final_gate.status if thesis.research_protocol_required else None
             )
             frozen_rule_ids = sorted(
                 str(rule_id) for rule_id in final_gate.verification_rule_ids
             )
-            input_ref["verification_rule_ids"] = frozen_rule_ids
+            if thesis.research_protocol_required:
+                self._capture_protocol_footprint(input_ref, final_gate)
             if thesis.research_protocol_required and final_gate.status == "blocked":
                 raise ValidationError(
                     "researchability gate blocked: "
@@ -191,7 +201,9 @@ class AssessmentGenerator:
                 gaps.append("insufficient_primary_metrics")
 
             snapshot = assessment_service.freeze_snapshot(
-                thesis_id, cutoff=cutoff
+                thesis_id,
+                cutoff=cutoff,
+                evidence_link_ids=prompt_link_ids,
             )
             assessment = assessment_service.create_ai_assessment(
                 snapshot.id,
@@ -217,7 +229,6 @@ class AssessmentGenerator:
             )
 
             input_ref["snapshot_id"] = str(snapshot.id)
-            input_ref["link_count"] = len(links)
             summary = f"conclusion={conclusion}, links={len(links)}"
             if rewritten:
                 summary += ", rewritten_for_compliance"
@@ -234,6 +245,11 @@ class AssessmentGenerator:
             return assessment
 
         except Exception as exc:
+            # A failed assessment is a separate clean unit of work: discard
+            # every partial immutable domain write, then append exactly one
+            # durable audit row for the caller to commit with its failure
+            # handling. Worker task state was committed before provider work.
+            session.rollback()
             record_run(
                 session,
                 kind="assess",
@@ -246,6 +262,24 @@ class AssessmentGenerator:
                 started_at=started_at,
             )
             raise
+
+    @staticmethod
+    def _capture_protocol_footprint(input_ref: dict, gate) -> None:
+        """Attach one strict gate footprint to the mutable AIRun input."""
+        input_ref["research_protocol_status"] = gate.status
+        input_ref["effective_binding_id"] = (
+            str(gate.effective_binding_id)
+            if gate.effective_binding_id is not None
+            else None
+        )
+        input_ref["mechanism_template_version_id"] = (
+            str(gate.mechanism_template_version_id)
+            if gate.mechanism_template_version_id is not None
+            else None
+        )
+        input_ref["verification_rule_ids"] = sorted(
+            str(rule_id) for rule_id in gate.verification_rule_ids
+        )
 
     # ------------------------------------------------------------------ compliance
 

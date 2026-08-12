@@ -342,6 +342,11 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
     event.listen(engine, "before_cursor_execute", observe_case_lock)
 
     def assess() -> None:
+        from unittest.mock import patch
+
+        from app.api.v1.commands.engine import rerun_assessment
+        from app.errors import ValidationFailedError
+
         assessing = SessionLocal()
         assessment_thread_id.append(get_ident())
         client = LLMClient(model_version="mock-test", mock=True)
@@ -356,15 +361,14 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
 
         try:
             client.chat_json = provider
-            AssessmentGenerator(client).generate(
-                thesis_id,
-                datetime(2026, 12, 31, tzinfo=timezone.utc),
-                assessing,
-            )
-            assessing.commit()
+            with patch(
+                "app.api.v1.commands.engine.LLMClient.from_env",
+                return_value=client,
+            ):
+                rerun_assessment(thesis_id, db=assessing)
         except BaseException as exc:
             errors.append(exc)
-            assessing.commit()
+            assert isinstance(exc, ValidationFailedError)
         finally:
             assessing.close()
             assessment_finished.set()
@@ -381,7 +385,6 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
 
     assert not thread.is_alive()
     assert len(errors) == 1
-    assert isinstance(errors[0], ValidationError)
     assert "researchability gate blocked" in str(errors[0])
     with SessionLocal() as check:
         assert check.scalar(
@@ -411,6 +414,8 @@ def test_blocked_protocol_thesis_never_freezes_an_assessment_snapshot(session) -
     session.flush()
 
     with pytest.raises(ValidationError, match="researchability gate blocked: missing_outcome_binding"):
-        AssessmentGenerator(object()).generate(thesis.id, now, session)
+        AssessmentGenerator(LLMClient(model_version="mock-test", mock=True)).generate(
+            thesis.id, now, session
+        )
 
     assert list(session.scalars(select(EvidenceSnapshot))) == []

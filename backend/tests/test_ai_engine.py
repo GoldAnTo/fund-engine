@@ -32,6 +32,7 @@ from app.models.ledger import (
     ValidationError,
 )
 from app.services.research_protocol import ResearchabilityResult
+from app.repositories.research import ResearchRepository
 from tests.protocol_provenance import seed_protocol_footprint
 
 
@@ -229,6 +230,68 @@ def test_assessment_gen_creates_assessment_and_airun(
     assert run.model_version == "mock-test"
     assert run.prompt_version == ASSESS_PROMPT_VERSION
     assert "conclusion=" in run.output_summary
+    assert run.input_ref["research_protocol_status"] is None
+    assert run.input_ref["initial_protocol_status"] is None
+    assert run.input_ref["final_protocol_status"] is None
+    assert run.input_ref["effective_binding_id"] is None
+    assert run.input_ref["mechanism_template_version_id"] is None
+    assert run.input_ref["verification_rule_ids"] is None
+    assert run.input_ref["evidence_link_ids"] == assessment_service_link_ids(
+        session, assessment.snapshot_id
+    )
+
+
+def assessment_service_link_ids(session, snapshot_id):
+    snapshot = session.get(EvidenceSnapshot, snapshot_id)
+    assert snapshot is not None
+    return snapshot.evidence_link_ids
+
+
+def test_assessment_snapshot_contains_exact_prompt_evidence_when_link_arrives_during_provider(
+    engine, session, research_service, thesis, statement
+):
+    original = research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="original prompt evidence",
+        scope={"segment": "DC"},
+    )
+    session.commit()
+    client = LLMClient(model_version="mock-test", mock=True)
+    inserted_ids: list[uuid.UUID] = []
+
+    def provider(*_args, **_kwargs):
+        from sqlalchemy.orm import Session
+
+        with Session(engine) as concurrent:
+            added = ResearchRepository(concurrent).link_evidence(
+                thesis_id=thesis.id,
+                source_statement_id=statement.id,
+                role="supports",
+                reason="published while provider runs",
+                scope={"segment": "late"},
+                available_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            inserted_ids.append(added.id)
+            concurrent.commit()
+        return {
+            "conclusion": "supported",
+            "rationale": "Only the prompt evidence was assessed.",
+            "gaps": [],
+        }
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
+    run = session.scalar(select(AIRun).where(AIRun.kind == "assess"))
+    assert inserted_ids
+    assert snapshot.evidence_link_ids == [str(original.id)]
+    assert run.input_ref["evidence_link_ids"] == [str(original.id)]
+    assert run.input_ref["link_count"] == 1
 
 
 def test_assessment_releases_read_transaction_before_provider(
@@ -625,6 +688,38 @@ def test_ai_run_records_failure_on_assessment_error(
     assert "LLM error" in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == ASSESS_PROMPT_VERSION
+
+
+def test_assessment_failure_rolls_back_partial_snapshot_before_failed_audit(
+    session, research_service, thesis, statement
+):
+    research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="orders rose",
+        scope={"segment": "DC"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+
+    with (
+        patch(
+            "app.services.assessment.AssessmentService.create_ai_assessment",
+            side_effect=ValidationError("assessment persistence rejected"),
+        ),
+        pytest.raises(ValidationError, match="assessment persistence rejected"),
+    ):
+        AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert session.scalar(
+        select(EvidenceSnapshot.id).where(EvidenceSnapshot.thesis_id == thesis.id)
+    ) is None
+    assert session.scalar(select(AIAssessment.id)) is None
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
+    assert len(runs) == 1
+    assert runs[0].status == "failed"
 
 
 # ---------------------------------------------------------------------------

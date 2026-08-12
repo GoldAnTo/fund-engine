@@ -17,6 +17,7 @@ from app.models.ledger import (
     CaseTenantAdmission,
     AtomicClaimCandidate,
     AIAssessment,
+    AIRun,
     EvidenceSnapshot,
 )
 from app.models.operational import ResearchRun, ResearchTask, TaskItem
@@ -217,6 +218,102 @@ def test_tasks_created(session):
     assert any(t.task_type == "contradict" for t in tasks)
     assert any(t.task_type == "result" for t in tasks)
     assert any(t.task_type == "alternative" for t in tasks)
+
+
+def test_worker_commits_final_protocol_block_audit_in_clean_transaction(
+    session, monkeypatch
+):
+    from app.ai.client import LLMClient
+    from app.services.research_protocol import ResearchabilityResult
+    from tests.protocol_provenance import seed_protocol_footprint
+
+    case = ResearchCase(
+        title="worker final protocol block",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="Protocol becomes blocked while assessment provider runs",
+        research_protocol_required=True,
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.flush()
+    footprint = seed_protocol_footprint(session, thesis, status="ready")
+    ready = ResearchabilityResult(
+        "ready",
+        [],
+        footprint.binding.id,
+        "assess",
+        footprint.template.id,
+        tuple(rule.id for rule in footprint.rules),
+    )
+    blocked = ResearchabilityResult(
+        "blocked",
+        ["missing_verification_rule"],
+        footprint.binding.id,
+        "complete protocol",
+        footprint.template.id,
+        (),
+    )
+    gates = iter([ready, blocked])
+    monkeypatch.setattr(
+        "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+        lambda _service, _thesis_id: next(gates),
+    )
+    repo = AutoResearchRepository(session)
+    run = repo.create_run(
+        research_case_id=case.id,
+        max_rounds=1,
+        budget=1,
+        scope_thesis_ids=[str(thesis.id)],
+    )
+    task = repo.create_task(
+        run_id=run.id,
+        research_case_id=case.id,
+        thesis_id=thesis.id,
+        task_type="result",
+        query="form a conclusion",
+    )
+    session.commit()
+    run_id, task_id, thesis_id = run.id, task.id, thesis.id
+    service = AutoResearchService(session)
+    service._client = LLMClient(model_version="mock-worker-audit", mock=True)
+
+    service.execute(run)
+
+    with Session(session.get_bind()) as check:
+        persisted_task = check.get(ResearchTask, task_id)
+        assert persisted_task is not None and persisted_task.status == "failed"
+        assert check.scalar(
+            select(func.count()).select_from(EvidenceSnapshot).where(
+                EvidenceSnapshot.thesis_id == thesis_id
+            )
+        ) == 0
+        assert check.scalar(
+            select(func.count())
+            .select_from(AIAssessment)
+            .join(EvidenceSnapshot, AIAssessment.snapshot_id == EvidenceSnapshot.id)
+            .where(EvidenceSnapshot.thesis_id == thesis_id)
+        ) == 0
+        runs = list(
+            check.scalars(
+                select(AIRun)
+                .where(AIRun.kind == "assess", AIRun.status == "failed")
+                .where(
+                    AIRun.input_ref["thesis_id"].as_string() == str(thesis_id)
+                )
+            )
+        )
+        persisted_run = check.get(ResearchRun, run_id)
+        assert persisted_run is not None and persisted_run.status == "failed"
+    assert len(runs) == 1
+    assert runs[0].input_ref["final_protocol_status"] == "blocked"
 
 
 def test_auto_research_stops_before_propose_or_assess_when_atomic_claims_await_review(session):

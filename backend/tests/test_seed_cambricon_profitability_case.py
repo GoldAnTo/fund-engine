@@ -366,7 +366,7 @@ def test_seed_is_idempotent_after_legitimate_later_human_reviews(session):
             reason="后续人工审核，不改变种子基础账本",
             reviewer="test-reviewer",
         )
-    AssessmentService(ResearchRepository(session)).review(
+    AssessmentService(ResearchRepository(session), session).review(
         result.assessment_id,
         outcome="confirmed",
         conclusion="supported",

@@ -213,7 +213,7 @@ def _get_or_create_case(session: Session, research: ResearchService) -> Research
 def seed(session: Session) -> str:
     research_repo = ResearchRepository(session)
     research = ResearchService(research_repo)
-    assessment = AssessmentService(research_repo)
+    assessment = AssessmentService(research_repo, session)
     spans = _freeze_sources(session)
     case = _get_or_create_case(session, research)
 

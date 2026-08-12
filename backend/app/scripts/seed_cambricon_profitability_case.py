@@ -425,7 +425,7 @@ def seed(session: Session) -> SeedResult:
     document_service = DocumentService(document_repo)
     research_repo = ResearchRepository(session)
     research_service = ResearchService(research_repo)
-    assessment_service = AssessmentService(research_repo)
+    assessment_service = AssessmentService(research_repo, session)
     instruments = InstrumentRepository(session)
     spans = _insert_documents(document_repo, document_service, data)
 

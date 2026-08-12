@@ -25,7 +25,12 @@ from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
 from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, Thesis
+from app.models.ledger import (
+    CaseDocumentVersion,
+    DocumentVersion,
+    Thesis,
+    ValidationError,
+)
 from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 from app.services.jobs import JobService
@@ -142,12 +147,20 @@ def rerun_assessment(
             thesis_id, datetime.now(timezone.utc), db
         )
     except ValueError as exc:
+        commit_or_rollback(db)
         raise NotFoundError(str(exc)) from exc
-    except ComplianceRefusedError as exc:
-        # The generator already deleted the half-frozen snapshot; persist
-        # ONLY the failed AIRun (audit trail for the refusal), then 422.
+    except (ComplianceRefusedError, ValidationError) as exc:
+        # The generator rolled back every partial domain write and appended
+        # one failed AIRun in a clean transaction. Persist that audit before
+        # translating the domain refusal to a 422 response.
         commit_or_rollback(db)
         raise ValidationFailedError(str(exc)) from exc
+    except Exception:
+        # Unexpected provider/runtime failures use the same generator-owned
+        # clean failure transaction. Preserve its audit before propagating
+        # the 500-class error to the global handler.
+        commit_or_rollback(db)
+        raise
     commit_or_rollback(db)
     return RerunResponse(
         thesis_id=str(thesis_id),

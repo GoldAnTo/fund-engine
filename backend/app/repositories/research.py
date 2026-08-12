@@ -37,10 +37,6 @@ class ResearchRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    @property
-    def session(self) -> Session:
-        return self._session
-
     def add_case(
         self,
         *,
@@ -383,6 +379,38 @@ class ResearchRepository:
                 .order_by(EvidenceLink.available_at)
             )
         )
+
+    def visible_links_by_ids(
+        self,
+        *,
+        thesis_id: uuid.UUID,
+        cutoff: datetime,
+        evidence_link_ids: list[uuid.UUID],
+    ) -> list[EvidenceLink]:
+        """Return the captured prompt links in caller order or fail closed."""
+        if len(evidence_link_ids) != len(set(evidence_link_ids)):
+            raise ValueError("captured evidence link IDs must be unique")
+        if not evidence_link_ids:
+            return []
+        links = {
+            link.id: link
+            for link in self._session.scalars(
+                select(EvidenceLink)
+                .where(EvidenceLink.id.in_(evidence_link_ids))
+                .where(EvidenceLink.thesis_id == thesis_id)
+                .where(EvidenceLink.available_at <= cutoff)
+                .where(EvidenceLink.created_at <= cutoff)
+            )
+        }
+        ordered: list[EvidenceLink] = []
+        for link_id in evidence_link_ids:
+            link = links.get(link_id)
+            if link is None:
+                raise ValueError(
+                    "captured evidence link is not visible for the snapshot thesis and cutoff"
+                )
+            ordered.append(link)
+        return ordered
 
     def insert_snapshot(
         self,

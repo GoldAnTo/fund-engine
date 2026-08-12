@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from sqlalchemy.orm import Session
+
 from app.models.ledger import (
     AIAssessment,
     EvidenceSnapshot,
@@ -17,9 +19,7 @@ from app.services.research_protocol import ResearchProtocolService
 _ASSESSMENT_STATUSES = frozenset(
     {"supported", "contradicted", "insufficient_evidence"}
 )
-_RESEARCH_PROTOCOL_STATUSES = frozenset(
-    {"blocked", "single_metric_monitoring", "ready"}
-)
+_RESEARCH_PROTOCOL_STATUSES = frozenset({"single_metric_monitoring", "ready"})
 
 
 class AssessmentService:
@@ -29,16 +29,31 @@ class AssessmentService:
     ReviewDecision that references the original assessment without overwriting it.
     """
 
-    def __init__(self, repository: ResearchRepository) -> None:
+    def __init__(self, repository: ResearchRepository, session: Session) -> None:
         self._repo = repository
+        self._session = session
 
     def freeze_snapshot(
         self,
         thesis_id: uuid.UUID,
         *,
         cutoff: datetime,
+        evidence_link_ids: list[uuid.UUID | str] | None = None,
     ) -> EvidenceSnapshot:
-        links = self._repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
+        if evidence_link_ids is None:
+            links = self._repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
+        else:
+            try:
+                captured_ids = [
+                    uuid.UUID(str(link_id)) for link_id in evidence_link_ids
+                ]
+                links = self._repo.visible_links_by_ids(
+                    thesis_id=thesis_id,
+                    cutoff=cutoff,
+                    evidence_link_ids=captured_ids,
+                )
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError(str(exc)) from exc
         return self._repo.insert_snapshot(
             thesis_id=thesis_id,
             cutoff=cutoff,
@@ -57,7 +72,7 @@ class AssessmentService:
         mechanism_template_version_id: uuid.UUID | None = None,
         verification_rule_ids: list[uuid.UUID | str] | None = None,
     ) -> AIAssessment:
-        session = self._repo.session
+        session = self._session
         snapshot = session.get(EvidenceSnapshot, snapshot_id)
         if snapshot is None:
             raise ValidationError("evidence snapshot not found")
@@ -159,23 +174,31 @@ class AssessmentService:
         effective_conclusion = conclusion or (
             assessment.conclusion if assessment is not None else None
         )
+        if assessment is not None and effective_conclusion in {
+            "supported",
+            "contradicted",
+        }:
+            if assessment.research_protocol_status == "single_metric_monitoring":
+                raise ValidationError(
+                    "strict single-metric assessments require an "
+                    "insufficient_evidence review conclusion"
+                )
+            if assessment.research_protocol_status == "blocked":
+                raise ValidationError(
+                    "blocked protocol assessments require a non-directional "
+                    "review conclusion"
+                )
         if (
             assessment is not None
             and effective_conclusion in {"supported", "contradicted"}
-            and assessment.research_protocol_status
-            == "single_metric_monitoring"
+            and assessment.research_protocol_status is None
         ):
-            raise ValidationError(
-                "strict single-metric assessments require an insufficient_evidence review conclusion"
-            )
-        if (
-            assessment is not None
-            and effective_conclusion in {"supported", "contradicted"}
-            and assessment.research_protocol_status == "blocked"
-        ):
-            raise ValidationError(
-                "blocked protocol assessments require a non-directional review conclusion"
-            )
+            thesis = self._repo.assessment_thesis(assessment_id)
+            if thesis is not None and thesis.research_protocol_required:
+                raise ValidationError(
+                    "strict historical assessment is missing protocol provenance; "
+                    "directional review conclusions are not allowed"
+                )
         return self._repo.insert_review(
             ai_assessment_id=assessment_id,
             outcome=outcome,

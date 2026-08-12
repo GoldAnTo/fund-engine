@@ -378,7 +378,7 @@ def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
         created_by="tester",
         research_protocol_required=True,
     )
-    service = AssessmentService(repo)
+    service = AssessmentService(repo, cmd_seeded)
     snapshot = service.freeze_snapshot(
         thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc)
     )

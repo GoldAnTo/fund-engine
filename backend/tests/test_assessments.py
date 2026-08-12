@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
+import uuid
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
-from app.models.ledger import Thesis, ValidationError
+from app.models.ledger import AIAssessment, Thesis, ValidationError
 from app.services.research_protocol import ResearchProtocolService
 from tests.protocol_provenance import seed_protocol_footprint
 
@@ -44,6 +48,57 @@ def test_ai_assessment_is_displayed_as_provisional(assessment_service, snapshot)
         snapshot.id, conclusion="supported", rationale="x", gaps=["gap1"]
     )
     assert assessment.displayed_as_provisional is True
+
+
+def test_freeze_snapshot_revalidates_captured_link_thesis(
+    assessment_service,
+    research_service,
+    research_case,
+    thesis,
+    statement,
+):
+    other_thesis = research_service.add_thesis(
+        research_case.id,
+        statement="Other thesis must not lend prompt evidence",
+        created_by="tester",
+    )
+    other_link = research_service.link_evidence(
+        other_thesis.id,
+        statement.id,
+        role="supports",
+        reason="belongs to the other thesis",
+        scope={"segment": "other"},
+    )
+
+    with pytest.raises(ValidationError, match="not visible for the snapshot thesis"):
+        assessment_service.freeze_snapshot(
+            thesis.id,
+            cutoff=datetime(2027, 12, 31, tzinfo=timezone.utc),
+            evidence_link_ids=[other_link.id],
+        )
+
+
+def test_freeze_snapshot_revalidates_captured_link_cutoff(
+    assessment_service,
+    research_service,
+    thesis,
+    statement,
+):
+    future_link = research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="not yet visible at the original prompt cutoff",
+        scope={"segment": "future"},
+        available_at=datetime(2027, 1, 1, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(ValidationError, match="not visible for the snapshot thesis"):
+        assessment_service.freeze_snapshot(
+            thesis.id,
+            cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc),
+            evidence_link_ids=[future_link.id],
+        )
 
 
 def test_ai_assessment_freezes_typed_research_protocol_provenance(
@@ -237,7 +292,7 @@ def test_human_review_does_not_change_ai_assessment(assessment_service, ai_asses
 
 
 @pytest.mark.parametrize("outcome", ["confirmed", "modified", "rejected"])
-def test_legacy_null_provenance_ignores_single_metric_gap_prose(
+def test_historical_strict_null_provenance_fails_closed_for_directional_review(
     assessment_service, research_service, research_case, outcome
 ):
     strict_thesis = research_service.add_thesis(
@@ -257,14 +312,63 @@ def test_legacy_null_provenance_ignores_single_metric_gap_prose(
         gaps=["insufficient_primary_metrics"],
     )
 
+    with pytest.raises(ValidationError, match="missing protocol provenance"):
+        assessment_service.review(
+            assessment.id,
+            outcome=outcome,
+            conclusion="supported",
+            reason="strict historical rows fail closed without typed provenance",
+        )
+
+
+def test_historical_non_strict_null_provenance_ignores_gap_prose(
+    assessment_service, snapshot
+):
+    assessment = assessment_service._repo.insert_ai_assessment(
+        snapshot_id=snapshot.id,
+        conclusion="supported",
+        rationale="Legacy model prose is not an authorization signal.",
+        gaps=["insufficient_primary_metrics"],
+    )
+
     review = assessment_service.review(
         assessment.id,
-        outcome=outcome,
+        outcome="confirmed",
         conclusion="supported",
-        reason="legacy compatibility ignores model gap prose",
+        reason="non-strict legacy compatibility is thesis-derived",
     )
 
     assert review.conclusion == "supported"
+
+
+def test_historical_strict_null_provenance_allows_insufficient_evidence(
+    assessment_service, research_service, research_case
+):
+    strict_thesis = research_service.add_thesis(
+        research_case.id,
+        statement="A historical strict assessment without typed provenance",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    snapshot = assessment_service.freeze_snapshot(
+        strict_thesis.id,
+        cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc),
+    )
+    assessment = assessment_service._repo.insert_ai_assessment(
+        snapshot_id=snapshot.id,
+        conclusion="insufficient_evidence",
+        rationale="Historical strict assessment remains non-directional.",
+        gaps=[],
+    )
+
+    review = assessment_service.review(
+        assessment.id,
+        outcome="confirmed",
+        conclusion="insufficient_evidence",
+        reason="non-directional historical review is safe",
+    )
+
+    assert review.conclusion == "insufficient_evidence"
 
 
 def test_non_strict_review_preserves_legacy_directional_conclusion(
@@ -343,16 +447,20 @@ def test_typed_single_metric_review_rejects_directional_conclusion_for_any_outco
 
 
 def test_typed_single_metric_review_rejects_null_that_falls_back_to_directional_ai_result(
-    assessment_service, snapshot
+    assessment_service, monkeypatch
 ):
     # Simulate a malformed imported row so null review semantics cannot reopen
-    # a directional conclusion. The public creation service rejects this row.
-    assessment = assessment_service._repo.insert_ai_assessment(
-        snapshot_id=snapshot.id,
+    # a directional conclusion. Current database invariants reject this row,
+    # so the review authorization is tested at its repository boundary.
+    assessment = SimpleNamespace(
+        id=uuid.uuid4(),
         conclusion="contradicted",
-        rationale="Historical malformed directional draft.",
-        gaps=[],
         research_protocol_status="single_metric_monitoring",
+    )
+    monkeypatch.setattr(
+        assessment_service._repo,
+        "get_ai_assessment",
+        lambda assessment_id: assessment if assessment_id == assessment.id else None,
     )
 
     with pytest.raises(ValidationError, match="insufficient_evidence"):
@@ -394,14 +502,17 @@ def test_typed_single_metric_review_permits_insufficient_evidence(
 
 
 def test_corrupt_typed_blocked_provenance_fails_closed_for_directional_review(
-    assessment_service, snapshot
+    assessment_service, monkeypatch
 ):
-    assessment = assessment_service._repo.insert_ai_assessment(
-        snapshot_id=snapshot.id,
+    assessment = SimpleNamespace(
+        id=uuid.uuid4(),
         conclusion="supported",
-        rationale="Corrupt legacy typed row.",
-        gaps=[],
         research_protocol_status="blocked",
+    )
+    monkeypatch.setattr(
+        assessment_service._repo,
+        "get_ai_assessment",
+        lambda assessment_id: assessment if assessment_id == assessment.id else None,
     )
 
     with pytest.raises(ValidationError, match="non-directional"):
@@ -411,3 +522,236 @@ def test_corrupt_typed_blocked_provenance_fails_closed_for_directional_review(
             conclusion="supported",
             reason="Fail closed for a corrupt typed blocked row.",
         )
+
+
+def _bypass_assessment(snapshot, **overrides):
+    values = {
+        "snapshot_id": snapshot.id,
+        "conclusion": "insufficient_evidence",
+        "rationale": "database invariant probe",
+        "gaps": [],
+        "displayed_as_provisional": True,
+        "creator_type": "ai",
+        "created_at": datetime.now(timezone.utc),
+    }
+    values.update(overrides)
+    return AIAssessment(**values)
+
+
+def test_create_all_installs_protocol_scope_trigger_once(session):
+    if session.get_bind().dialect.name != "sqlite":
+        pytest.skip("SQLite create_all trigger assertion")
+    assert session.execute(
+        text(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'trigger' "
+            "AND name = 'trg_ai_assessments_protocol_scope'"
+        )
+    ).scalar_one() == 1
+
+
+def test_assessment_service_does_not_require_repository_session_escape_hatch(
+    assessment_service
+):
+    assert not hasattr(assessment_service._repo, "session")
+
+
+def test_database_rejects_partial_and_blocked_typed_protocol_provenance(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Database protocol check constraint",
+    )
+    footprint, protocol = _protocol_kwargs(session, snapshot)
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(snapshot, research_protocol_status="ready")
+        )
+        session.flush()
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status=None,
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                snapshot,
+                research_protocol_status="blocked",
+                effective_binding_id=protocol["effective_binding_id"],
+                mechanism_template_version_id=protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id) for rule_id in protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_malformed_protocol_rule_json(
+    assessment_service, research_service, research_case, session
+):
+    snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Malformed database protocol rules",
+    )
+    _, protocol = _protocol_kwargs(session, snapshot, status="ready")
+    base = {
+        "research_protocol_status": "ready",
+        "effective_binding_id": protocol["effective_binding_id"],
+        "mechanism_template_version_id": protocol[
+            "mechanism_template_version_id"
+        ],
+    }
+
+    for malformed in ({"rule": "not-an-array"}, ["not-a-uuid"]):
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.add(
+                _bypass_assessment(
+                    snapshot,
+                    verification_rule_ids=malformed,
+                    **base,
+                )
+            )
+            session.flush()
+
+
+def test_database_rejects_non_current_case_template(
+    assessment_service, research_service, research_case, session
+):
+    first_snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="First selected mechanism template",
+    )
+    _, first_protocol = _protocol_kwargs(session, first_snapshot, status="ready")
+    second_snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Later selected mechanism template",
+    )
+    _protocol_kwargs(session, second_snapshot, status="ready")
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _bypass_assessment(
+                first_snapshot,
+                research_protocol_status="ready",
+                effective_binding_id=first_protocol["effective_binding_id"],
+                mechanism_template_version_id=first_protocol[
+                    "mechanism_template_version_id"
+                ],
+                verification_rule_ids=[
+                    str(rule_id)
+                    for rule_id in first_protocol["verification_rule_ids"]
+                ],
+            )
+        )
+        session.flush()
+
+
+def test_database_rejects_cross_scope_assessment_protocol_ids(
+    assessment_service, research_service, research_case, session
+):
+    first_snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="First database protocol scope",
+    )
+    first, first_protocol = _protocol_kwargs(
+        session, first_snapshot, status="ready"
+    )
+    other_case = research_service.add_case(
+        title="Other protocol case", industry_topic="test", created_by="tester"
+    )
+    other_snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        other_case,
+        statement="Other database protocol scope",
+    )
+    other, other_protocol = _protocol_kwargs(
+        session, other_snapshot, status="ready"
+    )
+
+    invalid_footprints = [
+        {
+            **first_protocol,
+            "effective_binding_id": other.binding.id,
+        },
+        {
+            **first_protocol,
+            "mechanism_template_version_id": other.template.id,
+        },
+        {
+            **first_protocol,
+            "verification_rule_ids": [rule.id for rule in other.rules],
+        },
+    ]
+    for invalid in invalid_footprints:
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.add(
+                _bypass_assessment(
+                    first_snapshot,
+                    research_protocol_status="ready",
+                    verification_rule_ids=[
+                        str(rule_id) for rule_id in invalid["verification_rule_ids"]
+                    ],
+                    effective_binding_id=invalid["effective_binding_id"],
+                    mechanism_template_version_id=invalid[
+                        "mechanism_template_version_id"
+                    ],
+                )
+            )
+            session.flush()
+
+
+def test_database_accepts_all_null_legacy_and_valid_typed_footprints(
+    assessment_service, research_service, research_case, snapshot, session
+):
+    legacy = _bypass_assessment(snapshot)
+    session.add(legacy)
+    session.flush()
+
+    strict_snapshot = _strict_snapshot(
+        assessment_service,
+        research_service,
+        research_case,
+        statement="Valid database protocol scope",
+    )
+    _, protocol = _protocol_kwargs(session, strict_snapshot, status="ready")
+    valid = _bypass_assessment(
+        strict_snapshot,
+        research_protocol_status="ready",
+        effective_binding_id=protocol["effective_binding_id"],
+        mechanism_template_version_id=protocol["mechanism_template_version_id"],
+        verification_rule_ids=[
+            str(rule_id) for rule_id in protocol["verification_rule_ids"]
+        ],
+    )
+    session.add(valid)
+    session.flush()
+
+    assert legacy.research_protocol_status is None
+    assert valid.research_protocol_status == "ready"

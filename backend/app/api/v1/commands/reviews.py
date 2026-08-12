@@ -86,7 +86,7 @@ def review_assessment(
     if repo.get_ai_assessment(assessment_id) is None:
         raise NotFoundError(f"assessment {assessment_id} not found")
     review = translate_validation(
-        AssessmentService(repo).review,
+        AssessmentService(repo, db).review,
         assessment_id,
         outcome=payload.outcome,
         conclusion=payload.conclusion,
