@@ -3,6 +3,49 @@ import type { components } from "../contracts/v1";
 type Schemas = components["schemas"];
 const baseUrl = (import.meta.env.VITE_RESEARCH_API_URL || "/api/v1").replace(/\/$/, "");
 
+export class ResearchOsRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly requestId?: string,
+  ) {
+    super(message);
+    this.name = "ResearchOsRequestError";
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+async function errorDetails(response: Response): Promise<{
+  message?: string;
+  code?: string;
+  requestId?: string;
+}> {
+  try {
+    const body: unknown = await response.json();
+    const bodyRecord = record(body);
+    const error = record(bodyRecord?.error);
+    return {
+      message: typeof error?.message === "string"
+        ? error.message
+        : typeof bodyRecord?.detail === "string"
+          ? bodyRecord.detail
+          : undefined,
+      code: typeof error?.code === "string" ? error.code : undefined,
+      requestId: typeof error?.request_id === "string"
+        ? error.request_id
+        : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const bearerToken = import.meta.env.VITE_RESEARCH_BEARER_TOKEN?.trim();
   const response = await fetch(`${baseUrl}${path}`, {
@@ -14,7 +57,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  if (!response.ok) throw new Error(`Research OS request failed (${response.status})`);
+  if (!response.ok) {
+    const details = await errorDetails(response);
+    throw new ResearchOsRequestError(
+      details.message ?? `Research OS request failed (${response.status})`,
+      response.status,
+      details.code,
+      details.requestId ?? response.headers.get("x-request-id") ?? undefined,
+    );
+  }
   return response.json() as Promise<T>;
 }
 

@@ -6,7 +6,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
-import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
+import { ResearchOsRequestError, resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
@@ -1346,6 +1346,43 @@ describe("Research OS event entry", () => {
         selector: ".ros-forecast-verdict strong",
       }),
     ).toBeVisible();
+  });
+
+  it("shows actionable request details when recording an actual observation fails", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "recordActualMetricObservation").mockRejectedValue(
+      new ResearchOsRequestError(
+        "available_at must include a timezone",
+        422,
+        "validation_failed",
+        "req-forecast-1",
+      ),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "历史预测验证" });
+    await user.click(screen.getByRole("button", { name: "登记历史预测验证" }));
+    await user.type(screen.getByLabelText("冻结预测值"), "100");
+    await user.type(screen.getByLabelText("实体标识"), "TSM");
+    await user.type(screen.getByLabelText("单位"), "%");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "已核对研报表格、原文定位和期间口径。");
+    await user.click(screen.getByRole("button", { name: "冻结预测目标" }));
+    await screen.findByText(/已冻结预测目标/);
+    await user.type(screen.getByLabelText("后续实际值"), "80");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "年报实际值与预测的实体、单位和期间一致。");
+    await user.click(screen.getByRole("button", { name: "冻结后续实际值" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "available_at must include a timezone（请求 req-forecast-1）",
+    );
   });
 
   it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {

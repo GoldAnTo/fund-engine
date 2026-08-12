@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resetResearchOsApi, researchOsApi, setResearchOsApi, type MonitorDetail, type ResearchOsApi } from "../app/researchOsApi";
+import { ResearchOsRequestError, resetResearchOsApi, researchOsApi, setResearchOsApi, type MonitorDetail, type ResearchOsApi } from "../app/researchOsApi";
 import { researchClient } from "../data/researchClient";
 
 describe("research OS API selection", () => {
@@ -45,6 +45,53 @@ describe("research OS API selection", () => {
         headers: expect.objectContaining({ Authorization: "Bearer team-token" }),
       }),
     );
+  });
+
+  it("preserves typed V1 error details and falls back to the response request id", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        code: "validation_failed",
+        message: "available_at must include a timezone",
+      },
+    }), {
+      status: 422,
+      headers: { "x-request-id": "req-forecast-1" },
+    })));
+
+    const failure = await researchOsApi.recordActualMetricObservation("event-tsm", {} as never).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ResearchOsRequestError);
+    expect(failure).toMatchObject({
+      status: 422,
+      code: "validation_failed",
+      message: "available_at must include a timezone",
+      requestId: "req-forecast-1",
+    });
+  });
+
+  it("uses safe fallback messages when an error body has no supported string detail", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("not json", { status: 502 }))
+      .mockResolvedValueOnce(new Response("{", { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: [{ msg: "invalid" }] }), { status: 422 })));
+
+    for (const status of [502, 503, 422]) {
+      const failure = await researchOsApi.network().catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        message: `Research OS request failed (${status})`,
+        status,
+      });
+    }
+  });
+
+  it("uses a legacy string detail without rendering object values", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      detail: "Legacy request is invalid",
+    }), { status: 400 })));
+
+    const failure = await researchOsApi.network().catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ message: "Legacy request is invalid", status: 400 });
   });
 
   it("does not expose retired prototype screen calls on the active client", () => {
