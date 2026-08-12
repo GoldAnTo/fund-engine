@@ -251,12 +251,12 @@ class AutoResearchService:
         *,
         reviewer: str,
     ) -> list[uuid.UUID]:
-        """Resume affected runs only once every Case candidate has a verdict.
+        """Resume each affected run once its frozen-scope candidates have a verdict.
 
         Atomic claims may be deduplicated at document level, while run state is
         Case-scoped.  A human decision therefore checks every admitted Case
-        using the candidate's frozen document and requeues only its runs that
-        were paused specifically at the atomic-claim gate.
+        using the candidate's frozen document and requeues only the paused
+        runs whose own frozen source scope has no pending candidate.
         """
         document_id = self.session.scalar(
             select(SourceSpan.document_version_id)
@@ -274,8 +274,6 @@ class AutoResearchService:
         )
         resumed: list[uuid.UUID] = []
         for case_id in case_ids:
-            if self._pending_atomic_claims(case_id):
-                continue
             runs = list(
                 self.session.scalars(
                     select(ResearchRun)
@@ -285,6 +283,11 @@ class AutoResearchService:
                 )
             )
             for run in runs:
+                if self._pending_atomic_claims(
+                    case_id,
+                    allowed_source_types=self._run_allowed_source_types(run),
+                ):
+                    continue
                 if not self.repo.resume_after_claim_review(run):
                     continue
                 ResearchRunEventRepository(self.session).append(
@@ -577,7 +580,12 @@ class AutoResearchService:
             run.research_case_id
         )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
-        pending_claim_count = len(self._pending_atomic_claims(run.research_case_id))
+        pending_claim_count = len(
+            self._pending_atomic_claims(
+                run.research_case_id,
+                allowed_source_types=self._run_allowed_source_types(run),
+            )
+        )
         if pending_claim_count:
             lifecycle_repo.update(
                 lifecycle,
@@ -823,7 +831,10 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
-        for candidate in self._pending_atomic_claims(run.research_case_id):
+        for candidate in self._pending_atomic_claims(
+            run.research_case_id,
+            allowed_source_types=self._run_allowed_source_types(run),
+        ):
             if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
                 continue
             self.task_repo.add_task(
@@ -854,7 +865,14 @@ class AutoResearchService:
                     return "waiting_for_review"
             except (TypeError, ValueError):
                 continue
-        return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
+        return (
+            "waiting_for_review"
+            if self._pending_atomic_claims(
+                run.research_case_id,
+                allowed_source_types=self._run_allowed_source_types(run),
+            )
+            else "succeeded"
+        )
 
     def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
         """Close only runs whose last outstanding human gate was this assessment."""
@@ -920,7 +938,12 @@ class AutoResearchService:
             )
             if review_task is None or review_task.status in {"open", "in_progress"}:
                 return True
-        return bool(self._pending_atomic_claims(run.research_case_id))
+        return bool(
+            self._pending_atomic_claims(
+                run.research_case_id,
+                allowed_source_types=self._run_allowed_source_types(run),
+            )
+        )
 
     def _run_allowed_source_types(self, run) -> set[str]:
         """Read the immutable research-source-category boundary from run scope."""
