@@ -79,6 +79,7 @@ def test_b_scope_policy_only_enables_gildata_and_official_exchanges():
     [
         "query.sse.com.cn",
         "www.sse.com.cn",
+        "static.sse.com.cn",
         "www.szse.cn",
         "disc.static.szse.cn",
     ],
@@ -93,6 +94,9 @@ def test_b_scope_policy_allows_only_declared_exchange_hosts(host: str):
         "example-news.invalid",
         "evil.sse.com.cn",
         "notwww.sse.com.cn",
+        "evil.static.sse.com.cn",
+        "notstatic.sse.com.cn",
+        "static.sse.com.cn.evil.test",
         "evil.szse.cn",
         "notdisc.static.szse.cn",
     ],
