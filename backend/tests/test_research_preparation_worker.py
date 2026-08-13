@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,6 +24,7 @@ from app.models.research_preparation import ResearchPreparationEvent
 from app.models.source_governance import SourceContract
 from app.services.research_preparation import ResearchPreparationService
 from app.services.research_preparation import ClaimDecision, ProtocolConfirmation
+from app.services.atomic_claims import AtomicClaimService
 
 
 def _session_factory(tmp_path):
@@ -182,6 +184,85 @@ def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path) ->
         assert preparation is not None
         assert preparation.draft_evidence_plan_state == "succeeded"
         assert preparation.plan_review_state == "awaiting_review"
+        assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
+
+
+@pytest.mark.parametrize("step", ["draft_protocol", "draft_evidence_plan"])
+def test_changed_candidate_context_discards_protocol_or_plan_output(tmp_path, step: str) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+
+    engine, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        case, preparation, _ = _preparation(setup)
+        case_id, preparation_id = case.id, preparation.id
+        setup.commit()
+    assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
+    with sessions() as review:
+        preparation = review.get(ResearchPreparation, preparation_id)
+        claims = review.scalar(select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation_id,
+            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+            ResearchPreparationArtifact.state == "current",
+        ))
+        assert preparation is not None and claims is not None
+        candidate_id = uuid.UUID(claims.payload["candidates"][0]["candidate_id"])
+        ResearchPreparationService(review).confirm_claims(
+            case_id, actor="reviewer", revision=preparation.version,
+            decisions=[ClaimDecision(candidate_id=candidate_id, outcome="confirmed", reason="reviewed")],
+        )
+        review.commit()
+    if step == "draft_evidence_plan":
+        assert worker.run_once(session_factory=sessions, generator_factory=_ProtocolGenerator)
+        with sessions() as review:
+            preparation = review.get(ResearchPreparation, preparation_id)
+            protocol = review.scalar(select(ResearchPreparationArtifact).where(
+                ResearchPreparationArtifact.research_preparation_id == preparation_id,
+                ResearchPreparationArtifact.kind == "research_protocol_draft",
+                ResearchPreparationArtifact.state == "current",
+            ))
+            assert preparation is not None and protocol is not None
+            ResearchPreparationService(review).confirm_protocol(
+                case_id, actor="reviewer", revision=preparation.version,
+                payload=ProtocolConfirmation(draft_sequence=protocol.sequence, edits={}),
+            )
+            review.commit()
+
+    class StaleGenerator:
+        def _change_context(self):
+            with sessions() as change:
+                AtomicClaimService(change).review(
+                    candidate_id, outcome="confirmed", reviewer="reviewer",
+                    reason="new review", idempotency_key=f"new-context-{step}",
+                )
+                change.commit()
+
+        def draft_protocol(self, _input):
+            self._change_context()
+            return _ProtocolGenerator().draft_protocol(_input)
+
+        def draft_evidence_plan(self, _input):
+            self._change_context()
+            return _PlanGenerator().draft_evidence_plan(_input)
+
+    assert worker.run_once(session_factory=sessions, generator_factory=StaleGenerator)
+    kind = "research_protocol_draft" if step == "draft_protocol" else "evidence_acquisition_plan"
+    with Session(engine) as check:
+        job = check.scalar(select(Job).where(
+            Job.target_id == preparation_id,
+            Job.correlation_id.like(f"%:{step}"),
+        ))
+        assert job is not None and job.status == "cancelled"
+        assert check.scalar(select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation_id,
+            ResearchPreparationArtifact.kind == kind,
+            ResearchPreparationArtifact.state == "current",
+        )) is None
+        event = check.scalar(select(ResearchPreparationEvent).where(
+            ResearchPreparationEvent.research_preparation_id == preparation_id,
+            ResearchPreparationEvent.type == "preparation_output_discarded",
+            ResearchPreparationEvent.step == step,
+        ))
+        assert event is not None and event.detail["reason"] == "candidate_context_changed"
         assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
 
 
@@ -373,6 +454,45 @@ def test_late_input_change_discards_parse_output_with_a_safe_event(tmp_path) -> 
         assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
 
 
+def test_old_correlation_is_discarded_before_any_provider_call(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+
+    engine, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        case, preparation, _ = _preparation(setup)
+        preparation_id = preparation.id
+        old_job = setup.scalar(select(Job).where(Job.target_id == preparation_id))
+        assert old_job is not None
+        old_job_id = old_job.id
+        ResearchPreparationService(setup).create_for_case(
+            case.id, input_fingerprint="c" * 64, actor="reset"
+        )
+        setup.commit()
+
+    calls = 0
+    class Generator:
+        def validate_claim_drafts(self, _input):
+            nonlocal calls
+            calls += 1
+            return []
+
+    assert worker.run_once(session_factory=sessions, generator_factory=Generator)
+    with Session(engine) as check:
+        job = check.get(Job, old_job_id)
+        event = check.scalar(select(ResearchPreparationEvent).where(
+            ResearchPreparationEvent.research_preparation_id == preparation_id,
+            ResearchPreparationEvent.type == "preparation_output_discarded",
+            ResearchPreparationEvent.detail["reason"].as_string() == "version_changed",
+        ))
+        assert calls == 0
+        assert job is not None and job.status == "cancelled"
+        assert event is not None and event.detail["job_id"] == str(old_job_id)
+        assert check.scalars(select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation_id,
+            ResearchPreparationArtifact.state == "current",
+        )).all() == []
+
+
 def test_recovery_gives_reclaimed_job_a_fresh_lease_and_does_not_reclaim_twice(tmp_path) -> None:
     from app.scripts import run_research_preparation_worker as worker
 
@@ -408,4 +528,27 @@ def test_preparation_heartbeat_uses_available_loop_contract(tmp_path, monkeypatc
     monkeypatch.setenv("RESEARCH_PREPARATION_WORKER_ID", "prep-heartbeat")
     worker._touch(mode="loop", state="polling", session_factory=sessions)
     with sessions() as session:
-        assert WorkerHeartbeatService(session).status()["status"] == "available"
+        assert WorkerHeartbeatService(session).status(worker_kind="research_preparation")["status"] == "available"
+
+
+def test_preparation_heartbeat_does_not_make_research_run_worker_available(tmp_path) -> None:
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    _, sessions = _session_factory(tmp_path)
+    with sessions() as session:
+        heartbeats = WorkerHeartbeatService(session)
+        heartbeats.touch(
+            worker_id="preparation-only",
+            mode="loop",
+            state="polling",
+            worker_kind="research_preparation",
+        )
+        assert heartbeats.status()["status"] == "unavailable"
+        assert heartbeats.status(worker_kind="research_preparation")["status"] == "available"
+        heartbeats.touch(
+            worker_id="run-worker",
+            mode="loop",
+            state="polling",
+            worker_kind="research_run",
+        )
+        assert heartbeats.status()["status"] == "available"

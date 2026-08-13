@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -20,17 +21,21 @@ def test_backfill_module_is_available() -> None:
     assert callable(ResearchPreparationBackfill.enqueue_eligible)
 
 
-def _eligible_case(session, *, created_at):
+def _eligible_case(session, *, created_at, admit: bool = True, link_document: bool = True, lifecycle: bool = True, scope: bool = True):
     case = ResearchCase(title="old", industry_topic="test", created_by="test", created_at=created_at)
     document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/backfill", available_at=created_at, acquired_at=created_at, parser_version="test")
     session.add_all((case, document))
     session.flush()
-    session.add_all((
-        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=created_at),
-        CaseTenantAdmission(research_case_id=case.id, tenant_id="test", initial_document_version_id=document.id, admitted_by="test", admitted_at=created_at),
-        EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by="test", change_summary="scope", created_at=created_at),
-        EventResearchLifecycle(research_case_id=case.id, status="awaiting_scope", active_run_id=None, current_round=0, status_summary="waiting", current_gap=None, next_human_action=None, updated_at=created_at),
-    ))
+    rows = []
+    if link_document:
+        rows.append(CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=created_at))
+    if admit:
+        rows.append(CaseTenantAdmission(research_case_id=case.id, tenant_id="test", initial_document_version_id=document.id, admitted_by="test", admitted_at=created_at))
+    if scope:
+        rows.append(EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by="test", change_summary="scope", created_at=created_at))
+    if lifecycle:
+        rows.append(EventResearchLifecycle(research_case_id=case.id, status="awaiting_scope", active_run_id=None, current_round=0, status_summary="waiting", current_gap=None, next_human_action=None, updated_at=created_at))
+    session.add_all(rows)
     session.flush()
     return case
 
@@ -97,3 +102,38 @@ def test_backfill_reuses_existing_candidates_without_a_parse_job(tmp_path) -> No
         assert artifact is not None and artifact.payload == {"candidates": [{"candidate_id": str(candidate_id)}]}
         assert check.scalars(select(Job).where(Job.target_id == preparation_id)).all() == []
         assert check.scalars(select(ResearchRun)).all() == []
+
+
+@pytest.mark.parametrize(
+    "excluded_by",
+    ["admission", "document", "lifecycle", "published", "run", "preparation", "scope"],
+)
+def test_backfill_excludes_each_ineligible_case(tmp_path, excluded_by: str) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+    from app.services.research_preparation import ResearchPreparationService
+
+    engine = create_engine(f"sqlite:///{tmp_path / f'backfill-{excluded_by}.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        case = _eligible_case(
+            session,
+            created_at=now,
+            admit=excluded_by != "admission",
+            link_document=excluded_by != "document",
+            lifecycle=excluded_by != "lifecycle",
+            scope=excluded_by != "scope",
+        )
+        if excluded_by == "published":
+            session.get(EventResearchLifecycle, case.id).status = "published"
+        elif excluded_by == "run":
+            session.add(ResearchRun(research_case_id=case.id, status="succeeded", stage="completed", round=1, max_rounds=1, budget=1, budget_used=1, created_at=now, updated_at=now))
+        elif excluded_by == "preparation":
+            ResearchPreparationService(session).create_for_case(case.id, input_fingerprint="a" * 64, actor="existing")
+        session.flush()
+        preparations_before = list(session.scalars(select(ResearchPreparation)))
+        jobs_before = list(session.scalars(select(Job)))
+        assert ResearchPreparationBackfill(session).enqueue_eligible() == []
+        assert list(session.scalars(select(ResearchPreparation))) == preparations_before
+        assert list(session.scalars(select(Job))) == jobs_before

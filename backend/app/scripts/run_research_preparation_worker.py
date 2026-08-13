@@ -65,7 +65,8 @@ def _worker_id() -> str:
 def _touch(*, mode: str, state: str, session_factory=SessionLocal) -> None:
     with session_factory() as session:
         WorkerHeartbeatService(session).touch(
-            worker_id=_worker_id(), mode=mode, state=state
+            worker_id=_worker_id(), mode=mode, state=state,
+            worker_kind="research_preparation",
         )
         session.commit()
 
@@ -118,7 +119,7 @@ def _discard_output(
     job: Job,
     input: _JobInput,
     *,
-    reason: Literal["version_changed", "input_changed", "candidate_context_changed", "cancelled"],
+    reason: Literal["version_changed", "input_changed", "candidate_context_changed", "cancelled", "step_no_longer_eligible"],
 ) -> None:
     service.record_worker_output_discarded(
         input.case_id,
@@ -217,7 +218,13 @@ def _begin(session: Session, job: Job) -> _JobInput | None:
             expected_fingerprint=input.fingerprint,
         )
     except ConflictError:
-        _cancel(repo, job, step=input.step)
+        if preparation.version != input.version:
+            reason = "version_changed"
+        elif preparation.input_fingerprint != input.fingerprint:
+            reason = "input_changed"
+        else:
+            reason = "step_no_longer_eligible"
+        _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
         return None
     job.step = input.step
     session.flush()

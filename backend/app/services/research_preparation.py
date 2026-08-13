@@ -415,6 +415,7 @@ class ResearchPreparationService:
             "input_changed",
             "candidate_context_changed",
             "cancelled",
+            "step_no_longer_eligible",
         ],
     ) -> ResearchPreparation:
         """Audit a worker output that lost its guarded output slot."""

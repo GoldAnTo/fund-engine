@@ -314,6 +314,9 @@ class ResearchWorkerHeartbeat(Base):
     __tablename__ = "research_worker_heartbeats"
 
     worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="research_run", server_default="research_run"
+    )
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

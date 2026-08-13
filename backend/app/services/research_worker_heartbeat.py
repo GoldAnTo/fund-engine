@@ -21,6 +21,7 @@ class WorkerHeartbeatService:
         worker_id: str,
         mode: str,
         state: str,
+        worker_kind: str = "research_run",
         seen_at: datetime | None = None,
     ) -> ResearchWorkerHeartbeat:
         now = seen_at or datetime.now(timezone.utc)
@@ -28,6 +29,7 @@ class WorkerHeartbeatService:
         if heartbeat is None:
             heartbeat = ResearchWorkerHeartbeat(
                 worker_id=worker_id,
+                worker_kind=worker_kind,
                 mode=mode,
                 state=state,
                 started_at=now,
@@ -35,21 +37,26 @@ class WorkerHeartbeatService:
             )
             self._session.add(heartbeat)
         else:
+            heartbeat.worker_kind = worker_kind
             heartbeat.mode = mode
             heartbeat.state = state
             heartbeat.last_seen_at = now
         self._session.flush()
         return heartbeat
 
-    def latest(self) -> ResearchWorkerHeartbeat | None:
+    def latest(self, *, worker_kind: str = "research_run") -> ResearchWorkerHeartbeat | None:
         return self._session.scalar(
-            select(ResearchWorkerHeartbeat).order_by(
+            select(ResearchWorkerHeartbeat)
+            .where(ResearchWorkerHeartbeat.worker_kind == worker_kind)
+            .order_by(
                 ResearchWorkerHeartbeat.last_seen_at.desc()
             ).limit(1)
         )
 
-    def status(self, *, now: datetime | None = None) -> dict[str, str | None]:
-        heartbeat = self.latest()
+    def status(
+        self, *, now: datetime | None = None, worker_kind: str = "research_run"
+    ) -> dict[str, str | None]:
+        heartbeat = self.latest(worker_kind=worker_kind)
         if heartbeat is None:
             return {
                 "status": "unavailable",
