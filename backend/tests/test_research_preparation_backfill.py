@@ -22,9 +22,9 @@ def test_backfill_module_is_available() -> None:
     assert callable(ResearchPreparationBackfill.enqueue_eligible)
 
 
-def _eligible_case(session, *, created_at, admit: bool = True, link_document: bool = True, lifecycle: bool = True, scope: bool = True, allow_ai_processing: bool = True):
+def _eligible_case(session, *, created_at, admit: bool = True, link_document: bool = True, lifecycle: bool = True, scope: bool = True, allow_ai_processing: bool = True, contract_effective_from=None, contract_effective_until=None, document_available_at=None):
     case = ResearchCase(title="old", industry_topic="test", created_by="test", created_at=created_at)
-    document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/backfill", available_at=created_at, acquired_at=created_at, parser_version="test")
+    document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/backfill", available_at=document_available_at or created_at, acquired_at=created_at, parser_version="test")
     session.add_all((case, document))
     session.flush()
     rows = []
@@ -46,8 +46,8 @@ def _eligible_case(session, *, created_at, admit: bool = True, link_document: bo
         allow_export=False,
         allow_api=False,
         region="CN",
-        effective_from=None,
-        effective_until=None,
+        effective_from=contract_effective_from,
+        effective_until=contract_effective_until,
         retention_policy="case_retained",
         deletion_policy="manual",
         downstream_restrictions=[],
@@ -175,6 +175,25 @@ def test_backfill_excludes_an_ai_disallowed_initial_source(tmp_path) -> None:
         assert ResearchPreparationBackfill(session).enqueue_eligible() == []
         assert session.scalars(select(ResearchPreparation)).all() == []
         assert session.scalars(select(Job)).all() == []
+
+
+@pytest.mark.parametrize(
+    "contract_kwargs",
+    [
+        {"contract_effective_from": datetime.now(UTC) + timedelta(days=1)},
+        {"contract_effective_until": datetime.now(UTC) + timedelta(days=1), "document_available_at": datetime.now(UTC) + timedelta(days=2)},
+    ],
+)
+def test_backfill_requires_contract_to_cover_document_availability(tmp_path, contract_kwargs) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-contract-window.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as session:
+        _eligible_case(session, created_at=datetime.now(UTC), **contract_kwargs)
+        assert ResearchPreparationBackfill(session).enqueue_eligible() == []
+        assert session.scalars(select(ResearchPreparation)).all() == []
 
 
 @pytest.mark.parametrize(

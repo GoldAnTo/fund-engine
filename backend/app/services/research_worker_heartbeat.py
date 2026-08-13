@@ -54,12 +54,12 @@ class WorkerHeartbeatService:
 
     def latest(self, *, worker_kind: str = "research_run") -> ResearchWorkerHeartbeat | None:
         prefix = f"{worker_kind}:%"
-        identity_filter = ResearchWorkerHeartbeat.worker_id.like(prefix)
-        if worker_kind == "research_run":
-            identity_filter = or_(
-                identity_filter,
-                ~ResearchWorkerHeartbeat.worker_id.contains(":"),
-            )
+        # 0053 classifies raw pre-migration IDs by kind.  Keep those rows
+        # visible alongside namespaced IDs until their worker next touches.
+        identity_filter = or_(
+            ResearchWorkerHeartbeat.worker_id.like(prefix),
+            ~ResearchWorkerHeartbeat.worker_id.contains(":"),
+        )
         return self._session.scalar(
             select(ResearchWorkerHeartbeat)
             .where(

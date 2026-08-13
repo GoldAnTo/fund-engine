@@ -10,7 +10,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable, TypeVar
 
 import httpx
@@ -122,22 +122,8 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
     document = session.get(DocumentVersion, admission.initial_document_version_id)
     if document is None:
         _unavailable_input()
-    contract = session.scalar(
-        select(SourceContract).where(SourceContract.document_version_id == document.id)
-    )
-    if (
-        contract is None
-        or not contract.allow_ai_processing
-        or not source_contract_is_active(contract, at=document.available_at)
-        or not source_contract_is_active(contract)
-    ):
+    if not preparation_ai_input_is_available(session, document):
         _unavailable_input()
-    if contract.source_type == "licensed_provider":
-        provider_record = session.scalar(
-            select(ProviderRecord).where(ProviderRecord.document_version_id == document.id)
-        )
-        if provider_record is None or provider_record.content_sha256 != document.content_sha256:
-            _unavailable_input()
 
     spans = tuple(
         PreparationSourceSpan(source_span_id=span.id, verbatim_text=span.verbatim_text)
@@ -195,6 +181,35 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
 
 def _unavailable_input() -> None:
     raise PreparationInputUnavailableError(PREPARATION_INPUT_UNAVAILABLE_MESSAGE)
+
+
+def preparation_ai_input_is_available(
+    session: Session,
+    document: DocumentVersion,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether frozen document use is still allowed for preparation AI."""
+    contract = session.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document.id)
+    )
+    instant = now or datetime.now(timezone.utc)
+    if (
+        contract is None
+        or not contract.allow_ai_processing
+        or not source_contract_is_active(contract, at=document.available_at)
+        or not source_contract_is_active(contract, at=instant)
+    ):
+        return False
+    if contract.source_type != "licensed_provider":
+        return True
+    provider_record = session.scalar(
+        select(ProviderRecord).where(ProviderRecord.document_version_id == document.id)
+    )
+    return (
+        provider_record is not None
+        and provider_record.content_sha256 == document.content_sha256
+    )
 
 
 def _context_limit_unavailable() -> None:

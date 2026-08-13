@@ -27,6 +27,18 @@ def upgrade() -> None:
                 server_default="research_run",
             )
         )
+    # Before worker_kind existed, preparation workers were distinguished only
+    # by their conventional host suffix (or an older mode value).  Preserve
+    # regular workers as the server default and classify those legacy rows so
+    # they cannot make the ResearchRun worker-status endpoint look healthy.
+    op.execute(
+        sa.text(
+            "UPDATE research_worker_heartbeats "
+            "SET worker_kind = 'research_preparation' "
+            "WHERE worker_id LIKE '%-preparation' "
+            "OR mode = 'research_preparation'"
+        )
+    )
 
 
 def downgrade() -> None:

@@ -252,6 +252,49 @@ with SessionLocal() as session:
             )
 
 
+def test_0053_classifies_legacy_preparation_heartbeats(tmp_path) -> None:
+    database_path = tmp_path / "legacy-preparation-heartbeats.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    before = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0052"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert before.returncode == 0, before.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    now = "2026-08-13 00:00:00"
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO research_worker_heartbeats "
+            "(worker_id, mode, state, started_at, last_seen_at) "
+            "VALUES ('host-preparation', 'loop', 'polling', :now, :now), "
+            "('host-old-mode', 'research_preparation', 'polling', :now, :now), "
+            "('host-run', 'loop', 'polling', :now, :now)"
+        ), {"now": now})
+    after = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert after.returncode == 0, after.stderr
+    with engine.connect() as connection:
+        rows = dict(connection.execute(sa.text(
+            "SELECT worker_id, worker_kind FROM research_worker_heartbeats"
+        )).all())
+    assert rows == {
+        "host-preparation": "research_preparation",
+        "host-old-mode": "research_preparation",
+        "host-run": "research_run",
+    }
+    from sqlalchemy.orm import Session
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    with Session(engine) as session:
+        observed_at = datetime(2026, 8, 13, tzinfo=UTC)
+        assert WorkerHeartbeatService(session).status(now=observed_at)["status"] == "available"
+        assert WorkerHeartbeatService(session).status(
+            now=observed_at, worker_kind="research_preparation"
+        )["status"] == "available"
+
 def test_0052_downgrade_removes_preparation_tables(tmp_path) -> None:
     database_path = tmp_path / "research-preparation-downgrade.db"
     backend = Path(__file__).parents[1]
