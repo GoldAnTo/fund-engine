@@ -28,7 +28,7 @@ from sqlalchemy import bindparam, func
 from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.acquisition.sources import RetrievedEnvelope
 from app.datasources.docling import PdfParserAdapter, PypdfAdapter
@@ -844,6 +844,8 @@ class RetrievedDocumentFreezer:
                             ),
                             supersedes_id=classification.document_id,
                             infer_supersedes=False,
+                            available_at=reference.published_at,
+                            acquired_at=context.retrieved_at,
                         )
                         if not created:
                             relation = "content_duplicate"
@@ -937,10 +939,20 @@ class RetrievedDocumentFreezer:
             ):
                 return _Classification("variant_conflict")
         if not publication_identity_ambiguous:
+            predecessor = aliased(DocumentVersion)
+            successor = aliased(DocumentVersion)
             source_predecessor = session.scalar(
-                select(DocumentVersion)
-                .where(DocumentVersion.source_url == canonical_url)
-                .order_by(DocumentVersion.acquired_at.desc(), DocumentVersion.id.desc())
+                select(predecessor)
+                .outerjoin(
+                    successor,
+                    (successor.supersedes_id == predecessor.id)
+                    & (successor.source_url == canonical_url),
+                )
+                .where(
+                    predecessor.source_url == canonical_url,
+                    successor.id.is_(None),
+                )
+                .order_by(predecessor.acquired_at.desc(), predecessor.id.desc())
                 .limit(1)
             )
             if source_predecessor is not None:

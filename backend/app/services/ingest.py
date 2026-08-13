@@ -87,6 +87,8 @@ class DocumentService:
         source_authority: str = "unknown",
         supplements_document_version_id: uuid.UUID | None = None,
         claimed_page_reference: str | None = None,
+        available_at: datetime | None = None,
+        acquired_at: datetime | None = None,
     ) -> DocumentVersion:
         """Freeze bytes into a DocumentVersion, deduping on two levels:
 
@@ -119,6 +121,8 @@ class DocumentService:
             source_authority=source_authority,
             supplements_document_version_id=supplements_document_version_id,
             claimed_page_reference=claimed_page_reference,
+            available_at=available_at,
+            acquired_at=acquired_at,
         )
         return version
 
@@ -138,6 +142,8 @@ class DocumentService:
         claimed_page_reference: str | None = None,
         supersedes_id: uuid.UUID | None = None,
         infer_supersedes: bool = True,
+        available_at: datetime | None = None,
+        acquired_at: datetime | None = None,
     ) -> tuple[DocumentVersion, bool]:
         """Freeze bytes and expose whether this call created the version.
 
@@ -161,6 +167,8 @@ class DocumentService:
             claimed_page_reference=claimed_page_reference,
             supersedes_id=supersedes_id,
             infer_supersedes=infer_supersedes,
+            available_at=available_at,
+            acquired_at=acquired_at,
         )
 
     def _freeze(
@@ -180,6 +188,8 @@ class DocumentService:
         claimed_page_reference: str | None = None,
         supersedes_id: uuid.UUID | None = None,
         infer_supersedes: bool = True,
+        available_at: datetime | None = None,
+        acquired_at: datetime | None = None,
     ) -> tuple[DocumentVersion, bool]:
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
@@ -203,14 +213,15 @@ class DocumentService:
                 if prior is not None and prior.content_sha256 != digest
                 else None
             )
-        now = _utcnow()
+        acquisition_time = acquired_at or _utcnow()
+        source_available_at = available_at or acquisition_time
         version = self._repo.insert_version(
             content_sha256=digest,
             source_url=source_url,
             natural_key=key,
             published_at=published_at,
-            available_at=now,
-            acquired_at=now,
+            available_at=source_available_at,
+            acquired_at=acquisition_time,
             parser_version=parser_version or PARSER_VERSION,
             supersedes_id=supersedes_id,
             title=title,

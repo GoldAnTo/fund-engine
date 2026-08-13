@@ -870,6 +870,27 @@ def test_injected_pdf_parser_spans_are_persisted(session):
         assert result.document.parser_version == parser.parser_version
 
 
+def test_new_frozen_document_preserves_source_availability_and_acquisition_time(session):
+    case, job = _seed_job(session)
+    published_at = NOW - timedelta(days=2)
+    reference, attempt = _add_reference(
+        session, job, published_at=published_at
+    )
+
+    result = RetrievedDocumentFreezer(
+        _factory(session), clock=lambda: NOW
+    ).freeze(
+        reference,
+        _envelope(b"new cutoff-visible announcement"),
+        _context(job, attempt, case, retrieved_at=NOW),
+    )
+
+    assert result.document is not None
+    assert result.document.published_at.replace(tzinfo=UTC) == published_at
+    assert result.document.available_at.replace(tzinfo=UTC) == published_at
+    assert result.document.acquired_at.replace(tzinfo=UTC) == NOW
+
+
 def test_licensed_provider_creates_provider_record(session):
     case, job = _seed_job(session)
     reference, attempt = _add_reference(

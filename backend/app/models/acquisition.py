@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -348,6 +349,20 @@ class AcquisitionException(Base):
         Index("ix_acquisition_exceptions_source_reference", "source_reference_id"),
         Index("ix_acquisition_exceptions_artifact", "retrieval_artifact_id"),
         Index("ix_acquisition_exceptions_candidate", "candidate_id"),
+        Index(
+            "uq_acquisition_exceptions_automatic_quarantine",
+            "job_id",
+            "retrieval_artifact_id",
+            "candidate_id",
+            "reason_code",
+            unique=True,
+            sqlite_where=text(
+                "reason_code = 'automatic_admission_quarantined'"
+            ),
+            postgresql_where=text(
+                "reason_code = 'automatic_admission_quarantined'"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)

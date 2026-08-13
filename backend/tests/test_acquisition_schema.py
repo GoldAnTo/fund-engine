@@ -283,9 +283,15 @@ EXPECTED_INDEXES = {
         "ix_acquisition_exceptions_source_reference": ("source_reference_id",),
         "ix_acquisition_exceptions_artifact": ("retrieval_artifact_id",),
         "ix_acquisition_exceptions_candidate": ("candidate_id",),
+        "uq_acquisition_exceptions_automatic_quarantine": (
+            "job_id",
+            "retrieval_artifact_id",
+            "candidate_id",
+            "reason_code",
+        ),
     },
     "evidence_links": {
-        "ix_evidence_links_automatic_admission_decision": (
+        "uq_evidence_links_automatic_admission_decision": (
             "automatic_admission_decision_id",
         )
     },
@@ -365,11 +371,13 @@ def _inspected_indexes(
     return {
         index["name"]: tuple(index["column_names"])
         for index in inspector.get_indexes(table_name)
-        if index["name"].startswith("ix_")
+        if index["name"].startswith(("ix_", "uq_"))
     }
 
 
-def assert_migrated_acquisition_schema(inspector: sa.Inspector) -> None:
+def assert_migrated_acquisition_schema(
+    inspector: sa.Inspector, *, automatic_uniqueness: bool = True
+) -> None:
     for table_name, expected in EXPECTED_UNIQUES.items():
         assert _inspected_unique_constraints(inspector, table_name) == expected
     for table_name, expected in EXPECTED_FOREIGN_KEYS.items():
@@ -377,7 +385,18 @@ def assert_migrated_acquisition_schema(inspector: sa.Inspector) -> None:
     for table_name, expected in EXPECTED_CHECKS.items():
         assert _inspected_check_names(inspector, table_name) == set(expected)
     for table_name, expected in EXPECTED_INDEXES.items():
-        assert _inspected_indexes(inspector, table_name) == expected
+        migrated_expected = dict(expected)
+        if not automatic_uniqueness and table_name == "acquisition_exceptions":
+            migrated_expected.pop(
+                "uq_acquisition_exceptions_automatic_quarantine", None
+            )
+        if not automatic_uniqueness and table_name == "evidence_links":
+            migrated_expected = {
+                "ix_evidence_links_automatic_admission_decision": (
+                    "automatic_admission_decision_id",
+                )
+            }
+        assert _inspected_indexes(inspector, table_name) == migrated_expected
 
     for table_name, expected in EXPECTED_PROVENANCE_UNIQUES.items():
         relevant = {
@@ -454,6 +473,21 @@ def test_metadata_declares_exact_constraints_and_important_indexes() -> None:
     assert external_version.server_default is not None
 
     assert "automatically_admitted" in get_args(ReviewState)
+
+    evidence_index = next(
+        index
+        for index in Base.metadata.tables["evidence_links"].indexes
+        if index.name == "uq_evidence_links_automatic_admission_decision"
+    )
+    quarantine_index = next(
+        index
+        for index in Base.metadata.tables["acquisition_exceptions"].indexes
+        if index.name == "uq_acquisition_exceptions_automatic_quarantine"
+    )
+    assert evidence_index.unique is True
+    assert quarantine_index.unique is True
+    assert evidence_index.dialect_options["sqlite"]["where"] is not None
+    assert quarantine_index.dialect_options["sqlite"]["where"] is not None
 
 
 def test_overview_key_change_accepts_automatically_admitted_review_state() -> None:
@@ -615,6 +649,60 @@ def test_sqlite_accepts_existing_and_automatic_provenance_pairs() -> None:
         )
 
 
+def test_sqlite_allows_many_legacy_links_but_one_link_per_automatic_decision() -> None:
+    engine = _new_sqlite_schema()
+    decision_id = uuid.uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            Base.metadata.tables["evidence_links"].insert(),
+            [
+                _evidence_link_values(
+                    review_state="machine_generated", decision_id=None
+                ),
+                _evidence_link_values(
+                    review_state="machine_generated", decision_id=None
+                ),
+                _evidence_link_values(
+                    review_state="automatically_admitted", decision_id=decision_id
+                ),
+            ],
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(
+                Base.metadata.tables["evidence_links"].insert(),
+                _evidence_link_values(
+                    review_state="automatically_admitted", decision_id=decision_id
+                ),
+            )
+
+
+def test_sqlite_allows_other_exceptions_but_one_logical_automatic_quarantine() -> None:
+    engine = _new_sqlite_schema()
+    now = datetime.now(UTC)
+    logical = {
+        "job_id": uuid.uuid4(),
+        "source_reference_id": uuid.uuid4(),
+        "retrieval_artifact_id": uuid.uuid4(),
+        "candidate_id": uuid.uuid4(),
+        "reason_code": "automatic_admission_quarantined",
+        "detail_json": {},
+        "created_at": now,
+    }
+    table = Base.metadata.tables["acquisition_exceptions"]
+    with engine.begin() as connection:
+        connection.execute(table.insert(), {"id": uuid.uuid4(), **logical})
+        connection.execute(
+            table.insert(),
+            {
+                "id": uuid.uuid4(),
+                **logical,
+                "reason_code": "ordinary_fetch_failure",
+            },
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(table.insert(), {"id": uuid.uuid4(), **logical})
+
+
 def test_append_only_guard_covers_acquisition_history_but_not_jobs() -> None:
     assert APPEND_ONLY_TABLES <= IMMUTABLE_TABLES
     engine = sa.create_engine("sqlite://", future=True)
@@ -666,7 +754,7 @@ def test_sqlite_upgrade_downgrade_and_reupgrade_0052(tmp_path: Path) -> None:
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one() == "0052"
         assert ACQUISITION_TABLES <= set(inspector.get_table_names())
-        assert_migrated_acquisition_schema(inspector)
+        assert_migrated_acquisition_schema(inspector, automatic_uniqueness=False)
         assert "automatic_admission_decision_id" in {
             column["name"] for column in inspector.get_columns("source_statements")
         }
@@ -717,4 +805,76 @@ def test_sqlite_upgrade_downgrade_and_reupgrade_0052(tmp_path: Path) -> None:
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one() == "0052"
         assert ACQUISITION_TABLES <= set(inspector.get_table_names())
+        assert_migrated_acquisition_schema(inspector, automatic_uniqueness=False)
+
+
+def test_sqlite_upgrade_downgrade_and_reupgrade_0053(tmp_path: Path) -> None:
+    database_path = tmp_path / "automatic-admission-0053.db"
+    backend = Path(__file__).parents[1]
+    environment = {
+        **os.environ,
+        "DATABASE_URL": f"sqlite:///{database_path}",
+    }
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0053"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"], future=True)
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0053"
         assert_migrated_acquisition_schema(inspector)
+        assert "uq_evidence_links_automatic_admission_decision" in {
+            index["name"] for index in inspector.get_indexes("evidence_links")
+        }
+        assert "uq_acquisition_exceptions_automatic_quarantine" in {
+            index["name"]
+            for index in inspector.get_indexes("acquisition_exceptions")
+        }
+    engine.dispose()
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0052"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"], future=True)
+    with engine.connect() as connection:
+        names = {
+            index["name"]
+            for table in ("evidence_links", "acquisition_exceptions")
+            for index in sa.inspect(connection).get_indexes(table)
+        }
+        assert "uq_evidence_links_automatic_admission_decision" not in names
+        assert "uq_acquisition_exceptions_automatic_quarantine" not in names
+        assert "ix_evidence_links_automatic_admission_decision" in names
+    engine.dispose()
+
+    reupgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0053"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert reupgraded.returncode == 0, reupgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"], future=True)
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0053"
+        assert_migrated_acquisition_schema(sa.inspect(connection))
+    engine.dispose()

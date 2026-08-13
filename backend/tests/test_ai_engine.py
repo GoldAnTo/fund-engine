@@ -67,6 +67,13 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     assert "span_ids" in run.input_ref
     assert str(span.id) in run.input_ref["span_ids"]
     assert "atomic candidates" in run.output_summary
+    assert {
+        candidate.structured_fields["run_ref"] for candidate in candidates
+    } == {f"extract:{run.id}"}
+    assert {
+        candidate.validation_result["normalizer_version"]
+        for candidate in candidates
+    } == {"atomic-claim-normalizer-v1"}
 
 
 def test_extractor_releases_read_transaction_before_llm_provider(session, span):

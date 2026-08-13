@@ -28,8 +28,10 @@ def record_run(
     error: str | None = None,
     started_at: datetime,
     finished_at: datetime | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> AIRun:
     run = AIRun(
+        id=run_id or uuid.uuid4(),
         kind=kind,
         model_version=model_version,
         prompt_version=prompt_version,

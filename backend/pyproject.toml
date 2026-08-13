@@ -14,7 +14,7 @@ dependencies = [
     "openai>=1.0",
     "json-repair>=0.7",
     "httpx[socks]>=0.27",
-    "pypdf>=5.0",
+    "pypdf>=6.15,<6.16",
     "python-multipart>=0.0.9",
 ]
 

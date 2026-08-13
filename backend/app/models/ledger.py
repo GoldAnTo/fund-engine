@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, Uuid, UniqueConstraint, event
+from sqlalchemy import CheckConstraint, DateTime, Date, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, Uuid, UniqueConstraint, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.dml import Delete, Update, UpdateBase
@@ -506,8 +506,11 @@ class EvidenceLink(Base):
             name="ck_evidence_links_automatic_admission_provenance",
         ),
         Index(
-            "ix_evidence_links_automatic_admission_decision",
+            "uq_evidence_links_automatic_admission_decision",
             "automatic_admission_decision_id",
+            unique=True,
+            sqlite_where=text("automatic_admission_decision_id IS NOT NULL"),
+            postgresql_where=text("automatic_admission_decision_id IS NOT NULL"),
         ),
     )
 
