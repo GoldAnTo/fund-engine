@@ -48,15 +48,16 @@ class ResearchPreparationRepository:
 
     def lock_preparation_for_candidate_review(
         self, candidate_id: uuid.UUID
-    ) -> ResearchPreparation | None:
-        """Lock the one current preparation affected by a claim review.
+    ) -> list[ResearchPreparation]:
+        """Lock every current preparation affected by a claim review.
 
         Candidate lookup is deliberately read-only until it has established a
         current parse artifact for the candidate.  When such an artifact
-        exists, every affected Case is locked in UUID order and then its
-        preparation is locked.  This is
-        the same Case → preparation order used by protocol confirmation, so a
-        review cannot interleave after that command has read its context.
+        exists, each Case → preparation pair is locked in canonical order.
+        This matches protocol confirmation's lock order, so a review cannot
+        interleave after that command has read its context.  A shared frozen
+        document may legitimately map one candidate into multiple current
+        preparations.
         """
         document_version_id = self._session.scalar(
             select(SourceSpan.document_version_id)
@@ -67,9 +68,9 @@ class ResearchPreparationRepository:
             .where(AtomicClaimCandidate.id == candidate_id)
         )
         if document_version_id is None:
-            return None
+            return []
         if self._session.get(DocumentVersion, document_version_id) is None:
-            return None
+            return []
         candidate_case_ids = list(
             self._session.scalars(
                 select(CaseTenantAdmission.research_case_id).where(
@@ -79,7 +80,7 @@ class ResearchPreparationRepository:
             )
         )
         if not candidate_case_ids:
-            return None
+            return []
         current_artifacts = list(
             self._session.scalars(
                 select(ResearchPreparationArtifact)
@@ -101,41 +102,33 @@ class ResearchPreparationRepository:
             if self._artifact_includes_candidate(artifact, candidate_id)
         }
         if not candidate_preparation_ids:
-            return None
-        candidate_case_ids = sorted(
-            {
-                case_id
-                for case_id in self._session.scalars(
-                    select(ResearchPreparation.research_case_id).where(
-                        ResearchPreparation.id.in_(candidate_preparation_ids)
-                    )
-                )
-            },
-            key=str,
+            return []
+        mappings = sorted(
+            set(
+                self._session.execute(
+                    select(
+                        ResearchPreparation.research_case_id,
+                        ResearchPreparation.id,
+                    ).where(ResearchPreparation.id.in_(candidate_preparation_ids))
+                ).all()
+            ),
+            key=lambda mapping: (str(mapping[0]), str(mapping[1])),
         )
-        if not candidate_case_ids:
-            return None
-
-        # Lock every possible Case first.  The ordered acquisition avoids a
-        # cycle if corrupted data ever maps one candidate to more than one
-        # preparation; preparation rows are locked only afterwards.
-        for case_id in candidate_case_ids:
-            if lock_event_scope_case(self._session, case_id) is None:
-                return None
+        if not mappings:
+            return []
 
         locked_preparations: list[ResearchPreparation] = []
-        for case_id in candidate_case_ids:
-            preparation_id = self._session.scalar(
-                select(ResearchPreparation.id).where(
-                    ResearchPreparation.id.in_(candidate_preparation_ids),
-                    ResearchPreparation.research_case_id == case_id,
-                )
-            )
-            if preparation_id is None:
+        for case_id, preparation_id in mappings:
+            if lock_event_scope_case(self._session, case_id) is None:
                 continue
-            preparation = self._lock_preparation_after_case_lock(
-                case_id, preparation_id
-            )
+            try:
+                preparation = self._lock_preparation_after_case_lock(
+                    case_id, preparation_id
+                )
+            except ConflictError:
+                # The preliminary mapping became stale before its pair was
+                # locked. Revalidation below remains authoritative.
+                continue
             admission = self._session.scalar(
                 select(CaseTenantAdmission).where(
                     CaseTenantAdmission.research_case_id == case_id,
@@ -160,10 +153,8 @@ class ResearchPreparationRepository:
             ):
                 locked_preparations.append(preparation)
         if not locked_preparations:
-            return None
-        if len(locked_preparations) != 1:
-            raise ConflictError("claim candidate preparation mapping is ambiguous")
-        return locked_preparations[0]
+            return []
+        return locked_preparations
 
     @staticmethod
     def _artifact_includes_candidate(

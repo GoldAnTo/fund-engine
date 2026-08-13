@@ -780,6 +780,81 @@ def test_atomic_review_locks_current_preparation_case_then_preparation(session, 
     assert lock_order == ["case", "preparation"]
 
 
+def test_atomic_review_locks_all_same_tenant_preparations_for_shared_candidate(
+    session, monkeypatch
+) -> None:
+    """A shared, tenant-local candidate locks each current preparation once."""
+    first_case = _case(session)
+    second_case = _case(session)
+    candidate = _candidate(session, first_case, suffix="shared-review-lock")
+    span = session.get(SourceSpan, candidate.source_span_id)
+    assert span is not None
+    session.add(
+        CaseDocumentVersion(
+            research_case_id=second_case.id,
+            document_version_id=span.document_version_id,
+            linked_at=datetime.now(UTC),
+        )
+    )
+    _admit_candidate_document(session, first_case, candidate)
+    _admit_candidate_document(session, second_case, candidate)
+    first_preparation = _service(session).create_for_case(
+        first_case.id, input_fingerprint="a" * 64, actor="tester"
+    )
+    second_preparation = _service(session).create_for_case(
+        second_case.id, input_fingerprint="b" * 64, actor="tester"
+    )
+    _parse(_service(session), first_preparation, [candidate])
+    _parse(_service(session), second_preparation, [candidate])
+
+    lock_trace: list[tuple[str, uuid.UUID]] = []
+    original_case_lock = preparation_repository_module.lock_event_scope_case
+    original_preparation_lock = (
+        ResearchPreparationRepository._lock_preparation_after_case_lock
+    )
+
+    def record_case_lock(locking_session, case_id):
+        lock_trace.append(("case", case_id))
+        return original_case_lock(locking_session, case_id)
+
+    def record_preparation_lock(self, case_id, preparation_id):
+        lock_trace.append(("preparation", preparation_id))
+        return original_preparation_lock(self, case_id, preparation_id)
+
+    monkeypatch.setattr(
+        preparation_repository_module, "lock_event_scope_case", record_case_lock
+    )
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "_lock_preparation_after_case_lock",
+        record_preparation_lock,
+    )
+    review = AtomicClaimService(session).review(
+        candidate.id,
+        outcome="confirmed",
+        reviewer="shared-reviewer",
+        reason="shared source reviewed",
+        idempotency_key="shared-review-lock",
+    )
+    session.commit()
+
+    ordered = sorted(
+        (
+            (first_case.id, first_preparation.id),
+            (second_case.id, second_preparation.id),
+        ),
+        key=lambda pair: (str(pair[0]), str(pair[1])),
+    )
+    assert review.atomic_claim_candidate_id == candidate.id
+    assert len(session.scalars(select(AtomicClaimReview)).all()) == 1
+    assert len(session.scalars(select(SourceStatement)).all()) == 1
+    assert lock_trace == [
+        entry
+        for case_id, preparation_id in ordered
+        for entry in (("case", case_id), ("preparation", preparation_id))
+    ]
+
+
 @pytest.mark.pg_only
 def test_postgres_candidate_review_waits_for_protocol_confirmation_context_lock(
     engine, session, monkeypatch
