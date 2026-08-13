@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.ai.research_preparation import preparation_ai_input_is_available
@@ -31,8 +31,12 @@ class ResearchPreparationBackfill:
     def enqueue_eligible(self, *, limit: int = 100) -> list[ResearchPreparation]:
         if limit <= 0:
             return []
-        case_ids = list(self._session.scalars(
-            select(ResearchCase.id)
+        page_size = max(100, limit)
+        cursor: tuple[object, uuid.UUID] | None = None
+        preparations: list[ResearchPreparation] = []
+        while len(preparations) < limit:
+            query = (
+                select(ResearchCase.id, ResearchCase.created_at)
             .join(CaseTenantAdmission, CaseTenantAdmission.research_case_id == ResearchCase.id)
             .join(EventResearchLifecycle, EventResearchLifecycle.research_case_id == ResearchCase.id)
             .outerjoin(ResearchPreparation, ResearchPreparation.research_case_id == ResearchCase.id)
@@ -50,13 +54,22 @@ class ResearchPreparationBackfill:
                 exists(select(EventResearchScopeVersion.id).where(EventResearchScopeVersion.research_case_id == ResearchCase.id)),
             )
             .order_by(ResearchCase.created_at, ResearchCase.id)
-            .limit(limit)
-        ))
-        preparations: list[ResearchPreparation] = []
-        for case_id in case_ids:
-            preparation = self._enqueue_case(case_id)
-            if preparation is not None:
-                preparations.append(preparation)
+            .limit(page_size)
+            )
+            if cursor is not None:
+                query = query.where(
+                    tuple_(ResearchCase.created_at, ResearchCase.id) > cursor
+                )
+            page = list(self._session.execute(query))
+            if not page:
+                break
+            for case_id, _created_at in page:
+                preparation = self._enqueue_case(case_id)
+                if preparation is not None:
+                    preparations.append(preparation)
+                    if len(preparations) == limit:
+                        break
+            cursor = (page[-1].created_at, page[-1].id)
         return preparations
 
     def _enqueue_case(self, case_id: uuid.UUID) -> ResearchPreparation | None:

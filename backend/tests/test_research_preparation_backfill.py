@@ -196,6 +196,51 @@ def test_backfill_requires_contract_to_cover_document_availability(tmp_path, con
         assert session.scalars(select(ResearchPreparation)).all() == []
 
 
+def test_backfill_skips_an_old_unavailable_case_to_fill_limit(tmp_path) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-starvation-one.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        _eligible_case(session, created_at=now - timedelta(minutes=2), allow_ai_processing=False)
+        eligible = _eligible_case(session, created_at=now - timedelta(minutes=1))
+        eligible_id = eligible.id
+        preparations = ResearchPreparationBackfill(session).enqueue_eligible(limit=1)
+        assert [preparation.research_case_id for preparation in preparations] == [eligible_id]
+        session.commit()
+    with sessions() as check:
+        assert len(check.scalars(select(ResearchPreparation)).all()) == 1
+        assert check.scalar(select(Job)).correlation_id.endswith(":parse_claims")
+
+
+def test_backfill_pages_past_many_unavailable_cases_and_remains_idempotent(tmp_path) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-starvation-many.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        for index in range(150):
+            _eligible_case(
+                session,
+                created_at=now - timedelta(minutes=200 - index),
+                allow_ai_processing=False,
+            )
+        first = _eligible_case(session, created_at=now - timedelta(minutes=2))
+        second = _eligible_case(session, created_at=now - timedelta(minutes=1))
+        first_id, second_id = first.id, second.id
+        preparations = ResearchPreparationBackfill(session).enqueue_eligible(limit=2)
+        assert [preparation.research_case_id for preparation in preparations] == [first_id, second_id]
+        session.commit()
+    with sessions() as check:
+        assert ResearchPreparationBackfill(check).enqueue_eligible(limit=2) == []
+        assert len(check.scalars(select(ResearchPreparation)).all()) == 2
+        assert len(check.scalars(select(Job)).all()) == 2
+
+
 @pytest.mark.parametrize(
     "excluded_by",
     ["admission", "document", "lifecycle", "published", "run", "preparation", "scope"],
