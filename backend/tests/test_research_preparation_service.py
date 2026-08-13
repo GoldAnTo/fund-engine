@@ -493,6 +493,156 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
     assert session.scalars(select(ResearchRun)).all() == []
 
 
+def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_sequence(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="q" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="protocol-edits")
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {
+            "title": "Original protocol",
+            "nested": {"keep": "original", "replace": "old"},
+            "items": ["old"],
+        },
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+    )
+    source = session.scalar(
+        select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation.id,
+            ResearchPreparationArtifact.kind == "research_protocol_draft",
+            ResearchPreparationArtifact.state == "current",
+        )
+    )
+    assert source is not None
+    stale_snapshot = _snapshot(session, preparation)
+
+    with pytest.raises(ConflictError):
+        service.confirm_protocol(
+            case.id,
+            actor="reviewer",
+            revision=preparation.version,
+            payload=ProtocolConfirmation(source.sequence + 1, {"title": "stale"}),
+        )
+    assert _snapshot(session, preparation) == stale_snapshot
+
+    with pytest.raises(ConflictError):
+        service.confirm_protocol(
+            case.id,
+            actor="reviewer",
+            revision=preparation.version,
+            payload=ProtocolConfirmation(source.sequence, {1: "invalid key"}),
+        )
+    assert _snapshot(session, preparation) == stale_snapshot
+
+    service.confirm_protocol(
+        case.id,
+        actor="reviewer",
+        revision=preparation.version,
+        payload=ProtocolConfirmation(
+            source.sequence,
+            {"nested": {"replace": "new", "added": "value"}, "items": ["new"]},
+        ),
+    )
+
+    artifacts = list(
+        session.scalars(
+            select(ResearchPreparationArtifact)
+            .where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id,
+                ResearchPreparationArtifact.kind == "research_protocol_draft",
+            )
+            .order_by(ResearchPreparationArtifact.sequence)
+        )
+    )
+    assert [(artifact.sequence, artifact.state) for artifact in artifacts] == [
+        (source.sequence, "superseded"),
+        (source.sequence + 1, "current"),
+    ]
+    assert artifacts[-1].payload == {
+        "title": "Original protocol",
+        "nested": {"keep": "original", "replace": "new", "added": "value"},
+        "items": ["new"],
+    }
+    event = _events(session, preparation.id)[-1]
+    assert event.detail == {
+        "source_draft_sequence": source.sequence,
+        "confirmed_draft_sequence": source.sequence + 1,
+        "changed_field_paths": ["items", "nested.added", "nested.replace"],
+        "changed_field_count": 3,
+        "changed_field_paths_truncated": False,
+    }
+    assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
+
+
+def test_claim_validation_is_atomic_before_any_review_write(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="r" * 64, actor="tester")
+    candidates = [_candidate(session, case, suffix=f"atomic-{index}") for index in range(2)]
+    _parse(service, preparation, candidates)
+    baseline = _snapshot(session, preparation)
+
+    with pytest.raises(ConflictError):
+        service.confirm_claims(
+            case.id,
+            actor="reviewer",
+            revision=preparation.version,
+            decisions=[
+                ClaimDecision(candidates[0].id, "confirmed", "reviewed"),
+                ClaimDecision(candidates[1].id, "modified", "reviewed"),
+            ],
+        )
+    session.commit()
+
+    assert _snapshot(session, preparation) == baseline
+
+
+def test_new_input_clears_authorized_run_before_resetting_preparation(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="s" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="authorized-reset")
+    _parse(service, preparation, [candidate])
+    now = datetime.now(UTC)
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=3,
+        budget=100,
+        budget_used=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+    preparation.research_run_id = run.id
+    preparation.status = "authorized"
+    session.flush()
+
+    reset = service.create_for_case(case.id, input_fingerprint="t" * 64, actor="tester")
+    session.commit()
+
+    assert reset.status == "preparing"
+    assert reset.research_run_id is None
+    assert session.get(ResearchRun, run.id) is not None
+    assert reset.parse_claims_state == "queued"
+    assert all(
+        artifact.state == "stale"
+        for artifact in session.scalars(
+            select(ResearchPreparationArtifact).where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id
+            )
+        )
+    )
+
+
 def test_failed_plan_preserves_prior_artifacts_and_manual_retry_only_queues_plan(session) -> None:
     case = _case(session)
     service = _service(session)

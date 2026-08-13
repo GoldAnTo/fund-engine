@@ -1,6 +1,7 @@
 """In-process command state machine for pre-authorization research work."""
 from __future__ import annotations
 
+import copy
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import ArtifactKind, PreparationStep
 from app.errors import ConflictError, NotFoundError
+from app.models.ledger import AtomicClaimCandidate
 from app.models.research_preparation import (
     ResearchPreparation,
     ResearchPreparationArtifact,
@@ -52,6 +54,8 @@ _PREPARATION_FAILURE_CODES = frozenset(
     {"provider_unavailable", "invalid_response", "retry_exhausted"}
 )
 _PERSISTED_PROVIDER_FAILURE = "preparation_provider_unavailable"
+_CLAIM_OUTCOMES = frozenset({"confirmed", "modified", "rejected"})
+_MAX_RECORDED_EDIT_PATHS = 50
 
 
 def _utcnow() -> datetime:
@@ -107,6 +111,10 @@ class ResearchPreparationService:
         preparation.version += 1
         preparation.input_fingerprint = input_fingerprint
         self._invalidate_current_artifacts(preparation, reason="input_changed")
+        # The check constraint permits this only as one atomic UPDATE with the
+        # following status transition; never flush an authorized row without
+        # its required run reference.
+        preparation.research_run_id = None
         preparation.status = "preparing"
         preparation.parse_claims_state = "queued"
         preparation.draft_protocol_state = "queued"
@@ -232,9 +240,18 @@ class ResearchPreparationService:
         if artifact is None:
             raise ConflictError("current claim candidates are missing")
         candidate_ids = self._candidate_ids(artifact)
-        decision_ids = [decision.candidate_id for decision in decisions]
-        if len(decision_ids) != len(set(decision_ids)) or set(decision_ids) != candidate_ids:
-            raise ConflictError("claim decisions must cover every current candidate exactly once")
+        self._validate_claim_decisions(
+            actor=actor, candidate_ids=candidate_ids, decisions=decisions
+        )
+        persisted_candidate_ids = set(
+            self._session.scalars(
+                select(AtomicClaimCandidate.id).where(
+                    AtomicClaimCandidate.id.in_(candidate_ids)
+                )
+            )
+        )
+        if persisted_candidate_ids != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
         for decision in decisions:
             self._claims.review(
                 decision.candidate_id,
@@ -284,6 +301,21 @@ class ResearchPreparationService:
         artifact = self._repo.current_artifact(preparation.id, "research_protocol_draft")
         if artifact is None or artifact.sequence != payload.draft_sequence:
             raise ConflictError("protocol draft revision is stale")
+        self._validate_protocol_edits(payload.edits)
+        confirmed_draft_sequence = artifact.sequence
+        changed_paths: list[str] = []
+        if payload.edits:
+            merged_payload, changed_paths = self._merge_protocol_edits(
+                artifact.payload, payload.edits
+            )
+            successor = self._repo.append_artifact(
+                preparation,
+                research_case_id=case_id,
+                kind="research_protocol_draft",
+                input_fingerprint=preparation.input_fingerprint,
+                payload=merged_payload,
+            )
+            confirmed_draft_sequence = successor.sequence
         preparation.protocol_review_state = "confirmed"
         self._set_aggregate_status(preparation)
         preparation.updated_at = _utcnow()
@@ -296,7 +328,14 @@ class ResearchPreparationService:
             type="preparation_protocol_confirmed",
             step="draft_protocol",
             message="protocol review confirmed",
-            detail={"actor": actor, "edit_count": len(payload.edits)},
+            detail={
+                "source_draft_sequence": artifact.sequence,
+                "confirmed_draft_sequence": confirmed_draft_sequence,
+                "changed_field_paths": changed_paths[:_MAX_RECORDED_EDIT_PATHS],
+                "changed_field_count": len(changed_paths),
+                "changed_field_paths_truncated": len(changed_paths)
+                > _MAX_RECORDED_EDIT_PATHS,
+            },
         )
         return preparation
 
@@ -417,6 +456,67 @@ class ResearchPreparationService:
                 raise ConflictError("claim candidate artifact has duplicate candidates")
             ids.add(candidate_id)
         return ids
+
+    def _validate_claim_decisions(
+        self,
+        *,
+        actor: str,
+        candidate_ids: set[uuid.UUID],
+        decisions: list[ClaimDecision],
+    ) -> None:
+        if not isinstance(actor, str) or not actor.strip():
+            raise ConflictError("claim reviewer is invalid")
+        decision_ids = [decision.candidate_id for decision in decisions]
+        if any(not isinstance(candidate_id, uuid.UUID) for candidate_id in decision_ids):
+            raise ConflictError("claim decision candidate is invalid")
+        if len(decision_ids) != len(set(decision_ids)) or set(decision_ids) != candidate_ids:
+            raise ConflictError("claim decisions must cover every current candidate exactly once")
+        for decision in decisions:
+            if decision.outcome not in _CLAIM_OUTCOMES:
+                raise ConflictError("claim decision outcome is invalid")
+            if not isinstance(decision.reason, str) or not decision.reason.strip():
+                raise ConflictError("claim decision reason is invalid")
+            if decision.outcome == "modified":
+                if not isinstance(decision.normalized_text, str) or not decision.normalized_text.strip():
+                    raise ConflictError("modified claim requires normalized text")
+            elif decision.normalized_text is not None:
+                raise ConflictError("only modified claim may provide normalized text")
+
+    def _validate_protocol_edits(self, edits: object) -> None:
+        if not isinstance(edits, dict) or not self._has_only_string_object_keys(edits):
+            raise ConflictError("protocol edits must be an object with string keys")
+
+    def _has_only_string_object_keys(self, value: object) -> bool:
+        if isinstance(value, dict):
+            return all(
+                isinstance(key, str) and self._has_only_string_object_keys(child)
+                for key, child in value.items()
+            )
+        if isinstance(value, list):
+            return all(self._has_only_string_object_keys(child) for child in value)
+        return True
+
+    def _merge_protocol_edits(
+        self, source_payload: dict[str, object], edits: dict[str, object]
+    ) -> tuple[dict[str, object], list[str]]:
+        merged = copy.deepcopy(source_payload)
+        changed_paths: list[str] = []
+
+        def overlay(
+            target: dict[str, object], patch: dict[str, object], prefix: str
+        ) -> None:
+            for key in sorted(patch):
+                path = f"{prefix}.{key}" if prefix else key
+                incoming = copy.deepcopy(patch[key])
+                previous = target.get(key)
+                if isinstance(previous, dict) and isinstance(incoming, dict):
+                    overlay(previous, incoming, path)
+                elif key not in target or previous != incoming:
+                    target[key] = incoming
+                    changed_paths.append(path)
+
+        overlay(merged, edits, "")
+        return merged, changed_paths
 
     def _set_aggregate_status(self, preparation: ResearchPreparation) -> None:
         if any(
