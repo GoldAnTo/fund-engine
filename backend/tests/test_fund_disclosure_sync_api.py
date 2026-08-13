@@ -746,6 +746,58 @@ def test_real_provider_failures_remain_transparent_replayable_runs(
     assert "sentinel-secret" not in response.text
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        1,
+        {},
+        {"table_markdown": {}},
+        {"table_markdown": "totally malformed sentinel-secret"},
+    ],
+)
+@pytest.mark.parametrize("is_retry", [False, True])
+def test_malformed_fund_provider_results_are_safe_failed_runs(
+    cmd_client, cmd_session, monkeypatch, result, is_retry
+) -> None:
+    from app.api.v1 import fund_disclosure_sync
+
+    class Client(_UnmatchedFundClient):
+        def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
+            return json.dumps({"code": "0", "results": [result]})
+
+    case = _admitted_case(cmd_session)
+    configured = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["005827"],
+            "frequency": "weekly",
+            "report_period": "2025-06-30",
+            "change_reason": "验证供应商结果结构",
+        },
+    )
+    assert configured.status_code == 200
+    monkeypatch.setattr(
+        fund_disclosure_sync, "get_fund_disclosure_client", Client
+    )
+    url = f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
+    if is_retry:
+        parent = FundDisclosureSyncService(cmd_session).start_manual_run(case.id)
+        cmd_session.commit()
+        url += f"/{parent.id}/retry"
+
+    response = cmd_client.post(url)
+
+    assert response.status_code == 201
+    assert response.json()["trigger"] == ("retry" if is_retry else "manual")
+    assert response.json()["status"] == "failed"
+    assert response.json()["events"][-1]["payload"] == {
+        "error_type": "operation_failure",
+        "error": "provider operation failed",
+    }
+    assert "sentinel-secret" not in response.text
+
+
 def test_stale_run_is_interrupted_and_retry_preserves_frozen_period(session) -> None:
     case = _case(session)
     service = FundDisclosureSyncService(session)

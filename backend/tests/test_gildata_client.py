@@ -244,11 +244,41 @@ def test_parse_content_invalid_returns_empty():
 
 @pytest.mark.parametrize(
     "content",
-    ["", "not json", "[]", json.dumps({"code": "500", "results": []})],
+    [
+        "",
+        "not json",
+        "[]",
+        json.dumps({"code": "500", "results": []}),
+        json.dumps({"code": "0", "results": [1]}),
+    ],
 )
 def test_strict_content_parser_normalizes_malformed_provider_payload(content):
     with pytest.raises(GildataMCPError) as exc_info:
         adapters.parse_content_strict(content)
+
+    assert str(exc_info.value) == "Gildata provider returned an invalid response"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {},
+        {"table_markdown": {}},
+        {"table_markdown": ""},
+        {"table_markdown": "totally malformed"},
+    ],
+)
+@pytest.mark.parametrize(
+    "fetcher",
+    [adapters.fetch_fund_stock_holdings, adapters.fetch_announcement],
+)
+def test_live_fund_adapters_reject_malformed_table_payload(result, fetcher):
+    class Client:
+        def call_tool(self, name, arguments, timeout=60):
+            return json.dumps({"code": "0", "results": [result]})
+
+    with pytest.raises(GildataMCPError) as exc_info:
+        fetcher(Client(), "query")
 
     assert str(exc_info.value) == "Gildata provider returned an invalid response"
 

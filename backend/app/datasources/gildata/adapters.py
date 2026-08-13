@@ -296,7 +296,20 @@ def parse_content_strict(text: str) -> list[dict]:
         or not isinstance(inner.get("results"), list)
     ):
         raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return [item for item in inner["results"] if isinstance(item, dict)]
+    results = inner["results"]
+    if any(not isinstance(item, dict) for item in results):
+        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
+    return results
+
+
+def _strict_table_rows(item: dict) -> list[dict[str, str]]:
+    table_markdown = item.get("table_markdown")
+    if not isinstance(table_markdown, str) or not table_markdown.strip():
+        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
+    rows = parse_table_markdown_payload(table_markdown)
+    if not rows:
+        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +354,7 @@ def fetch_announcement(client, query: str) -> list[dict]:
     text = client.call_tool("AnnouncementData", {"query": query})
     announcements: list[dict] = []
     for item in parse_content_strict(text):
-        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
+        for row in _strict_table_rows(item):
             normalized = _normalize(row, _ANNOUNCEMENT_ALIASES)
             announcements.append(
                 {
@@ -410,7 +423,7 @@ def fetch_fund_stock_holdings(client, query: str) -> list[dict]:
     text = client.call_tool("FinQuery", {"query": query})
     holdings: list[dict] = []
     for item in parse_content_strict(text):
-        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
+        for row in _strict_table_rows(item):
             normalized = _normalize(row, _FUND_HOLDING_ALIASES)
             if not all(
                 normalized.get(field, "")
