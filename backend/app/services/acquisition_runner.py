@@ -7,7 +7,9 @@ re-read when a lease is reclaimed.
 """
 from __future__ import annotations
 
+import math
 import re
+import secrets
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
@@ -20,6 +22,7 @@ from app.acquisition.policy import AcquisitionQueryPlanner, SourcePolicy
 from app.acquisition.sources import (
     RejectedSearchItem,
     RetrievedEnvelope,
+    RetrievedSearchResult,
     SourceAdapter,
     SourceReferenceValue,
     SourceUnavailable,
@@ -56,6 +59,8 @@ from app.services.retrieved_documents import (
 
 
 SessionFactory = Callable[[], Session]
+JitterSource = Callable[[], float]
+_SYSTEM_RANDOM = secrets.SystemRandom()
 _RUNNING_STAGES = frozenset(
     {"searching", "fetching", "freezing", "extracting", "admitting"}
 )
@@ -110,6 +115,8 @@ class AcquisitionRunner:
         clock: Callable[[], datetime] = _utcnow,
         retry_delay: timedelta = timedelta(minutes=1),
         max_retry_delay: timedelta = timedelta(minutes=15),
+        retry_jitter_ratio: float = 0.2,
+        jitter_source: JitterSource = _SYSTEM_RANDOM.random,
         max_attempts: int = 3,
     ) -> None:
         if not callable(session_factory):
@@ -118,6 +125,15 @@ class AcquisitionRunner:
             raise ValueError("retry_delay must be positive")
         if max_retry_delay < retry_delay:
             raise ValueError("max_retry_delay must not be less than retry_delay")
+        if (
+            isinstance(retry_jitter_ratio, bool)
+            or not isinstance(retry_jitter_ratio, (int, float))
+            or not math.isfinite(retry_jitter_ratio)
+            or not 0 <= retry_jitter_ratio <= 1
+        ):
+            raise ValueError("retry_jitter_ratio must be between zero and one")
+        if not callable(jitter_source):
+            raise TypeError("jitter_source must be callable")
         if (
             not isinstance(max_attempts, int)
             or isinstance(max_attempts, bool)
@@ -139,6 +155,8 @@ class AcquisitionRunner:
         self._clock = clock
         self._retry_delay = retry_delay
         self._max_retry_delay = max_retry_delay
+        self._retry_jitter_ratio = float(retry_jitter_ratio)
+        self._jitter_source = jitter_source
         self._max_attempts = max_attempts
         self._searched_adapters: set[str] = set()
 
@@ -167,7 +185,7 @@ class AcquisitionRunner:
             self._advance(claim, "fetching")
             stage = "fetching"
         if stage == "fetching":
-            self._fetch(claim, request, queries)
+            self._fetch(claim, request)
             if not self._has_artifacts(claim.job_id):
                 self._finish_without_artifacts(claim, stage="fetching")
                 return
@@ -443,6 +461,7 @@ class AcquisitionRunner:
                         "adapter_key": adapter_key,
                         "operation": "search",
                         "retryable": exc.retryable,
+                        "claim_attempt": claim.attempt,
                         "diagnostics": _thaw(exc.diagnostics),
                     },
                 )
@@ -488,22 +507,45 @@ class AcquisitionRunner:
                         },
                     )
                     continue
-                adapter.descriptor.validate_reference(item)
-                metadata = _thaw(item.metadata)
-                metadata["retrieval_locator"] = _thaw(item.fetch_locator)
+                reference_value = (
+                    item.reference
+                    if isinstance(item, RetrievedSearchResult)
+                    else item
+                )
+                adapter.descriptor.validate_reference(reference_value)
+                if isinstance(item, RetrievedSearchResult):
+                    self._freezer.checkpoint_search_result(
+                        reference_value,
+                        item.envelope,
+                        FetchCheckpointContext(
+                            job_id=claim.job_id,
+                            research_case_id=request.case_id,
+                            tenant_id=request.tenant_id,
+                            declared_actor=claim.lease_owner,
+                            lease_token=claim.lease_token,
+                            claim_attempt=claim.attempt,
+                            retrieved_at=self._now(),
+                        ),
+                        started_at=started_at,
+                    )
+                    continue
+                metadata = _thaw(reference_value.metadata)
+                metadata["retrieval_locator"] = _thaw(
+                    reference_value.fetch_locator
+                )
                 with self._session_factory() as session:
                     AcquisitionRepository(
                         session, clock=self._clock
                     ).create_or_get_reference(
                         claim.job_id,
                         lease_token=claim.lease_token,
-                        adapter_key=item.adapter_key,
-                        external_record_id=item.external_record_id,
-                        external_version=item.external_version,
-                        canonical_url=item.canonical_url,
-                        title=item.title,
-                        published_at=item.published_at,
-                        source_role=item.source_role,
+                        adapter_key=reference_value.adapter_key,
+                        external_record_id=reference_value.external_record_id,
+                        external_version=reference_value.external_version,
+                        canonical_url=reference_value.canonical_url,
+                        title=reference_value.title,
+                        published_at=reference_value.published_at,
+                        source_role=reference_value.source_role,
                         metadata_json=metadata,
                     )
                     session.commit()
@@ -549,11 +591,7 @@ class AcquisitionRunner:
             metadata=metadata,
         )
 
-    def _fetch(self, claim, request, queries) -> None:
-        references = self._references_without_artifacts(claim.job_id)
-        for adapter_key in dict.fromkeys(ref.adapter_key for ref in references):
-            if adapter_key not in self._searched_adapters and adapter_key in queries:
-                self._search(claim, request, {adapter_key: queries[adapter_key]})
+    def _fetch(self, claim, request) -> None:
         for reference in self._references_without_artifacts(claim.job_id):
             adapter = self._adapters.get(reference.adapter_key)
             if adapter is None:
@@ -564,9 +602,35 @@ class AcquisitionRunner:
                     reference_id=reference.id,
                 )
                 continue
-            value = self._reference_value(reference)
             self._fence(claim)
             started_at = self._now()
+            try:
+                value = self._reference_value(reference)
+                adapter.descriptor.validate_reference(value)
+                if reference.adapter_key not in self._searched_adapters:
+                    adapter.restore_reference(value)
+            except Exception as exc:
+                code = _safe_error_code(exc)
+                self._record_attempt(
+                    claim,
+                    adapter_key=reference.adapter_key,
+                    operation="fetch",
+                    started_at=started_at,
+                    outcome="failed",
+                    retryable=False,
+                    metadata={"source_reference_id": str(reference.id)},
+                    error_code=code,
+                )
+                self._record_exception(
+                    claim,
+                    reason_code="reference_restore_failed",
+                    detail={
+                        "adapter_key": reference.adapter_key,
+                        "error_code": code,
+                    },
+                    reference_id=reference.id,
+                )
+                continue
             try:
                 envelope = adapter.fetch(value)
             except SourceUnavailable as exc:
@@ -577,7 +641,10 @@ class AcquisitionRunner:
                     started_at=started_at,
                     outcome="failed",
                     retryable=exc.retryable,
-                    metadata={"source_reference_id": str(reference.id)},
+                    metadata={
+                        "source_reference_id": str(reference.id),
+                        "diagnostics": _thaw(exc.diagnostics),
+                    },
                     error_code="SourceUnavailable",
                 )
                 self._record_exception(
@@ -587,6 +654,7 @@ class AcquisitionRunner:
                         "adapter_key": reference.adapter_key,
                         "operation": "fetch",
                         "retryable": exc.retryable,
+                        "claim_attempt": claim.attempt,
                         "diagnostics": _thaw(exc.diagnostics),
                     },
                     reference_id=reference.id,
@@ -908,34 +976,113 @@ class AcquisitionRunner:
     def _has_artifacts(self, job_id: uuid.UUID) -> bool:
         return self._counts(job_id)["fetched_count"] > 0
 
-    def _retryable_failure_exists(
+    @staticmethod
+    def _retry_after_seconds(value: object, *, policy_cap: float) -> float | None:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            return None
+        return min(float(value), policy_cap)
+
+    @classmethod
+    def _retry_after_from_metadata(
+        cls, metadata: object, *, policy_cap: float
+    ) -> float | None:
+        if not isinstance(metadata, Mapping):
+            return None
+        candidates = [metadata.get("retry_after_seconds")]
+        diagnostics = metadata.get("diagnostics")
+        if isinstance(diagnostics, Mapping):
+            candidates.append(diagnostics.get("retry_after_seconds"))
+        values: list[float] = []
+        for candidate in candidates:
+            parsed = cls._retry_after_seconds(candidate, policy_cap=policy_cap)
+            if parsed is not None:
+                values.append(parsed)
+        return max(values, default=None)
+
+    def _retryable_failure_policy(
         self, job_id: uuid.UUID, *, claim_attempt: int
-    ) -> bool:
+    ) -> tuple[bool, float]:
+        policy_cap = self._max_retry_delay.total_seconds()
         with self._session_factory() as session:
-            attempts = session.scalars(
-                select(AcquisitionAttempt).where(
-                    AcquisitionAttempt.job_id == job_id,
-                    AcquisitionAttempt.outcome == "failed",
-                    AcquisitionAttempt.retryable.is_(True),
+            attempts = tuple(
+                session.scalars(
+                    select(AcquisitionAttempt).where(
+                        AcquisitionAttempt.job_id == job_id,
+                        AcquisitionAttempt.outcome == "failed",
+                        AcquisitionAttempt.retryable.is_(True),
+                    )
                 )
             )
-            return any(
-                isinstance(attempt.safe_metadata, dict)
-                and attempt.safe_metadata.get("claim_attempt") == claim_attempt
-                for attempt in attempts
+            exceptions = tuple(
+                session.scalars(
+                    select(AcquisitionException).where(
+                        AcquisitionException.job_id == job_id,
+                        AcquisitionException.reason_code == "source_unavailable",
+                    )
+                )
             )
+        current_attempts = tuple(
+            attempt
+            for attempt in attempts
+            if isinstance(attempt.safe_metadata, dict)
+            and attempt.safe_metadata.get("claim_attempt") == claim_attempt
+        )
+        retry_after_values: list[float] = []
+        for attempt in current_attempts:
+            value = self._retry_after_from_metadata(
+                attempt.safe_metadata, policy_cap=policy_cap
+            )
+            if value is not None:
+                retry_after_values.append(value)
+        for exception in exceptions:
+            detail = exception.detail_json
+            if (
+                not isinstance(detail, dict)
+                or detail.get("claim_attempt") != claim_attempt
+                or detail.get("retryable") is not True
+            ):
+                continue
+            value = self._retry_after_from_metadata(detail, policy_cap=policy_cap)
+            if value is not None:
+                retry_after_values.append(value)
+        return bool(current_attempts), max(retry_after_values, default=0.0)
+
+    def _retry_backoff(self, claim_attempt: int, provider_minimum: float) -> timedelta:
+        exponential = min(
+            self._retry_delay * (2 ** (claim_attempt - 1)),
+            self._max_retry_delay,
+        ).total_seconds()
+        policy_cap = self._max_retry_delay.total_seconds()
+        sample = self._jitter_source()
+        if (
+            isinstance(sample, bool)
+            or not isinstance(sample, (int, float))
+            or not math.isfinite(sample)
+            or not 0 <= sample <= 1
+        ):
+            raise ValueError(
+                "jitter_source must return a finite value from zero to one"
+            )
+        jitter_room = min(
+            exponential * self._retry_jitter_ratio,
+            policy_cap - exponential,
+        )
+        jittered = exponential + jitter_room * float(sample)
+        return timedelta(seconds=max(jittered, provider_minimum))
 
     def _finish_without_artifacts(self, claim: AcquisitionClaim, *, stage: str) -> None:
-        retryable = self._retryable_failure_exists(
+        retryable, provider_minimum = self._retryable_failure_policy(
             claim.job_id, claim_attempt=claim.attempt
         )
         with self._session_factory() as session:
             repository = AcquisitionRepository(session, clock=self._clock)
             if retryable and claim.attempt < self._max_attempts:
-                backoff = min(
-                    self._retry_delay * (2 ** (claim.attempt - 1)),
-                    self._max_retry_delay,
-                )
+                backoff = self._retry_backoff(claim.attempt, provider_minimum)
                 repository.advance(
                     claim.job_id,
                     lease_token=claim.lease_token,

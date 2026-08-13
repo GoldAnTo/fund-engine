@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
@@ -104,6 +105,7 @@ class FakeSSEAdapter(SourceAdapter):
 
     def __init__(self) -> None:
         self.search_calls = 0
+        self.restore_calls = 0
         self.fetch_calls = 0
         self.closed = False
 
@@ -150,6 +152,10 @@ class FakeSSEAdapter(SourceAdapter):
             },
         )
 
+    def restore_reference(self, reference: SourceReferenceValue) -> None:
+        self.restore_calls += 1
+        self.descriptor.validate_reference(reference)
+
     def close(self) -> None:
         self.closed = True
 
@@ -170,12 +176,19 @@ class PartialSSEAdapter(FakeSSEAdapter):
 
 
 class RetryableSearchAdapter(FakeSSEAdapter):
+    def __init__(self, *, retry_after_seconds=None) -> None:
+        super().__init__()
+        self._retry_after_seconds = retry_after_seconds
+
     def search(self, query: str, cutoff: datetime):
         self.search_calls += 1
+        diagnostics = {"provider_status": "temporarily_unavailable"}
+        if self._retry_after_seconds is not None:
+            diagnostics["retry_after_seconds"] = self._retry_after_seconds
         raise SourceUnavailable(
             "official source temporarily unavailable",
             retryable=True,
-            diagnostics={"provider_status": "temporarily_unavailable"},
+            diagnostics=diagnostics,
         )
 
 
@@ -348,6 +361,7 @@ def _run_with_adapter(session, research_case, thesis, document, adapter, clock):
         llm_client=FakeExtractionClient(),
         clock=clock,
         retry_delay=timedelta(seconds=45),
+        jitter_source=lambda: 0.0,
     ).run_claim(claim)
     session.expire_all()
     return module, principal, job
@@ -389,6 +403,128 @@ def test_retryable_provider_failure_without_success_enters_retry_wait(
     assert persisted is not None
     assert persisted.retry_at.replace(tzinfo=UTC) == NOW + timedelta(seconds=45)
     assert persisted.lease_token is None
+
+
+def test_provider_retry_after_is_a_lower_bound_for_retry_at(
+    session, research_case, thesis, document
+):
+    clock = MutableClock()
+    module, principal, job = _run_with_adapter(
+        session,
+        research_case,
+        thesis,
+        document,
+        RetryableSearchAdapter(retry_after_seconds=120),
+        clock,
+    )
+
+    persisted = session.get(AcquisitionJob, job.id)
+    assert module.get(job.id, principal=principal).status == "retry_wait"
+    assert persisted is not None
+    assert persisted.retry_at.replace(tzinfo=UTC) == NOW + timedelta(seconds=120)
+    attempt = session.scalar(
+        select(AcquisitionAttempt).where(AcquisitionAttempt.job_id == job.id)
+    )
+    assert attempt is not None
+    assert attempt.safe_metadata["diagnostics"]["retry_after_seconds"] == 120
+
+
+def test_retry_backoff_adds_injected_bounded_jitter(
+    session, research_case, thesis, document
+):
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    module = AcquisitionModule(session, policy=SSE_ONLY_POLICY)
+    job = module.request(make_request(research_case, thesis), principal=principal)
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(minutes=5),
+    )
+    assert claim is not None
+    session.commit()
+
+    AcquisitionRunner(
+        make_session_factory(session),
+        adapters={"sse": RetryableSearchAdapter()},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+        retry_delay=timedelta(seconds=100),
+        max_retry_delay=timedelta(seconds=110),
+        retry_jitter_ratio=0.2,
+        jitter_source=lambda: 0.75,
+    ).run_claim(claim)
+
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted is not None
+    assert persisted.retry_at.replace(tzinfo=UTC) == NOW + timedelta(seconds=107.5)
+
+
+@pytest.mark.parametrize(
+    ("retry_after_seconds", "expected_seconds"),
+    [
+        (float("nan"), 45),
+        (float("inf"), 45),
+        (-1, 45),
+        (True, 45),
+        ("120", 45),
+        (9999, 90),
+    ],
+)
+def test_invalid_retry_after_is_ignored_and_oversized_value_is_clamped(
+    session,
+    research_case,
+    thesis,
+    document,
+    retry_after_seconds,
+    expected_seconds,
+):
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    job = AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
+        make_request(research_case, thesis), principal=principal
+    )
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(minutes=5),
+    )
+    assert claim is not None
+    session.commit()
+
+    AcquisitionRunner(
+        make_session_factory(session),
+        adapters={
+            "sse": RetryableSearchAdapter(
+                retry_after_seconds=retry_after_seconds
+            )
+        },
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+        retry_delay=timedelta(seconds=45),
+        max_retry_delay=timedelta(seconds=90),
+        jitter_source=lambda: 0.0,
+    ).run_claim(claim)
+
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted is not None
+    assert persisted.retry_at.replace(tzinfo=UTC) == NOW + timedelta(
+        seconds=expected_seconds
+    )
 
 
 def test_empty_nonretryable_search_fails_closed(
@@ -433,6 +569,7 @@ def test_historical_retryable_failure_does_not_pollute_current_claim(
         llm_client=FakeExtractionClient(),
         clock=clock,
         retry_delay=timedelta(seconds=45),
+        jitter_source=lambda: 0.0,
     ).run_claim(claim_a)
 
     clock.advance(timedelta(seconds=45))
@@ -449,6 +586,7 @@ def test_historical_retryable_failure_does_not_pollute_current_claim(
         llm_client=FakeExtractionClient(),
         clock=clock,
         retry_delay=timedelta(seconds=45),
+        jitter_source=lambda: 0.0,
     ).run_claim(claim_b)
 
     session.expire_all()
@@ -503,6 +641,7 @@ def test_retry_backoff_is_bounded_and_last_claim_attempt_fails(
             retry_delay=timedelta(seconds=45),
             max_retry_delay=timedelta(seconds=90),
             max_attempts=3,
+            jitter_source=lambda: 0.0,
         ).run_claim(claim)
         session.expire_all()
         persisted = session.get(AcquisitionJob, job.id)

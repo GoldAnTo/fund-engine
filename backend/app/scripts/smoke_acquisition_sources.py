@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from app.acquisition.sources import (
     RejectedSearchItem,
     RetrievedEnvelope,
+    RetrievedSearchResult,
     SourceAdapter,
     SourceDescriptor,
     SourceReferenceValue,
@@ -308,7 +309,7 @@ def _run_live(
         return 2
 
     report["counts"]["returned"] = len(results)
-    accepted: list[SourceReferenceValue] = []
+    accepted: list[tuple[SourceReferenceValue, RetrievedEnvelope | None]] = []
     for item in results:
         if isinstance(item, RejectedSearchItem):
             report["counts"]["rejected"] += 1
@@ -326,6 +327,10 @@ def _run_live(
                 }
             )
             continue
+        inline_envelope = None
+        if isinstance(item, RetrievedSearchResult):
+            inline_envelope = item.envelope
+            item = item.reference
         if not isinstance(item, SourceReferenceValue):
             report["errors"].append(
                 {
@@ -340,17 +345,17 @@ def _run_live(
         except Exception as exc:
             report["errors"].append(_safe_error(exc, stage="search"))
             continue
-        accepted.append(item)
+        accepted.append((item, inline_envelope))
         report["references"].append(_reference_value(item))
     report["counts"]["accepted"] = len(accepted)
     report["fetch_limit"] = _FETCH_LIMIT
     report["not_fetched_count"] = max(0, len(accepted) - _FETCH_LIMIT)
 
-    for index, reference in enumerate(accepted[:_FETCH_LIMIT]):
+    for index, (reference, inline_envelope) in enumerate(accepted[:_FETCH_LIMIT]):
         if index:
             sleeper(_FETCH_INTERVAL_SECONDS)
         try:
-            envelope = adapter.fetch(reference)
+            envelope = inline_envelope or adapter.fetch(reference)
         except Exception as exc:
             report["errors"].append(_safe_error(exc, stage="fetch"))
             continue

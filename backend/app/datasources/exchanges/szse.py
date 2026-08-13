@@ -443,6 +443,28 @@ class SZSEAnnouncementSource(SourceAdapter):
             },
         )
 
+    def restore_reference(self, reference: SourceReferenceValue) -> None:
+        try:
+            self.descriptor.validate_reference(reference)
+            valid = (
+                reference.adapter_key == self.descriptor.adapter_key
+                and reference.source_role == "company_disclosure"
+                and reference.external_record_id.startswith("szse:")
+                and reference.metadata.get("provider_identity")
+                == self.descriptor.provider_identity
+                and dict(reference.fetch_locator)
+                == {"canonical_pdf_url": reference.canonical_url}
+                and self._pdf_url(reference.canonical_url)
+                == reference.canonical_url
+            )
+        except Exception:
+            valid = False
+        if not valid:
+            raise ValueError("persisted SZSE reference failed validation") from None
+        tracked = self._track_reference(reference)
+        if not isinstance(tracked, SourceReferenceValue):
+            raise ValueError("persisted SZSE reference identity conflicts") from None
+
     def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:
         key = _identity_key(reference)
         known = self._known.get(key)

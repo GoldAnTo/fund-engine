@@ -13,6 +13,7 @@ import httpx
 
 from app.acquisition.sources import (
     RetrievedEnvelope,
+    RetrievedSearchResult,
     SourceDescriptor,
     SourceReferenceValue,
     SourceUnavailable,
@@ -94,6 +95,41 @@ def reference(number: int) -> SourceReferenceValue:
         fetch_locator={"record_id": f"sse:record-{number}"},
         metadata={"provider_identity": "Test Official Source"},
     )
+
+
+def test_live_smoke_consumes_inline_search_envelope_without_adapter_fetch(tmp_path):
+    value = reference(1)
+    envelope = RetrievedEnvelope(
+        content=b"inline provider body",
+        mime_type="text/plain; charset=utf-8",
+        final_url=value.canonical_url,
+        etag=None,
+        last_modified=None,
+        provider_request_id=None,
+        metadata={
+            "adapter_key": "sse",
+            "external_record_id": value.external_record_id,
+            "provider_identity": "Test Official Source",
+        },
+    )
+    adapter = StubAdapter(
+        search_results=(RetrievedSearchResult(reference=value, envelope=envelope),)
+    )
+
+    exit_code, _output, report = run_in_process(
+        tmp_path,
+        "--source",
+        "sse",
+        "--security-code",
+        "600000",
+        "--days",
+        "2",
+        adapter=adapter,
+    )
+
+    assert exit_code == 0
+    assert adapter.fetch_calls == []
+    assert report["counts"]["fetched"] == 1
 
 
 def run_in_process(

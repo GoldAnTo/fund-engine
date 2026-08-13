@@ -424,6 +424,63 @@ def test_fetch_unknown_reference_never_uses_network_and_duplicate_is_cached():
     assert first.metadata["external_record_id"] == reference.external_record_id
 
 
+def test_new_instance_restores_persisted_reference_without_search():
+    fixture = json.loads(FIXTURE.read_text())
+    original = make_source(lambda request: response_json(fixture))
+    reference = accepted(
+        original.search("300750", datetime(2025, 4, 30, tzinfo=UTC))
+    )[0]
+    calls: list[httpx.Request] = []
+
+    def fetch_only(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.url.host != "www.szse.cn"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nrestored",
+        )
+
+    recovered = make_source(fetch_only)
+    recovered.restore_reference(reference)
+
+    assert recovered.fetch(reference).content == b"%PDF-1.7\nrestored"
+    assert [request.method for request in calls] == ["GET"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"source_role": "licensed_provider"},
+        {"fetch_locator": {}},
+        {"metadata": {"provider_identity": "Other Exchange"}},
+    ],
+)
+def test_restore_rejects_unsafe_persisted_szse_reference(changes):
+    fixture = json.loads(FIXTURE.read_text())
+    source = make_source(lambda request: response_json(fixture))
+    reference = accepted(
+        source.search("300750", datetime(2025, 4, 30, tzinfo=UTC))
+    )[0]
+    values = {
+        "adapter_key": reference.adapter_key,
+        "external_record_id": reference.external_record_id,
+        "external_version": reference.external_version,
+        "canonical_url": reference.canonical_url,
+        "title": reference.title,
+        "published_at": reference.published_at,
+        "source_role": reference.source_role,
+        "fetch_locator": dict(reference.fetch_locator),
+        "metadata": dict(reference.metadata),
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError, match="persisted SZSE"):
+        make_source(lambda request: pytest.fail("network must not run")).restore_reference(
+            SourceReferenceValue(**values)
+        )
+
+
 def test_evicted_download_is_never_fetched_twice_in_same_lifecycle():
     fixture = json.loads(FIXTURE.read_text())
     fixture["announceCount"] = 2

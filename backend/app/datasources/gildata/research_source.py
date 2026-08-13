@@ -13,6 +13,7 @@ from typing import Any, Final
 from app.acquisition.sources import (
     RejectedSearchItem,
     RetrievedEnvelope,
+    RetrievedSearchResult,
     SearchItem,
     SourceAdapter,
     SourceDescriptor,
@@ -49,9 +50,9 @@ CacheKey = tuple[str, str, str]
 
 
 @dataclass(frozen=True, slots=True)
-class _CacheEntry:
+class _KnownEntry:
     reference: SourceReferenceValue
-    payload: bytes
+    content_sha256: str
 
 
 class _StrictGildataClient:
@@ -228,7 +229,7 @@ def _cache_key(reference: SourceReferenceValue) -> CacheKey:
 
 
 class GildataResearchSource(SourceAdapter):
-    """Map complete licensed Gildata payloads into cache-backed references."""
+    """Map complete licensed rows into transient, immediately frozen results."""
 
     def __init__(
         self,
@@ -243,8 +244,7 @@ class GildataResearchSource(SourceAdapter):
         self._client = client
         self._strict_client = _StrictGildataClient(client)
         self._max_cache_bytes = max_cache_bytes
-        self._cache_bytes = 0
-        self._payloads: dict[CacheKey, _CacheEntry] = {}
+        self._known: dict[CacheKey, _KnownEntry] = {}
         self._conflicts: set[CacheKey] = set()
 
     @property
@@ -527,14 +527,18 @@ class GildataResearchSource(SourceAdapter):
         for key in sorted(accepted):
             variants = accepted[key]
             payloads = {payload for _reference, payload in variants}
-            cached = self._payloads.get(key)
+            known = self._known.get(key)
             if key in self._conflicts:
                 resolved.append(
                     self._derived_rejection(variants[0][0], "variant_conflict")
                 )
                 continue
+            payload_digests = {
+                hashlib.sha256(payload).hexdigest() for payload in payloads
+            }
             if len(payloads) != 1 or (
-                cached is not None and cached.payload not in payloads
+                known is not None
+                and known.content_sha256 not in payload_digests
             ):
                 self._conflicts.add(key)
                 resolved.append(
@@ -542,22 +546,48 @@ class GildataResearchSource(SourceAdapter):
                 )
                 continue
             payload = next(iter(payloads))
-            if cached is not None:
-                resolved.append(cached.reference)
-                continue
-            reference = min(variants, key=lambda value: repr(value[0]))[0]
-            if len(payload) > self._max_cache_bytes - self._cache_bytes:
+            reference = (
+                known.reference
+                if known is not None
+                else min(variants, key=lambda value: repr(value[0]))[0]
+            )
+            if len(payload) > self._max_cache_bytes:
                 resolved.append(self._derived_rejection(reference, "payload_too_large"))
                 continue
-            self._payloads[key] = _CacheEntry(reference=reference, payload=payload)
-            self._cache_bytes += len(payload)
-            resolved.append(reference)
+            self._known[key] = _KnownEntry(
+                reference=reference,
+                content_sha256=hashlib.sha256(payload).hexdigest(),
+            )
+            provider_identity = reference.metadata.get(
+                "provider_identity"
+            ) or reference.metadata.get("publisher")
+            resolved.append(
+                RetrievedSearchResult(
+                    reference=reference,
+                    envelope=RetrievedEnvelope(
+                        content=payload,
+                        mime_type="text/plain; charset=utf-8",
+                        final_url=reference.canonical_url,
+                        etag=None,
+                        last_modified=None,
+                        provider_request_id=None,
+                        metadata={
+                            "adapter_key": self.descriptor.adapter_key,
+                            "external_record_id": reference.external_record_id,
+                            "source_type": reference.metadata["source_type"],
+                            "provider_identity": provider_identity,
+                        },
+                    ),
+                )
+            )
         return tuple(
             sorted(
                 resolved,
                 key=lambda item: (
-                    item.external_record_id,
-                    0 if isinstance(item, SourceReferenceValue) else 1,
+                    item.reference.external_record_id
+                    if isinstance(item, RetrievedSearchResult)
+                    else item.external_record_id,
+                    0 if isinstance(item, RetrievedSearchResult) else 1,
                     item.reason if isinstance(item, RejectedSearchItem) else "",
                 ),
             )
@@ -580,33 +610,33 @@ class GildataResearchSource(SourceAdapter):
             },
         )
 
-    def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:
-        entry = self._payloads.get(_cache_key(reference))
-        if entry is None or entry.reference != reference:
-            error = ValueError("unknown or mismatched Gildata source reference")
-            error.__context__ = None
-            raise error from None
+    def restore_reference(self, reference: SourceReferenceValue) -> None:
         self.descriptor.validate_reference(reference)
-        provider_identity = reference.metadata.get(
-            "provider_identity"
-        ) or reference.metadata.get("publisher")
-        return RetrievedEnvelope(
-            content=entry.payload,
-            mime_type="text/plain; charset=utf-8",
-            final_url=reference.canonical_url,
-            etag=None,
-            last_modified=None,
-            provider_request_id=None,
-            metadata={
-                "adapter_key": self.descriptor.adapter_key,
-                "external_record_id": reference.external_record_id,
-                "source_type": reference.metadata["source_type"],
-                "provider_identity": provider_identity,
-            },
+        source_type = reference.metadata.get("source_type")
+        expected_host = {
+            "research_report": "research-report",
+            "announcement": "announcement",
+        }.get(source_type)
+        valid = (
+            reference.source_role == "licensed_provider"
+            and reference.fetch_locator.get("record_id")
+            == reference.external_record_id
+            and reference.canonical_url
+            == f"gildata://{expected_host}/{reference.external_record_id}"
         )
+        if not valid:
+            raise ValueError("persisted Gildata reference failed validation") from None
+        raise SourceUnavailable(
+            "Gildata reference requires an inline search artifact",
+            retryable=False,
+            diagnostics={"operation": "restore_reference", "stable_fetch": False},
+        ) from None
+
+    def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:
+        self.restore_reference(reference)
+        raise AssertionError("unreachable")
 
     def close(self) -> None:
-        self._payloads.clear()
+        self._known.clear()
         self._conflicts.clear()
-        self._cache_bytes = 0
         self._client.close()

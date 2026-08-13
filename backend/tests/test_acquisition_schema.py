@@ -372,6 +372,10 @@ def _inspected_indexes(
         index["name"]: tuple(index["column_names"])
         for index in inspector.get_indexes(table_name)
         if index["name"].startswith(("ix_", "uq_"))
+        # PostgreSQL exposes a UNIQUE constraint's backing index in the
+        # index inspector as well.  It is already asserted above as a
+        # constraint and must not be counted as a separately declared index.
+        and not index.get("duplicates_constraint")
     }
 
 

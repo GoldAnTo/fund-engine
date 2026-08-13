@@ -291,9 +291,6 @@ class RejectedSearchItem:
         object.__setattr__(self, "metadata", _safe_mapping(self.metadata, "metadata"))
 
 
-SearchItem = SourceReferenceValue | RejectedSearchItem
-
-
 @dataclass(frozen=True, slots=True)
 class RetrievedEnvelope:
     content: bytes
@@ -339,6 +336,29 @@ class RetrievedEnvelope:
         object.__setattr__(self, "metadata", _safe_mapping(self.metadata, "metadata"))
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievedSearchResult:
+    """A transient provider body that must be checkpointed with its reference."""
+
+    reference: SourceReferenceValue
+    envelope: RetrievedEnvelope
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference, SourceReferenceValue):
+            raise TypeError("reference must be a SourceReferenceValue")
+        if not isinstance(self.envelope, RetrievedEnvelope):
+            raise TypeError("envelope must be a RetrievedEnvelope")
+        adapter_key = self.envelope.metadata.get("adapter_key")
+        if adapter_key is not None and adapter_key != self.reference.adapter_key:
+            raise ValueError("retrieved search adapter identity mismatch")
+        record_id = self.envelope.metadata.get("external_record_id")
+        if record_id is not None and record_id != self.reference.external_record_id:
+            raise ValueError("retrieved search provider identity mismatch")
+
+
+SearchItem = SourceReferenceValue | RejectedSearchItem | RetrievedSearchResult
+
+
 class SourceUnavailable(Exception):
     """A sanitized provider failure with an explicit retry decision."""
 
@@ -368,6 +388,11 @@ class SourceAdapter(ABC):
     @abstractmethod
     def search(self, query: str, cutoff: datetime) -> tuple[SearchItem, ...]:
         raise NotImplementedError
+
+    def restore_reference(self, reference: SourceReferenceValue) -> None:
+        """Hydrate safe adapter state from a durable reference or fail closed."""
+        self.descriptor.validate_reference(reference)
+        raise ValueError("adapter does not support persisted reference recovery")
 
     @abstractmethod
     def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:

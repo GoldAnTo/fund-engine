@@ -52,12 +52,35 @@ def test_source_adapter_exposes_exact_narrow_contract():
         if not name.startswith("_") and (callable(value) or isinstance(value, property))
     }
 
-    assert public_names == {"descriptor", "search", "fetch", "close"}
+    assert public_names == {
+        "descriptor",
+        "search",
+        "restore_reference",
+        "fetch",
+        "close",
+    }
     assert getattr(SourceAdapter.descriptor.fget, "__isabstractmethod__", False)
     assert all(
         getattr(getattr(SourceAdapter, method), "__isabstractmethod__", False)
         for method in ("search", "fetch", "close")
     )
+
+
+def test_default_reference_restore_validates_then_fails_closed():
+    class MinimalSource(SourceAdapter):
+        descriptor = descriptor()
+
+        def search(self, query, cutoff):
+            return ()
+
+        def fetch(self, value):
+            raise AssertionError
+
+        def close(self):
+            return None
+
+    with pytest.raises(ValueError, match="persisted reference recovery"):
+        MinimalSource().restore_reference(reference())
 
 
 def test_frozen_reference_matches_contract_value():

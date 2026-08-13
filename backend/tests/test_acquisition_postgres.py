@@ -112,7 +112,10 @@ def test_0053_postgres_constraints_uniqueness_and_database_immutability() -> Non
             )
             assert "attempt_no >= 1" in attempt_checks
             assert "byte_size > 0" in artifact_checks
-            assert "length(content_sha256) = 64" in artifact_checks
+            assert (
+                "length(content_sha256) = 64" in artifact_checks
+                or "length(content_sha256::text) = 64" in artifact_checks
+            )
             assert "byte_size = length(raw_bytes)" in artifact_checks
             assert "admitted" in decision_checks
             assert "quarantined" in decision_checks

@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
 
+from app.acquisition.policy import B_SCOPE_POLICY, SourcePolicy
+from app.acquisition.sources import (
+    RetrievedEnvelope,
+    RetrievedSearchResult,
+    SourceAdapter,
+    SourceDescriptor,
+    SourceReferenceValue,
+)
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionException,
@@ -61,6 +70,223 @@ class CrashDuringFetchAdapter(FakeSSEAdapter):
     def fetch(self, reference):
         self.fetch_calls += 1
         raise InjectedWorkerCrash
+
+
+GILDATA_ONLY_POLICY = SourcePolicy(
+    version=B_SCOPE_POLICY.version,
+    enabled_adapter_keys=frozenset({"gildata"}),
+    allowed_source_roles=B_SCOPE_POLICY.allowed_source_roles,
+    exact_hosts=B_SCOPE_POLICY.exact_hosts,
+    suffix_hosts=B_SCOPE_POLICY.suffix_hosts,
+    max_response_bytes=B_SCOPE_POLICY.max_response_bytes,
+    per_adapter_page_limit=B_SCOPE_POLICY.per_adapter_page_limit,
+    permission_declarations=(("gildata", "licensed-provider-contract"),),
+)
+
+
+class FakeGildataInlineAdapter(SourceAdapter):
+    descriptor = SourceDescriptor(
+        adapter_key="gildata",
+        provider_identity="Gildata",
+        allowed_schemes=frozenset({"gildata"}),
+        allowed_hosts=frozenset({"research-report"}),
+        allowed_source_roles=frozenset({"licensed_provider"}),
+    )
+
+    def __init__(self, *, search_enabled: bool = True) -> None:
+        self.search_enabled = search_enabled
+        self.search_calls = 0
+        self.fetch_calls = 0
+        self.restore_calls = 0
+
+    def search(self, query, cutoff):
+        self.search_calls += 1
+        if not self.search_enabled:
+            raise AssertionError("recovery must not call Gildata search")
+        reference = SourceReferenceValue(
+            adapter_key="gildata",
+            external_record_id="report:600001:2026-08-13:task8",
+            external_version="published:2026-08-13",
+            canonical_url=(
+                "gildata://research-report/"
+                "report:600001:2026-08-13:task8"
+            ),
+            title="Example Corp annual report",
+            published_at=CUTOFF - timedelta(hours=1),
+            source_role="licensed_provider",
+            fetch_locator={"record_id": "report:600001:2026-08-13:task8"},
+            metadata={
+                "source_type": "research_report",
+                "security_code": "600001",
+                "publisher": "Task8 Research",
+            },
+        )
+        return (
+            RetrievedSearchResult(
+                reference=reference,
+                envelope=RetrievedEnvelope(
+                    content=b"Example Corp 2026-08-12 Revenue was 100 USD.",
+                    mime_type="text/plain; charset=utf-8",
+                    final_url=reference.canonical_url,
+                    etag=None,
+                    last_modified=None,
+                    provider_request_id=None,
+                    metadata={
+                        "adapter_key": "gildata",
+                        "external_record_id": reference.external_record_id,
+                        "provider_identity": "Task8 Research",
+                    },
+                ),
+            ),
+        )
+
+    def restore_reference(self, reference):
+        self.restore_calls += 1
+        raise AssertionError("inline Gildata artifact must not need restore")
+
+    def fetch(self, reference):
+        self.fetch_calls += 1
+        raise AssertionError("inline Gildata artifact must not need fetch")
+
+    def close(self):
+        return None
+
+
+class CrashBeforeFetchRunner(AcquisitionRunner):
+    def _fetch(self, claim, request):
+        raise InjectedWorkerCrash
+
+
+def test_gildata_inline_artifact_recovers_without_provider_research(
+    session, research_case, thesis, document
+):
+    clock = MutableClock()
+    sessions = make_session_factory(session)
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    request = replace(
+        make_request(
+            research_case,
+            thesis,
+            idempotency_key="task8-gildata-inline-recovery",
+        ),
+        allowed_source_roles=frozenset({"licensed_provider"}),
+    )
+    job = AcquisitionModule(session, policy=GILDATA_ONLY_POLICY).request(
+        request, principal=principal
+    )
+    session.commit()
+    repository = AcquisitionRepository(session, clock=clock)
+    claim_a = repository.claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(seconds=30),
+    )
+    assert claim_a is not None
+    session.commit()
+    original = FakeGildataInlineAdapter()
+
+    with pytest.raises(InjectedWorkerCrash):
+        CrashBeforeFetchRunner(
+            sessions,
+            adapters={"gildata": original},
+            llm_client=FakeExtractionClient(),
+            clock=clock,
+        ).run_claim(claim_a)
+
+    assert original.search_calls == 1
+    assert original.fetch_calls == 0
+    assert session.scalar(select(func.count()).select_from(SourceReference)) == 1
+    assert session.scalar(select(func.count()).select_from(RetrievalArtifact)) == 1
+    reference = session.scalar(select(SourceReference))
+    assert reference is not None
+    assert "Revenue was 100 USD" not in repr(reference.metadata_json)
+    clock.advance(timedelta(seconds=31))
+    claim_b = repository.claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-b",
+        lease_for=timedelta(minutes=5),
+    )
+    assert claim_b is not None
+    session.commit()
+    recovered = FakeGildataInlineAdapter(search_enabled=False)
+
+    AcquisitionRunner(
+        sessions,
+        adapters={"gildata": recovered},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    ).run_claim(claim_b)
+
+    assert recovered.search_calls == 0
+    assert recovered.restore_calls == 0
+    assert recovered.fetch_calls == 0
+    assert session.get(AcquisitionJob, job.id).status in {"succeeded", "partial"}
+    assert session.scalar(select(func.count()).select_from(RetrievalArtifactDocument)) == 1
+
+
+def test_persisted_official_reference_recovers_without_live_search(
+    session, research_case, thesis, document
+):
+    clock = MutableClock()
+    sessions = make_session_factory(session)
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    job = AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
+        make_request(
+            research_case,
+            thesis,
+            idempotency_key="task8-reference-restore",
+        ),
+        principal=principal,
+    )
+    session.commit()
+    repository = AcquisitionRepository(session, clock=clock)
+    claim_a = repository.claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(seconds=30),
+    )
+    assert claim_a is not None
+    session.commit()
+
+    with pytest.raises(InjectedWorkerCrash):
+        AcquisitionRunner(
+            sessions,
+            adapters={"sse": CrashDuringFetchAdapter()},
+            llm_client=FakeExtractionClient(),
+            clock=clock,
+        ).run_claim(claim_a)
+
+    assert session.scalar(select(func.count()).select_from(SourceReference)) == 1
+    assert session.scalar(select(func.count()).select_from(RetrievalArtifact)) == 0
+    clock.advance(timedelta(seconds=31))
+    claim_b = repository.claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-b",
+        lease_for=timedelta(minutes=5),
+    )
+    assert claim_b is not None
+    session.commit()
+    recovered = FakeSSEAdapter()
+
+    AcquisitionRunner(
+        sessions,
+        adapters={"sse": recovered},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    ).run_claim(claim_b)
+
+    assert recovered.search_calls == 0
+    assert recovered.restore_calls == 1
+    assert recovered.fetch_calls == 1
+    assert session.scalar(select(func.count()).select_from(RetrievalArtifact)) == 1
 
 
 def test_fetch_success_checkpoint_never_commits_attempt_without_artifact(
@@ -611,7 +837,7 @@ def test_repository_runner_units_are_lease_fenced_and_caller_transactional(
     assert session.scalar(select(func.count()).select_from(AcquisitionException)) == 0
 
 
-def test_reclaimed_fetch_repeats_search_attempt_and_reuses_reference(
+def test_reclaimed_fetch_restores_reference_without_repeating_search(
     session, research_case, thesis, document
 ):
     clock = MutableClock()
@@ -652,9 +878,10 @@ def test_reclaimed_fetch_repeats_search_attempt_and_reuses_reference(
     )
     assert claim_b is not None
     session.commit()
+    recovered = FakeSSEAdapter()
     AcquisitionRunner(
         sessions,
-        adapters={"sse": FakeSSEAdapter()},
+        adapters={"sse": recovered},
         llm_client=FakeExtractionClient(),
         clock=clock,
     ).run_claim(claim_b)
@@ -669,8 +896,13 @@ def test_reclaimed_fetch_repeats_search_attempt_and_reuses_reference(
             )
         )
     )
-    assert [attempt.attempt_no for attempt in attempts if attempt.operation == "search"] == [1, 2]
+    assert [attempt.attempt_no for attempt in attempts if attempt.operation == "search"] == [1]
     assert [attempt.attempt_no for attempt in attempts if attempt.operation == "fetch"] == [1]
+    assert (recovered.search_calls, recovered.restore_calls, recovered.fetch_calls) == (
+        0,
+        1,
+        1,
+    )
     assert session.scalar(select(func.count()).select_from(SourceReference)) == 1
     assert module.get(job.id, principal=principal).status == "succeeded"
 

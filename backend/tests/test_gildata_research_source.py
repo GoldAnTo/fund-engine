@@ -10,6 +10,7 @@ import pytest
 
 from app.acquisition.sources import (
     RejectedSearchItem,
+    RetrievedSearchResult,
     SourceReferenceValue,
     SourceUnavailable,
 )
@@ -83,8 +84,12 @@ def make_source(**kwargs: object) -> tuple[GildataResearchSource, FakeGildataCli
     return GildataResearchSource(client), client
 
 
-def accepted(items: tuple[SourceReferenceValue | RejectedSearchItem, ...]):
-    return tuple(item for item in items if isinstance(item, SourceReferenceValue))
+def retrieved(items):
+    return tuple(item for item in items if isinstance(item, RetrievedSearchResult))
+
+
+def accepted(items):
+    return tuple(item.reference for item in retrieved(items))
 
 
 def rejected(items: tuple[SourceReferenceValue | RejectedSearchItem, ...]):
@@ -163,6 +168,18 @@ def test_search_maps_reports_and_announcements_to_governed_references():
     ]
 
 
+def test_search_returns_transient_envelopes_without_caching_body_in_reference():
+    source, _client = make_source(reports=[REPORT])
+
+    result = source.search("query", datetime(2026, 8, 2, tzinfo=UTC))[0]
+
+    assert type(result).__name__ == "RetrievedSearchResult"
+    assert result.reference.metadata["source_type"] == "research_report"
+    assert result.envelope.content == REPORT["原文"].encode("utf-8")
+    assert REPORT["原文"] not in repr(dict(result.reference.metadata))
+    assert not hasattr(source, "_payloads")
+
+
 def test_stable_identity_ignores_result_order_and_normalizes_title():
     report_variant = {**REPORT, "报告标题": "示例公司\u3000收入跟踪"}
     other = {
@@ -203,25 +220,26 @@ def test_within_search_divergent_payloads_reject_ambiguous_identity():
 
 def test_cross_search_payload_conflict_keeps_old_reference_and_bytes():
     source, client = make_source(reports=[REPORT])
-    old_reference = accepted(
+    original = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
-    original_bytes = source.fetch(old_reference).content
+    original_bytes = original.envelope.content
     client.reports = [{**REPORT, "原文": "发生漂移的新正文。"}]
 
     later = source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
 
     assert accepted(later) == ()
     assert [item.reason for item in rejected(later)] == ["variant_conflict"]
-    assert source.fetch(old_reference).content == original_bytes
+    assert original.envelope.content == original_bytes
 
 
 def test_variant_conflict_tombstone_survives_later_single_variant():
     source, client = make_source(reports=[REPORT])
-    original = accepted(
+    original_result = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
-    original_bytes = source.fetch(original).content
+    original = original_result.reference
+    original_bytes = original_result.envelope.content
     client.reports = [{**REPORT, "原文": "冲突正文。"}]
     assert [
         item.reason
@@ -237,7 +255,7 @@ def test_variant_conflict_tombstone_survives_later_single_variant():
     assert [item.reason for item in rejected(after_conflict)] == [
         "variant_conflict"
     ]
-    assert source.fetch(original).content == original_bytes
+    assert original_result.envelope.content == original_bytes
 
 
 def test_close_clears_variant_conflict_tombstones_for_new_lifecycle():
@@ -265,13 +283,14 @@ def test_same_payload_metadata_drift_reuses_original_cached_reference():
     )[0]
     client.reports = [{**REPORT, "作者": "漂移后的作者"}]
 
-    repeated = accepted(
+    repeated_result = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
+    repeated = repeated_result.reference
 
     assert repeated == original
     assert repeated.metadata["author"] == "研究员甲"
-    assert source.fetch(original).content == REPORT["原文"].encode("utf-8")
+    assert repeated_result.envelope.content == REPORT["原文"].encode("utf-8")
 
 
 @pytest.mark.parametrize(
@@ -659,12 +678,13 @@ def test_offset_publication_keeps_source_calendar_identity_date():
 
 def test_fetch_returns_exact_cached_provider_text_without_another_call():
     source, client = make_source(reports=[REPORT])
-    reference = accepted(
+    result = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
+    reference = result.reference
     calls_after_search = tuple(client.calls)
 
-    envelope = source.fetch(reference)
+    envelope = result.envelope
 
     assert envelope.content == REPORT["原文"].encode("utf-8")
     assert envelope.mime_type == "text/plain; charset=utf-8"
@@ -684,11 +704,11 @@ def test_fetch_returns_exact_cached_provider_text_without_another_call():
 def test_fetch_preserves_provider_payload_whitespace_byte_for_byte():
     exact_body = "  第一行。\n第二行。\n"
     source, _client = make_source(reports=[{**REPORT, "原文": exact_body}])
-    reference = accepted(
+    result = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
 
-    envelope = source.fetch(reference)
+    envelope = result.envelope
 
     assert envelope.content == exact_body.encode("utf-8")
 
@@ -719,7 +739,7 @@ def test_oversized_payload_is_rejected_without_entering_cache():
     assert [item.reason for item in rejected(results)] == ["payload_too_large"]
 
 
-def test_cumulative_cache_bound_never_displaces_prior_payload():
+def test_payload_limit_applies_per_transient_result_without_body_cache():
     first_row = {**REPORT, "原文": "1234"}
     second_row = {
         **REPORT,
@@ -728,16 +748,16 @@ def test_cumulative_cache_bound_never_displaces_prior_payload():
     }
     client = FakeGildataClient(reports=[first_row])
     source = GildataResearchSource(client, max_cache_bytes=4)
-    first = accepted(
+    first = retrieved(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
     )[0]
     client.reports = [second_row]
 
     later = source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
 
-    assert accepted(later) == ()
-    assert [item.reason for item in rejected(later)] == ["payload_too_large"]
-    assert source.fetch(first).content == b"1234"
+    assert len(accepted(later)) == 1
+    assert rejected(later) == ()
+    assert first.envelope.content == b"1234"
 
 
 def test_fetch_rejects_unknown_or_mismatched_reference_without_provider_call():
@@ -758,10 +778,11 @@ def test_fetch_rejects_unknown_or_mismatched_reference_without_provider_call():
         metadata=reference.metadata,
     )
 
-    with pytest.raises(ValueError, match="unknown or mismatched") as caught:
+    with pytest.raises(SourceUnavailable) as caught:
         source.fetch(unknown)
 
     assert tuple(client.calls) == calls_after_search
+    assert caught.value.retryable is False
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
 
@@ -795,7 +816,7 @@ def test_close_delegates_to_client():
     assert client.closed is True
 
 
-def test_close_clears_cached_payloads_and_fetch_fails_without_context():
+def test_close_clears_identity_state_and_persisted_fetch_fails_closed():
     source, _client = make_source(reports=[REPORT])
     reference = accepted(
         source.search("query", datetime(2026, 8, 2, tzinfo=UTC))
@@ -803,7 +824,8 @@ def test_close_clears_cached_payloads_and_fetch_fails_without_context():
 
     source.close()
 
-    with pytest.raises(ValueError, match="unknown or mismatched") as caught:
+    with pytest.raises(SourceUnavailable) as caught:
         source.fetch(reference)
+    assert caught.value.retryable is False
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None

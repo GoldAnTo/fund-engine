@@ -30,7 +30,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from app.acquisition.sources import RetrievedEnvelope
+from app.acquisition.sources import RetrievedEnvelope, SourceReferenceValue
 from app.datasources.docling import PdfParserAdapter, PypdfAdapter
 from app.documents.locators import (
     SourceLocatorV1,
@@ -48,6 +48,7 @@ from app.models.acquisition import (
 )
 from app.models.ledger import DocumentVersion
 from app.repositories.acquisition import (
+    AcquisitionRepository,
     StaleLeaseError,
     validate_persistable_json,
     validate_persistable_text,
@@ -540,6 +541,118 @@ class RetrievedDocumentFreezer:
             session.add_all((attempt, artifact))
             session.flush()
             return artifact.id, attempt.id
+
+    def checkpoint_search_result(
+        self,
+        reference: SourceReferenceValue,
+        envelope: RetrievedEnvelope,
+        context: FetchCheckpointContext,
+        *,
+        started_at: datetime,
+    ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+        """Atomically persist an inline-search reference, attempt, and artifact."""
+        if not isinstance(reference, SourceReferenceValue):
+            raise TypeError("reference must be a SourceReferenceValue")
+        if not isinstance(envelope, RetrievedEnvelope):
+            raise TypeError("envelope must be a RetrievedEnvelope")
+        if not isinstance(context, FetchCheckpointContext):
+            raise TypeError("context must be a FetchCheckpointContext")
+        started = _aware_utc(started_at)
+        finished = self._now()
+        if finished < started:
+            raise ValueError("attempt finished_at must not precede started_at")
+        digest = hashlib.sha256(envelope.content).hexdigest()
+        metadata = _thaw_json(reference.metadata)
+        metadata["retrieval_locator"] = _thaw_json(reference.fetch_locator)
+
+        with self._write_session(sqlite_immediate=True) as session:
+            job = self._require_lease_values(
+                session,
+                job_id=context.job_id,
+                lease_token=context.lease_token,
+                allowed_stages=frozenset({"searching"}),
+            )
+            if (
+                job.research_case_id != context.research_case_id
+                or job.tenant_id != context.tenant_id
+            ):
+                raise ValueError("source reference/job lineage mismatch")
+            reference_row = AcquisitionRepository(
+                session, clock=self._clock
+            ).create_or_get_reference(
+                context.job_id,
+                lease_token=context.lease_token,
+                adapter_key=reference.adapter_key,
+                external_record_id=reference.external_record_id,
+                external_version=reference.external_version,
+                canonical_url=reference.canonical_url,
+                title=reference.title,
+                published_at=reference.published_at,
+                source_role=reference.source_role,
+                metadata_json=metadata,
+            )
+            self._validate_envelope_identity(reference_row, envelope)
+            existing = session.scalar(
+                select(RetrievalArtifact)
+                .where(RetrievalArtifact.source_reference_id == reference_row.id)
+                .order_by(RetrievalArtifact.retrieved_at, RetrievalArtifact.id)
+                .limit(1)
+            )
+            if existing is not None:
+                attempt = session.get(AcquisitionAttempt, existing.attempt_id)
+                if (
+                    existing.content_sha256 != digest
+                    or attempt is None
+                    or attempt.job_id != context.job_id
+                    or attempt.operation != "fetch"
+                    or attempt.outcome != "succeeded"
+                ):
+                    raise ValueError("persisted inline fetch checkpoint is inconsistent")
+                return reference_row.id, existing.id, attempt.id
+            attempt_no = (
+                session.scalar(
+                    select(func.max(AcquisitionAttempt.attempt_no)).where(
+                        AcquisitionAttempt.job_id == context.job_id,
+                        AcquisitionAttempt.adapter_key == reference.adapter_key,
+                        AcquisitionAttempt.operation == "fetch",
+                    )
+                )
+                or 0
+            ) + 1
+            attempt = AcquisitionAttempt(
+                id=uuid.uuid4(),
+                job_id=context.job_id,
+                adapter_key=reference.adapter_key,
+                operation="fetch",
+                attempt_no=attempt_no,
+                started_at=started,
+                finished_at=finished,
+                outcome="succeeded",
+                error_code=None,
+                retryable=False,
+                safe_metadata={
+                    "source_reference_id": str(reference_row.id),
+                    "claim_attempt": context.claim_attempt,
+                    "checkpoint": "inline_search_result",
+                },
+            )
+            artifact = RetrievalArtifact(
+                id=uuid.uuid4(),
+                source_reference_id=reference_row.id,
+                attempt_id=attempt.id,
+                content_sha256=digest,
+                raw_bytes=envelope.content,
+                mime_type=envelope.mime_type,
+                byte_size=len(envelope.content),
+                final_url=envelope.final_url,
+                etag=envelope.etag,
+                last_modified=envelope.last_modified,
+                provider_request_id=envelope.provider_request_id,
+                retrieved_at=context.retrieved_at,
+            )
+            session.add_all((attempt, artifact))
+            session.flush()
+            return reference_row.id, artifact.id, attempt.id
 
     def freeze(
         self,
