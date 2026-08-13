@@ -459,7 +459,14 @@ class ResearchPreparationService:
         artifact: ResearchPreparationArtifact,
         case_id: uuid.UUID,
     ) -> None:
-        """Invalidate a generated draft whose reviewed claims have changed."""
+        """Durably invalidate a draft whose reviewed claims have changed.
+
+        ``confirm_protocol`` must return a 409 for this conflict.  Normal API
+        request cleanup rolls back a session after that exception, so this
+        narrow boundary commits the already-validated invalidation, retry job,
+        and audit event before the caller raises.  Other confirmation failures
+        intentionally retain normal unit-of-work rollback semantics.
+        """
         artifact.state = "stale"
         artifact.invalidated_reason = "candidate_context_changed"
         preparation.draft_protocol_state = "stale"
@@ -481,6 +488,7 @@ class ResearchPreparationService:
             message="protocol draft invalidated by changed claim context",
             detail={"source_draft_sequence": artifact.sequence},
         )
+        self._session.commit()
 
     def retry_failed_step(
         self, case_id: uuid.UUID, *, actor: str, revision: int

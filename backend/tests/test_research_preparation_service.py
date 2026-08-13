@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 import app.repositories.research_preparation as preparation_repository_module
 from app.errors import ConflictError
@@ -714,6 +715,107 @@ def test_confirm_protocol_rejects_candidate_context_changed_after_draft(session)
     )
     assert preparation.protocol_review_state == "confirmed"
     assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
+
+
+def test_confirm_protocol_persists_stale_context_before_conflict(session, monkeypatch) -> None:
+    """A 409 must not let request cleanup roll back the invalidation transition."""
+    session_factory = sessionmaker(bind=session.get_bind(), future=True)
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="y" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="durable-context-stale")
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"rationale": "draft before independent review"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=_candidate_context(service, case.id),
+    )
+    artifact = service._repo.current_artifact(preparation.id, "research_protocol_draft")
+    assert artifact is not None
+    case_id, preparation_id, artifact_id, draft_sequence = (
+        case.id,
+        preparation.id,
+        artifact.id,
+        artifact.sequence,
+    )
+    session.commit()
+
+    modifier = session_factory()
+    try:
+        persisted_candidate = modifier.get(type(candidate), candidate.id)
+        assert persisted_candidate is not None
+        AtomicClaimService(modifier).review(
+            persisted_candidate.id,
+            outcome="rejected",
+            reviewer="other-reviewer",
+            reason="withdrawn",
+            normalized_text=None,
+            idempotency_key="independent-review",
+        )
+        modifier.commit()
+    finally:
+        modifier.close()
+
+    request_session = session_factory()
+    try:
+        commit_calls = 0
+        original_commit = request_session.commit
+
+        def count_commit() -> None:
+            nonlocal commit_calls
+            commit_calls += 1
+            original_commit()
+
+        monkeypatch.setattr(request_session, "commit", count_commit)
+        with pytest.raises(ConflictError, match="candidate context changed"):
+            ResearchPreparationService(request_session).confirm_protocol(
+                case_id,
+                actor="reviewer",
+                revision=1,
+                payload=ProtocolConfirmation(draft_sequence, {}),
+            )
+        assert commit_calls == 1
+        request_session.rollback()  # FastAPI-style cleanup after a 409 response.
+    finally:
+        request_session.close()
+
+    verifier = session_factory()
+    try:
+        persisted_preparation = verifier.get(ResearchPreparation, preparation_id)
+        persisted_artifact = verifier.get(ResearchPreparationArtifact, artifact_id)
+        assert persisted_preparation is not None
+        assert persisted_artifact is not None
+        assert persisted_artifact.state == "stale"
+        assert persisted_artifact.invalidated_reason == "candidate_context_changed"
+        assert persisted_preparation.status == "preparing"
+        assert persisted_preparation.protocol_review_state == "locked"
+        assert _active_jobs(verifier, preparation_id, "draft_evidence_plan") == []
+        assert len(_active_jobs(verifier, preparation_id, "draft_protocol")) == 1
+        protocol_artifacts = list(
+            verifier.scalars(
+                select(ResearchPreparationArtifact).where(
+                    ResearchPreparationArtifact.research_preparation_id == preparation_id,
+                    ResearchPreparationArtifact.kind == "research_protocol_draft",
+                )
+            )
+        )
+        assert [item.id for item in protocol_artifacts] == [artifact_id]
+        assert verifier.scalars(
+            select(ResearchPreparationArtifact).where(
+                ResearchPreparationArtifact.research_preparation_id == preparation_id,
+                ResearchPreparationArtifact.kind == "evidence_acquisition_plan",
+            )
+        ).all() == []
+        events = _events(verifier, preparation_id)
+        assert events[-1].type == "preparation_protocol_context_stale"
+        assert events[-1].detail == {"source_draft_sequence": draft_sequence}
+        assert verifier.scalars(select(ResearchRun)).all() == []
+    finally:
+        verifier.close()
 
 
 def test_claim_validation_is_atomic_before_any_review_write(session) -> None:
