@@ -184,9 +184,10 @@ class ResearchPreparationService:
                 detail={"current_version": preparation.version},
             )
             return preparation
-        self._require_eligible_step(
-            preparation, step, allowed_states={"queued", "running", "retrying"}
-        )
+        allowed_states = {"queued", "running", "retrying"}
+        if step == "draft_protocol":
+            allowed_states.add("stale")
+        self._require_eligible_step(preparation, step, allowed_states=allowed_states)
         context_fingerprint = None
         if step == "parse_claims":
             if expected_context_fingerprint is not None:
@@ -410,6 +411,13 @@ class ResearchPreparationService:
         artifact = self._repo.current_artifact(preparation.id, "research_protocol_draft")
         if artifact is None or artifact.sequence != payload.draft_sequence:
             raise ConflictError("protocol draft revision is stale")
+        if (
+            artifact.context_fingerprint is None
+            or artifact.context_fingerprint
+            != self.current_candidate_context_fingerprint(case_id)
+        ):
+            self._invalidate_protocol_context(preparation, artifact, case_id)
+            raise ConflictError("protocol draft candidate context changed; refresh required")
         self._validate_protocol_edits(artifact.payload, payload.edits)
         confirmed_draft_sequence = artifact.sequence
         if payload.edits:
@@ -444,6 +452,35 @@ class ResearchPreparationService:
             },
         )
         return preparation
+
+    def _invalidate_protocol_context(
+        self,
+        preparation: ResearchPreparation,
+        artifact: ResearchPreparationArtifact,
+        case_id: uuid.UUID,
+    ) -> None:
+        """Invalidate a generated draft whose reviewed claims have changed."""
+        artifact.state = "stale"
+        artifact.invalidated_reason = "candidate_context_changed"
+        preparation.draft_protocol_state = "stale"
+        preparation.protocol_review_state = "locked"
+        preparation.draft_evidence_plan_state = "stale"
+        preparation.plan_review_state = "locked"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_protocol"
+        )
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_protocol_context_stale",
+            step="draft_protocol",
+            message="protocol draft invalidated by changed claim context",
+            detail={"source_draft_sequence": artifact.sequence},
+        )
 
     def retry_failed_step(
         self, case_id: uuid.UUID, *, actor: str, revision: int

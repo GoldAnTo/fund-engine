@@ -646,6 +646,76 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
     assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
 
 
+def test_confirm_protocol_rejects_candidate_context_changed_after_draft(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="x" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="protocol-context-stale")
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    original_context = _candidate_context(service, case.id)
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"rationale": "draft before correction"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=original_context,
+    )
+    original = service._repo.current_artifact(preparation.id, "research_protocol_draft")
+    assert original is not None
+    AtomicClaimService(session).review(
+        candidate.id,
+        outcome="modified",
+        reviewer="other-reviewer",
+        reason="correction",
+        normalized_text="human corrected protocol claim",
+        idempotency_key="late-correction",
+    )
+
+    with pytest.raises(ConflictError, match="candidate context changed"):
+        service.confirm_protocol(
+            case.id,
+            actor="reviewer",
+            revision=preparation.version,
+            payload=ProtocolConfirmation(original.sequence, {}),
+        )
+
+    assert original.state == "stale"
+    assert original.invalidated_reason == "candidate_context_changed"
+    assert preparation.draft_protocol_state == "stale"
+    assert preparation.protocol_review_state == "locked"
+    assert preparation.draft_evidence_plan_state == "stale"
+    assert preparation.plan_review_state == "locked"
+    assert _active_jobs(session, preparation.id, "draft_evidence_plan") == []
+    assert len(_active_jobs(session, preparation.id, "draft_protocol")) == 1
+    event = _events(session, preparation.id)[-1]
+    assert event.type == "preparation_protocol_context_stale"
+    assert event.detail == {"source_draft_sequence": original.sequence}
+    assert "human corrected protocol claim" not in str(event.detail)
+    assert session.scalars(select(ResearchRun)).all() == []
+
+    refreshed_context = _candidate_context(service, case.id)
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"rationale": "refreshed draft"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=refreshed_context,
+    )
+    refreshed = service._repo.current_artifact(preparation.id, "research_protocol_draft")
+    assert refreshed is not None and refreshed.id != original.id
+    service.confirm_protocol(
+        case.id,
+        actor="reviewer",
+        revision=preparation.version,
+        payload=ProtocolConfirmation(refreshed.sequence, {}),
+    )
+    assert preparation.protocol_review_state == "confirmed"
+    assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
+
+
 def test_claim_validation_is_atomic_before_any_review_write(session) -> None:
     case = _case(session)
     service = _service(session)
