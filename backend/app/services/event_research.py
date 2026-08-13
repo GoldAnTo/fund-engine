@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.domain.research_preparation import preparation_input_fingerprint
 from app.models.event_research import (
     EventResearchBrief,
     EventResearchFactorDraft,
@@ -19,6 +20,7 @@ from app.repositories.research import ResearchRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.ingest import DocumentService
 from app.services.research import ResearchService
+from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
 from app.services.case_tenant_access import CaseTenantAccess
 from app.errors import ValidationFailedError
@@ -153,22 +155,32 @@ class EventResearchService:
             )
         self._session.flush()
 
-        # Intake freezes a source snapshot and a researcher-proposed scope;
-        # it is deliberately not authorization to run collection or model
-        # work. The original material must be inspected and the Case protocol
-        # completed before a separately configured ResearchRun can exist.
-        lifecycle = EventResearchLifecycle(
-            research_case_id=case.id,
-            status="awaiting_key_review",
-            active_run_id=None,
-            current_round=0,
-            status_summary="资料已冻结，等待核验原文与研究协议；尚未启动后台研究",
-            current_gap="原文资料、来源许可与研究协议尚未完成核验",
-            next_human_action="核验原文资料并完成研究协议",
-            updated_at=_utcnow(),
-        )
-        self._session.add(lifecycle)
-        self._session.commit()
+        try:
+            # Preparation only schedules the source-bound draft workflow. It
+            # never authorizes collection or creates a formal ResearchRun.
+            ResearchPreparationService(self._session).create_for_case(
+                case.id,
+                input_fingerprint=preparation_input_fingerprint(document.id, scope.id),
+                actor=payload.created_by,
+            )
+            lifecycle = EventResearchLifecycle(
+                research_case_id=case.id,
+                status="awaiting_key_review",
+                active_run_id=None,
+                current_round=0,
+                status_summary="资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划",
+                current_gap="研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+                next_human_action=None,
+                updated_at=_utcnow(),
+            )
+            self._session.add(lifecycle)
+            self._session.commit()
+        except Exception:
+            # Preparation is part of event intake's one unit of work.  In
+            # particular, a failed job enqueue must not leave a half-created
+            # Case, frozen document, or tenant admission behind.
+            self._session.rollback()
+            raise
         return CreatedEventResearch(
             case_id=str(case.id), brief_id=str(brief.id), lifecycle=lifecycle
         )

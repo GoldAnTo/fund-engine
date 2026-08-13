@@ -16,11 +16,13 @@ from app.domain.research_preparation import (
     MAX_CANDIDATES,
     PreparationStep,
     candidate_context_fingerprint,
+    preparation_input_fingerprint,
 )
 from app.errors import ConflictError, NotFoundError
 from app.models.ledger import (
     AtomicClaimCandidate,
     AtomicClaimReview,
+    CaseTenantAdmission,
     SourceStatement,
     ValidationError,
 )
@@ -156,6 +158,73 @@ class ResearchPreparationService:
         self._repo.queue_step_job(
             preparation, research_case_id=case_id, step="parse_claims"
         )
+        return preparation
+
+    def invalidate_from_scope_change(
+        self,
+        case_id: uuid.UUID,
+        new_scope_id: uuid.UUID,
+        *,
+        actor: str,
+        case_locked: bool = False,
+    ) -> ResearchPreparation | None:
+        """Invalidate scope-dependent drafts without replacing claim review.
+
+        Scope changes use the same frozen admitted document.  Claim candidates
+        and their human decisions stay intact; only protocol and evidence-plan
+        drafts become stale.  This command never creates a ResearchRun.
+        """
+        preparation = self._lock(case_id, case_locked=case_locked)
+        if preparation is None:
+            return None
+        document_id = self._session.scalar(
+            select(CaseTenantAdmission.initial_document_version_id).where(
+                CaseTenantAdmission.research_case_id == case_id
+            )
+        )
+        if document_id is None:
+            raise ConflictError("research preparation requires an admitted document")
+        input_fingerprint = preparation_input_fingerprint(document_id, new_scope_id)
+        if preparation.input_fingerprint == input_fingerprint:
+            return preparation
+
+        preparation.version += 1
+        preparation.input_fingerprint = input_fingerprint
+        self._invalidate_downstream(preparation, reason="scope_changed")
+        # Keep this change in one flush: an authorized preparation cannot
+        # temporarily exist without its required run reference.
+        preparation.research_run_id = None
+        preparation.status = "preparing"
+        preparation.draft_protocol_state = (
+            "queued"
+            if preparation.claim_review_state == "confirmed"
+            else "stale"
+        )
+        preparation.draft_evidence_plan_state = "stale"
+        preparation.protocol_review_state = "locked"
+        preparation.plan_review_state = "locked"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_scope_changed",
+            step=None,
+            message="preparation drafts invalidated by scope change",
+            detail={"actor": actor, "version": preparation.version},
+        )
+        if preparation.claim_review_state == "confirmed":
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="draft_protocol"
+            )
+        elif preparation.parse_claims_state != "succeeded":
+            # The predecessor's queued job is version-guarded and will be
+            # discarded, so ensure this new preparation version remains live.
+            preparation.parse_claims_state = "queued"
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="parse_claims"
+            )
         return preparation
 
     def complete_system_step(
@@ -698,7 +767,11 @@ class ResearchPreparationService:
         )
         return preparation
 
-    def _lock(self, case_id: uuid.UUID) -> ResearchPreparation | None:
+    def _lock(
+        self, case_id: uuid.UUID, *, case_locked: bool = False
+    ) -> ResearchPreparation | None:
+        if case_locked:
+            return self._repo.lock_for_case(case_id, case_locked=True)
         return self._repo.lock_for_case(case_id)
 
     def _require_preparation(self, case_id: uuid.UUID) -> ResearchPreparation:

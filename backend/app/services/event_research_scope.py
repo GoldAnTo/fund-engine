@@ -26,6 +26,7 @@ from app.services.event_research_factors import (
 )
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_preparation import ResearchPreparationService
 from app.services.research_protocol import ResearchProtocolService
 
 
@@ -142,7 +143,17 @@ class EventResearchScopeService:
         # remain immutable audit records, but their review tasks must no
         # longer appear actionable while the successor run is pending.
         EventReviewQueueService(self._session).reconcile_event_review_queue(case_id)
-        if lifecycle is not None:
+        preparation = ResearchPreparationService(
+            self._session
+        ).invalidate_from_scope_change(
+            case_id,
+            scope.id,
+            actor=changed_by.strip(),
+            case_locked=True,
+        )
+        # Preparation supersedes automatic formal-run continuation.  Legacy
+        # event Cases without a preparation preserve their historical path.
+        if lifecycle is not None and preparation is None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()
         return UpdatedEventResearchScope(

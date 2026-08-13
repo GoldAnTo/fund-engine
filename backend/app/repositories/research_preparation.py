@@ -38,9 +38,11 @@ class ResearchPreparationRepository:
         self._session = session
         self._jobs = JobRepository(session)
 
-    def lock_for_case(self, case_id: uuid.UUID) -> ResearchPreparation | None:
+    def lock_for_case(
+        self, case_id: uuid.UUID, *, case_locked: bool = False
+    ) -> ResearchPreparation | None:
         """Lock the stable Case row before reading the preparation projection."""
-        if lock_event_scope_case(self._session, case_id) is None:
+        if not case_locked and lock_event_scope_case(self._session, case_id) is None:
             raise NotFoundError(f"research case {case_id} not found")
         return self._session.scalar(
             select(ResearchPreparation)
