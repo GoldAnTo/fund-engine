@@ -13,6 +13,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.orm import sessionmaker
 from reportlab.pdfgen import canvas as rl_canvas
 
+from app.acquisition.policy import B_SCOPE_POLICY
 from app.datasources.docling import PARSER_VERSION_PYPDF, ParsedSpan, PypdfAdapter
 from app.documents.locators import compute_text_sha256, validate_locator_v1
 from app.errors import ConflictError
@@ -173,13 +174,13 @@ def _seed(
         "period_end": "2026-12-31",
         "period_start": "2026-01-01",
         "security_codes": list(security_codes),
-        "source_policy_version": "b-scope-v1",
+        "source_policy_version": B_SCOPE_POLICY.version,
         "target_link_role": "supports",
         "thesis_id": str(thesis.id),
     }
     request_snapshot.update(request_extras or {})
     policy_snapshot = {
-        "version": "b-scope-v1",
+        "version": B_SCOPE_POLICY.version,
         "allowed_source_roles": list(allowed_source_roles),
         "enabled_adapter_keys": list(policy_enabled_adapter_keys),
     }
@@ -373,7 +374,7 @@ def _seed(
         objective="support",
         target_link_role="supports",
         gate_version=B_SCOPE_GATE_VERSION,
-        policy_version="b-scope-v1",
+        policy_version=B_SCOPE_POLICY.version,
         allowed_source_roles=frozenset(allowed_source_roles),
         metric_terms=metric_terms,
         expected_subject=entity_names[0] if entity_names else None,
@@ -593,12 +594,12 @@ def test_real_pdf_freeze_extract_admit_and_automatic_publish_end_to_end(
             "period_end": "2026-12-31",
             "period_start": "2026-01-01",
             "security_codes": [],
-            "source_policy_version": "b-scope-v1",
+            "source_policy_version": B_SCOPE_POLICY.version,
             "target_link_role": "supports",
             "thesis_id": str(thesis.id),
         },
         policy_snapshot={
-            "version": "b-scope-v1",
+            "version": B_SCOPE_POLICY.version,
             "allowed_source_roles": ["company_disclosure"],
             "enabled_adapter_keys": ["gildata", "sse", "szse"],
         },
@@ -724,7 +725,7 @@ def test_real_pdf_freeze_extract_admit_and_automatic_publish_end_to_end(
         objective="support",
         target_link_role="supports",
         gate_version=B_SCOPE_GATE_VERSION,
-        policy_version="b-scope-v1",
+        policy_version=B_SCOPE_POLICY.version,
         allowed_source_roles=frozenset({"company_disclosure"}),
         metric_terms=("Revenue",),
         expected_subject="Example Corp",
@@ -2372,7 +2373,7 @@ def test_publication_rejects_any_frozen_request_security_mutation(
     ("field", "value"),
     [
         ("enabled_adapter_keys", ["gildata", "szse"]),
-        ("version", "b-scope-v2"),
+        ("version", "other-policy"),
         ("exact_hosts", ["evil.example"]),
         ("max_response_bytes", 1),
         ("permission_declarations", [["sse", "mutated"]]),

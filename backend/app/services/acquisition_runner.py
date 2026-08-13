@@ -18,7 +18,11 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.acquisition.policy import AcquisitionQueryPlanner, SourcePolicy
+from app.acquisition.policy import (
+    B_SCOPE_POLICY,
+    AcquisitionQueryPlanner,
+    SourcePolicy,
+)
 from app.acquisition.sources import (
     RejectedSearchItem,
     RetrievedEnvelope,
@@ -167,7 +171,10 @@ class AcquisitionRunner:
         return value.astimezone(UTC)
 
     def run_claim(self, claim: AcquisitionClaim) -> None:
-        request, policy, stage = self._load_contract(claim)
+        contract = self._load_contract(claim)
+        if contract is None:
+            return
+        request, policy, stage = contract
         if not self._configured_adapters_are_safe(claim, policy):
             return
         if not self._fetch_checkpoints_are_valid(claim):
@@ -320,7 +327,7 @@ class AcquisitionRunner:
 
     def _load_contract(
         self, claim: AcquisitionClaim
-    ) -> tuple[AcquisitionRequest, SourcePolicy, str]:
+    ) -> tuple[AcquisitionRequest, SourcePolicy, str] | None:
         with self._session_factory() as session:
             repository = AcquisitionRepository(session, clock=self._clock)
             job = repository.fence(
@@ -331,6 +338,31 @@ class AcquisitionRunner:
             request_snapshot = dict(job.request_snapshot or {})
             policy_snapshot = dict(job.policy_snapshot or {})
             stage = job.stage
+            request_version = request_snapshot.get("source_policy_version")
+            policy_version = policy_snapshot.get("version")
+            if (
+                request_version != policy_version
+                or request_version != B_SCOPE_POLICY.version
+                or policy_version != B_SCOPE_POLICY.version
+            ):
+                repository.record_exception(
+                    claim.job_id,
+                    lease_token=claim.lease_token,
+                    reason_code="unsupported_source_policy_version",
+                    detail_json={
+                        "active_policy_version": B_SCOPE_POLICY.version,
+                    },
+                )
+                repository.advance(
+                    claim.job_id,
+                    lease_token=claim.lease_token,
+                    stage="failed",
+                    status="failed",
+                    message="acquisition source policy version is unsupported",
+                    error_code="unsupported_source_policy_version",
+                )
+                session.commit()
+                return None
             session.commit()
         request = AcquisitionRequest(
             tenant_id=request_snapshot["tenant_id"],

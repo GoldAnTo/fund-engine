@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import sessionmaker
 
+from app.acquisition.policy import B_SCOPE_POLICY
 from app.domain.acquisition import AdmittedEvidenceRef
 from app.errors import ConflictError
 from app.models.acquisition import (
@@ -70,7 +71,7 @@ def _create_job(repo, research_case, thesis, **overrides):
         "research_run_id": None,
         "idempotency_key": uuid.uuid4().hex,
         "request_snapshot": {"objective": "support", "cutoff": "2026-08-12T08:00:00Z"},
-        "policy_snapshot": {"version": "b-scope-v1"},
+        "policy_snapshot": {"version": B_SCOPE_POLICY.version},
         "creation_payload": {"actor": "system:test"},
     }
     values.update(overrides)
@@ -664,7 +665,7 @@ def test_admitted_evidence_returns_only_fully_coherent_lineage(
             retrieval_artifact_id=artifact.id,
             outcome="admitted",
             gate_version=uuid.uuid4().hex,
-            policy_version="b-scope-v1",
+            policy_version=B_SCOPE_POLICY.version,
             gate_results={},
             created_at=datetime(2026, 8, 12, tzinfo=UTC),
         )

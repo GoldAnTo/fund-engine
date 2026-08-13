@@ -157,6 +157,89 @@ class CrashBeforeFetchRunner(AcquisitionRunner):
         raise InjectedWorkerCrash
 
 
+@pytest.mark.parametrize(
+    ("request_version", "policy_version"),
+    [
+        pytest.param("b-scope-v1", "b-scope-v1", id="obsolete-v1"),
+        pytest.param(B_SCOPE_POLICY.version, "b-scope-v1", id="mismatched"),
+    ],
+)
+def test_obsolete_or_mismatched_policy_claim_fails_closed_before_adapter_work(
+    session,
+    research_case,
+    thesis,
+    document,
+    request_version,
+    policy_version,
+):
+    marker = "raw-obsolete-policy-snapshot-marker"
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    job_ref = AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
+        make_request(
+            research_case,
+            thesis,
+            idempotency_key=f"task8-policy-rollover-{request_version}-{policy_version}",
+        ),
+        principal=principal,
+    )
+    job = session.get(AcquisitionJob, job_ref.id)
+    assert job is not None
+    job.request_snapshot = {
+        **job.request_snapshot,
+        "source_policy_version": request_version,
+        "raw_marker": marker,
+    }
+    job.policy_snapshot = {
+        **job.policy_snapshot,
+        "version": policy_version,
+        "raw_marker": marker,
+    }
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#policy-rollover",
+        lease_for=timedelta(minutes=5),
+    )
+    assert claim is not None
+    session.commit()
+    adapter = FakeSSEAdapter()
+
+    AcquisitionRunner(
+        make_session_factory(session),
+        adapters={"sse": adapter},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    ).run_claim(claim)
+
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job_ref.id)
+    exception = session.scalar(
+        select(AcquisitionException).where(
+            AcquisitionException.job_id == job_ref.id
+        )
+    )
+    assert persisted is not None
+    assert (persisted.status, persisted.stage) == ("failed", "failed")
+    assert persisted.error_code == "unsupported_source_policy_version"
+    assert exception is not None
+    assert exception.reason_code == "unsupported_source_policy_version"
+    assert exception.detail_json == {
+        "active_policy_version": B_SCOPE_POLICY.version
+    }
+    assert marker not in repr(exception.detail_json)
+    assert (adapter.search_calls, adapter.restore_calls, adapter.fetch_calls) == (
+        0,
+        0,
+        0,
+    )
+
+
 def test_gildata_inline_artifact_recovers_without_provider_research(
     session, research_case, thesis, document
 ):
@@ -688,7 +771,7 @@ def test_artifact_commit_survives_crash_and_stale_worker_is_fenced(
                 objective="support",
                 target_link_role="supports",
                 gate_version=B_SCOPE_GATE_VERSION,
-                policy_version="b-scope-v1",
+                policy_version=B_SCOPE_POLICY.version,
                 allowed_source_roles=frozenset({"company_disclosure"}),
                 metric_terms=("Revenue",),
                 expected_subject="Example Corp",

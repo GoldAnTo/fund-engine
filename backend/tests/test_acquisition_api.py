@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
+from app.acquisition.policy import B_SCOPE_POLICY
 from app.acquisition.sources import (
     RetrievedEnvelope,
     SourceAdapter,
@@ -576,7 +577,7 @@ def test_post_freezes_scope_and_actor_only_from_server_records(
         "research_run_id": None,
         "round": 1,
         "security_codes": ["600001"],
-        "source_policy_version": "b-scope-v1",
+        "source_policy_version": B_SCOPE_POLICY.version,
         "target_link_role": "contradicts",
         "tenant_id": "test-team",
         "thesis_id": str(acquisition_api_scope.thesis_id),

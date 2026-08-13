@@ -249,7 +249,7 @@ def make_request(research_case, thesis, *, idempotency_key=None):
         period_end="2026-12-31",
         cutoff=CUTOFF,
         allowed_source_roles=frozenset({"company_disclosure"}),
-        source_policy_version="b-scope-v1",
+        source_policy_version=B_SCOPE_POLICY.version,
         idempotency_key=idempotency_key or uuid.uuid4().hex,
     )
 

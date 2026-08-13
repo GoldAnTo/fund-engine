@@ -96,7 +96,7 @@ def test_request_is_idempotent_and_persists_complete_deterministic_snapshots(
         "research_run_id": None,
         "round": 2,
         "security_codes": ["600000"],
-        "source_policy_version": "b-scope-v1",
+        "source_policy_version": B_SCOPE_POLICY.version,
         "target_link_role": "contradicts",
         "tenant_id": "team-a",
         "thesis_id": str(thesis.id),

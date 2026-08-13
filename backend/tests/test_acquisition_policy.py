@@ -78,6 +78,20 @@ def test_b_scope_policy_version_tracks_exact_network_authority():
     assert B_SCOPE_POLICY.version == "b-scope-v2"
 
 
+def test_b_scope_policy_declares_only_exact_exchange_hosts():
+    assert B_SCOPE_POLICY.exact_hosts == frozenset(
+        {
+            "query.sse.com.cn",
+            "www.sse.com.cn",
+            "static.sse.com.cn",
+            "big5.sse.com.cn",
+            "www.szse.cn",
+            "disc.static.szse.cn",
+        }
+    )
+    assert B_SCOPE_POLICY.suffix_hosts == frozenset()
+
+
 @pytest.mark.parametrize(
     "host",
     [
