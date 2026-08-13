@@ -588,6 +588,8 @@ def test_non_pdf_non_text_and_mime_sniff_mismatches_fail_closed(
     assert str(caught.value) == "unsupported exchange response type"
     assert caught.value.retryable is False
     assert caught.value.diagnostics == {"error_type": "response_type"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
     exposed = f"{caught.value!r} {caught.value.diagnostics!r}"
     assert "url-secret" not in exposed
     assert "header-secret" not in exposed

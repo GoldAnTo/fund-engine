@@ -462,9 +462,12 @@ class ExchangeHttpTransport:
                     "unsupported exchange response type",
                     diagnostics={"error_type": "response_type"},
                 ) from None
+            valid_utf8 = True
             try:
                 content.decode("utf-8")
             except UnicodeDecodeError:
+                valid_utf8 = False
+            if not valid_utf8:
                 raise SourceProtocolError(
                     "unsupported exchange response type",
                     diagnostics={"error_type": "response_type"},
