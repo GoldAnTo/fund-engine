@@ -18,6 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    op.create_index(
+        "uq_research_runs_case_id",
+        "research_runs",
+        ["research_case_id", "id"],
+        unique=True,
+    )
     op.create_table(
         "research_preparations",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -77,17 +83,12 @@ def upgrade() -> None:
             name="fk_research_preparations_research_case_id",
         ),
         sa.ForeignKeyConstraint(
-            ["research_run_id"],
-            ["research_runs.id"],
-            name="fk_research_preparations_research_run_id",
+            ["research_case_id", "research_run_id"],
+            ["research_runs.research_case_id", "research_runs.id"],
+            name="fk_research_preparations_case_run",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("research_case_id", name="uq_research_preparations_research_case"),
-    )
-    op.create_index(
-        "ix_research_preparations_research_case_id",
-        "research_preparations",
-        ["research_case_id"],
     )
     op.create_table(
         "research_preparation_artifacts",
@@ -95,6 +96,7 @@ def upgrade() -> None:
         sa.Column("research_preparation_id", sa.Uuid(), nullable=False),
         sa.Column("kind", sa.String(length=64), nullable=False),
         sa.Column("sequence", sa.Integer(), nullable=False),
+        sa.Column("preparation_version", sa.Integer(), nullable=False),
         sa.Column("input_fingerprint", sa.String(length=64), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("state", sa.String(length=16), nullable=False),
@@ -125,6 +127,14 @@ def upgrade() -> None:
         "research_preparation_artifacts",
         ["research_preparation_id", "kind", "state"],
     )
+    op.create_index(
+        "uq_research_preparation_artifacts_current_kind",
+        "research_preparation_artifacts",
+        ["research_preparation_id", "kind"],
+        unique=True,
+        sqlite_where=sa.text("state = 'current'"),
+        postgresql_where=sa.text("state = 'current'"),
+    )
     op.create_table(
         "research_preparation_events",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -151,26 +161,58 @@ def upgrade() -> None:
             name="uq_research_preparation_events_preparation_seq",
         ),
     )
-    op.create_index(
-        "ix_research_preparation_events_preparation_seq",
-        "research_preparation_events",
-        ["research_preparation_id", "seq"],
-    )
+    _create_event_immutability_triggers()
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_research_preparation_events_preparation_seq",
-        table_name="research_preparation_events",
-    )
+    _drop_event_immutability_triggers()
     op.drop_table("research_preparation_events")
+    op.drop_index(
+        "uq_research_preparation_artifacts_current_kind",
+        table_name="research_preparation_artifacts",
+    )
     op.drop_index(
         "ix_research_preparation_artifacts_preparation_kind_state",
         table_name="research_preparation_artifacts",
     )
     op.drop_table("research_preparation_artifacts")
-    op.drop_index(
-        "ix_research_preparations_research_case_id",
-        table_name="research_preparations",
-    )
     op.drop_table("research_preparations")
+    op.drop_index("uq_research_runs_case_id", table_name="research_runs")
+
+
+def _create_event_immutability_triggers() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        op.execute(
+            "CREATE TRIGGER no_update_research_preparation_events "
+            "BEFORE UPDATE ON research_preparation_events FOR EACH ROW "
+            "BEGIN SELECT RAISE(ABORT, 'table research_preparation_events is append-only'); END"
+        )
+        op.execute(
+            "CREATE TRIGGER no_delete_research_preparation_events "
+            "BEFORE DELETE ON research_preparation_events FOR EACH ROW "
+            "BEGIN SELECT RAISE(ABORT, 'table research_preparation_events is append-only'); END"
+        )
+        return
+    if op.get_bind().dialect.name == "postgresql":
+        for operation in ("update", "delete"):
+            op.execute(
+                f"CREATE TRIGGER no_{operation}_research_preparation_events "
+                f"BEFORE {operation.upper()} ON research_preparation_events "
+                "FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
+
+
+def _drop_event_immutability_triggers() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        op.execute("DROP TRIGGER IF EXISTS no_update_research_preparation_events")
+        op.execute("DROP TRIGGER IF EXISTS no_delete_research_preparation_events")
+        return
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            "DROP TRIGGER IF EXISTS no_update_research_preparation_events "
+            "ON research_preparation_events"
+        )
+        op.execute(
+            "DROP TRIGGER IF EXISTS no_delete_research_preparation_events "
+            "ON research_preparation_events"
+        )

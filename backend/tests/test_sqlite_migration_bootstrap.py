@@ -81,6 +81,77 @@ def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) ->
     )
     assert upgraded_to_head.returncode == 0, upgraded_to_head.stderr
 
+    normal_app_fk_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from app.db import SessionLocal, engine
+
+assert engine.dialect.name == 'sqlite'
+with SessionLocal() as session:
+    assert session.connection().exec_driver_sql('PRAGMA foreign_keys').scalar_one() == 1
+    now = '2026-08-13 00:00:00'
+    case_a = '00000000000000000000000000000021'
+    case_b = '00000000000000000000000000000022'
+    case_c = '00000000000000000000000000000023'
+    run_a = '00000000000000000000000000000024'
+    prep_a = '00000000000000000000000000000025'
+    for case_id, title in ((case_a, 'case a'), (case_b, 'case b'), (case_c, 'case c')):
+        session.execute(text(
+            'INSERT INTO research_cases (id, title, industry_topic, created_at, created_by) '
+            "VALUES (:id, :title, 'test', :now, 'tester')"
+        ), {'id': case_id, 'title': title, 'now': now})
+    session.execute(text(
+        'INSERT INTO research_runs (id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) '
+        "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+    ), {'id': run_a, 'case_id': case_a, 'now': now})
+    session.execute(text(
+        'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) '
+        "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :now, :now)"
+    ), {'id': prep_a, 'case_id': case_a, 'fingerprint': 'a' * 64, 'run_id': run_a, 'now': now})
+    session.execute(text(
+        'INSERT INTO research_preparation_events (id, research_preparation_id, seq, type, step, message, detail, created_at) '
+        "VALUES ('00000000000000000000000000000018', :preparation_id, 1, 'claims_parsed', NULL, NULL, '{}', :now)"
+    ), {'preparation_id': prep_a, 'now': now})
+    session.commit()
+    for case_id, prep_id, referenced_run_id in (
+        (case_b, '00000000000000000000000000000026', run_a),
+        (case_c, '00000000000000000000000000000027', '00000000000000000000000000000028'),
+    ):
+        try:
+            session.execute(text(
+                'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) '
+                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :now, :now)"
+            ), {'id': prep_id, 'case_id': case_id, 'fingerprint': 'a' * 64, 'run_id': referenced_run_id, 'now': now})
+        except IntegrityError:
+            session.rollback()
+        else:
+            raise AssertionError('invalid research_run_id reference was accepted')
+    try:
+        session.execute(text("UPDATE research_preparation_events SET message = 'rewritten' WHERE id = '00000000000000000000000000000018'"))
+    except IntegrityError:
+        session.rollback()
+    else:
+        raise AssertionError('raw preparation event update was accepted')
+    try:
+        session.execute(text("DELETE FROM research_preparation_events WHERE id = '00000000000000000000000000000018'"))
+    except IntegrityError:
+        session.rollback()
+    else:
+        raise AssertionError('raw preparation event delete was accepted')
+""",
+        ],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert normal_app_fk_probe.returncode == 0, normal_app_fk_probe.stderr
+
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0052"
@@ -89,6 +160,11 @@ def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) ->
             "research_preparation_artifacts",
             "research_preparation_events",
         }.issubset(sa.inspect(connection).get_table_names())
+        artifact_columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("research_preparation_artifacts")
+        }
+        assert artifact_columns["preparation_version"]["nullable"] is False
 
         now = "2026-08-13 00:00:00"
 
@@ -144,7 +220,7 @@ def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) ->
             sa.text(
                 "INSERT INTO research_preparation_events "
                 "(id, research_preparation_id, seq, type, step, message, detail, created_at) "
-                "VALUES ('00000000000000000000000000000018', "
+                "VALUES ('00000000000000000000000000000019', "
                 "'00000000000000000000000000000013', 1, 'claims_parsed', NULL, NULL, '{}', :now)"
             ),
             {"now": now},
@@ -211,6 +287,9 @@ def test_0052_downgrade_removes_preparation_tables(tmp_path) -> None:
             "research_preparation_artifacts",
             "research_preparations",
         }.intersection(sa.inspect(connection).get_table_names())
+        assert "uq_research_runs_case_id" not in {
+            index["name"] for index in sa.inspect(connection).get_indexes("research_runs")
+        }
 
 
 def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> None:

@@ -22,6 +22,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -253,6 +254,14 @@ class ProjectionCheckpoint(Base):
 # --------------------------------------------------------------------------- #
 class ResearchRun(Base):
     __tablename__ = "research_runs"
+    __table_args__ = (
+        Index(
+            "uq_research_runs_case_id",
+            "research_case_id",
+            "id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)

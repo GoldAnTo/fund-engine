@@ -6,7 +6,7 @@ The engine is created lazily; importing this module does not open a connection.
 import os
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 DATABASE_URL = os.getenv(
@@ -15,6 +15,11 @@ DATABASE_URL = os.getenv(
 )
 
 engine = create_engine(DATABASE_URL, future=True)
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 
 

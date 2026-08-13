@@ -70,6 +70,7 @@ IMMUTABLE_TABLES = frozenset(
         "event_research_conclusions",
         "case_monitor_versions",
         "research_run_events",
+        "research_preparation_events",
         "fund_disclosure_sync_config_versions",
         "fund_disclosure_sync_runs",
         "fund_disclosure_sync_run_events",

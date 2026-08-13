@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,7 +29,11 @@ class ResearchPreparation(Base):
     __tablename__ = "research_preparations"
     __table_args__ = (
         UniqueConstraint("research_case_id", name="uq_research_preparations_research_case"),
-        Index("ix_research_preparations_research_case_id", "research_case_id"),
+        ForeignKeyConstraint(
+            ["research_case_id", "research_run_id"],
+            ["research_runs.research_case_id", "research_runs.id"],
+            name="fk_research_preparations_case_run",
+        ),
         CheckConstraint(
             "status IN ('preparing', 'awaiting_claim_review', "
             "'awaiting_protocol_confirmation', 'awaiting_plan_authorization', "
@@ -82,7 +88,6 @@ class ResearchPreparation(Base):
     plan_review_state: Mapped[str] = mapped_column(String(16), nullable=False)
     research_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("research_runs.id", name="fk_research_preparations_research_run_id"),
         nullable=True,
     )
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -107,6 +112,14 @@ class ResearchPreparationArtifact(Base):
             "kind",
             "state",
         ),
+        Index(
+            "uq_research_preparation_artifacts_current_kind",
+            "research_preparation_id",
+            "kind",
+            unique=True,
+            sqlite_where=text("state = 'current'"),
+            postgresql_where=text("state = 'current'"),
+        ),
         CheckConstraint(
             "kind IN ('atomic_claim_candidates', 'research_protocol_draft', 'evidence_acquisition_plan')",
             name="ck_research_preparation_artifacts_kind",
@@ -128,6 +141,7 @@ class ResearchPreparationArtifact(Base):
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    preparation_version: Mapped[int] = mapped_column(Integer, nullable=False)
     input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -144,11 +158,6 @@ class ResearchPreparationEvent(Base):
             "research_preparation_id",
             "seq",
             name="uq_research_preparation_events_preparation_seq",
-        ),
-        Index(
-            "ix_research_preparation_events_preparation_seq",
-            "research_preparation_id",
-            "seq",
         ),
         CheckConstraint(
             "step IS NULL OR step IN ('parse_claims', 'draft_protocol', 'draft_evidence_plan')",

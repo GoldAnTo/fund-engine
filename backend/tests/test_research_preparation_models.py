@@ -4,10 +4,11 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 
 from app.domain.research_preparation import preparation_input_fingerprint
-from app.models.ledger import ResearchCase
+from app.models.ledger import ImmutableLedgerError, ResearchCase
 from app.models.operational import ResearchRun
 from app.models.research_preparation import (
     ResearchPreparation,
@@ -70,6 +71,7 @@ def _artifact(preparation: ResearchPreparation, *, sequence: int, **overrides) -
         "research_preparation_id": preparation.id,
         "kind": "atomic_claim_candidates",
         "sequence": sequence,
+        "preparation_version": preparation.version,
         "input_fingerprint": preparation.input_fingerprint,
         "payload": {"claims": []},
         "state": "current",
@@ -106,8 +108,6 @@ def test_fingerprint_is_stable_and_changes_with_either_input() -> None:
 
 
 def test_preparation_has_one_current_row_and_no_run_before_authorization(session) -> None:
-    session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
-    assert session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     case = _case(session)
     session.add(_preparation(case))
     session.commit()
@@ -136,15 +136,6 @@ def test_preparation_has_one_current_row_and_no_run_before_authorization(session
     )
     session.flush()
 
-    with pytest.raises(IntegrityError), session.begin_nested():
-        session.add(
-            _preparation(
-                _case(session, title="Unknown authorized run"),
-                status="authorized",
-                research_run_id=uuid.uuid4(),
-            )
-        )
-        session.flush()
 
 
 @pytest.mark.parametrize(
@@ -261,6 +252,33 @@ def test_preparation_artifact_values_are_constrained(session, field, legal_value
         session.flush()
 
 
+def test_preparation_artifacts_keep_their_preparation_version_and_one_current_kind(session) -> None:
+    preparation = _preparation(_case(session, title="Artifact current uniqueness"))
+    session.add(preparation)
+    session.flush()
+    session.add_all(
+        [
+            _artifact(preparation, sequence=1, preparation_version=1, state="current"),
+            _artifact(preparation, sequence=2, preparation_version=1, state="stale"),
+            _artifact(preparation, sequence=3, preparation_version=1, state="superseded"),
+            _artifact(
+                preparation,
+                sequence=4,
+                preparation_version=1,
+                kind="research_protocol_draft",
+                state="current",
+            ),
+        ]
+    )
+    session.commit()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(_artifact(preparation, sequence=5, preparation_version=1, state="current"))
+        session.flush()
+
+    assert ResearchPreparationArtifact.__table__.c.preparation_version.default is None
+
+
 def test_preparation_event_step_is_constrained_and_message_is_optional(session) -> None:
     preparation = _preparation(_case(session, title="Optional event message"))
     session.add(preparation)
@@ -278,3 +296,21 @@ def test_preparation_event_step_is_constrained_and_message_is_optional(session) 
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(_event(preparation, seq=5, step="invalid_step"))
         session.flush()
+
+
+def test_preparation_events_are_append_only(session) -> None:
+    preparation = _preparation(_case(session, title="Append-only preparation event"))
+    session.add(preparation)
+    session.flush()
+    event = _event(preparation, seq=1)
+    session.add(event)
+    session.commit()
+
+    with pytest.raises(ImmutableLedgerError):
+        session.execute(
+            update(ResearchPreparationEvent)
+            .where(ResearchPreparationEvent.id == event.id)
+            .values(message="rewritten")
+        )
+    with pytest.raises(ImmutableLedgerError):
+        session.execute(delete(ResearchPreparationEvent).where(ResearchPreparationEvent.id == event.id))
