@@ -20,6 +20,8 @@ const backend = path.join(root, "backend");
 const python = process.env.PYTHON || "python";
 const token = "live-ui-verifier-token";
 const tenant = "live-ui-verifier-team";
+const llmApiKey = "live-ui-verifier-not-a-real-key";
+const llmModel = "live-ui-verifier-model";
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -39,6 +41,104 @@ function start(command, args, options) {
   process.stdout.on("data", (chunk) => stdout.push(String(chunk)));
   process.stderr.on("data", (chunk) => stderr.push(String(chunk)));
   return { process, stdout, stderr };
+}
+
+async function startVerifierLLMProvider() {
+  const calls = [];
+  const server = http.createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unexpected verifier provider request" } }));
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "invalid verifier provider JSON" } }));
+        return;
+      }
+      let input;
+      try {
+        const userMessage = [...payload.messages].reverse().find((message) => message.role === "user");
+        input = JSON.parse(userMessage?.content || "{}");
+      } catch {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "invalid verifier provider prompt" } }));
+        return;
+      }
+      const operation = typeof input.raw_input === "string"
+        ? "event_research_extract"
+        : Array.isArray(input.spans)
+          ? "document_extract"
+          : "unsupported";
+      calls.push({
+        authorization: request.headers.authorization,
+        model: payload.model,
+        operation,
+        responseFormat: payload.response_format,
+      });
+      let content;
+      if (operation === "event_research_extract") {
+        content = {
+          research_question: "研报预测能否被后续公司披露验证？",
+          candidate_factors: ["公司盈利兑现情况", "预测口径一致性", "后续披露可得性"],
+        };
+      } else if (operation === "document_extract") {
+        content = {
+          statements: input.spans.map((span) => ({
+            span_id: span.span_id,
+            kind: "forecast",
+            quote: span.verbatim_text,
+            quote_start: 0,
+            quote_end: span.verbatim_text.length,
+            normalized_text: span.verbatim_text,
+            observed_period: null,
+          })),
+        };
+      } else {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unsupported verifier provider prompt" } }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        id: "chatcmpl-live-ui-verifier",
+        object: "chat.completion",
+        created: 0,
+        model: llmModel,
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: JSON.stringify(content),
+          },
+          finish_reason: "stop",
+        }],
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  return {
+    calls,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    server,
+  };
+}
+
+async function stopHttpServer(server) {
+  if (!server?.listening) return;
+  await new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
 }
 
 async function stop(server) {
@@ -328,20 +428,29 @@ async function main() {
   const apiBase = `http://127.0.0.1:${apiPort}/api/v1`;
   const uiBase = `http://127.0.0.1:${uiPort}`;
   const browserApiBase = `${uiBase}/api/v1`;
-  const env = {
-    ...process.env,
-    DATABASE_URL: `sqlite:///${path.join(temporary, "live-ui.db")}`,
-    RESEARCH_TENANT_TOKENS: JSON.stringify({ [token]: tenant }),
-    NO_PROXY: "127.0.0.1,localhost",
-    no_proxy: "127.0.0.1,localhost",
-  };
   let api;
   let vite;
   let browser;
+  let verifierLLMProvider;
   const apiRequests = [];
   const apiResponses = [];
   const browserFailures = [];
   try {
+    verifierLLMProvider = await startVerifierLLMProvider();
+    const env = {
+      ...process.env,
+      APP_ENV: "production",
+      LLM_API_KEY: llmApiKey,
+      LLM_BASE_URL: verifierLLMProvider.baseUrl,
+      LLM_MODEL: llmModel,
+      LLM_TEMPERATURE: "0",
+      GILDATA_TOKEN: "",
+      DATABASE_URL: `sqlite:///${path.join(temporary, "live-ui.db")}`,
+      RESEARCH_TENANT_TOKENS: JSON.stringify({ [token]: tenant }),
+      NO_PROXY: "127.0.0.1,localhost",
+      no_proxy: "127.0.0.1,localhost",
+    };
+    delete env.LLM_SEED;
     execFileSync(
       python,
       ["-c", "from app.models.ledger import Base; from app.db import engine; Base.metadata.create_all(engine)"],
@@ -615,6 +724,18 @@ async function main() {
         throw new Error(`missing live frontend request ${expected}: ${apiRequests.join(" | ")}`);
       }
     }
+    const providerOperations = verifierLLMProvider.calls.map((call) => call.operation);
+    if (
+      providerOperations.filter((operation) => operation === "event_research_extract").length !== 1
+      || providerOperations.filter((operation) => operation === "document_extract").length !== 1
+      || verifierLLMProvider.calls.some((call) => (
+        call.authorization !== `Bearer ${llmApiKey}`
+        || call.model !== llmModel
+        || call.responseFormat?.type !== "json_object"
+      ))
+    ) {
+      throw new Error(`LLM steps did not use the isolated OpenAI-compatible provider: ${JSON.stringify(verifierLLMProvider.calls)}`);
+    }
     await browser.close();
     browser = undefined;
     console.log("PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API");
@@ -632,6 +753,7 @@ async function main() {
     await browser?.close();
     await stop(vite);
     await stop(api);
+    await stopHttpServer(verifierLLMProvider?.server);
     await rm(temporary, { recursive: true, force: true });
   }
 }

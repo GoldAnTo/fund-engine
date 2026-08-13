@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 def test_live_event_ui_verifier_creates_market_factor_instrument_fund_chain_runs_pauses_and_reads_a_case_through_default_http_client() -> None:
+    """Use live HTTP/browser adapters with an explicit external-provider fake."""
     frontend = Path(__file__).parents[2] / "frontend"
     script = frontend / "scripts" / "verify-live-event-ui.mjs"
     node = shutil.which("node")
