@@ -427,7 +427,10 @@ class ExchangeHttpTransport:
         expected: Literal["json", "pdf"],
     ) -> str:
         if not raw_content_type:
-            raise SourceProtocolError("unsupported exchange response type") from None
+            raise SourceProtocolError(
+                "unsupported exchange response type",
+                diagnostics={"error_type": "response_type"},
+            ) from None
         parts = [part.strip().casefold() for part in raw_content_type.split(";")]
         media_type = parts[0]
         parameters = {
@@ -438,19 +441,34 @@ class ExchangeHttpTransport:
         }
         charset = parameters.get("charset")
         if charset is not None and charset not in {"utf-8", "utf8"}:
-            raise SourceProtocolError("unsupported exchange response type") from None
+            raise SourceProtocolError(
+                "unsupported exchange response type",
+                diagnostics={"error_type": "response_type"},
+            ) from None
         if expected == "pdf":
             if media_type != "application/pdf" or not content.startswith(b"%PDF-"):
-                raise SourceProtocolError("unsupported exchange response type") from None
+                raise SourceProtocolError(
+                    "unsupported exchange response type",
+                    diagnostics={"error_type": "response_type"},
+                ) from None
         else:
             if media_type not in {"application/json", "text/json", "text/plain"}:
-                raise SourceProtocolError("unsupported exchange response type") from None
+                raise SourceProtocolError(
+                    "unsupported exchange response type",
+                    diagnostics={"error_type": "response_type"},
+                ) from None
             if content.startswith(b"%PDF-"):
-                raise SourceProtocolError("unsupported exchange response type") from None
+                raise SourceProtocolError(
+                    "unsupported exchange response type",
+                    diagnostics={"error_type": "response_type"},
+                ) from None
             try:
                 content.decode("utf-8")
             except UnicodeDecodeError:
-                raise SourceProtocolError("unsupported exchange response type") from None
+                raise SourceProtocolError(
+                    "unsupported exchange response type",
+                    diagnostics={"error_type": "response_type"},
+                ) from None
         normalized = media_type
         if charset is not None:
             normalized += "; charset=utf-8"

@@ -556,27 +556,42 @@ def test_compressed_body_is_rejected_before_decompression_or_iteration():
 @pytest.mark.parametrize(
     ("expected", "mime_type", "content"),
     [
-        ("json", "text/html", b"<html>blocked</html>"),
-        ("json", "application/octet-stream", b"{}"),
-        ("pdf", "text/plain; charset=utf-8", b"not-pdf"),
-        ("pdf", "application/pdf", b"not-pdf"),
-        ("json", "application/json", b"%PDF-1.7"),
-        ("json", "application/json; charset=gbk", b"{}"),
+        ("json", None, b"body-secret"),
+        ("json", "text/html", b"<html>body-secret</html>"),
+        ("json", "application/octet-stream", b'{"body-secret": true}'),
+        ("pdf", "text/plain; charset=utf-8", b"body-secret-not-pdf"),
+        ("pdf", "application/pdf", b"body-secret-not-pdf"),
+        ("json", "application/json", b"%PDF-1.7\nbody-secret"),
+        ("json", "application/json; charset=gbk", b'{"body-secret": true}'),
+        ("json", "application/json", b"\xffbody-secret"),
     ],
 )
 def test_non_pdf_non_text_and_mime_sniff_mismatches_fail_closed(
-    expected: str, mime_type: str, content: bytes
+    expected: str, mime_type: str | None, content: bytes
 ):
+    headers = {"X-Leak-Probe": "header-secret"}
+    if mime_type is not None:
+        headers["Content-Type"] = mime_type
     value = transport_for(
         lambda request: httpx.Response(
-            200, headers={"Content-Type": mime_type}, content=content
+            200, headers=headers, content=content
         )
     )
 
-    with pytest.raises(SourceProtocolError, match="response type"):
+    with pytest.raises(SourceProtocolError) as caught:
         value.request(
-            "GET", "https://www.sse.com.cn/file.pdf", expected=expected
+            "GET",
+            "https://www.sse.com.cn/url-secret/file.pdf",
+            expected=expected,
         )
+
+    assert str(caught.value) == "unsupported exchange response type"
+    assert caught.value.retryable is False
+    assert caught.value.diagnostics == {"error_type": "response_type"}
+    exposed = f"{caught.value!r} {caught.value.diagnostics!r}"
+    assert "url-secret" not in exposed
+    assert "header-secret" not in exposed
+    assert "body-secret" not in exposed
 
 
 def test_empty_body_is_rejected():
