@@ -18,7 +18,7 @@
 - Modify: `backend/app/ai/client.py`
 - Modify: `backend/app/scripts/run_ai_engine.py`
 
-- [ ] **Step 1: Write the failing provider-policy tests**
+- [x] **Step 1: Write the failing provider-policy tests**
 
 Replace the development-mock expectation with explicit closed-mode coverage:
 
@@ -46,7 +46,7 @@ Change the three no-key reproducibility tests in
 `test_ai_client_determinism.py` to set `APP_ENV=test`; their purpose is seed
 and temperature plumbing, not development fallback.
 
-- [ ] **Step 2: Run the provider-policy tests and verify RED**
+- [x] **Step 2: Run the provider-policy tests and verify RED**
 
 Run:
 
@@ -60,7 +60,7 @@ cd backend
 Expected: non-test cases for unset/development fail because the current client
 still creates `mock-*` clients there; the explicit test case passes.
 
-- [ ] **Step 3: Implement the minimal closed-mode factory**
+- [x] **Step 3: Implement the minimal closed-mode factory**
 
 In `LLMClient.from_env()`, allow the no-key mock branch only when
 `APP_ENV.strip().lower() == "test"`. For every other value raise:
@@ -75,7 +75,7 @@ raise RuntimeError(
 Update the module/class/factory and `run_ai_engine` usage text so they describe
 mock mode as test-only and live credentials as required for CLI execution.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run:
 
@@ -90,7 +90,7 @@ cd backend
 
 Expected: all tests pass without network access.
 
-- [ ] **Step 5: Commit the provider policy**
+- [x] **Step 5: Commit the provider policy**
 
 ```bash
 git add \
@@ -106,7 +106,7 @@ git commit -m "fix: require live llm outside tests"
 **Files:**
 - Modify locally, never stage: `backend/.env`
 
-- [ ] **Step 1: Set the local runtime policy without exposing secrets**
+- [x] **Step 1: Set the local runtime policy without exposing secrets**
 
 Set or replace only this key in the gitignored local file:
 
@@ -117,7 +117,7 @@ APP_ENV=production
 Do not print, stage, or rewrite the LLM/Gildata credential values. Confirm only
 the presence of the required key names with a redacted script.
 
-- [ ] **Step 2: Verify factories construct live clients without network calls**
+- [x] **Step 2: Verify factories construct live clients without network calls**
 
 From `backend`, load `.env`, construct both clients, and print only:
 
@@ -135,13 +135,13 @@ not raise.
 **Files:**
 - No repository files modified; use a temporary SQLite database and ephemeral validation scripts.
 
-- [ ] **Step 1: Send one minimal real LLM request**
+- [x] **Step 1: Send one minimal real LLM request**
 
 Load `backend/.env`, construct `LLMClient.from_env()`, and call `chat_json` with
 a non-sensitive instruction to return `{"status": "ok"}`. Assert a dictionary
 is returned and report only the configured model and returned key names.
 
-- [ ] **Step 2: Validate real Gildata MCP access**
+- [x] **Step 2: Validate real Gildata MCP access**
 
 Construct `GildataMCPClient.from_env()` in a context manager. Call
 `list_tools()` and assert `FinQuery` is available. Then call:
@@ -157,7 +157,7 @@ Parse the inner JSON, require a success code and a non-empty results list, and
 report only tool names, result count, and validation status. Never print the
 licensed payload or request URL.
 
-- [ ] **Step 3: Run a real isolated AI-engine workflow**
+- [x] **Step 3: Run a real isolated AI-engine workflow**
 
 Create a temporary directory with `mktemp -d`, point `DATABASE_URL` at a SQLite
 file inside it, and run:
@@ -172,7 +172,7 @@ equals the configured live model and none starts with `mock-`. The normal
 application database is never opened. Move the temporary directory to the
 user Trash after validation.
 
-- [ ] **Step 4: Run complete offline regression verification**
+- [x] **Step 4: Run complete offline regression verification**
 
 Run:
 
@@ -188,7 +188,7 @@ Expected: the complete backend suite passes; PostgreSQL-only tests may skip
 when `TEST_DATABASE_URL` is absent. Pytest keeps `APP_ENV=test`, so this command
 does not contact either real provider.
 
-- [ ] **Step 5: Commit the implementation plan progress only if changed**
+- [x] **Step 5: Commit the implementation plan progress only if changed**
 
 Mark completed checkboxes in this plan and commit it with the implementation.
 Never stage `backend/.env` or any temporary provider response.
