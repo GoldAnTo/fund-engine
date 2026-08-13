@@ -468,20 +468,12 @@ def test_scope_change_revokes_authorized_preparation_without_deleting_its_run(
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
     preparation = _complete_preparation_drafts(cmd_session, case_id)
-    now = datetime.now(timezone.utc)
-    run = ResearchRun(
-        research_case_id=case_id,
-        status="queued",
-        stage="planning",
-        round=0,
-        max_rounds=3,
-        budget=100,
-        budget_used=0,
-        created_at=now,
-        updated_at=now,
+    run = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
     )
-    cmd_session.add(run)
-    cmd_session.flush()
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = run.id
     preparation.research_run_id = run.id
     preparation.status = "authorized"
     cmd_session.commit()
@@ -503,7 +495,28 @@ def test_scope_change_revokes_authorized_preparation_without_deleting_its_run(
     cmd_session.refresh(preparation)
     assert preparation.status == "preparing"
     assert preparation.research_run_id is None
-    assert cmd_session.get(ResearchRun, run.id) is not None
+    old_run = cmd_session.get(ResearchRun, run.id)
+    assert old_run is not None
+    assert old_run.status == "cancelled"
+    assert old_run.stage == "stopped"
+    assert old_run.stop_reason == "scope_changed"
+    old_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == run.id)
+    )
+    assert old_job is not None
+    assert old_job.status == "cancelled"
+    assert old_job.cancel_requested is True
+    cancellation_event = cmd_session.scalar(
+        select(ResearchRunEvent).where(
+            ResearchRunEvent.run_id == run.id,
+            ResearchRunEvent.status == "cancelled",
+        )
+    )
+    assert cancellation_event is not None
+    assert cancellation_event.payload_json == {"stop_reason": "scope_changed"}
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.active_run_id is None
     assert len(
         list(
             cmd_session.scalars(
@@ -927,6 +940,14 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
         lifecycle.active_run_id = old_run.id
+        preparation = bootstrap.scalar(
+            select(ResearchPreparation).where(
+                ResearchPreparation.research_case_id == case_id
+            )
+        )
+        assert preparation is not None
+        preparation.research_run_id = old_run.id
+        preparation.status = "authorized"
         old_run_id = old_run.id
         old_run.max_rounds = 1
         tasks = list(
@@ -1062,6 +1083,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         old_task = verify.get(ResearchTask, target_task_id)
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert old_run is not None and old_run.status == "cancelled"
+        assert old_run.stop_reason == "scope_changed"
         assert old_task is not None and old_task.status == "cancelled"
         assert old_task.result is None
         old_job = verify.scalar(
@@ -1081,7 +1103,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             .where(Thesis.research_case_id == case_id)
         ) is None
         assert lifecycle is not None
-        assert lifecycle.status == "awaiting_scope"
+        assert lifecycle.status == "awaiting_key_review"
         assert lifecycle.active_run_id is None
         assert lifecycle.current_round == 0
         assert verify.scalar(
@@ -1124,12 +1146,14 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
     errors: list[BaseException] = []
     draft_ids: list[uuid.UUID] = []
     draft_thread_id: list[int] = []
-    original_continue = EventResearchScopeService._continue_research_if_needed
+    original_invalidate = ResearchPreparationService.invalidate_from_scope_change
 
-    def pause_scope(service, lifecycle, active_theses, now) -> None:
+    def pause_scope(service, case_id, new_scope_id, *, actor, case_locked=False) -> None:
         scope_has_lock.set()
         assert release_scope.wait(timeout=5)
-        original_continue(service, lifecycle, active_theses, now)
+        return original_invalidate(
+            service, case_id, new_scope_id, actor=actor, case_locked=case_locked
+        )
 
     def observe_draft_lock(
         _conn, _cursor, statement, _parameters, _context, _executemany
@@ -1143,7 +1167,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
             draft_lock_attempted.set()
 
     monkeypatch.setattr(
-        EventResearchScopeService, "_continue_research_if_needed", pause_scope
+        ResearchPreparationService, "invalidate_from_scope_change", pause_scope
     )
 
     def update_scope() -> None:
@@ -1250,12 +1274,16 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     publish_lock_attempted, stale_publish_rejected = Event(), Event()
     errors: list[BaseException] = []
     publisher_thread_id: list[int] = []
-    original_continue = EventResearchScopeService._continue_research_if_needed
+    original_invalidate = ResearchPreparationService.invalidate_from_scope_change
 
-    def pause_scope_lifecycle_write(service, lifecycle, active_theses, now) -> None:
+    def pause_scope_lifecycle_write(
+        service, case_id, new_scope_id, *, actor, case_locked=False
+    ) -> None:
         scope_has_lifecycle.set()
         assert allow_scope_continue.wait(timeout=5)
-        original_continue(service, lifecycle, active_theses, now)
+        return original_invalidate(
+            service, case_id, new_scope_id, actor=actor, case_locked=case_locked
+        )
 
     def observe_publish_lock(
         _conn, _cursor, statement, _parameters, _context, _executemany
@@ -1269,8 +1297,8 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
             publish_lock_attempted.set()
 
     monkeypatch.setattr(
-        EventResearchScopeService,
-        "_continue_research_if_needed",
+        ResearchPreparationService,
+        "invalidate_from_scope_change",
         pause_scope_lifecycle_write,
     )
 
@@ -1336,9 +1364,9 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     try:
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
-        # A changed scope queues a successor; it cannot leave a stale draft
-        # lifecycle that a concurrent publisher could mistake for current.
-        assert lifecycle.status == "continuing"
+        # Scope history invalidates the stale draft before the publisher's
+        # root-lock request can observe it as current.
+        assert lifecycle.status == "draft_ready"
         assert verify.scalar(
             select(EventResearchConclusion.id).where(
                 EventResearchConclusion.research_case_id == case_id,
@@ -1770,9 +1798,13 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
     assert response.status_code == 200
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    assert lifecycle.status == paused_status
-    assert lifecycle.next_human_action == "补充来源或调整研究范围"
-    assert lifecycle.active_run_id == initial_run_id
+    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.next_human_action is None
+    assert lifecycle.active_run_id is None
+    initial_run = cmd_session.get(ResearchRun, initial_run_id)
+    assert initial_run is not None
+    assert initial_run.status == "cancelled"
+    assert initial_run.stop_reason == "scope_changed"
     assert len(
         list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
     ) == 1
@@ -1825,26 +1857,26 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
 
     assert response.status_code == 200
     cmd_session.refresh(old_run)
-    assert old_run.status == old_status
-    assert old_run.stop_reason is None
+    assert old_run.status == "cancelled"
+    assert old_run.stop_reason == "scope_changed"
     old_job = cmd_session.scalar(
         select(Job).where(Job.target_type == "research_run", Job.target_id == old_run_id)
     )
     assert old_job is not None
-    assert old_job.status in {"queued", "running"}
-    assert old_job.cancel_requested is False
+    assert old_job.status == "cancelled"
+    assert old_job.cancel_requested is True
     old_tasks = list(
         cmd_session.scalars(
             select(ResearchTask).where(ResearchTask.id.in_(old_task_ids))
         )
     )
     assert old_tasks
-    assert {task.status for task in old_tasks} != {"cancelled"}
+    assert {task.status for task in old_tasks} == {"cancelled"}
 
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
     assert lifecycle.status == "awaiting_key_review"
-    assert lifecycle.active_run_id == old_run_id
+    assert lifecycle.active_run_id is None
     assert len(
         list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
     ) == 1
