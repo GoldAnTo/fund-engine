@@ -587,6 +587,49 @@ def test_fetch_valid_canonical_pdf_does_not_invoke_mirror():
     assert envelope.content == b"%PDF-1.7\ncanonical"
 
 
+@pytest.mark.parametrize("use_mirror", [False, True], ids=["canonical", "mirror"])
+def test_fetch_cache_rejection_does_not_fence_reference(use_mirror: bool):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+    valid_pdf_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal valid_pdf_calls
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        pdf_calls.append(str(request.url))
+        if use_mirror and request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                content=b"<html>not a PDF</html>",
+            )
+        valid_pdf_calls += 1
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\ncache-too-large",
+        )
+
+    source = make_source(handler, max_cache_bytes=10)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    for _attempt in range(2):
+        with pytest.raises(SourceProtocolError, match="adapter cache limit"):
+            source.fetch(reference)
+
+    expected_attempt = (
+        [reference.canonical_url, mirror_url(reference.canonical_url)]
+        if use_mirror
+        else [reference.canonical_url]
+    )
+    assert pdf_calls == expected_attempt * 2
+    assert valid_pdf_calls == 2
+
+
 @pytest.mark.parametrize(
     ("failure", "expected_exception", "message"),
     [

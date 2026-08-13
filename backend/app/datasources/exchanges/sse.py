@@ -547,9 +547,9 @@ class SSEAnnouncementSource(SourceAdapter):
                 raise SourceProtocolError(
                     "SSE final PDF URL did not match reference"
                 ) from None
-        self._fetched[key] = None
         envelope = self._envelope(reference, response)
         self._cache_download(key, envelope)
+        self._fetched[key] = None
         return envelope
 
     def _envelope(
