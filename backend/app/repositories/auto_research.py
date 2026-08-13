@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
+from app.models.ledger import ResearchCase
 from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent, TaskItem
+from app.services.case_monitor import ResearchRunEventRepository
 
 
 def _utcnow() -> datetime:
@@ -176,12 +178,171 @@ class AutoResearchRepository:
             self._append_job_event(job, status="cancelled", step="stopped", message="cancel requested")
         return True
 
-    def record_job_completion(self, job: Job, *, status: str, step: str, error: str | None = None) -> None:
+    def record_job_completion(
+        self,
+        job: Job,
+        *,
+        status: str,
+        step: str,
+        error: str | None = None,
+        run: ResearchRun | None = None,
+    ) -> None:
+        """Serialize the worker terminal write with public Job cancellation.
+
+        The worker locks in Case -> ResearchRun -> Job order.  A public cancel
+        only takes the Job lock, so it either commits ``cancel_requested``
+        first or waits until the worker has committed a terminal state.
+        """
+        desired_run = None
+        run_id = None
+        case_id = None
+        if run is not None:
+            run_id = run.id
+            case_id = run.research_case_id
+            desired_run = {
+                "status": run.status,
+                "stage": run.stage,
+                "round": run.round,
+                "budget_used": run.budget_used,
+                "stop_reason": run.stop_reason,
+            }
+        job_id = job.id
+
+        current_run, current_job = self._lock_terminal_rows(
+            run_id=run_id,
+            case_id=case_id,
+            job_id=job_id,
+        )
+        if current_job is None:
+            return
+        if current_job.status in {"succeeded", "failed"}:
+            # A different worker already won terminal ownership.  Nothing
+            # from this worker's losing Run/event/handoff transaction may be
+            # published by run_once's outer commit.
+            self._session.rollback()
+            return
+
+        cancel_won = bool(
+            current_job.cancel_requested or current_job.status == "cancelled"
+        )
+        if cancel_won and current_run is not None:
+            # execute() leaves its final Run/event/lifecycle work uncommitted.
+            # Discard that losing terminal branch, then reacquire the stable
+            # lock order in a clean transaction before publishing cancellation.
+            self._session.rollback()
+            current_run, current_job = self._lock_terminal_rows(
+                run_id=run_id,
+                case_id=case_id,
+                job_id=job_id,
+            )
+            if current_job is None or current_job.status in {"succeeded", "failed"}:
+                return
+            if not (
+                current_job.cancel_requested or current_job.status == "cancelled"
+            ):
+                return
+            self._cancel_locked_run(current_run)
+            self._set_job_completion(
+                current_job,
+                status="cancelled",
+                step="stopped",
+                error=None,
+            )
+            return
+
+        if current_job.status == "cancelled" or current_job.cancel_requested:
+            self._set_job_completion(
+                current_job,
+                status="cancelled",
+                step="stopped",
+                error=None,
+            )
+            return
+
+        if current_run is not None and desired_run is not None:
+            current_run.status = str(desired_run["status"])
+            current_run.stage = str(desired_run["stage"])
+            current_run.round = int(desired_run["round"])
+            current_run.budget_used = int(desired_run["budget_used"])
+            current_run.stop_reason = desired_run["stop_reason"]
+            current_run.updated_at = _utcnow()
+        self._set_job_completion(
+            current_job,
+            status=status,
+            step=step,
+            error=error,
+        )
+
+    def _lock_terminal_rows(
+        self,
+        *,
+        run_id: uuid.UUID | None,
+        case_id: uuid.UUID | None,
+        job_id: uuid.UUID,
+    ) -> tuple[ResearchRun | None, Job | None]:
+        with self._session.no_autoflush:
+            current_run = None
+            if run_id is not None and case_id is not None:
+                self._session.scalar(
+                    select(ResearchCase)
+                    .where(ResearchCase.id == case_id)
+                    .with_for_update()
+                )
+                current_run = self._session.scalar(
+                    select(ResearchRun)
+                    .where(ResearchRun.id == run_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            current_job = self._session.scalar(
+                select(Job)
+                .where(Job.id == job_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        return current_run, current_job
+
+    def _cancel_locked_run(self, run: ResearchRun | None) -> None:
+        if run is None:
+            return
+        run.status = "cancelled"
+        run.stage = "stopped"
+        run.stop_reason = "cancelled"
+        run.updated_at = _utcnow()
+        for task in self._session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.status.in_(("queued", "running")))
+        ):
+            task.status = "cancelled"
+            task.stage = "stopped"
+            task.updated_at = _utcnow()
+        ResearchRunEventRepository(self._session).append(
+            run.id,
+            stage="stopped",
+            status="cancelled",
+            message="研究任务在最终提交前收到取消请求。",
+            payload_json={"stop_reason": "cancelled"},
+        )
+
+    def _set_job_completion(
+        self,
+        job: Job,
+        *,
+        status: str,
+        step: str,
+        error: str | None,
+    ) -> None:
         job.status = status
         job.step = step
         job.error = error
         job.finished_at = _utcnow()
-        self._append_job_event(job, status=status, step=step, message=error or "worker finished")
+        self._append_job_event(
+            job,
+            status=status,
+            step=step,
+            message=error or "worker finished",
+        )
 
     def resume_after_claim_review(self, run: ResearchRun) -> bool:
         """Requeue the same frozen run after its atomic-claim gate is cleared.

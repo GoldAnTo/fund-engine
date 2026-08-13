@@ -583,6 +583,12 @@ class AutoResearchService:
             previous = now
         else:
             self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
+        # Start the final transaction in the same Case -> ResearchRun -> Job
+        # order used by scope replacement and worker terminalization.  The
+        # provider calls and intermediate task commits have already finished;
+        # this lock is held only through the short terminal write.
+        with self.session.no_autoflush:
+            lock_event_scope_case(self.session, run.research_case_id)
         self.session.flush()
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)

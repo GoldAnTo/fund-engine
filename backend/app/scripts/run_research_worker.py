@@ -62,16 +62,22 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
             return True
         try:
             service.execute(run)
-            session.refresh(run)
             service.repo.record_job_completion(
                 job,
                 status="cancelled" if run.status == "cancelled" else run.status,
                 step=run.stage,
+                run=run,
             )
             session.commit()
         except Exception as exc:
             service.repo.update_run(run, status="failed", stage="failed", stop_reason="execution_failed")
-            service.repo.record_job_completion(job, status="failed", step="failed", error=str(exc))
+            service.repo.record_job_completion(
+                job,
+                status="failed",
+                step="failed",
+                error=str(exc),
+                run=run,
+            )
             session.commit()
             raise
         return True
