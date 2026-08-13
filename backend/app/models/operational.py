@@ -37,7 +37,7 @@ from app.models.ledger import Base, _uuid
 # Jobs
 # --------------------------------------------------------------------------- #
 JobStatus = Literal["queued", "running", "waiting_for_review", "succeeded", "failed", "cancelled"]
-JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse"]
+JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse", "prepare_research"]
 
 
 class Job(Base):

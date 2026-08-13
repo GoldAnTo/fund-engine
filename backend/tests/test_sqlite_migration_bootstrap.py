@@ -33,7 +33,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0052"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -55,6 +55,110 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert trigger_count == 1
+
+
+def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) -> None:
+    database_path = tmp_path / "research-preparation.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0051.returncode == 0, upgraded_to_0051.stderr
+    upgraded_to_head = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_head.returncode == 0, upgraded_to_head.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0052"
+        assert {
+            "research_preparations",
+            "research_preparation_artifacts",
+            "research_preparation_events",
+        }.issubset(sa.inspect(connection).get_table_names())
+
+        now = "2026-08-13 00:00:00"
+
+        def insert_case(case_id: str, title: str) -> None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO research_cases "
+                    "(id, title, industry_topic, created_at, created_by) "
+                    "VALUES (:id, :title, 'test', :now, 'tester')"
+                ),
+                {"id": case_id, "title": title, "now": now},
+            )
+
+        def insert_preparation(case_id: str, *, preparation_id: str, status: str, run_id: str | None = None) -> None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO research_preparations "
+                    "(id, research_case_id, version, input_fingerprint, status, "
+                    "parse_claims_state, draft_protocol_state, draft_evidence_plan_state, "
+                    "claim_review_state, protocol_review_state, plan_review_state, "
+                    "research_run_id, created_at, updated_at) "
+                    "VALUES (:id, :case_id, 1, :fingerprint, :status, "
+                    "'queued', 'queued', 'queued', 'locked', 'locked', 'locked', "
+                    ":run_id, :now, :now)"
+                ),
+                {
+                    "id": preparation_id,
+                    "case_id": case_id,
+                    "fingerprint": "a" * 64,
+                    "status": status,
+                    "run_id": run_id,
+                    "now": now,
+                },
+            )
+
+        valid_case = "00000000000000000000000000000011"
+        run_id = "00000000000000000000000000000012"
+        insert_case(valid_case, "valid preparation")
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_runs "
+                "(id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) "
+                "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+            ),
+            {"id": run_id, "case_id": valid_case, "now": now},
+        )
+        insert_preparation(
+            valid_case,
+            preparation_id="00000000000000000000000000000013",
+            status="preparing",
+        )
+
+        invalid_status_case = "00000000000000000000000000000014"
+        insert_case(invalid_status_case, "invalid status")
+        with pytest.raises(sa.exc.IntegrityError):
+            insert_preparation(
+                invalid_status_case,
+                preparation_id="00000000000000000000000000000015",
+                status="not_a_preparation_status",
+            )
+
+        unauthorized_run_case = "00000000000000000000000000000016"
+        insert_case(unauthorized_run_case, "unauthorized run")
+        with pytest.raises(sa.exc.IntegrityError):
+            insert_preparation(
+                unauthorized_run_case,
+                preparation_id="00000000000000000000000000000017",
+                status="preparing",
+                run_id=run_id,
+            )
 
 
 def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> None:
@@ -639,7 +743,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0052"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -693,7 +797,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0052"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:
