@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.operational import ResearchWorkerHeartbeat
@@ -25,10 +25,18 @@ class WorkerHeartbeatService:
         seen_at: datetime | None = None,
     ) -> ResearchWorkerHeartbeat:
         now = seen_at or datetime.now(timezone.utc)
-        heartbeat = self._session.get(ResearchWorkerHeartbeat, worker_id)
+        storage_worker_id = self._storage_worker_id(worker_id, worker_kind)
+        heartbeat = self._session.get(ResearchWorkerHeartbeat, storage_worker_id)
+        if heartbeat is None and worker_kind == "research_run":
+            # Read and adopt pre-0053 heartbeat rows when their process next
+            # touches.  Until then ``latest`` still treats their raw ID as a
+            # research-run heartbeat.
+            heartbeat = self._session.get(ResearchWorkerHeartbeat, worker_id)
+            if heartbeat is not None:
+                heartbeat.worker_id = storage_worker_id
         if heartbeat is None:
             heartbeat = ResearchWorkerHeartbeat(
-                worker_id=worker_id,
+                worker_id=storage_worker_id,
                 worker_kind=worker_kind,
                 mode=mode,
                 state=state,
@@ -45,9 +53,19 @@ class WorkerHeartbeatService:
         return heartbeat
 
     def latest(self, *, worker_kind: str = "research_run") -> ResearchWorkerHeartbeat | None:
+        prefix = f"{worker_kind}:%"
+        identity_filter = ResearchWorkerHeartbeat.worker_id.like(prefix)
+        if worker_kind == "research_run":
+            identity_filter = or_(
+                identity_filter,
+                ~ResearchWorkerHeartbeat.worker_id.contains(":"),
+            )
         return self._session.scalar(
             select(ResearchWorkerHeartbeat)
-            .where(ResearchWorkerHeartbeat.worker_kind == worker_kind)
+            .where(
+                ResearchWorkerHeartbeat.worker_kind == worker_kind,
+                identity_filter,
+            )
             .order_by(
                 ResearchWorkerHeartbeat.last_seen_at.desc()
             ).limit(1)
@@ -79,3 +97,7 @@ class WorkerHeartbeatService:
             "mode": heartbeat.mode,
             "state": heartbeat.state,
         }
+
+    @staticmethod
+    def _storage_worker_id(worker_id: str, worker_kind: str) -> str:
+        return f"{worker_kind}:{worker_id}"[:128]

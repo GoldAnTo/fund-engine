@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.atomic_claims import AtomicClaimDraft
@@ -25,6 +26,7 @@ from app.models.source_governance import SourceContract
 from app.services.research_preparation import ResearchPreparationService
 from app.services.research_preparation import ClaimDecision, ProtocolConfirmation
 from app.services.atomic_claims import AtomicClaimService
+from app.repositories.research_preparation import ResearchPreparationRepository
 
 
 def _session_factory(tmp_path):
@@ -33,7 +35,7 @@ def _session_factory(tmp_path):
     return engine, sessionmaker(bind=engine, future=True)
 
 
-def _preparation(session):
+def _preparation(session, *, contract_effective_until=None):
     now = datetime.now(UTC)
     case = ResearchCase(title="worker", industry_topic="test", created_by="test", created_at=now)
     document = DocumentVersion(
@@ -49,7 +51,7 @@ def _preparation(session):
     session.add_all((
         CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
         CaseTenantAdmission(research_case_id=case.id, tenant_id="test", initial_document_version_id=document.id, admitted_by="test", admitted_at=now),
-        SourceContract(document_version_id=document.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="test", created_at=now),
+        SourceContract(document_version_id=document.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=contract_effective_until, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="test", created_at=now),
         EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by="test", change_summary="test", created_at=now),
     ))
     span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="Revenue grew ten percent.")
@@ -106,6 +108,56 @@ class _ProtocolGenerator:
 class _PlanGenerator:
     def draft_evidence_plan(self, _input):
         return {"items": []}
+
+
+def test_postgresql_preparation_claim_locks_only_jobs() -> None:
+    statement = ResearchPreparationRepository._eligible_preparation_jobs(
+        datetime.now(UTC)
+    ).with_for_update(of=Job, skip_locked=True).limit(1)
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE OF jobs SKIP LOCKED" in sql
+    assert "LEFT OUTER JOIN" not in sql and "JOIN research_preparations" not in sql
+
+
+def test_sqlite_conditional_claim_allows_exactly_one_winner(tmp_path) -> None:
+    engine, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        _, preparation, _ = _preparation(setup)
+        job_id = setup.scalar(select(Job.id).where(Job.target_id == preparation.id))
+        setup.commit()
+    first, second = sessions(), sessions()
+    try:
+        # Both workers see the same candidate before either conditional write.
+        assert first.scalar(ResearchPreparationRepository._eligible_preparation_jobs(datetime.now(UTC)).with_only_columns(Job.id)) == job_id
+        assert second.scalar(ResearchPreparationRepository._eligible_preparation_jobs(datetime.now(UTC)).with_only_columns(Job.id)) == job_id
+        assert first.execute(update(Job).where(Job.id == job_id, Job.status == "queued", Job.cancel_requested.is_(False)).values(status="running")).rowcount == 1
+        first.commit()
+        assert second.execute(update(Job).where(Job.id == job_id, Job.status == "queued", Job.cancel_requested.is_(False)).values(status="running")).rowcount == 0
+        second.commit()
+    finally:
+        first.close()
+        second.close()
+    with Session(engine) as check:
+        assert check.get(Job, job_id).status == "running"
+
+
+def test_repository_claim_only_returns_one_job_across_two_sqlite_sessions(tmp_path) -> None:
+    _, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        _, preparation, _ = _preparation(setup)
+        preparation_id = preparation.id
+        setup.commit()
+    first, second = sessions(), sessions()
+    try:
+        assert ResearchPreparationRepository(first).claim_next_preparation_job() is not None
+        first.commit()
+        assert ResearchPreparationRepository(second).claim_next_preparation_job() is None
+        second.commit()
+    finally:
+        first.close()
+        second.close()
+    with sessions() as check:
+        assert check.scalar(select(Job).where(Job.target_id == preparation_id)).status == "running"
 
 
 def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path) -> None:
@@ -348,6 +400,28 @@ def test_third_provider_failure_is_recoverable_without_another_queued_job(tmp_pa
         assert check.scalars(select(ResearchRun)).all() == []
 
 
+def test_unavailable_source_input_fails_the_step_without_leaving_a_running_job(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+
+    engine, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        _, preparation, _ = _preparation(
+            setup, contract_effective_until=datetime.now(UTC) - timedelta(seconds=1)
+        )
+        preparation_id = preparation.id
+        setup.commit()
+
+    assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
+    with Session(engine) as check:
+        preparation = check.get(ResearchPreparation, preparation_id)
+        job = check.scalar(select(Job).where(Job.target_id == preparation_id))
+        assert preparation is not None and preparation.status == "recoverable_failure"
+        assert preparation.parse_claims_state == "failed"
+        assert job is not None and job.status == "failed"
+        assert "https://" not in (job.error or "")
+        assert check.scalars(select(ResearchRun)).all() == []
+
+
 def test_queued_cancelled_preparation_job_never_calls_provider(tmp_path) -> None:
     from app.scripts import run_research_preparation_worker as worker
 
@@ -552,3 +626,41 @@ def test_preparation_heartbeat_does_not_make_research_run_worker_available(tmp_p
             worker_kind="research_run",
         )
         assert heartbeats.status()["status"] == "available"
+
+
+def test_worker_heartbeat_namespaces_a_shared_operator_id(tmp_path) -> None:
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    _, sessions = _session_factory(tmp_path)
+    with sessions() as session:
+        heartbeats = WorkerHeartbeatService(session)
+        heartbeats.touch(worker_id="operator", mode="loop", state="polling", worker_kind="research_run")
+        heartbeats.touch(worker_id="operator", mode="loop", state="polling", worker_kind="research_preparation")
+        assert heartbeats.status(worker_kind="research_run")["status"] == "available"
+        assert heartbeats.status(worker_kind="research_preparation")["status"] == "available"
+
+
+def test_once_preparation_heartbeat_never_advertises_an_available_worker(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    _, sessions = _session_factory(tmp_path)
+    worker._touch(mode="once", state="idle", session_factory=sessions)
+    with sessions() as session:
+        status = WorkerHeartbeatService(session).status(worker_kind="research_preparation")
+        assert status["mode"] == "once"
+        assert status["status"] == "stale"
+
+
+def test_once_cli_records_once_heartbeat_mode(tmp_path, monkeypatch) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    _, sessions = _session_factory(tmp_path)
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(worker, "run_once", lambda: False)
+    monkeypatch.setattr("sys.argv", ["run_research_preparation_worker", "--once"])
+    worker.main()
+    with sessions() as session:
+        status = WorkerHeartbeatService(session).status(worker_kind="research_preparation")
+        assert status["mode"] == "once" and status["state"] == "idle"

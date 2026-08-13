@@ -22,6 +22,8 @@ from app.env import load_local_env
 load_local_env()
 
 from app.ai.research_preparation import (
+    PreparationInputUnavailableError,
+    PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
     PREPARATION_PROVIDER_ERROR_MESSAGE,
     ResearchPreparationGenerator,
     ResearchPreparationProviderError,
@@ -62,7 +64,8 @@ def _worker_id() -> str:
     )[:128]
 
 
-def _touch(*, mode: str, state: str, session_factory=SessionLocal) -> None:
+def _touch(*, mode: str, state: str, session_factory=None) -> None:
+    session_factory = session_factory or SessionLocal
     with session_factory() as session:
         WorkerHeartbeatService(session).touch(
             worker_id=_worker_id(), mode=mode, state=state,
@@ -178,6 +181,39 @@ def _provider_failure(
             repo.requeue_preparation_job(
                 job, step=input.step, error=PREPARATION_PROVIDER_ERROR_MESSAGE
             )
+        session.commit()
+
+
+def _input_unavailable_failure(
+    session_factory, *, job_id: uuid.UUID, input: _JobInput
+) -> None:
+    """Terminate a source-governance input race without leaving a running Job."""
+    with session_factory() as session:
+        repo = ResearchPreparationRepository(session)
+        job = _locked_job(session, job_id)
+        if job is None or job.status != "running":
+            session.commit()
+            return
+        preparation = repo.lock_for_case(input.case_id)
+        if preparation is None:
+            _cancel(repo, job, step=input.step)
+        else:
+            reason = _fresh_job_reason(job, preparation, input)
+            if reason is not None:
+                _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
+            else:
+                ResearchPreparationService(session).mark_step_failed(
+                    input.case_id,
+                    input.step,  # type: ignore[arg-type]
+                    error_code="provider_unavailable",
+                    retry_at=None,
+                )
+                repo.set_preparation_job_terminal(
+                    job,
+                    status="failed",
+                    step=input.step,
+                    error=PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
+                )
         session.commit()
 
 
@@ -386,6 +422,9 @@ def run_once(
     except ResearchPreparationProviderError:
         _provider_failure(session_factory, job_id=job_id, input=input)
         return True
+    except PreparationInputUnavailableError:
+        _input_unavailable_failure(session_factory, job_id=job_id, input=input)
+        return True
     except Exception:
         _internal_failure(session_factory, job_id=job_id, step=input.step)
         raise
@@ -417,9 +456,9 @@ def main() -> None:
     if not args.once and not args.loop:
         parser.error("choose --once or --loop")
     if args.once:
-        _touch(mode="loop", state="polling")
+        _touch(mode="once", state="executing")
         run_once()
-        _touch(mode="loop", state="polling")
+        _touch(mode="once", state="idle")
         return
     while True:
         _touch(mode="loop", state="polling")

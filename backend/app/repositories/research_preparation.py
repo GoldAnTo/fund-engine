@@ -5,7 +5,7 @@ import uuid
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import ArtifactKind, PreparationStep
@@ -358,32 +358,69 @@ class ResearchPreparationRepository:
         test fallback.
         """
         now = now or _utcnow()
-        job = self._session.scalar(
-            select(Job)
-            .outerjoin(ResearchPreparation, ResearchPreparation.id == Job.target_id)
-            .where(Job.kind == "prepare_research", Job.status == "queued")
-            .where(
+        eligible = self._eligible_preparation_jobs(now)
+        if self._session.bind is not None and self._session.bind.dialect.name == "postgresql":
+            job = self._session.scalar(
+                eligible.with_for_update(of=Job, skip_locked=True)
+                .execution_options(populate_existing=True)
+                .limit(1)
+            )
+            if job is None:
+                return None
+            job.status = "running"
+            job.started_at = now
+            self._append_job_event(job, status="running", step=job.step, message="preparation job claimed")
+            self._session.flush()
+            return job
+
+        # SQLite has no row locks.  The read only nominates a candidate; the
+        # conditional state transition is the ownership primitive.  A racing
+        # worker sees rowcount=0 and continues to the next candidate.
+        candidate_ids = self._session.scalars(eligible.with_only_columns(Job.id)).all()
+        for candidate_id in candidate_ids:
+            claimed = self._session.execute(
+                update(Job)
+                .where(
+                    Job.id == candidate_id,
+                    Job.status == "queued",
+                    Job.cancel_requested.is_(False),
+                )
+                .values(status="running", started_at=now)
+            )
+            if claimed.rowcount != 1:
+                continue
+            job = self._session.get(Job, candidate_id, populate_existing=True)
+            assert job is not None
+            self._append_job_event(job, status="running", step=job.step, message="preparation job claimed")
+            self._session.flush()
+            return job
+        return None
+
+    @staticmethod
+    def _eligible_preparation_jobs(now: datetime):
+        preparation_exists = exists(
+            select(ResearchPreparation.id).where(
+                ResearchPreparation.id == Job.target_id,
+                ResearchPreparation.research_case_id == Job.research_case_id,
                 or_(
                     ResearchPreparation.next_attempt_at.is_(None),
                     ResearchPreparation.next_attempt_at <= now,
-                    ResearchPreparation.id.is_(None),
-                )
+                ),
+            )
+        )
+        return (
+            select(Job)
+            .where(
+                Job.kind == "prepare_research",
+                Job.status == "queued",
+                Job.cancel_requested.is_(False),
+                Job.target_type == "research_preparation",
+                Job.target_id.is_not(None),
+                Job.research_case_id.is_not(None),
+                preparation_exists,
             )
             .order_by(Job.created_at, Job.id)
-            .with_for_update(skip_locked=True)
-            .execution_options(populate_existing=True)
-            .limit(1)
         )
-        if job is None:
-            return None
-        job.status = "running"
-        # A queued Job has no active lease.  Always stamp the lease at the
-        # point it becomes running; retaining a stale timestamp would let a
-        # second recovery sweep reclaim an actively executing worker.
-        job.started_at = now
-        self._append_job_event(job, status="running", step=job.step, message="preparation job claimed")
-        self._session.flush()
-        return job
 
     def recover_stale_preparation_jobs(self, *, before: datetime) -> int:
         """Return abandoned preparation jobs to their queue without cloning."""

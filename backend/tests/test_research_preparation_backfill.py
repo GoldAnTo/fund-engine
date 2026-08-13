@@ -12,6 +12,7 @@ from app.models.event_research import EventResearchScopeVersion
 from app.models.ledger import Base, CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase, SourceSpan
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun
 from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact
+from app.models.source_governance import SourceContract
 from app.services.atomic_claims import AtomicClaimService
 
 
@@ -21,7 +22,7 @@ def test_backfill_module_is_available() -> None:
     assert callable(ResearchPreparationBackfill.enqueue_eligible)
 
 
-def _eligible_case(session, *, created_at, admit: bool = True, link_document: bool = True, lifecycle: bool = True, scope: bool = True):
+def _eligible_case(session, *, created_at, admit: bool = True, link_document: bool = True, lifecycle: bool = True, scope: bool = True, allow_ai_processing: bool = True):
     case = ResearchCase(title="old", industry_topic="test", created_by="test", created_at=created_at)
     document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/backfill", available_at=created_at, acquired_at=created_at, parser_version="test")
     session.add_all((case, document))
@@ -36,6 +37,25 @@ def _eligible_case(session, *, created_at, admit: bool = True, link_document: bo
     if lifecycle:
         rows.append(EventResearchLifecycle(research_case_id=case.id, status="awaiting_scope", active_run_id=None, current_round=0, status_summary="waiting", current_gap=None, next_human_action=None, updated_at=created_at))
     session.add_all(rows)
+    session.add(SourceContract(
+        document_version_id=document.id,
+        source_type="company_disclosure",
+        provider_or_tenant="issuer",
+        allow_ai_processing=allow_ai_processing,
+        allow_display=True,
+        allow_export=False,
+        allow_api=False,
+        region="CN",
+        effective_from=None,
+        effective_until=None,
+        retention_policy="case_retained",
+        deletion_policy="manual",
+        downstream_restrictions=[],
+        contract_version="test",
+        intake_metadata={},
+        declared_by="test",
+        created_at=created_at,
+    ))
     session.flush()
     return case
 
@@ -102,6 +122,59 @@ def test_backfill_reuses_existing_candidates_without_a_parse_job(tmp_path) -> No
         assert artifact is not None and artifact.payload == {"candidates": [{"candidate_id": str(candidate_id)}]}
         assert check.scalars(select(Job).where(Job.target_id == preparation_id)).all() == []
         assert check.scalars(select(ResearchRun)).all() == []
+
+
+def test_backfill_reused_reviewed_candidates_queue_protocol_but_partial_review_stays_gated(tmp_path) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-reviewed.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        fully_reviewed = _eligible_case(session, created_at=now - timedelta(minutes=1))
+        partial = _eligible_case(session, created_at=now)
+        candidates = []
+        for case, suffix in ((fully_reviewed, "full"), (partial, "partial-a"), (partial, "partial-b")):
+            document_id = session.scalar(select(CaseDocumentVersion.document_version_id).where(CaseDocumentVersion.research_case_id == case.id))
+            text = f"Revenue {suffix} grew."
+            span = SourceSpan(document_version_id=document_id, locator={"page": 1}, verbatim_text=text)
+            session.add(span)
+            session.flush()
+            candidate = AtomicClaimService(session).admit(
+                AtomicClaimDraft(source_span_id=span.id, quote=text, quote_start=0, quote_end=len(text), normalized_text=text, claim_type="reported_claim", assertion_actor=None, subject=None, predicate=None, object_text=None, numeric_value=None, unit=None, observed_period=None, scope={}),
+                authority_level="primary_disclosure", run_ref=suffix,
+            )
+            candidates.append(candidate)
+        for candidate in (candidates[0], candidates[1]):
+            AtomicClaimService(session).review(candidate.id, outcome="confirmed", reviewer="reviewer", reason="reviewed", idempotency_key=f"review-{candidate.id}")
+        preparations = ResearchPreparationBackfill(session).enqueue_eligible()
+        session.commit()
+        by_case = {preparation.research_case_id: preparation.id for preparation in preparations}
+        fully_reviewed_id, partial_id = fully_reviewed.id, partial.id
+    with sessions() as check:
+        full = check.get(ResearchPreparation, by_case[fully_reviewed_id])
+        partial_prep = check.get(ResearchPreparation, by_case[partial_id])
+        assert full is not None and full.claim_review_state == "confirmed" and full.status == "preparing"
+        assert partial_prep is not None and partial_prep.claim_review_state == "awaiting_review"
+        full_jobs = list(check.scalars(select(Job).where(Job.target_id == full.id)))
+        partial_jobs = list(check.scalars(select(Job).where(Job.target_id == partial_prep.id)))
+        assert [job.correlation_id.rsplit(":", 1)[-1] for job in full_jobs] == ["draft_protocol"]
+        assert partial_jobs == []
+        assert check.scalars(select(ResearchRun)).all() == []
+
+
+def test_backfill_excludes_an_ai_disallowed_initial_source(tmp_path) -> None:
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-contract.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as session:
+        _eligible_case(session, created_at=datetime.now(UTC), allow_ai_processing=False)
+        assert ResearchPreparationBackfill(session).enqueue_eligible() == []
+        assert session.scalars(select(ResearchPreparation)).all() == []
+        assert session.scalars(select(Job)).all() == []
 
 
 @pytest.mark.parametrize(

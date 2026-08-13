@@ -402,6 +402,9 @@ class ResearchPreparationService:
                 message="existing reviewed claim candidates attached",
                 detail={"candidate_count": len(candidate_ids)},
             )
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="draft_protocol"
+            )
         return preparation
 
     def record_worker_output_discarded(

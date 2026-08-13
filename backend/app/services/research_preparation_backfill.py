@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import preparation_input_fingerprint
@@ -13,12 +14,15 @@ from app.models.ledger import (
     AtomicClaimReview,
     CaseDocumentVersion,
     CaseTenantAdmission,
+    DocumentVersion,
     ResearchCase,
     SourceSpan,
 )
+from app.models.source_governance import ProviderRecord, SourceContract
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun
 from app.models.research_preparation import ResearchPreparation
 from app.services.research_preparation import ResearchPreparationService
+from app.services.source_admission import source_contract_is_active
 
 
 class ResearchPreparationBackfill:
@@ -30,6 +34,37 @@ class ResearchPreparationBackfill:
     def enqueue_eligible(self, *, limit: int = 100) -> list[ResearchPreparation]:
         if limit <= 0:
             return []
+        now = datetime.now(timezone.utc)
+        contract_is_usable = exists(
+            select(SourceContract.id).where(
+                SourceContract.document_version_id
+                == CaseTenantAdmission.initial_document_version_id,
+                SourceContract.allow_ai_processing.is_(True),
+                or_(
+                    SourceContract.effective_from.is_(None),
+                    SourceContract.effective_from <= now,
+                ),
+                or_(
+                    SourceContract.effective_until.is_(None),
+                    SourceContract.effective_until >= now,
+                ),
+                or_(
+                    SourceContract.source_type != "licensed_provider",
+                    exists(
+                        select(ProviderRecord.id)
+                        .join(
+                            DocumentVersion,
+                            DocumentVersion.id == ProviderRecord.document_version_id,
+                        )
+                        .where(
+                            ProviderRecord.document_version_id
+                            == CaseTenantAdmission.initial_document_version_id,
+                            ProviderRecord.content_sha256 == DocumentVersion.content_sha256,
+                        )
+                    ),
+                ),
+            )
+        )
         case_ids = list(self._session.scalars(
             select(ResearchCase.id)
             .join(CaseTenantAdmission, CaseTenantAdmission.research_case_id == ResearchCase.id)
@@ -47,6 +82,7 @@ class ResearchPreparationBackfill:
                 ),
                 ~exists(select(ResearchRun.id).where(ResearchRun.research_case_id == ResearchCase.id)),
                 exists(select(EventResearchScopeVersion.id).where(EventResearchScopeVersion.research_case_id == ResearchCase.id)),
+                contract_is_usable,
             )
             .order_by(ResearchCase.created_at, ResearchCase.id)
             .limit(limit)
@@ -88,6 +124,7 @@ class ResearchPreparationBackfill:
             or scope is None
             or not has_case_document
             or self._session.scalar(select(ResearchRun.id).where(ResearchRun.research_case_id == case_id).limit(1)) is not None
+            or not self._ai_input_is_available(admission.initial_document_version_id)
         ):
             return None
 
@@ -130,13 +167,48 @@ class ResearchPreparationBackfill:
         return preparation
 
     def _every_candidate_reviewed(self, candidate_ids: list[uuid.UUID]) -> bool:
-        for candidate_id in candidate_ids:
-            review = self._session.scalar(
-                select(AtomicClaimReview)
-                .where(AtomicClaimReview.atomic_claim_candidate_id == candidate_id)
-                .order_by(AtomicClaimReview.created_at.desc(), AtomicClaimReview.id.desc())
-                .limit(1)
+        if not candidate_ids:
+            return False
+        ranked_reviews = (
+            select(
+                AtomicClaimReview.atomic_claim_candidate_id.label("candidate_id"),
+                AtomicClaimReview.id.label("review_id"),
+                func.row_number().over(
+                    partition_by=AtomicClaimReview.atomic_claim_candidate_id,
+                    order_by=(
+                        AtomicClaimReview.created_at.desc(),
+                        AtomicClaimReview.id.desc(),
+                    ),
+                ).label("rank"),
             )
-            if review is None:
-                return False
-        return True
+            .where(AtomicClaimReview.atomic_claim_candidate_id.in_(candidate_ids))
+            .subquery()
+        )
+        reviewed_ids = set(self._session.scalars(
+            select(ranked_reviews.c.candidate_id).where(ranked_reviews.c.rank == 1)
+        ))
+        return reviewed_ids == set(candidate_ids)
+
+    def _ai_input_is_available(self, document_version_id: uuid.UUID) -> bool:
+        contract = self._session.scalar(
+            select(SourceContract).where(
+                SourceContract.document_version_id == document_version_id
+            )
+        )
+        if (
+            contract is None
+            or not contract.allow_ai_processing
+            or not source_contract_is_active(contract, at=datetime.now(timezone.utc))
+        ):
+            return False
+        if contract.source_type != "licensed_provider":
+            return True
+        record = self._session.scalar(
+            select(ProviderRecord).where(
+                ProviderRecord.document_version_id == document_version_id
+            )
+        )
+        # The generator repeats this check at execution time; backfill uses it
+        # too so it never creates a permanently un-runnable parse Job.
+        document = self._session.get(DocumentVersion, document_version_id)
+        return record is not None and document is not None and record.content_sha256 == document.content_sha256
