@@ -14,13 +14,27 @@ temperature=0 plus a fixed seed closes the bulk of the variance.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.ai.client import DEFAULT_TEMPERATURE, LLMClient
+
+
+def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_TEMPERATURE",
+        "LLM_SEED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
+    monkeypatch.setenv("LLM_SEED", "")
 
 
 class _FakeCompletions:
@@ -114,7 +128,7 @@ class TestFromEnvReadsReproducibilityKnobs:
     def test_from_env_with_no_key_runs_mock_with_knobs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        _isolate_llm_env(monkeypatch)
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
         monkeypatch.setenv("LLM_SEED", "1234")
@@ -129,7 +143,7 @@ class TestFromEnvReadsReproducibilityKnobs:
         """Empty ``LLM_SEED`` env must map to ``None`` (no seed passed to
         OpenAI) — a footgun here would silently seed every run with 0,
         locking users to a deterministic but unconfigurable run."""
-        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        _isolate_llm_env(monkeypatch)
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_SEED", "")
         client = LLMClient.from_env()
@@ -140,7 +154,7 @@ class TestFromEnvReadsReproducibilityKnobs:
     ) -> None:
         """The empty-string convention distinguishes "unset" from "0":
         ``LLM_SEED=0`` must pass 0 through, not be dropped to None."""
-        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        _isolate_llm_env(monkeypatch)
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_SEED", "0")
         client = LLMClient.from_env()
