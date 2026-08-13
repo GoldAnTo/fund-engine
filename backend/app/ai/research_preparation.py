@@ -48,7 +48,9 @@ PREPARATION_PROVIDER_ERROR_MESSAGE = (
     "preparation provider unavailable or returned an invalid response"
 )
 PREPARATION_INPUT_UNAVAILABLE_MESSAGE = "preparation input is unavailable for AI processing"
+PREPARATION_CONTEXT_LIMIT_MESSAGE = "preparation input exceeds safe context limits"
 MAX_CONTEXT_CHARACTERS = 120_000
+MAX_PARSE_CONTEXT_CHARACTERS = 120_000
 MAX_FACTOR_CHARACTERS = 4_000
 MAX_CANDIDATE_QUOTE_CHARACTERS = 2_000
 MAX_CANDIDATE_NORMALIZED_CHARACTERS = 4_000
@@ -192,6 +194,10 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
 
 def _unavailable_input() -> None:
     raise PreparationInputUnavailableError(PREPARATION_INPUT_UNAVAILABLE_MESSAGE)
+
+
+def _context_limit_unavailable() -> None:
+    raise PreparationInputUnavailableError(PREPARATION_CONTEXT_LIMIT_MESSAGE)
 
 
 def _confirmed_artifact_candidates(
@@ -353,12 +359,12 @@ class ResearchPreparationGenerator:
         _ensure_input_bounds(input)
         if not input.source_spans:
             return []
+        payload = _parse_context(input)
+        if len(json.dumps(payload, ensure_ascii=False)) > MAX_PARSE_CONTEXT_CHARACTERS:
+            _context_limit_unavailable()
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_PARSE_CLAIMS_SYSTEM,
-            {"spans": [
-                {"source_span_id": str(span.source_span_id), "verbatim_text": span.verbatim_text}
-                for span in input.source_spans
-            ]},
+            payload,
             "preparation_parse_claims",
         ))
         statements = self._provider_call(lambda: _validate_parse_response(result, input))
@@ -427,7 +433,7 @@ class ResearchPreparationGenerator:
             "preparation_draft_protocol",
         ))
         draft = self._provider_call(lambda: _validate_protocol_response(result))
-        return {**draft, "input_context": _input_context(input)}
+        return draft
 
     def draft_evidence_plan(self, input: PreparationInput) -> dict[str, object]:
         _ensure_draft_context_bounds(input)
@@ -437,7 +443,7 @@ class ResearchPreparationGenerator:
             "preparation_draft_evidence_plan",
         ))
         draft = self._provider_call(lambda: _validate_evidence_plan_response(result, input.current_factors))
-        return {**draft, "input_context": _input_context(input)}
+        return draft
 
     def _chat_json(self, system: str, payload: dict[str, object], schema_hint: str) -> dict:
         client = self._client
@@ -465,7 +471,6 @@ class ResearchPreparationGenerator:
 def _draft_context(input: PreparationInput) -> dict[str, object]:
     return {
         "factors": list(input.current_factors),
-        "input_context": _input_context(input),
         "candidate_claims": [
             {
                 "candidate_id": str(candidate.candidate_id),
@@ -479,11 +484,14 @@ def _draft_context(input: PreparationInput) -> dict[str, object]:
     }
 
 
-def _input_context(input: PreparationInput) -> dict[str, object]:
-    return {
-        "parse_artifact_sequence": input.parse_artifact_sequence,
-        "candidate_context_fingerprint": input.candidate_context_fingerprint,
-    }
+def _parse_context(input: PreparationInput) -> dict[str, object]:
+    return {"spans": [
+        {
+            "source_span_id": str(span.source_span_id),
+            "verbatim_text": span.verbatim_text,
+        }
+        for span in input.source_spans
+    ]}
 
 
 def _ensure_input_bounds(input: PreparationInput) -> None:

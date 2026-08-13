@@ -16,6 +16,8 @@ from app.ai.research_preparation import (
     MAX_CANDIDATE_NORMALIZED_CHARACTERS,
     MAX_CANDIDATE_QUOTE_CHARACTERS,
     MAX_FACTOR_CHARACTERS,
+    MAX_PARSE_CONTEXT_CHARACTERS,
+    PREPARATION_CONTEXT_LIMIT_MESSAGE,
     PREPARATION_PROVIDER_ERROR_MESSAGE,
     PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
     PreparationCandidateSummary,
@@ -368,13 +370,7 @@ def test_parse_does_not_admit_valid_prefix_when_later_statement_is_invalid(sessi
 def test_protocol_returns_exact_valid_draft_and_rejects_extra_or_bad_horizon(session) -> None:
     case, _, _ = _input(session)
     context = load_preparation_input(session, case.id)
-    assert ResearchPreparationGenerator(FakeClient(_protocol())).draft_protocol(context) == {
-        **_protocol(),
-        "input_context": {
-            "parse_artifact_sequence": context.parse_artifact_sequence,
-            "candidate_context_fingerprint": context.candidate_context_fingerprint,
-        },
-    }
+    assert ResearchPreparationGenerator(FakeClient(_protocol())).draft_protocol(context) == _protocol()
     for invalid in (
         {**_protocol(), "rationale": "not permitted"},
         {**_protocol(), "other": True},
@@ -649,18 +645,16 @@ def test_candidate_context_rejects_current_artifact_cross_document_candidate(ses
         load_preparation_input(session, case.id)
 
 
-def test_draft_outputs_include_safe_candidate_input_context(session) -> None:
+def test_draft_outputs_remain_exact_and_context_stays_on_input(session) -> None:
     case, _, _ = _input(session)
     context = load_preparation_input(session, case.id)
 
     protocol = ResearchPreparationGenerator(FakeClient(_protocol())).draft_protocol(context)
     plan = ResearchPreparationGenerator(FakeClient(_plan())).draft_evidence_plan(context)
-    expected = {
-        "parse_artifact_sequence": context.parse_artifact_sequence,
-        "candidate_context_fingerprint": context.candidate_context_fingerprint,
-    }
-    assert protocol["input_context"] == expected
-    assert plan["input_context"] == expected
+    assert protocol == _protocol()
+    assert plan == _plan()
+    assert context.parse_artifact_sequence is None
+    assert context.candidate_context_fingerprint
 
 
 @pytest.mark.parametrize("span_count, text_size, available", [
@@ -685,6 +679,49 @@ def test_input_span_limits_reject_before_client_call(session, span_count, text_s
         with pytest.raises(PreparationInputUnavailableError, match=PREPARATION_INPUT_UNAVAILABLE_MESSAGE):
             load_preparation_input(session, case.id)
     assert client.calls == []
+
+
+def test_parse_aggregate_context_cap_rejects_before_client_call(session) -> None:
+    case, document, _ = _input(session, span_text=None)
+    for index in range(50):
+        session.add(SourceSpan(
+            document_version_id=document.id,
+            locator={"index": index},
+            verbatim_text="x" * 3_000,
+        ))
+    session.flush()
+    client = FakeClient({"statements": []})
+
+    with pytest.raises(PreparationInputUnavailableError, match=PREPARATION_CONTEXT_LIMIT_MESSAGE):
+        ResearchPreparationGenerator(client).validate_claim_drafts(
+            load_preparation_input(session, case.id)
+        )
+    assert client.calls == []
+
+
+def test_parse_aggregate_context_cap_boundary_is_accepted(session, monkeypatch) -> None:
+    case, document, _ = _input(session, span_text=None)
+    session.add(SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="parse payload boundary",
+    ))
+    session.flush()
+    context = load_preparation_input(session, case.id)
+    payload_length = len(json.dumps({
+        "spans": [{
+            "source_span_id": str(context.source_spans[0].source_span_id),
+            "verbatim_text": context.source_spans[0].verbatim_text,
+        }],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(
+        "app.ai.research_preparation.MAX_PARSE_CONTEXT_CHARACTERS", payload_length
+    )
+    client = FakeClient({"statements": []})
+
+    assert ResearchPreparationGenerator(client).validate_claim_drafts(context) == []
+    assert len(client.calls) == 1
+    assert payload_length <= MAX_PARSE_CONTEXT_CHARACTERS
 
 
 def test_confirmed_candidate_limit_rejects_before_client_call(session) -> None:
@@ -713,13 +750,7 @@ def test_confirmed_candidate_limit_rejects_before_client_call(session) -> None:
 def test_plan_requires_current_unique_factor_and_positive_budget(session, invalid) -> None:
     case, _, _ = _input(session)
     context = load_preparation_input(session, case.id)
-    assert ResearchPreparationGenerator(FakeClient(_plan())).draft_evidence_plan(context) == {
-        **_plan(),
-        "input_context": {
-            "parse_artifact_sequence": context.parse_artifact_sequence,
-            "candidate_context_fingerprint": context.candidate_context_fingerprint,
-        },
-    }
+    assert ResearchPreparationGenerator(FakeClient(_plan())).draft_evidence_plan(context) == _plan()
     with pytest.raises(ResearchPreparationProviderError, match=PREPARATION_PROVIDER_ERROR_MESSAGE):
         ResearchPreparationGenerator(FakeClient(invalid)).draft_evidence_plan(context)
 
