@@ -1,7 +1,6 @@
 """In-process command state machine for pre-authorization research work."""
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -45,7 +44,15 @@ _STEP_ARTIFACTS: dict[PreparationStep, ArtifactKind] = {
     "draft_protocol": "research_protocol_draft",
     "draft_evidence_plan": "evidence_acquisition_plan",
 }
-_SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
+PreparationFailureCode = Literal[
+    "provider_unavailable",
+    "invalid_response",
+    "retry_exhausted",
+]
+_PREPARATION_FAILURE_CODES = frozenset(
+    {"provider_unavailable", "invalid_response", "retry_exhausted"}
+)
+_PERSISTED_PROVIDER_FAILURE = "preparation_provider_unavailable"
 
 
 def _utcnow() -> datetime:
@@ -124,15 +131,16 @@ class ResearchPreparationService:
         step: PreparationStep,
         payload: dict[str, object],
         *,
-        expected_version: int | None = None,
-        expected_fingerprint: str | None = None,
+        expected_version: int,
+        expected_fingerprint: str,
     ) -> ResearchPreparation:
         preparation = self._require_preparation(case_id)
+        if expected_version is None or expected_fingerprint is None:
+            raise ConflictError("preparation output guards are required")
         if (
-            expected_version is not None and expected_version != preparation.version
+            expected_version != preparation.version
         ) or (
-            expected_fingerprint is not None
-            and expected_fingerprint != preparation.input_fingerprint
+            expected_fingerprint != preparation.input_fingerprint
         ):
             self._repo.append_event(
                 preparation,
@@ -174,12 +182,17 @@ class ResearchPreparationService:
         case_id: uuid.UUID,
         step: PreparationStep,
         *,
-        error_code: str,
+        error_code: PreparationFailureCode,
         retry_at: datetime | None,
     ) -> ResearchPreparation:
         preparation = self._require_preparation(case_id)
         self._require_eligible_step(preparation, step, allowed_states={"queued", "running"})
-        safe_error_code = error_code if _SAFE_ERROR_CODE.fullmatch(error_code) else "preparation_step_failed"
+        # Provider adapters pass a semantic category, never exception text.
+        # Keep the durable projection deliberately coarser so credentials,
+        # endpoint URLs, and provider response bodies cannot enter activity.
+        if error_code not in _PREPARATION_FAILURE_CODES:
+            raise ConflictError("preparation failure code is invalid")
+        safe_error_code = _PERSISTED_PROVIDER_FAILURE
         setattr(preparation, _STEP_FIELDS[step], "retrying" if retry_at else "failed")
         preparation.next_attempt_at = retry_at
         preparation.last_error_code = safe_error_code
