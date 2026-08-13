@@ -33,7 +33,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0053"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -52,6 +52,9 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             for column in sa.inspect(connection).get_columns("research_worker_heartbeats")
         }
         assert "worker_kind" in heartbeat_columns
+        assert "claim_token" in {
+            column["name"] for column in sa.inspect(connection).get_columns("jobs")
+        }
         trigger_count = connection.execute(
             sa.text(
                 "SELECT COUNT(*) FROM sqlite_master "
@@ -159,7 +162,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0053"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -923,7 +926,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0053"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -977,7 +980,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0053"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:

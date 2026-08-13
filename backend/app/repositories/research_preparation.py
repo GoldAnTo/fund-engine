@@ -26,6 +26,9 @@ from app.repositories.operational import JobRepository
 from app.services.event_research_scope_evidence import lock_event_scope_case
 
 
+SQLITE_PREPARATION_CLAIM_BATCH_SIZE = 100
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -369,6 +372,7 @@ class ResearchPreparationRepository:
                 return None
             job.status = "running"
             job.started_at = now
+            job.claim_token = str(uuid.uuid4())
             self._append_job_event(job, status="running", step=job.step, message="preparation job claimed")
             self._session.flush()
             return job
@@ -376,8 +380,11 @@ class ResearchPreparationRepository:
         # SQLite has no row locks.  The read only nominates a candidate; the
         # conditional state transition is the ownership primitive.  A racing
         # worker sees rowcount=0 and continues to the next candidate.
-        candidate_ids = self._session.scalars(eligible.with_only_columns(Job.id)).all()
+        candidate_ids = list(self._session.scalars(
+            eligible.with_only_columns(Job.id).limit(SQLITE_PREPARATION_CLAIM_BATCH_SIZE)
+        ))
         for candidate_id in candidate_ids:
+            claim_token = str(uuid.uuid4())
             claimed = self._session.execute(
                 update(Job)
                 .where(
@@ -385,7 +392,7 @@ class ResearchPreparationRepository:
                     Job.status == "queued",
                     Job.cancel_requested.is_(False),
                 )
-                .values(status="running", started_at=now)
+                .values(status="running", started_at=now, claim_token=claim_token)
             )
             if claimed.rowcount != 1:
                 continue
@@ -443,6 +450,7 @@ class ResearchPreparationRepository:
                 job.status = "queued"
                 job.started_at = None
                 job.finished_at = None
+                job.claim_token = None
                 self._append_job_event(job, status="queued", step=job.step, message="stale preparation job reclaimed")
         self._session.flush()
         return len(jobs)
@@ -483,6 +491,7 @@ class ResearchPreparationRepository:
         job.step = step
         job.error = error
         job.attempt += 1
+        job.claim_token = None
         self._append_job_event(job, status="queued", step=step, message=error)
         self._session.flush()
 

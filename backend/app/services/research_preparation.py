@@ -334,6 +334,51 @@ class ResearchPreparationService:
         )
         return preparation
 
+    def mark_step_internal_failure(
+        self, case_id: uuid.UUID, step: PreparationStep
+    ) -> ResearchPreparation:
+        """Finish an owned unexpected worker failure without exposing details."""
+        preparation = self._require_preparation(case_id)
+        self._require_eligible_step(preparation, step, allowed_states={"running"})
+        setattr(preparation, _STEP_FIELDS[step], "failed")
+        preparation.next_attempt_at = None
+        preparation.last_error_code = "preparation_internal_error"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_internal_failed",
+            step=step,
+            message="preparation system step failed",
+            detail={"error_code": "preparation_internal_error"},
+        )
+        return preparation
+
+    def mark_backfill_candidate_limit(
+        self, case_id: uuid.UUID
+    ) -> ResearchPreparation:
+        """Stop an oversized historical reuse without invoking a provider."""
+        preparation = self._require_preparation(case_id)
+        self._require_eligible_step(preparation, "parse_claims", allowed_states={"queued"})
+        preparation.parse_claims_state = "failed"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = "preparation_backfill_candidate_limit"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_backfill_candidate_limit",
+            step="parse_claims",
+            message="preparation backfill candidate limit exceeded",
+            detail={
+                "error_code": "preparation_backfill_candidate_limit",
+                "candidate_limit": 500,
+            },
+        )
+        return preparation
+
     def start_system_step(
         self,
         case_id: uuid.UUID,

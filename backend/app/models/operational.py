@@ -64,6 +64,9 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Soft cancel: the worker polls this and stops at the next safe boundary.
     cancel_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Per-claim ownership lease.  A recovered worker must never be able to
+    # mutate a Job that a newer worker has subsequently claimed.
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The ledger entity this job ultimately mutates (e.g. thesis_id for an
     # assess job), used to resume and to build task items.
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -22,6 +22,9 @@ from app.models.research_preparation import ResearchPreparation
 from app.services.research_preparation import ResearchPreparationService
 
 
+MAX_BACKFILL_REUSE_CANDIDATES = 500
+
+
 class ResearchPreparationBackfill:
     """Create preparation projections for old, admitted event cases only."""
 
@@ -113,15 +116,17 @@ class ResearchPreparationBackfill:
         if preparation.parse_claims_state != "queued":
             return preparation
 
-        candidates = list(self._session.scalars(
-            select(AtomicClaimCandidate)
+        candidate_ids = list(self._session.scalars(
+            select(AtomicClaimCandidate.id)
             .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
             .where(SourceSpan.document_version_id == admission.initial_document_version_id)
             .order_by(AtomicClaimCandidate.id)
+            .limit(MAX_BACKFILL_REUSE_CANDIDATES + 1)
         ))
-        if not candidates:
+        if not candidate_ids:
             return preparation
-        candidate_ids = [candidate.id for candidate in candidates]
+        if len(candidate_ids) > MAX_BACKFILL_REUSE_CANDIDATES:
+            return self._mark_candidate_limit(service, preparation)
         every_reviewed = self._every_candidate_reviewed(candidate_ids)
         preparation = service.reuse_existing_claim_candidates(
             case_id,
@@ -141,6 +146,23 @@ class ResearchPreparationBackfill:
             )
         ))
         for job in jobs:
+            self._session.delete(job)
+        return preparation
+
+    def _mark_candidate_limit(
+        self, service: ResearchPreparationService, preparation: ResearchPreparation
+    ) -> ResearchPreparation:
+        """Keep historical ledgers untouched when reuse would be unbounded."""
+        preparation = service.mark_backfill_candidate_limit(preparation.research_case_id)
+        for job in list(self._session.scalars(
+            select(Job).where(
+                Job.kind == "prepare_research",
+                Job.target_type == "research_preparation",
+                Job.target_id == preparation.id,
+                Job.status == "queued",
+                Job.correlation_id == f"{preparation.id}:{preparation.version}:parse_claims",
+            )
+        )):
             self._session.delete(job)
         return preparation
 

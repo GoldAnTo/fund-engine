@@ -164,6 +164,46 @@ def test_backfill_reused_reviewed_candidates_queue_protocol_but_partial_review_s
         assert check.scalars(select(ResearchRun)).all() == []
 
 
+@pytest.mark.parametrize("candidate_count, expected_state", [(500, "succeeded"), (501, "failed")])
+def test_backfill_bounds_historical_candidate_reuse(tmp_path, candidate_count, expected_state) -> None:
+    from app.services.research_preparation_backfill import (
+        MAX_BACKFILL_REUSE_CANDIDATES,
+        ResearchPreparationBackfill,
+    )
+
+    engine = create_engine(f"sqlite:///{tmp_path / f'backfill-cap-{candidate_count}.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        case = _eligible_case(session, created_at=now)
+        document_id = session.scalar(select(CaseDocumentVersion.document_version_id).where(CaseDocumentVersion.research_case_id == case.id))
+        for index in range(candidate_count):
+            text = f"Historical candidate {index}."
+            span = SourceSpan(document_version_id=document_id, locator={"page": index}, verbatim_text=text)
+            session.add(span)
+            session.flush()
+            AtomicClaimService(session).admit(
+                AtomicClaimDraft(source_span_id=span.id, quote=text, quote_start=0, quote_end=len(text), normalized_text=text, claim_type="reported_claim", assertion_actor=None, subject=None, predicate=None, object_text=None, numeric_value=None, unit=None, observed_period=None, scope={}),
+                authority_level="primary_disclosure", run_ref=f"historical-{index}",
+            )
+        preparation = ResearchPreparationBackfill(session).enqueue_eligible(limit=1)[0]
+        preparation_id = preparation.id
+        session.commit()
+    with sessions() as check:
+        prep = check.get(ResearchPreparation, preparation_id)
+        assert prep is not None and prep.parse_claims_state == expected_state
+        if candidate_count > MAX_BACKFILL_REUSE_CANDIDATES:
+            assert prep.status == "recoverable_failure"
+            assert prep.last_error_code == "preparation_backfill_candidate_limit"
+            assert check.scalars(select(Job).where(Job.target_id == preparation_id)).all() == []
+            assert check.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id == preparation_id)) is None
+        else:
+            artifact = check.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id == preparation_id, ResearchPreparationArtifact.kind == "atomic_claim_candidates"))
+            assert artifact is not None and len(artifact.payload["candidates"]) == MAX_BACKFILL_REUSE_CANDIDATES
+        assert check.scalars(select(ResearchRun)).all() == []
+
+
 def test_backfill_excludes_an_ai_disallowed_initial_source(tmp_path) -> None:
     from app.services.research_preparation_backfill import ResearchPreparationBackfill
 

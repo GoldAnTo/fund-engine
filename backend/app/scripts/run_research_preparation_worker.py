@@ -52,6 +52,7 @@ class _JobInput:
     version: int
     step: str
     fingerprint: str
+    claim_token: str | None = None
 
 
 def _utcnow() -> datetime:
@@ -110,6 +111,15 @@ def _locked_job(session: Session, job_id: uuid.UUID) -> Job | None:
     )
 
 
+def _owns_running_job(job: Job | None, input: _JobInput) -> bool:
+    return (
+        job is not None
+        and job.status == "running"
+        and input.claim_token is not None
+        and job.claim_token == input.claim_token
+    )
+
+
 def _cancel(repo: ResearchPreparationRepository, job: Job, *, step: str | None) -> None:
     repo.set_preparation_job_terminal(
         job, status="cancelled", step=step, error=_SAFE_STALE_MESSAGE
@@ -135,13 +145,17 @@ def _discard_output(
 
 def _fresh_job_reason(
     job: Job, preparation: ResearchPreparation, input: _JobInput
-) -> Literal["version_changed", "input_changed", "cancelled"] | None:
+) -> Literal[
+    "version_changed", "input_changed", "cancelled", "step_no_longer_eligible"
+] | None:
     if job.cancel_requested:
         return "cancelled"
     if preparation.version != input.version or _correlation_job_input(job, preparation) is None:
         return "version_changed"
     if preparation.input_fingerprint != input.fingerprint:
         return "input_changed"
+    if getattr(preparation, f"{input.step}_state") != "running":
+        return "step_no_longer_eligible"
     return None
 
 
@@ -152,7 +166,7 @@ def _provider_failure(
     with session_factory() as session:
         repo = ResearchPreparationRepository(session)
         job = _locked_job(session, job_id)
-        if job is None or job.status != "running":
+        if not _owns_running_job(job, input):
             session.commit()
             return
         preparation = repo.lock_for_case(input.case_id)
@@ -191,7 +205,7 @@ def _input_unavailable_failure(
     with session_factory() as session:
         repo = ResearchPreparationRepository(session)
         job = _locked_job(session, job_id)
-        if job is None or job.status != "running":
+        if not _owns_running_job(job, input):
             session.commit()
             return
         preparation = repo.lock_for_case(input.case_id)
@@ -217,12 +231,30 @@ def _input_unavailable_failure(
         session.commit()
 
 
-def _internal_failure(session_factory, *, job_id: uuid.UUID, step: str | None) -> None:
+def _internal_failure(session_factory, *, job_id: uuid.UUID, input: _JobInput) -> None:
     with session_factory() as session:
         repo = ResearchPreparationRepository(session)
         job = _locked_job(session, job_id)
-        if job is not None and job.status in {"queued", "running"}:
-            repo.set_preparation_job_terminal(job, status="failed", step=step, error=_SAFE_INTERNAL_ERROR)
+        if not _owns_running_job(job, input):
+            session.commit()
+            return
+        try:
+            preparation = repo.lock_for_case(input.case_id)
+        except NotFoundError:
+            preparation = None
+        if preparation is not None:
+            reason = _fresh_job_reason(job, preparation, input)
+            if reason is not None:
+                _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
+            elif getattr(preparation, f"{input.step}_state") == "running":
+                ResearchPreparationService(session).mark_step_internal_failure(
+                    input.case_id, input.step  # type: ignore[arg-type]
+                )
+                repo.set_preparation_job_terminal(
+                    job, status="failed", step=input.step, error=_SAFE_INTERNAL_ERROR
+                )
+        elif job is not None:
+            repo.set_preparation_job_terminal(job, status="failed", step=input.step, error=_SAFE_INTERNAL_ERROR)
         session.commit()
 
 
@@ -264,7 +296,14 @@ def _begin(session: Session, job: Job) -> _JobInput | None:
         return None
     job.step = input.step
     session.flush()
-    return input
+    return _JobInput(
+        case_id=input.case_id,
+        preparation_id=input.preparation_id,
+        version=input.version,
+        step=input.step,
+        fingerprint=input.fingerprint,
+        claim_token=job.claim_token,
+    )
 
 
 def _ready_for_provider(session_factory, *, job_id: uuid.UUID, input: _JobInput) -> bool:
@@ -272,7 +311,7 @@ def _ready_for_provider(session_factory, *, job_id: uuid.UUID, input: _JobInput)
     with session_factory() as session:
         repo = ResearchPreparationRepository(session)
         job = _locked_job(session, job_id)
-        if job is None or job.status != "running":
+        if not _owns_running_job(job, input):
             session.commit()
             return False
         try:
@@ -306,7 +345,7 @@ def _complete(
     with session_factory() as session:
         repo = ResearchPreparationRepository(session)
         job = _locked_job(session, job_id)
-        if job is None or job.status != "running":
+        if not _owns_running_job(job, input):
             session.commit()
             return
         preparation = repo.lock_for_case(input.case_id)
@@ -426,7 +465,7 @@ def run_once(
         _input_unavailable_failure(session_factory, job_id=job_id, input=input)
         return True
     except Exception:
-        _internal_failure(session_factory, job_id=job_id, step=input.step)
+        _internal_failure(session_factory, job_id=job_id, input=input)
         raise
 
     try:
@@ -442,7 +481,7 @@ def run_once(
         # The output UoW is rolled back by its context manager.  Record only
         # a fixed operational error in a fresh transaction, then retain the
         # formal worker convention of surfacing programmer failures.
-        _internal_failure(session_factory, job_id=job_id, step=input.step)
+        _internal_failure(session_factory, job_id=job_id, input=input)
         raise
     return True
 

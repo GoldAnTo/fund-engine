@@ -160,6 +160,125 @@ def test_repository_claim_only_returns_one_job_across_two_sqlite_sessions(tmp_pa
         assert check.scalar(select(Job).where(Job.target_id == preparation_id)).status == "running"
 
 
+def test_sqlite_preparation_claim_uses_a_bounded_candidate_batch() -> None:
+    from app.repositories.research_preparation import SQLITE_PREPARATION_CLAIM_BATCH_SIZE
+
+    statement = ResearchPreparationRepository._eligible_preparation_jobs(
+        datetime.now(UTC)
+    ).with_only_columns(Job.id).limit(SQLITE_PREPARATION_CLAIM_BATCH_SIZE)
+    assert "LIMIT" in str(statement.compile())
+    assert SQLITE_PREPARATION_CLAIM_BATCH_SIZE == 100
+
+
+def test_claim_token_changes_after_stale_recovery(tmp_path) -> None:
+    _, sessions = _session_factory(tmp_path)
+    now = datetime.now(UTC)
+    with sessions() as setup:
+        _, preparation, _ = _preparation(setup)
+        first = ResearchPreparationRepository(setup).claim_next_preparation_job(now=now)
+        assert first is not None and first.claim_token is not None
+        first_token = first.claim_token
+        first.started_at = now - timedelta(hours=1)
+        setup.commit()
+    with sessions() as recovery:
+        repo = ResearchPreparationRepository(recovery)
+        assert repo.recover_stale_preparation_jobs(before=now - timedelta(minutes=30)) == 1
+        reclaimed = repo.claim_next_preparation_job(now=now)
+        assert reclaimed is not None
+        assert reclaimed.claim_token is not None and reclaimed.claim_token != first_token
+        assert reclaimed.started_at is not None
+        assert reclaimed.started_at.replace(tzinfo=UTC) == now
+        recovery.commit()
+
+
+def test_old_claim_token_cannot_fail_or_cancel_a_reclaimed_job(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+    from app.ai.research_preparation import load_preparation_input
+
+    engine, sessions = _session_factory(tmp_path)
+    now = datetime.now(UTC)
+    with sessions() as setup:
+        case, preparation, _ = _preparation(setup)
+        repo = ResearchPreparationRepository(setup)
+        first = repo.claim_next_preparation_job(now=now)
+        assert first is not None
+        first_input = worker._begin(setup, first)
+        assert first_input is not None and first_input.claim_token is not None
+        first.started_at = now - timedelta(hours=1)
+        setup.commit()
+        case_id, preparation_id, job_id = case.id, preparation.id, first.id
+    with sessions() as recovery:
+        repo = ResearchPreparationRepository(recovery)
+        assert repo.recover_stale_preparation_jobs(before=now - timedelta(minutes=30)) == 1
+        second = repo.claim_next_preparation_job(now=now)
+        assert second is not None
+        second_input = worker._begin(recovery, second)
+        assert second_input is not None and second_input.claim_token != first_input.claim_token
+        recovery.commit()
+    worker._provider_failure(sessions, job_id=job_id, input=first_input)
+    worker._internal_failure(sessions, job_id=job_id, input=first_input)
+    # A's late completion is a no-op; B owns and completes the one artifact.
+    with sessions() as load:
+        loaded_input = load_preparation_input(load, case_id)
+    drafts = _ParseGenerator().validate_claim_drafts(loaded_input)
+    worker._complete(
+        sessions,
+        job_id=job_id,
+        input=first_input,
+        generator=_ParseGenerator(),
+        loaded_input=loaded_input,
+        output=drafts,
+    )
+    worker._complete(
+        sessions,
+        job_id=job_id,
+        input=second_input,
+        generator=_ParseGenerator(),
+        loaded_input=loaded_input,
+        output=drafts,
+    )
+    with Session(engine) as check:
+        job = check.get(Job, job_id)
+        prep = check.get(ResearchPreparation, preparation_id)
+        assert job is not None and job.status == "succeeded" and job.claim_token == second_input.claim_token
+        assert prep is not None and prep.parse_claims_state == "succeeded"
+        assert len(check.scalars(select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation_id,
+            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+            ResearchPreparationArtifact.state == "current",
+        )).all()) == 1
+        assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
+
+
+def test_internal_generator_error_fails_preparation_safely_and_can_retry(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+
+    class BrokenGenerator:
+        def validate_claim_drafts(self, _input):
+            raise TypeError("Bearer sk-sentinel https://internal.invalid")
+
+    engine, sessions = _session_factory(tmp_path)
+    with sessions() as setup:
+        case, preparation, _ = _preparation(setup)
+        case_id, preparation_id = case.id, preparation.id
+        setup.commit()
+    with pytest.raises(TypeError):
+        worker.run_once(session_factory=sessions, generator_factory=BrokenGenerator)
+    with sessions() as repair:
+        prep = repair.get(ResearchPreparation, preparation_id)
+        job = repair.scalar(select(Job).where(Job.target_id == preparation_id))
+        assert prep is not None and prep.parse_claims_state == "failed"
+        assert prep.status == "recoverable_failure" and prep.last_error_code == "preparation_internal_error"
+        assert job is not None and job.status == "failed"
+        durable = f"{job.error} {prep.last_error_code}"
+        assert "TypeError" not in durable and "sk-sentinel" not in durable and "internal.invalid" not in durable
+        ResearchPreparationService(repair).retry_failed_step(case_id, actor="reviewer", revision=prep.version)
+        repair.commit()
+    with Session(engine) as check:
+        assert check.get(ResearchPreparation, preparation_id).parse_claims_state == "queued"
+        assert check.scalar(select(Job).where(Job.target_id == preparation_id, Job.status == "queued")) is not None
+
+
 def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path) -> None:
     from app.scripts import run_research_preparation_worker as worker
 
