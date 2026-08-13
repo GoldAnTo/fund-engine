@@ -132,7 +132,7 @@ def upgrade() -> None:
         sa.Column("seq", sa.Integer(), nullable=False),
         sa.Column("type", sa.String(length=64), nullable=False),
         sa.Column("step", sa.String(length=64), nullable=True),
-        sa.Column("message", sa.Text(), nullable=False),
+        sa.Column("message", sa.Text(), nullable=True),
         sa.Column("detail", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(

@@ -65,6 +65,34 @@ def _preparation(case: ResearchCase, **overrides) -> ResearchPreparation:
     return ResearchPreparation(**values)
 
 
+def _artifact(preparation: ResearchPreparation, *, sequence: int, **overrides) -> ResearchPreparationArtifact:
+    values = {
+        "research_preparation_id": preparation.id,
+        "kind": "atomic_claim_candidates",
+        "sequence": sequence,
+        "input_fingerprint": preparation.input_fingerprint,
+        "payload": {"claims": []},
+        "state": "current",
+        "created_at": datetime.now(UTC),
+    }
+    values.update(overrides)
+    return ResearchPreparationArtifact(**values)
+
+
+def _event(preparation: ResearchPreparation, *, seq: int, **overrides) -> ResearchPreparationEvent:
+    values = {
+        "research_preparation_id": preparation.id,
+        "seq": seq,
+        "type": "claims_parsed",
+        "step": "parse_claims",
+        "message": "Claims parsed",
+        "detail": {},
+        "created_at": datetime.now(UTC),
+    }
+    values.update(overrides)
+    return ResearchPreparationEvent(**values)
+
+
 def test_fingerprint_is_stable_and_changes_with_either_input() -> None:
     document_version_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     scope_version_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -78,6 +106,8 @@ def test_fingerprint_is_stable_and_changes_with_either_input() -> None:
 
 
 def test_preparation_has_one_current_row_and_no_run_before_authorization(session) -> None:
+    session.connection().exec_driver_sql("PRAGMA foreign_keys = ON")
+    assert session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     case = _case(session)
     session.add(_preparation(case))
     session.commit()
@@ -89,6 +119,31 @@ def test_preparation_has_one_current_row_and_no_run_before_authorization(session
     run = _run(session, case)
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(_preparation(_case(session, title="Other case"), research_run_id=run.id))
+        session.flush()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(_preparation(_case(session, title="Missing authorized run"), status="authorized"))
+        session.flush()
+
+    authorized_case = _case(session, title="Authorized case")
+    authorized_run = _run(session, authorized_case)
+    session.add(
+        _preparation(
+            authorized_case,
+            status="authorized",
+            research_run_id=authorized_run.id,
+        )
+    )
+    session.flush()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _preparation(
+                _case(session, title="Unknown authorized run"),
+                status="authorized",
+                research_run_id=uuid.uuid4(),
+            )
+        )
         session.flush()
 
 
@@ -113,7 +168,27 @@ def test_preparation_has_one_current_row_and_no_run_before_authorization(session
             "invalid_step",
         ),
         (
+            "draft_protocol_state",
+            ("queued", "running", "succeeded", "retrying", "failed", "stale"),
+            "invalid_step",
+        ),
+        (
+            "draft_evidence_plan_state",
+            ("queued", "running", "succeeded", "retrying", "failed", "stale"),
+            "invalid_step",
+        ),
+        (
             "claim_review_state",
+            ("locked", "awaiting_review", "confirmed", "stale"),
+            "invalid_review",
+        ),
+        (
+            "protocol_review_state",
+            ("locked", "awaiting_review", "confirmed", "stale"),
+            "invalid_review",
+        ),
+        (
+            "plan_review_state",
             ("locked", "awaiting_review", "confirmed", "stale"),
             "invalid_review",
         ),
@@ -138,54 +213,68 @@ def test_preparation_artifacts_and_events_are_append_only_sequences(session) -> 
     preparation = _preparation(case)
     session.add(preparation)
     session.flush()
-    now = datetime.now(UTC)
     session.add_all(
         [
-            ResearchPreparationArtifact(
-                research_preparation_id=preparation.id,
-                kind="atomic_claim_candidates",
-                sequence=1,
-                input_fingerprint=preparation.input_fingerprint,
-                payload={"claims": []},
-                state="current",
-                created_at=now,
-            ),
-            ResearchPreparationEvent(
-                research_preparation_id=preparation.id,
-                seq=1,
-                type="claims_parsed",
-                step="parse_claims",
-                message="Claims parsed",
-                detail={},
-                created_at=now,
-            ),
+            _artifact(preparation, sequence=1),
+            _event(preparation, seq=1),
         ]
     )
     session.commit()
 
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(
-            ResearchPreparationArtifact(
-                research_preparation_id=preparation.id,
-                kind="atomic_claim_candidates",
-                sequence=1,
-                input_fingerprint=preparation.input_fingerprint,
-                payload={"claims": []},
-                state="current",
-                created_at=now,
-            )
+            _artifact(preparation, sequence=1)
         )
         session.flush()
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(
-            ResearchPreparationEvent(
-                research_preparation_id=preparation.id,
-                seq=1,
-                type="claims_parsed",
-                step="parse_claims",
-                message="Claims parsed again",
-                detail={},
-                created_at=now,
-            )
+            _event(preparation, seq=1, message="Claims parsed again")
         )
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    ("field", "legal_values", "invalid_value"),
+    [
+        (
+            "kind",
+            (
+                "atomic_claim_candidates",
+                "research_protocol_draft",
+                "evidence_acquisition_plan",
+            ),
+            "invalid_artifact_kind",
+        ),
+        ("state", ("current", "stale", "superseded"), "invalid_artifact_state"),
+    ],
+)
+def test_preparation_artifact_values_are_constrained(session, field, legal_values, invalid_value) -> None:
+    preparation = _preparation(_case(session, title=f"Artifact {field}"))
+    session.add(preparation)
+    session.flush()
+    for sequence, value in enumerate(legal_values, start=1):
+        session.add(_artifact(preparation, sequence=sequence, **{field: value}))
+    session.commit()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(_artifact(preparation, sequence=99, **{field: invalid_value}))
+        session.flush()
+
+
+def test_preparation_event_step_is_constrained_and_message_is_optional(session) -> None:
+    preparation = _preparation(_case(session, title="Optional event message"))
+    session.add(preparation)
+    session.flush()
+    session.add_all(
+        [
+            _event(preparation, seq=1, step=None, message=None),
+            _event(preparation, seq=2, step="parse_claims"),
+            _event(preparation, seq=3, step="draft_protocol"),
+            _event(preparation, seq=4, step="draft_evidence_plan"),
+        ]
+    )
+    session.commit()
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(_event(preparation, seq=5, step="invalid_step"))
         session.flush()

@@ -140,6 +140,15 @@ def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) ->
             preparation_id="00000000000000000000000000000013",
             status="preparing",
         )
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_preparation_events "
+                "(id, research_preparation_id, seq, type, step, message, detail, created_at) "
+                "VALUES ('00000000000000000000000000000018', "
+                "'00000000000000000000000000000013', 1, 'claims_parsed', NULL, NULL, '{}', :now)"
+            ),
+            {"now": now},
+        )
 
         invalid_status_case = "00000000000000000000000000000014"
         insert_case(invalid_status_case, "invalid status")
@@ -159,6 +168,49 @@ def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) ->
                 status="preparing",
                 run_id=run_id,
             )
+
+
+def test_0052_downgrade_removes_preparation_tables(tmp_path) -> None:
+    database_path = tmp_path / "research-preparation-downgrade.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0051.returncode == 0, upgraded_to_0051.stderr
+    upgraded_to_head = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_head.returncode == 0, upgraded_to_head.stderr
+    downgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded_to_0051.returncode == 0, downgraded_to_0051.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert not {
+            "research_preparation_events",
+            "research_preparation_artifacts",
+            "research_preparations",
+        }.intersection(sa.inspect(connection).get_table_names())
 
 
 def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> None:

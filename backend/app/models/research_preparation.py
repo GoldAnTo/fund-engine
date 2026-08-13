@@ -168,6 +168,6 @@ class ResearchPreparationEvent(Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     step: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
