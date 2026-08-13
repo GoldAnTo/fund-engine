@@ -10,6 +10,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.error_safety import (
+    AI_OPERATION_ERROR_TYPE,
+    provider_failure_payload,
+)
 from app.models.fund_disclosure_sync import (
     FundDisclosureSyncConfigVersion,
     FundDisclosureSyncRun,
@@ -163,7 +167,7 @@ class FundDisclosureSyncService:
                     "used_tools": [],
                     "required_fields": list(_FUND_DISCLOSURE_FIELDS),
                     "unverified_capabilities": list(_UNVERIFIED_FUND_CAPABILITIES),
-                    "error_type": type(exc).__name__,
+                    "error_type": AI_OPERATION_ERROR_TYPE,
                 },
             )
             return self.record_failure(
@@ -207,7 +211,7 @@ class FundDisclosureSyncService:
                 stage="failed",
                 status="failed",
                 message="基金披露补充失败；可在本记录基础上重试",
-                payload_json={"error_type": type(exc).__name__, "error": str(exc)},
+                payload_json=provider_failure_payload(),
             )
             return self._run(run.id)
         payload = asdict(stats)
@@ -270,7 +274,7 @@ class FundDisclosureSyncService:
             stage="failed",
             status="failed",
             message=message,
-            payload_json={"error_type": type(error).__name__, "error": str(error)},
+            payload_json=provider_failure_payload(),
         )
         return self._run(run.id)
 

@@ -18,6 +18,7 @@ from app.models.ledger import (
 from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun, FundDisclosureSyncRunEvent
 from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
 from app.models.research_expression import MarketInstrumentBinding
+from app.datasources.gildata.client import GildataMCPError
 from app.scripts.ingest_gildata_fund_holdings import ingest
 from app.services.fund_disclosure_sync import FundDisclosureSyncService
 
@@ -314,8 +315,67 @@ def test_capability_probe_failure_is_replayable_and_stops_fund_sync(session) -> 
         ("failed", "failed"),
     ]
     assert run.events[1].payload_json["used_tools"] == []
-    assert run.events[1].payload_json["error_type"] == "RuntimeError"
+    assert run.events[1].payload_json["error_type"] == "operation_failure"
     assert session.query(HoldingDisclosure).count() == 0
+
+
+def test_recorded_fund_sync_failure_does_not_persist_exception_details(session) -> None:
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        report_period=date(2025, 6, 30),
+        change_reason="验证错误安全",
+    )
+    run = service.start_manual_run(case.id)
+
+    failed = service.record_failure(
+        run.id,
+        error=RuntimeError(
+            "https://provider.invalid?token=sentinel-secret response body"
+        ),
+    )
+
+    event = failed.events[-1]
+    assert event.payload_json == {
+        "error_type": "operation_failure",
+        "error": "provider operation failed",
+    }
+    assert "sentinel-secret" not in str(service.detail(case.id))
+
+
+def test_fund_sync_execution_failure_does_not_persist_exception_details(
+    session, monkeypatch
+) -> None:
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        report_period=date(2025, 6, 30),
+        change_reason="验证执行错误安全",
+    )
+
+    monkeypatch.setattr(
+        "app.services.fund_disclosure_sync.ingest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "https://provider.invalid?token=sentinel-secret response body"
+            )
+        ),
+    )
+    failed = service.run_now(case.id, client=_UnmatchedFundClient())
+
+    assert failed.events[-1].payload_json == {
+        "error_type": "operation_failure",
+        "error": "provider operation failed",
+    }
+    assert "sentinel-secret" not in str(service.detail(case.id))
 
 
 def _admitted_case(cmd_session) -> ResearchCase:
@@ -468,6 +528,71 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
     assert retried.status_code == 201, retried.text
     assert retried.json()["trigger"] == "retry"
     assert retried.json()["fund_codes"] == ["005827"]
+
+
+def test_case_scoped_api_redacts_client_factory_failure(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import fund_disclosure_sync
+
+    case = _admitted_case(cmd_session)
+    configured = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["005827"],
+            "frequency": "weekly",
+            "report_period": "2025-06-30",
+            "change_reason": "验证工厂错误安全",
+        },
+    )
+    assert configured.status_code == 200
+
+    def fail_factory():
+        raise GildataMCPError(
+            "https://provider.invalid?token=sentinel-secret response body"
+        )
+
+    monkeypatch.setattr(
+        fund_disclosure_sync, "get_fund_disclosure_client", fail_factory
+    )
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
+    )
+
+    assert response.status_code == 201
+    failed_event = response.json()["events"][-1]
+    assert failed_event["payload"] == {
+        "error_type": "operation_failure",
+        "error": "provider operation failed",
+    }
+    assert "sentinel-secret" not in response.text
+
+
+def test_run_executor_does_not_convert_client_factory_programming_error(
+    session,
+) -> None:
+    from app.api.v1.fund_disclosure_sync import _execute_run
+
+    case = _case(session)
+    service = FundDisclosureSyncService(session)
+    service.save_config(
+        case.id,
+        actor="human:researcher",
+        fund_codes=["005827"],
+        frequency="weekly",
+        report_period=date(2025, 6, 30),
+        change_reason="验证编程错误边界",
+    )
+    run = service.start_manual_run(case.id)
+
+    def broken_factory():
+        raise TypeError("programming defect")
+
+    import pytest
+
+    with pytest.raises(TypeError, match="programming defect"):
+        _execute_run(service, run.id, client_factory=broken_factory)
 
 
 def test_stale_run_is_interrupted_and_retry_preserves_frozen_period(session) -> None:

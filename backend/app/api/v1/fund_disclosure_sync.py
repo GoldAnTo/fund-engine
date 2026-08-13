@@ -222,7 +222,7 @@ def _execute_run(
 ) -> FundDisclosureSyncExecution:
     try:
         client = client_factory()
-    except Exception as exc:
+    except GildataMCPError as exc:
         return service.record_failure(run_id, error=exc, message="数据源不可用；本次范围已保存，可重试")
     try:
         return service.execute(run_id, client=client)

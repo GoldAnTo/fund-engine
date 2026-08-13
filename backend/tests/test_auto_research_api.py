@@ -1340,6 +1340,7 @@ def test_failed_task_result_and_detail_do_not_persist_provider_exception(
     persisted = session.get(ResearchTask, task.id)
     assert persisted is not None and persisted.status == "failed"
     assert persisted.result["error"] == "AI operation failed"
+    assert persisted.result["error_type"] == "operation_failure"
     assert "sentinel-secret" not in str(persisted.result)
     detail = service.detail(run.id)
     assert detail is not None

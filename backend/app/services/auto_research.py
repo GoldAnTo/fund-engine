@@ -15,7 +15,7 @@ from app.ai.error_safety import (
     AI_COMPLIANCE_ERROR_MESSAGE,
     AI_COMPLIANCE_ERROR_TYPE,
     AI_OPERATION_ERROR_MESSAGE,
-    AI_PROVIDER_ERROR_TYPE,
+    AI_OPERATION_ERROR_TYPE,
 )
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
@@ -552,7 +552,7 @@ class AutoResearchService:
                         task.result = {
                             "task_type": task.task_type,
                             "error": AI_OPERATION_ERROR_MESSAGE,
-                            "error_type": AI_PROVIDER_ERROR_TYPE,
+                            "error_type": AI_OPERATION_ERROR_TYPE,
                         }
                         failed = True
                 finally:

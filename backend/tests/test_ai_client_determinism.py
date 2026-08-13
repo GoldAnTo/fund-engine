@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from app.ai.client import (
@@ -69,7 +70,7 @@ class _FakeOpenAIClient:
 
 class _FailingCompletions:
     def create(self, **kwargs: Any) -> MagicMock:
-        raise RuntimeError(
+        raise httpx.ConnectError(
             "upstream leaked https://llm.example/v1?token=sentinel-secret"
         )
 
@@ -157,7 +158,25 @@ class TestLLMClientDeterminism:
 
         assert str(exc_info.value) == "LLM provider request failed"
         assert "sentinel-secret" not in str(exc_info.value)
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+    @pytest.mark.parametrize(
+        "programming_error", [TypeError, KeyError, AssertionError, AttributeError]
+    )
+    def test_live_call_does_not_wrap_programming_errors(
+        self, programming_error
+    ) -> None:
+        class BrokenCompletions:
+            def create(self, **kwargs: Any) -> MagicMock:
+                raise programming_error("programming defect")
+
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(BrokenCompletions()),
+        )
+
+        with pytest.raises(programming_error, match="programming defect"):
+            client.chat_json([{"role": "user", "content": "{}"}])
 
     def test_empty_choices_uses_dedicated_malformed_response_error(self) -> None:
         client = LLMClient(

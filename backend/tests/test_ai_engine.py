@@ -1002,6 +1002,8 @@ def test_assessment_failure_rolls_back_partial_snapshot_before_failed_audit(
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
     assert len(runs) == 1
     assert runs[0].status == "failed"
+    assert runs[0].error == "AI operation failed"
+    assert "researchability gate blocked" not in runs[0].error
 
 
 # ---------------------------------------------------------------------------

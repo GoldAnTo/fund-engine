@@ -15,6 +15,9 @@ import os
 import re
 from typing import Any
 
+import httpx
+from openai import OpenAIError
+
 DEFAULT_MODEL = "gpt-4o-mini"
 
 # Default temperature=0.0: every live call freezes sampling so the citation
@@ -136,7 +139,7 @@ class LLMClient:
             create_kwargs["seed"] = self._seed
         try:
             response = self._client.chat.completions.create(**create_kwargs)
-        except Exception as exc:
+        except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
             raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
 
         try:

@@ -60,6 +60,10 @@ from app.services.compliance import (
 )
 
 
+class ResearchProtocolGateError(ValidationError):
+    """A protocol gate decision, distinct from generic ledger validation."""
+
+
 class AssessmentGenerator:
     """Generates a provisional AIAssessment for a Thesis at a cutoff."""
 
@@ -102,7 +106,7 @@ class AssessmentGenerator:
             if thesis.research_protocol_required:
                 self._capture_protocol_footprint(input_ref, initial_gate)
             if thesis.research_protocol_required and initial_gate.status == "blocked":
-                raise ValidationError(
+                raise ResearchProtocolGateError(
                     "researchability gate blocked: "
                     + ", ".join(initial_gate.reason_codes)
                 )
@@ -179,7 +183,7 @@ class AssessmentGenerator:
             if thesis.research_protocol_required:
                 self._capture_protocol_footprint(input_ref, final_gate)
             if thesis.research_protocol_required and final_gate.status == "blocked":
-                raise ValidationError(
+                raise ResearchProtocolGateError(
                     "researchability gate blocked: "
                     + ", ".join(final_gate.reason_codes)
                 )
@@ -191,7 +195,7 @@ class AssessmentGenerator:
                     if final_gate.status == "single_metric_monitoring":
                         conclusion = "insufficient_evidence"
                     else:
-                        raise ValidationError(
+                        raise ResearchProtocolGateError(
                             f"researchability gate disallows conclusion: {conclusion}"
                         )
             if (
@@ -257,7 +261,7 @@ class AssessmentGenerator:
             session.rollback()
             if isinstance(exc, ComplianceRefusedError):
                 safe_error = AI_COMPLIANCE_ERROR_MESSAGE
-            elif isinstance(exc, ValidationError):
+            elif isinstance(exc, ResearchProtocolGateError):
                 safe_error = AI_PROTOCOL_ERROR_MESSAGE
             else:
                 safe_error = AI_OPERATION_ERROR_MESSAGE

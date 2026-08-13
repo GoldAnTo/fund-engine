@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from unittest.mock import MagicMock
 
 from app.ai.client import LLMMalformedResponseError
 from app.services.event_extraction import (
@@ -112,6 +113,24 @@ def test_extraction_maps_llm_protocol_error_to_fixed_provider_failure() -> None:
 
     assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
     assert isinstance(exc_info.value.__cause__, LLMMalformedResponseError)
+
+
+def test_extraction_does_not_map_llm_client_programming_error_to_provider_failure() -> None:
+    class BrokenCompletions:
+        def create(self, **kwargs):
+            raise TypeError("programming defect")
+
+    sdk_client = MagicMock()
+    sdk_client.chat.completions = BrokenCompletions()
+    client = __import__("app.ai.client", fromlist=["LLMClient"]).LLMClient(
+        model_version="provider-test", client=sdk_client
+    )
+
+    with pytest.raises(TypeError, match="programming defect"):
+        EventExtractionService(client=client).extract(
+            raw_input="公司披露新的经营数据，等待人工核验。",
+            source_url=None,
+        )
 
 
 @pytest.mark.parametrize(
