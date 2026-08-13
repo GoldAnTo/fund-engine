@@ -24,7 +24,7 @@ Replace the development-mock expectation with explicit closed-mode coverage:
 
 ```python
 @pytest.mark.parametrize("app_env", [None, "", "development", "production"])
-def test_non_test_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
+def test_live_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     if app_env is None:
         monkeypatch.delenv("APP_ENV", raising=False)
@@ -34,7 +34,7 @@ def test_non_test_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
         LLMClient.from_env()
 
 
-def test_test_runtime_without_api_key_uses_deterministic_mock(monkeypatch):
+def test_test_environment_without_api_key_uses_mock(monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setenv("APP_ENV", "test")
     client = LLMClient.from_env()
@@ -53,8 +53,8 @@ Run:
 ```bash
 cd backend
 .venv/bin/pytest -q \
-  tests/test_compliance.py::test_non_test_runtime_without_api_key_fails_loudly \
-  tests/test_compliance.py::test_test_runtime_without_api_key_uses_deterministic_mock
+  tests/test_compliance.py::test_live_runtime_without_api_key_fails_loudly \
+  tests/test_compliance.py::test_test_environment_without_api_key_uses_mock
 ```
 
 Expected: non-test cases for unset/development fail because the current client

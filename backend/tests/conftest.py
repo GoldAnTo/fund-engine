@@ -3,9 +3,20 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-# Tests must never see a developer's local .env credentials: APP_ENV=test
-# makes app.env.load_local_env() a no-op, so providers stay mock/fake.
-os.environ.setdefault("APP_ENV", "test")
+# Tests must never see a developer's local .env credentials.  Force test mode
+# before importing application modules and discard every ambient setting that
+# could construct a live provider.  Database service URLs are intentionally
+# preserved so opt-in PostgreSQL and Neo4j integration tests still work.
+os.environ["APP_ENV"] = "test"
+for provider_env_name in (
+    "LLM_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_TEMPERATURE",
+    "LLM_SEED",
+    "GILDATA_TOKEN",
+):
+    os.environ.pop(provider_env_name, None)
 
 import pytest
 from fastapi.testclient import TestClient

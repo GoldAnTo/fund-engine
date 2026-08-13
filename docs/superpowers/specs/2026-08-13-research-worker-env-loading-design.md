@@ -18,8 +18,8 @@ The existing environment contract remains unchanged:
 
 - exported process variables take precedence over `backend/.env`;
 - `APP_ENV=test` prevents local credentials from being loaded;
-- development without `LLM_API_KEY` may still use deterministic mock mode;
-- production without `LLM_API_KEY` still fails closed.
+- only `APP_ENV=test` without `LLM_API_KEY` may use deterministic mock mode;
+- every non-test runtime without `LLM_API_KEY` fails closed.
 
 ## Verification
 
