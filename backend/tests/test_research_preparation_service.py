@@ -466,7 +466,8 @@ def test_claim_decisions_require_exact_coverage_and_publish_exactly_once(session
     assert len(reviews) == 3
     assert len(statements) == 2
     assert {review.idempotency_key for review in reviews} == {
-        f"preparation:{preparation.id}:1:claim:{candidate.id}" for candidate in candidates
+        ResearchPreparationService._claim_review_idempotency_key(decision)
+        for decision in decisions
     }
     assert {review.outcome for review in reviews if review.published_source_statement_id is not None} == {
         "confirmed",
@@ -853,6 +854,177 @@ def test_atomic_review_locks_all_same_tenant_preparations_for_shared_candidate(
         for case_id, preparation_id in ordered
         for entry in (("case", case_id), ("preparation", preparation_id))
     ]
+
+
+def test_confirm_claims_locks_candidates_before_case_and_skips_shared_mapping(
+    session, monkeypatch
+) -> None:
+    """Preparation confirmation never holds one Case while traversing peers."""
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="c" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="confirm-claim-lock-order")
+    _parse(service, preparation, [candidate])
+
+    lock_trace: list[str] = []
+    review_modes: list[str | None] = []
+    original_lock_for_case = ResearchPreparationRepository.lock_for_case
+    original_review = AtomicClaimService.review
+
+    def record_candidate_lock(self, candidate_ids):
+        lock_trace.append("candidate")
+        return [candidate]
+
+    def record_case_lock(self, case_id):
+        lock_trace.append("case")
+        return original_lock_for_case(self, case_id)
+
+    def record_review(self, *args, **kwargs):
+        review_modes.append(kwargs.get("preparation_locking"))
+        return original_review(self, *args, **kwargs)
+
+    def fail_cross_preparation_lock(self, candidate_id):
+        raise AssertionError("confirm_claims must not traverse shared preparation mappings")
+
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "lock_candidate_rows",
+        record_candidate_lock,
+        raising=False,
+    )
+    monkeypatch.setattr(ResearchPreparationRepository, "lock_for_case", record_case_lock)
+    monkeypatch.setattr(AtomicClaimService, "review", record_review)
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "lock_preparation_for_candidate_review",
+        fail_cross_preparation_lock,
+    )
+
+    service.confirm_claims(
+        case.id,
+        actor="reviewer",
+        revision=preparation.version,
+        decisions=[ClaimDecision(candidate.id, "confirmed", "reviewed")],
+    )
+
+    assert lock_trace[:2] == ["candidate", "case"]
+    assert review_modes == ["already_locked"]
+
+
+@pytest.mark.pg_only
+def test_postgres_shared_candidate_confirmations_serialize_on_candidate_lock(
+    engine, session, monkeypatch
+) -> None:
+    """Two shared-case confirmations cannot deadlock while traversing cases."""
+    session_factory = sessionmaker(bind=engine, future=True)
+    first_case = _case(session)
+    second_case = _case(session)
+    candidate = _candidate(session, first_case, suffix="shared-confirm-race")
+    span = session.get(SourceSpan, candidate.source_span_id)
+    assert span is not None
+    session.add(CaseDocumentVersion(
+        research_case_id=second_case.id,
+        document_version_id=span.document_version_id,
+        linked_at=datetime.now(UTC),
+    ))
+    _admit_candidate_document(session, first_case, candidate)
+    _admit_candidate_document(session, second_case, candidate)
+    first_preparation = _service(session).create_for_case(
+        first_case.id, input_fingerprint="d" * 64, actor="tester"
+    )
+    second_preparation = _service(session).create_for_case(
+        second_case.id, input_fingerprint="e" * 64, actor="tester"
+    )
+    _parse(_service(session), first_preparation, [candidate])
+    _parse(_service(session), second_preparation, [candidate])
+    first_case_id, second_case_id, candidate_id = (
+        first_case.id,
+        second_case.id,
+        candidate.id,
+    )
+    session.commit()
+
+    candidate_locked, release_first = Event(), Event()
+    second_candidate_lock_attempted, second_finished = Event(), Event()
+    errors: list[BaseException] = []
+    first_thread_id: list[int] = []
+    second_thread_id: list[int] = []
+    original_lock_candidates = ResearchPreparationRepository.lock_candidate_rows
+
+    def pause_first_candidate_lock(repository, candidate_ids):
+        locked = original_lock_candidates(repository, candidate_ids)
+        if first_thread_id and get_ident() == first_thread_id[0]:
+            candidate_locked.set()
+            assert release_first.wait(timeout=5)
+        return locked
+
+    def observe_second_candidate_lock(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if (
+            second_thread_id
+            and get_ident() == second_thread_id[0]
+            and "atomic_claim_candidates" in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            second_candidate_lock_attempted.set()
+
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "lock_candidate_rows",
+        pause_first_candidate_lock,
+    )
+
+    def confirm(case_id: uuid.UUID, *, first: bool) -> None:
+        confirming = session_factory()
+        try:
+            if first:
+                first_thread_id.append(get_ident())
+            else:
+                second_thread_id.append(get_ident())
+            ResearchPreparationService(confirming).confirm_claims(
+                case_id,
+                actor="reviewer",
+                revision=1,
+                decisions=[ClaimDecision(candidate_id, "confirmed", "reviewed")],
+            )
+            confirming.commit()
+            if not first:
+                second_finished.set()
+        except BaseException as exc:
+            errors.append(exc)
+            confirming.rollback()
+        finally:
+            confirming.close()
+
+    first_thread = Thread(target=lambda: confirm(first_case_id, first=True))
+    second_thread = Thread(target=lambda: confirm(second_case_id, first=False))
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_second_candidate_lock)
+    try:
+        first_thread.start()
+        assert candidate_locked.wait(timeout=5)
+        second_thread.start()
+        assert second_candidate_lock_attempted.wait(timeout=5)
+        assert not second_finished.is_set()
+        release_first.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+        assert not first_thread.is_alive()
+        assert not second_thread.is_alive()
+        assert errors == []
+    finally:
+        release_first.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_second_candidate_lock)
+
+    verifier = session_factory()
+    try:
+        assert verifier.get(ResearchPreparation, first_preparation.id).claim_review_state == "confirmed"
+        assert verifier.get(ResearchPreparation, second_preparation.id).claim_review_state == "confirmed"
+        assert len(verifier.scalars(select(AtomicClaimReview)).all()) == 1
+    finally:
+        verifier.close()
 
 
 @pytest.mark.pg_only

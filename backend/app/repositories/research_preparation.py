@@ -46,6 +46,36 @@ class ResearchPreparationRepository:
             .execution_options(populate_existing=True)
         )
 
+    def preparation_for_case(self, case_id: uuid.UUID) -> ResearchPreparation | None:
+        """Read a preparation before a caller obtains its Case lock."""
+        return self._session.scalar(
+            select(ResearchPreparation).where(
+                ResearchPreparation.research_case_id == case_id
+            )
+        )
+
+    def lock_candidate_rows(
+        self, candidate_ids: set[uuid.UUID]
+    ) -> list[AtomicClaimCandidate]:
+        """Acquire candidate row locks in the global UUID order.
+
+        This is the first serialization primitive for every atomic-claim
+        review path.  It prevents a command from holding one preparation's
+        Case lock while attempting to traverse another shared candidate's
+        preparation mappings.
+        """
+        locked: list[AtomicClaimCandidate] = []
+        for candidate_id in sorted(candidate_ids, key=str):
+            candidate = self._session.scalar(
+                select(AtomicClaimCandidate)
+                .where(AtomicClaimCandidate.id == candidate_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if candidate is not None:
+                locked.append(candidate)
+        return locked
+
     def lock_preparation_for_candidate_review(
         self, candidate_id: uuid.UUID
     ) -> list[ResearchPreparation]:

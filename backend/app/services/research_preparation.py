@@ -342,7 +342,9 @@ class ResearchPreparationService:
         revision: int,
         decisions: list[ClaimDecision],
     ) -> ResearchPreparation:
-        preparation = self._require_preparation(case_id)
+        preparation = self._repo.preparation_for_case(case_id)
+        if preparation is None:
+            raise NotFoundError(f"research preparation for case {case_id} not found")
         self._require_revision(preparation, revision)
         if preparation.claim_review_state != "awaiting_review":
             raise ConflictError("claim review is not awaiting review")
@@ -362,6 +364,24 @@ class ResearchPreparationService:
         )
         if persisted_candidate_ids != candidate_ids:
             raise ConflictError("current claim candidates are missing")
+        locked_candidate_ids = {
+            candidate.id for candidate in self._repo.lock_candidate_rows(candidate_ids)
+        }
+        if locked_candidate_ids != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
+
+        # Candidate locks are acquired before the Case lock. Recheck all
+        # mutable preparation state after taking the normal Case → prep lock.
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        if preparation.claim_review_state != "awaiting_review":
+            raise ConflictError("claim review is not awaiting review")
+        artifact = self._repo.current_artifact(preparation.id, "atomic_claim_candidates")
+        if artifact is None or self._candidate_ids(artifact) != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
+        self._validate_claim_decisions(
+            actor=actor, candidate_ids=candidate_ids, decisions=decisions
+        )
         for decision in decisions:
             self._claims.review(
                 decision.candidate_id,
@@ -369,7 +389,8 @@ class ResearchPreparationService:
                 reviewer=actor,
                 reason=decision.reason,
                 normalized_text=decision.normalized_text,
-                idempotency_key=f"preparation:{preparation.id}:{revision}:claim:{decision.candidate_id}",
+                idempotency_key=self._claim_review_idempotency_key(decision),
+                preparation_locking="already_locked",
             )
         modified_count = sum(decision.outcome == "modified" for decision in decisions)
         rejected_count = sum(decision.outcome == "rejected" for decision in decisions)
@@ -395,6 +416,15 @@ class ResearchPreparationService:
             },
         )
         return preparation
+
+    @staticmethod
+    def _claim_review_idempotency_key(decision: ClaimDecision) -> str:
+        """Deduplicate the same global candidate decision across preparations."""
+        normalized_text = (decision.normalized_text or "").strip()
+        decision_hash = hashlib.sha256(
+            f"{decision.outcome}\n{normalized_text}".encode("utf-8")
+        ).hexdigest()
+        return f"preparation:claim:{decision.candidate_id}:{decision_hash}"
 
     def confirm_protocol(
         self,

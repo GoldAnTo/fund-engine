@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -72,13 +73,17 @@ class AtomicClaimService:
         idempotency_key: str,
         normalized_text: str | None = None,
         observed_period: date | None = None,
+        preparation_locking: Literal["direct", "already_locked"] = "direct",
     ) -> AtomicClaimReview:
-        # Current preparation candidates share this Case → preparation lock
-        # with protocol confirmation.  Unmapped legacy candidates retain the
-        # ordinary review path without acquiring unrelated Case locks.
-        ResearchPreparationRepository(
-            self._session
-        ).lock_preparation_for_candidate_review(candidate_id)
+        repository = ResearchPreparationRepository(self._session)
+        # Candidate rows are always locked before any Case/preparation lock.
+        # ``confirm_claims`` already owns its Case → preparation lock after
+        # taking this candidate lock, so it must not traverse shared mappings.
+        repository.lock_candidate_rows({candidate_id})
+        if preparation_locking == "direct":
+            repository.lock_preparation_for_candidate_review(candidate_id)
+        elif preparation_locking != "already_locked":
+            raise ValueError("atomic claim preparation locking mode is invalid")
         if self._session.get(AtomicClaimCandidate, candidate_id) is None:
             raise ValidationError("atomic claim candidate not found")
         if outcome not in _REVIEW_OUTCOMES or not reviewer.strip() or not reason.strip() or not idempotency_key.strip():
