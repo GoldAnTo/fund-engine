@@ -64,6 +64,8 @@ class StatementExtractor:
         }
 
         if not spans:
+            if before_persist is not None and not before_persist():
+                return None
             record_run(
                 session,
                 kind="extract",

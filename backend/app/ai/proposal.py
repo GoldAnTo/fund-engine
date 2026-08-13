@@ -74,6 +74,8 @@ class EvidenceProposer:
         }
 
         if not statements:
+            if before_persist is not None and not before_persist():
+                return []
             record_run(
                 session,
                 kind="propose",

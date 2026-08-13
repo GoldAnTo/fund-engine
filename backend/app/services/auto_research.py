@@ -553,9 +553,23 @@ class AutoResearchService:
                         break
                     task.updated_at = datetime.now(timezone.utc)
                     used += 1
+                    if failed:
+                        # Keep the failed task and its failed AIRun in this
+                        # transaction.  The worker terminalizer commits them
+                        # atomically with the failed ResearchRun and Job.
+                        break
                     self.session.commit()
 
             if run.status == "cancelled":
+                break
+            if failed:
+                self.repo.update_run(
+                    run,
+                    status="failed",
+                    stage="failed",
+                    budget_used=used,
+                    stop_reason="task_failed",
+                )
                 break
 
             self._create_balance_gaps(run, current_round)

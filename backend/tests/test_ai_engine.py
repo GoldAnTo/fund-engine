@@ -114,6 +114,45 @@ def test_extraction_records_no_spans(session, document_service):
     assert "no source spans" in runs[0].output_summary
 
 
+def test_no_span_extraction_honors_cancelled_output_slot(session, document_service):
+    version = document_service.freeze(
+        raw=b"empty cancelled doc",
+        source_url="https://example.test/empty-cancelled",
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    result = StatementExtractor(client).extract(
+        version.id,
+        session,
+        before_persist=lambda: False,
+    )
+
+    assert result is None
+    assert list(session.scalars(select(AIRun).where(AIRun.kind == "extract"))) == []
+
+
+def test_no_span_extraction_claims_output_slot_before_success_audit(
+    session, document_service
+):
+    version = document_service.freeze(
+        raw=b"empty accepted doc",
+        source_url="https://example.test/empty-accepted",
+    )
+    slot_checks: list[bool] = []
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    result = StatementExtractor(client).extract(
+        version.id,
+        session,
+        before_persist=lambda: slot_checks.append(True) or True,
+    )
+
+    assert result == []
+    assert slot_checks == [True]
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
+    assert len(runs) == 1 and runs[0].status == "success"
+
+
 # ---------------------------------------------------------------------------
 # Proposal
 # ---------------------------------------------------------------------------
@@ -193,6 +232,35 @@ def test_proposer_releases_read_transaction_before_provider(
 
     with patch.object(client, "chat_json", side_effect=provider):
         assert EvidenceProposer(client).propose(thesis.id, session)
+
+
+def test_no_recall_proposal_honors_cancelled_output_slot(session, thesis):
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    result = EvidenceProposer(client).propose(
+        thesis.id,
+        session,
+        before_persist=lambda: False,
+    )
+
+    assert result == []
+    assert list(session.scalars(select(AIRun).where(AIRun.kind == "propose"))) == []
+
+
+def test_no_recall_proposal_claims_output_slot_before_success_audit(session, thesis):
+    slot_checks: list[bool] = []
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    result = EvidenceProposer(client).propose(
+        thesis.id,
+        session,
+        before_persist=lambda: slot_checks.append(True) or True,
+    )
+
+    assert result == []
+    assert slot_checks == [True]
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
+    assert len(runs) == 1 and runs[0].status == "success"
 
 
 # ---------------------------------------------------------------------------

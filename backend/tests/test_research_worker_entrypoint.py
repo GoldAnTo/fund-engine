@@ -214,6 +214,164 @@ def test_worker_commits_failed_run_job_event_and_airun_atomically(
         assert event is not None and event.status == "failed"
 
 
+def test_worker_stops_on_first_proposal_failure_and_commits_terminal_state_atomically(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.ai.client import LLMClient
+    from app.models.ledger import (
+        AIRun,
+        Base,
+        CaseDocumentVersion,
+        DocumentVersion,
+        ResearchCase,
+        SourceSpan,
+        SourceStatement,
+        Thesis,
+    )
+    from app.models.operational import Job, ResearchRun, ResearchTask
+    from app.repositories.auto_research import AutoResearchRepository
+    from app.scripts import run_research_worker
+    from app.services.auto_research import AutoResearchService
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'worker-proposal-failure-atomic.db'}",
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local() as setup:
+        case = ResearchCase(
+            title="first provider failure is terminal",
+            industry_topic="accelerator demand",
+            created_by="test",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        first = Thesis(
+            research_case_id=case.id,
+            statement="accelerator demand growth",
+            created_by="test",
+            created_at=now,
+        )
+        second = Thesis(
+            research_case_id=case.id,
+            statement="accelerator demand backlog",
+            created_by="test",
+            created_at=now,
+        )
+        document = DocumentVersion(
+            content_sha256="worker-proposal-failure-document",
+            source_url="https://example.test/worker-proposal-failure",
+            available_at=now,
+            acquired_at=now,
+            parser_version="test",
+        )
+        setup.add_all([first, second, document])
+        setup.flush()
+        span = SourceSpan(
+            document_version_id=document.id,
+            locator={"page": 1},
+            verbatim_text="accelerator demand growth and backlog remain elevated",
+        )
+        setup.add(span)
+        setup.flush()
+        setup.add_all(
+            [
+                CaseDocumentVersion(
+                    research_case_id=case.id,
+                    document_version_id=document.id,
+                    linked_at=now,
+                ),
+                SourceStatement(
+                    source_span_id=span.id,
+                    kind="research_opinion",
+                    normalized_text=(
+                        "accelerator demand growth and backlog remain elevated"
+                    ),
+                    created_at=now,
+                ),
+            ]
+        )
+        repo = AutoResearchRepository(setup)
+        run = repo.create_run(
+            research_case_id=case.id,
+            max_rounds=1,
+            budget=10,
+            scope_thesis_ids=[str(first.id), str(second.id)],
+        )
+        first_task = repo.create_task(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=first.id,
+            task_type="support",
+            query="first provider task",
+        )
+        second_task = repo.create_task(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=second.id,
+            task_type="support",
+            query="must not execute after first failure",
+        )
+        job = repo.enqueue_run_job(run)
+        setup.commit()
+        run_id, job_id = run.id, job.id
+        first_task_id, second_task_id = first_task.id, second_task.id
+
+    client = LLMClient(model_version="provider-test", mock=True)
+    provider_calls = 0
+
+    def fail_provider(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise RuntimeError("provider transport failed")
+
+    monkeypatch.setattr(client, "chat_json", fail_provider)
+    monkeypatch.setattr(LLMClient, "from_env", classmethod(lambda cls: client))
+    _patch_worker_dependencies(monkeypatch, run_research_worker, session_local)
+    original_completion = AutoResearchRepository.record_job_completion
+
+    def assert_no_partial_failure_commit(self, job, **kwargs):
+        with Session(engine) as check:
+            persisted_run = check.get(ResearchRun, run_id)
+            persisted_job = check.get(Job, job_id)
+            persisted_first = check.get(ResearchTask, first_task_id)
+            assert persisted_run is not None and persisted_run.status == "running"
+            assert persisted_job is not None and persisted_job.status == "running"
+            assert persisted_first is not None and persisted_first.status == "running"
+            assert check.scalar(
+                select(func.count()).select_from(AIRun).where(AIRun.status == "failed")
+            ) == 0
+        original_completion(self, job, **kwargs)
+
+    monkeypatch.setattr(
+        AutoResearchRepository,
+        "record_job_completion",
+        assert_no_partial_failure_commit,
+    )
+
+    assert run_research_worker.run_once()
+    assert provider_calls == 1
+
+    with Session(engine) as check:
+        run = check.get(ResearchRun, run_id)
+        job = check.get(Job, job_id)
+        first_task = check.get(ResearchTask, first_task_id)
+        second_task = check.get(ResearchTask, second_task_id)
+        assert run is not None and run.status == "failed"
+        assert run.stage == "failed" and run.stop_reason == "task_failed"
+        assert job is not None and job.status == "failed" and job.step == "failed"
+        assert first_task is not None and first_task.status == "failed"
+        assert second_task is not None and second_task.status == "queued"
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(
+                AIRun.kind == "propose", AIRun.status == "failed"
+            )
+        ) == 1
+
+
 @pytest.mark.parametrize(
     ("terminal_status", "terminal_stage", "terminal_reason"),
     [
