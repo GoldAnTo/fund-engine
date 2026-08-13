@@ -107,7 +107,6 @@ class EventExtractionService:
             OpenAIError,
             httpx.HTTPError,
             json.JSONDecodeError,
-            ValueError,
         ) as exc:
             raise EventExtractionProviderError(
                 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE

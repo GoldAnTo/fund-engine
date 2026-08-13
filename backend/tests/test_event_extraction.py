@@ -168,6 +168,18 @@ def test_extraction_does_not_wrap_call_programming_errors(programming_error) -> 
         )
 
 
+def test_extraction_does_not_wrap_client_value_error() -> None:
+    class BrokenClient:
+        def chat_json(self, messages, schema_hint):
+            raise ValueError("programming defect")
+
+    with pytest.raises(ValueError, match="programming defect"):
+        EventExtractionService(client=BrokenClient()).extract(
+            raw_input="公司披露新的经营数据，等待人工核验。",
+            source_url=None,
+        )
+
+
 @pytest.mark.parametrize(
     ("provider_result", "error_message"),
     [

@@ -262,6 +262,25 @@ def test_extract_event_does_not_map_programming_errors_to_upstream_503(
     assert "upstream_unavailable" not in response.text
 
 
+def test_extract_event_does_not_map_client_value_error_to_upstream_503(
+    cmd_client, monkeypatch
+) -> None:
+    class BrokenClient:
+        def chat_json(self, messages, schema_hint):
+            raise ValueError("programming defect")
+
+    monkeypatch.setattr(
+        "app.services.event_extraction.LLMClient.from_env", BrokenClient
+    )
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 500
+    assert "upstream_unavailable" not in response.text
+
+
 def test_extract_event_maps_provider_call_failure_to_safe_503(
     cmd_client, monkeypatch
 ) -> None:

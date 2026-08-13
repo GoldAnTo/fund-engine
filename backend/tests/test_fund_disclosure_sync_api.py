@@ -595,6 +595,38 @@ def test_run_executor_does_not_convert_client_factory_programming_error(
         _execute_run(service, run.id, client_factory=broken_factory)
 
 
+def test_run_route_does_not_convert_client_factory_programming_error_to_422(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import fund_disclosure_sync
+
+    case = _admitted_case(cmd_session)
+    configured = cmd_client.put(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
+        json={
+            "actor": "human:researcher",
+            "fund_codes": ["005827"],
+            "frequency": "weekly",
+            "report_period": "2025-06-30",
+            "change_reason": "验证路由编程错误边界",
+        },
+    )
+    assert configured.status_code == 200
+
+    def broken_factory():
+        raise TypeError("programming defect")
+
+    monkeypatch.setattr(
+        fund_disclosure_sync, "get_fund_disclosure_client", broken_factory
+    )
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+
+
 def test_stale_run_is_interrupted_and_retry_preserves_frozen_period(session) -> None:
     case = _case(session)
     service = FundDisclosureSyncService(session)
