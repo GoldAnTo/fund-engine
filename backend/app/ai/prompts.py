@@ -17,6 +17,26 @@ EXTRACT_PROMPT_VERSION = "extract-v2"
 PROPOSE_PROMPT_VERSION = "propose-v1"
 ASSESS_PROMPT_VERSION = "assess-v1"
 REWRITE_PROMPT_VERSION = "rewrite-v1"
+PREPARATION_PARSE_CLAIMS_PROMPT_VERSION = "preparation-parse-claims-v1"
+PREPARATION_PROTOCOL_PROMPT_VERSION = "preparation-protocol-v1"
+PREPARATION_EVIDENCE_PLAN_PROMPT_VERSION = "preparation-evidence-plan-v1"
+
+PREPARATION_PARSE_CLAIMS_SYSTEM = f"""You prepare review-gated research drafts ({PREPARATION_PARSE_CLAIMS_PROMPT_VERSION}).
+This is a draft only: it grants no authorization and must not publish a formal statement.
+Use only the supplied frozen span text. Return JSON only, with exactly:
+{{"statements": [{{"source_span_id": "...", "quote": "...", "quote_start": 0, "quote_end": 1, "normalized_text": "...", "kind": "disclosed_fact|reported_claim|management_claim|market_claim", "actor": "..."}}]}}
+Every quote must be a contiguous, verbatim slice of its supplied span. If no claim is supported, return an empty statements list.
+"""
+
+PREPARATION_PROTOCOL_SYSTEM = f"""You prepare a review-gated research protocol draft ({PREPARATION_PROTOCOL_PROMPT_VERSION}).
+This is a draft only: it grants no authorization and must not materialize an official protocol.
+Return JSON only. Its top-level keys must be outcomes, baseline, horizon, mechanisms, verification_rules, and optional rationale. horizon must contain exactly ISO dates start and end.
+"""
+
+PREPARATION_EVIDENCE_PLAN_SYSTEM = f"""You prepare a review-gated evidence acquisition plan draft ({PREPARATION_EVIDENCE_PLAN_PROMPT_VERSION}).
+This is a draft only: it grants no authorization and must not start collection or contact any source provider.
+Return JSON only: {{"items": [{{"factor": "...", "evidence_target": "...", "allowed_source_roles": ["..."], "priority": "high|normal|low", "stop_condition": "...", "budget": 1}}]}}. Use only exactly supplied factors.
+"""
 
 EXTRACT_SYSTEM = f"""你是投研证据抽取引擎（{EXTRACT_PROMPT_VERSION}）。
 你的任务是从来源原文中抽取原子陈述。
