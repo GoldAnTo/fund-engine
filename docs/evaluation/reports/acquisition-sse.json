@@ -1,0 +1,183 @@
+{
+  "counts": {
+    "accepted": 25,
+    "fetched": 0,
+    "rejected": 0,
+    "returned": 25
+  },
+  "errors": [
+    {
+      "category": "provider_protocol",
+      "retryable": false,
+      "stage": "fetch"
+    },
+    {
+      "category": "provider_protocol",
+      "retryable": false,
+      "stage": "fetch"
+    },
+    {
+      "category": "provider_protocol",
+      "retryable": false,
+      "stage": "fetch"
+    }
+  ],
+  "fetch_limit": 3,
+  "fetches": [],
+  "git_commit": "8c6a9320f59020aacabc77f807d7eda046db9b68",
+  "live_success": false,
+  "not_fetched_count": 22,
+  "query": {
+    "sha256": "9e5f57a69950a285c9a35f7e6fb2519c2a75a41bf88c0be9ffe7fc4951fb8ce9",
+    "window_end": "2025-04-20",
+    "window_start": "2025-04-19"
+  },
+  "references": [
+    {
+      "canonical_url_sha256": "fd93ad32551715c4db48c0169f0ecd566b44ca0e9684b92946fe5fc99de4a02d",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:0082d0f8faf7110a28555998"
+    },
+    {
+      "canonical_url_sha256": "82f50a18809beec912f0684561143813b744712559cb4d5b1e1d1b8831ee1c55",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:01af0a47e9761563d9c73e24"
+    },
+    {
+      "canonical_url_sha256": "d3eb7206cb5d1720e9cbad3305ebe7d6f42f9858a4c739b2e4d6493969abfed5",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:0f4aacf12c492df3ad61eaba"
+    },
+    {
+      "canonical_url_sha256": "830fa92bb6809f4efa4a70760779726180476b840b16a5f7bf566968ad8e8d79",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:18ac5dcae50df3feb4084cd3"
+    },
+    {
+      "canonical_url_sha256": "b93aeec936ded214590c96ff3a314af61dd39b4ebed8498fc3901451b560a773",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:1b40b93c3e694790217aeae9"
+    },
+    {
+      "canonical_url_sha256": "29e708ad25e2b5fa29af74b42d3d7c1511cacbdcd1568966221cf808d40577ce",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:2e6b7fa223fa979b62cc2249"
+    },
+    {
+      "canonical_url_sha256": "5e21c048d5b267f9da534aa85750012dad22778d27341971c2d4de0c8ab41dd9",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:2f542d675c1cafdcf46bd817"
+    },
+    {
+      "canonical_url_sha256": "335dc6f2200727024ae3f1a0187a46c1569a32663fffb9d729998bf3e757c0c3",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:35a792bc615ec98ac6c95639"
+    },
+    {
+      "canonical_url_sha256": "7168e15f7625b62be152cfe4219bf7101bcd7ce99ab24ce7d4357eae16f23086",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:48e3ffb8ceb4bf4c49345f85"
+    },
+    {
+      "canonical_url_sha256": "1a0580e6750e44bfaca1450e6bde31ba02d6b6e6d91ad02eefaeb7a53fcbf1a8",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:4d05114dad65801d3776d492"
+    },
+    {
+      "canonical_url_sha256": "c7f83eaf9c5d1f2008d7a540dcdc0590fc42dec364587bc5f36f268e08ac21b8",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:5a997906f509a9c6e3e2a14b"
+    },
+    {
+      "canonical_url_sha256": "f9ef24fe37c75e658510cc534b9fd45ac6f5cc9a54b4e1f291689a7cfd312e05",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:6260b60b14c4f35c428647d6"
+    },
+    {
+      "canonical_url_sha256": "5ba9c6a3bc4e202987d0f006299dce37ce5bc28824703643b3f3f9c034caade5",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:641e60711c9281826cf7bd6e"
+    },
+    {
+      "canonical_url_sha256": "3c8f6cb3c9cf0a93d08e4dc7372110b74f12925cfdf80a6dd3f4436278432e86",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:67c9335f545ef40c886bade8"
+    },
+    {
+      "canonical_url_sha256": "6b944f015738ef680f49a790821a1b332ff804bf80038b8568ee5196213b98b0",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:765a800c7e08dc9af6e78284"
+    },
+    {
+      "canonical_url_sha256": "d59223181f3a078132da3079a7f0f132c24f912b2d7cb5025a766ed9ded20fb8",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:76ecf4a911c2cb61e93a63c6"
+    },
+    {
+      "canonical_url_sha256": "e04cad16dca213c93fa056895b83b6e085e8205cd868788000770aae53d61c3b",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:85a750559b92c8a8b76c0b89"
+    },
+    {
+      "canonical_url_sha256": "6a797e48da559e1c40a93674cb538b3109b4c5659cb445c394cda16346ef156d",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:8625b084f8e731c40e1e20c2"
+    },
+    {
+      "canonical_url_sha256": "73d6fbe4c0469ad3f9e6e236c4694f9d4d2101baa57906b442d9569d0a982b2a",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:b8e54f287ad93523dc697e12"
+    },
+    {
+      "canonical_url_sha256": "e627cfad637a84f07fb90e4121b072301c934d9cfa4fd4df8ca972535abb2782",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:bceb94bd30feb38b814b9c16"
+    },
+    {
+      "canonical_url_sha256": "8df75cfa2f037cf363e91f7e116e032ed3be5f788e5dcd8d96eaffe9794a5ed9",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:c4d9a039c470dc87f76352b4"
+    },
+    {
+      "canonical_url_sha256": "3b7d33507099fcd66f694634012ba043a699d1f2540c01b07ac57fbec95ee7f0",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:d24221fe5beff7456841972c"
+    },
+    {
+      "canonical_url_sha256": "6be6f7708df22e1bea8db892e0a4048793bfa99bf2b6ec736ddaaabceaddafbc",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:d57c7266aa14b1c37cfc0bbe"
+    },
+    {
+      "canonical_url_sha256": "053ed728ae0bd6665d96592e2ea3017faef9fa3cf348a96410a75995f18e8c42",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:d849b0c8317beccfcba19d1e"
+    },
+    {
+      "canonical_url_sha256": "8510450c901736cbe062ec71395c49f5ba818512cfccc850962d53e304509aa1",
+      "external_version": "published:2025-04-19",
+      "stable_id": "sse:e64a13c232870ff00efcbe84"
+    }
+  ],
+  "schema_version": "acquisition-source-smoke/v1",
+  "source": {
+    "adapter_key": "sse",
+    "adapter_version": "sse-announcement-source/v1",
+    "descriptor": {
+      "allowed_hosts": [
+        "query.sse.com.cn",
+        "static.sse.com.cn",
+        "www.sse.com.cn"
+      ],
+      "allowed_schemes": [
+        "https"
+      ],
+      "allowed_source_roles": [
+        "company_disclosure"
+      ],
+      "provider_identity": "Shanghai Stock Exchange"
+    }
+  },
+  "status": "failed",
+  "timestamp_utc": "2026-08-13T07:21:39.466183Z"
+}

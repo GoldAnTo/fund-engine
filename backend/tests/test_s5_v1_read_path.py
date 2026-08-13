@@ -18,7 +18,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas as rl_canvas
 
-from app.datasources.docling import PypdfAdapter
+from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
 from app.documents.locators import compute_text_sha256
 from app.repositories.documents import DocumentRepository
 from app.services.ingest import DocumentService
@@ -97,7 +97,7 @@ def test_v1_span_round_trips_through_v1_read_api(fresh_db, session, doc_service,
         assert dto["locator_v1"] is not None
         assert dto["locator_v1"]["schema"] == "source-locator/v1"
         assert dto["locator_v1"]["page"] == parsed.locator.page
-        assert dto["locator_v1"]["parser_version"] == "pypdf-v1"
+        assert dto["locator_v1"]["parser_version"] == PARSER_VERSION_PYPDF
         assert dto["text_sha256"] == parsed.text_sha256
         assert dto["text_sha256"] == compute_text_sha256(dto["verbatim_text"])
 

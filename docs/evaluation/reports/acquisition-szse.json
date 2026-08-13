@@ -1,0 +1,81 @@
+{
+  "counts": {
+    "accepted": 3,
+    "fetched": 3,
+    "rejected": 0,
+    "returned": 3
+  },
+  "errors": [],
+  "fetch_limit": 3,
+  "fetches": [
+    {
+      "byte_sha256": "2190716636d6a9fbf8d0daf6c31b0f4238ac00e9e8de3fdd22016d070f3262d3",
+      "byte_size": 214790,
+      "final_url_sha256": "c9245d1b8355b15e5156b1771451b4014215e5711f5e2dd77432fff290987744",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:482e8433-46cf-4e65-827a-66855ded37e0"
+    },
+    {
+      "byte_sha256": "db8f021d426d0c0a9c88f6bc06b441ddd47fcc7eac6ca0fd9b1f7eaaba5de124",
+      "byte_size": 271771,
+      "final_url_sha256": "09413a8bf4c81b8a2347e7e44c3eccfe124a377148514f35cb8561062a8e1d59",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:793b9185-3bbc-4364-bda0-eb8160a87173"
+    },
+    {
+      "byte_sha256": "5d5fb8b7637c8ef163273107e36332d347f682515b64f95519a9f976d25e1908",
+      "byte_size": 1654657,
+      "final_url_sha256": "f773acc6f9aa246dd16ece411ced7a3df277f40e05bb397870830cad2804ece1",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:9b0752d2-6a4e-46a4-ab28-b7f05f67425c"
+    }
+  ],
+  "git_commit": "8c6a9320f59020aacabc77f807d7eda046db9b68",
+  "live_success": true,
+  "not_fetched_count": 0,
+  "query": {
+    "sha256": "ba6eecc539d691736fe21550c957de280b504550c1c1a838bb23d3c973a3e369",
+    "window_end": "2025-04-20",
+    "window_start": "2025-04-18"
+  },
+  "references": [
+    {
+      "canonical_url_sha256": "c9245d1b8355b15e5156b1771451b4014215e5711f5e2dd77432fff290987744",
+      "external_version": "sha256:fe88d46a9f14f4de979f53fa7fa27cb7094a8e50e8068bbbd0a9529d0e73774b",
+      "stable_id": "szse:482e8433-46cf-4e65-827a-66855ded37e0"
+    },
+    {
+      "canonical_url_sha256": "09413a8bf4c81b8a2347e7e44c3eccfe124a377148514f35cb8561062a8e1d59",
+      "external_version": "sha256:fe88d46a9f14f4de979f53fa7fa27cb7094a8e50e8068bbbd0a9529d0e73774b",
+      "stable_id": "szse:793b9185-3bbc-4364-bda0-eb8160a87173"
+    },
+    {
+      "canonical_url_sha256": "f773acc6f9aa246dd16ece411ced7a3df277f40e05bb397870830cad2804ece1",
+      "external_version": "sha256:fe88d46a9f14f4de979f53fa7fa27cb7094a8e50e8068bbbd0a9529d0e73774b",
+      "stable_id": "szse:9b0752d2-6a4e-46a4-ab28-b7f05f67425c"
+    }
+  ],
+  "schema_version": "acquisition-source-smoke/v1",
+  "source": {
+    "adapter_key": "szse",
+    "adapter_version": "szse-announcement-source/v1",
+    "descriptor": {
+      "allowed_hosts": [
+        "disc.static.szse.cn",
+        "www.szse.cn"
+      ],
+      "allowed_schemes": [
+        "https"
+      ],
+      "allowed_source_roles": [
+        "company_disclosure"
+      ],
+      "provider_identity": "Shenzhen Stock Exchange"
+    }
+  },
+  "status": "succeeded",
+  "timestamp_utc": "2026-08-13T07:24:38.605691Z"
+}
