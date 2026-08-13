@@ -115,7 +115,7 @@ class TestFromEnvReadsReproducibilityKnobs:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LLM_API_KEY", raising=False)
-        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
         monkeypatch.setenv("LLM_SEED", "1234")
         client = LLMClient.from_env()
@@ -130,7 +130,7 @@ class TestFromEnvReadsReproducibilityKnobs:
         OpenAI) — a footgun here would silently seed every run with 0,
         locking users to a deterministic but unconfigurable run."""
         monkeypatch.delenv("LLM_API_KEY", raising=False)
-        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_SEED", "")
         client = LLMClient.from_env()
         assert client._seed is None
@@ -141,7 +141,7 @@ class TestFromEnvReadsReproducibilityKnobs:
         """The empty-string convention distinguishes "unset" from "0":
         ``LLM_SEED=0`` must pass 0 through, not be dropped to None."""
         monkeypatch.delenv("LLM_API_KEY", raising=False)
-        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("LLM_SEED", "0")
         client = LLMClient.from_env()
         assert client._seed == 0

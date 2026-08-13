@@ -1,16 +1,16 @@
 """End-to-end AI research engine script.
 
-Runs ``extract -> propose -> assess`` on a seeded case.  Without
-``LLM_API_KEY`` the engine runs in mock mode, producing deterministic
-machine-generated statements, links, and assessments.
+Runs ``extract -> propose -> assess`` on a seeded case using a live LLM.
+Operational CLI runs require ``LLM_API_KEY``; deterministic mock output is
+restricted to automated tests running with ``APP_ENV=test``.
 
 Usage::
 
-    # auto-seed then run (mock mode, SQLite)
-    python -m app.scripts.run_ai_engine --seed
+    # auto-seed then run with a live provider (SQLite)
+    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --seed
 
-    # run on an existing seeded case
-    python -m app.scripts.run_ai_engine --case-id <uuid>
+    # run on an existing seeded case with live provider settings in the env
+    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --case-id <uuid>
 """
 from __future__ import annotations
 

@@ -4,8 +4,8 @@ Compliance: keyword rules (six violation categories, allow/rewrite/refuse),
 sanitize/word-boundary engineering details, and the integration points that
 keep refused AI text out of the ledger.
 
-Provider discipline: with APP_ENV=production a missing LLM_API_KEY is a hard
-failure, never a silent fallback to mock mode.
+Provider discipline: only APP_ENV=test permits a missing LLM_API_KEY to select
+deterministic mock mode. Every live runtime fails closed instead.
 """
 from __future__ import annotations
 
@@ -148,17 +148,23 @@ def test_proposal_skips_refused_links_but_keeps_clean_ones(
 # ---------------------------------------------------------------------------
 
 
-def test_production_without_api_key_fails_loudly(monkeypatch):
+@pytest.mark.parametrize("app_env", [None, "", "development", "production"])
+def test_live_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.setenv("APP_ENV", "production")
+    if app_env is None:
+        monkeypatch.delenv("APP_ENV", raising=False)
+    else:
+        monkeypatch.setenv("APP_ENV", app_env)
+
     with pytest.raises(RuntimeError, match="LLM_API_KEY"):
         LLMClient.from_env()
 
 
-def test_development_without_api_key_uses_mock(monkeypatch):
+def test_test_environment_without_api_key_uses_mock(monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("APP_ENV", "test")
     client = LLMClient.from_env()
+    assert client._mock is True
     assert client.model_version.startswith("mock-")
 
 

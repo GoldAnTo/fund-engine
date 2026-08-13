@@ -1,8 +1,8 @@
-"""LLM client with OpenAI-compatible protocol and automatic mock mode.
+"""LLM client with an OpenAI-compatible protocol and test-only mock mode.
 
-When ``LLM_API_KEY`` is absent the client operates in *mock mode*: it returns
-predefined structured JSON based on the prompt content, allowing tests and
-offline runs to exercise the full AI-engine pipeline without a real API key.
+Live runtimes require ``LLM_API_KEY`` and fail closed when it is absent. Only
+``APP_ENV=test`` may select deterministic mock responses, allowing tests to
+exercise the full AI-engine pipeline without contacting an external service.
 
 Every call goes through ``chat_json`` which forces JSON output.  The
 ``model_version`` attribute records the model used (or ``mock-<model>`` in
@@ -26,7 +26,7 @@ DEFAULT_TEMPERATURE = 0.0
 
 
 class LLMClient:
-    """Thin wrapper around the OpenAI SDK with a deterministic mock fallback.
+    """Thin OpenAI SDK wrapper with deterministic mocks restricted to tests.
 
     Reproducibility contract (defect-7 fix, 2026-08-02):
     - ``temperature`` defaults to 0.0; pass a higher value only when you have
@@ -34,9 +34,9 @@ class LLMClient:
     - ``seed`` is forwarded to OpenAI's ``chat.completions.create`` as the
       ``seed`` field when set; unset (None) means "do not pin" — callers that
       need identical manifests across reruns should set this.
-    - Mock mode is already deterministic by construction (keyword heuristics
+    - Test-only mock mode is deterministic by construction (keyword heuristics
       in ``_mock_response``); the same temperature/seed plumbing still
-      exercises the code path so production config matches test config.
+      exercises the configuration path used by live runtimes.
     """
 
     def __init__(
@@ -64,13 +64,11 @@ class LLMClient:
         - ``LLM_TEMPERATURE`` (default 0.0): passed straight to the OpenAI
           call.  Zero freezes sampling so reruns land on the same token.
         - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
-          as ``seed``.  Empty/0 means "do not pin".
+          as ``seed``. Empty means "do not pin"; zero is a real seed.
 
-        Without ``LLM_API_KEY`` the client runs in mock mode for development
-        and tests.  In production (``APP_ENV=production``) a missing key is a
-        hard failure: silently falling back to mock would produce fabricated
-        research output while appearing live (provider discipline borrowed
-        from VCRA's ProviderFactory — real providers fail, never degrade).
+        Without ``LLM_API_KEY``, only ``APP_ENV=test`` may build a deterministic
+        mock client. Every other environment is a live runtime and fails
+        immediately rather than producing mock research output.
         """
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
@@ -80,17 +78,17 @@ class LLMClient:
         seed: int | None = int(raw_seed) if raw_seed else None
 
         if not api_key:
-            app_env = os.getenv("APP_ENV", "development").strip().lower()
-            if app_env in {"production", "prod"}:
-                raise RuntimeError(
-                    "LLM_API_KEY is required when APP_ENV=production; "
-                    "mock mode is restricted to development and tests"
+            app_env = os.getenv("APP_ENV", "").strip().lower()
+            if app_env == "test":
+                return cls(
+                    model_version=f"mock-{model}",
+                    mock=True,
+                    temperature=temperature,
+                    seed=seed,
                 )
-            return cls(
-                model_version=f"mock-{model}",
-                mock=True,
-                temperature=temperature,
-                seed=seed,
+            raise RuntimeError(
+                "LLM_API_KEY is required outside APP_ENV=test; "
+                "live runtimes never fall back to mock output"
             )
 
         from openai import OpenAI
