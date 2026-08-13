@@ -442,6 +442,75 @@ def test_pdf_path_outside_exact_download_host_is_row_local_rejection():
     assert len(accepted(results)) == 1
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/disclosure/%252e%252e/file.pdf",
+        "/disclosure/parent%252fchild/file.pdf",
+        "/disclosure/parent%255cchild/file.pdf",
+    ],
+)
+def test_recursively_encoded_pdf_path_is_rejected_without_document_request(
+    path: str,
+):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    fixture["result"][0]["URL"] = path
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.url.host == "query.sse.com.cn"
+        return response_json(fixture)
+
+    source = make_source(handler)
+
+    results = source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+
+    assert {item.reason for item in rejected(results)} == {"invalid_pdf_path"}
+    assert len(accepted(results)) == 1
+    assert len(calls) == 1
+
+
+def test_absolute_pdf_url_is_canonicalized_before_storage_and_fetch():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    fixture["result"][0]["URL"] = (
+        "HTTPS://WWW.SSE.COM.CN:443/disclosure/listedinfo/公告.PDF"
+    )
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        pdf_calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\ncanonical-spelling",
+        )
+
+    source = make_source(handler)
+    expected = (
+        "https://www.sse.com.cn/disclosure/listedinfo/"
+        "%E5%85%AC%E5%91%8A.PDF"
+    )
+
+    reference = next(
+        item
+        for item in accepted(
+            source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+        )
+        if item.title == fixture["result"][0]["TITLE"]
+    )
+
+    assert reference.canonical_url == expected
+    assert reference.fetch_locator == {"canonical_pdf_url": expected}
+    envelope = source.fetch(reference)
+    assert pdf_calls == [expected]
+    assert envelope.final_url == expected
+
+
 def test_search_rejects_blank_query_or_naive_cutoff_before_network():
     calls = 0
 
@@ -635,6 +704,10 @@ def test_fetch_cache_rejection_does_not_fence_reference(use_mirror: bool):
     [
         ("timeout", SourceUnavailable, "timed out"),
         ("http_status", SourceUnavailable, "unavailable"),
+        ("http_4xx", SourceUnavailable, "rejected"),
+        ("rate_limit", SourceUnavailable, "rate limited"),
+        ("network_error", SourceUnavailable, "network"),
+        ("connect_error", SourceUnavailable, "network"),
         ("unsafe_redirect", SourceProtocolError, "redirect"),
         ("unsupported_encoding", SourceProtocolError, "content encoding"),
         ("oversized_body", SourceProtocolError, "byte limit"),
@@ -658,6 +731,14 @@ def test_fetch_non_response_type_failures_do_not_invoke_mirror(
             raise httpx.ReadTimeout("timed out", request=request)
         if failure == "http_status":
             return httpx.Response(503)
+        if failure == "http_4xx":
+            return httpx.Response(404)
+        if failure == "rate_limit":
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        if failure == "network_error":
+            raise httpx.NetworkError("network failed", request=request)
+        if failure == "connect_error":
+            raise httpx.ConnectError("connect failed", request=request)
         if failure == "unsafe_redirect":
             return httpx.Response(
                 302,
@@ -860,6 +941,48 @@ def test_restore_rejects_unsafe_persisted_sse_reference(changes):
         )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/disclosure/%252e%252e/file.pdf",
+        "/disclosure/parent%252fchild/file.pdf",
+        "/disclosure/parent%255cchild/file.pdf",
+    ],
+)
+def test_restore_rejects_recursively_encoded_pdf_path_before_network(path: str):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    source = make_source(lambda request: response_json(fixture))
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    malicious_url = f"https://www.sse.com.cn{path}"
+    restored = SourceReferenceValue(
+        adapter_key=reference.adapter_key,
+        external_record_id=reference.external_record_id,
+        external_version=reference.external_version,
+        canonical_url=malicious_url,
+        title=reference.title,
+        published_at=reference.published_at,
+        source_role=reference.source_role,
+        fetch_locator={"canonical_pdf_url": malicious_url},
+        metadata=dict(reference.metadata),
+    )
+    calls = 0
+
+    def fail_network(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return pytest.fail("network must not run")
+
+    recovered = make_source(fail_network)
+
+    with pytest.raises(ValueError, match="persisted SSE"):
+        recovered.restore_reference(restored)
+
+    assert calls == 0
+
+
 def test_fetch_records_exact_official_static_cdn_final_url_and_caches_identity():
     fixture = json.loads(FIXTURE.read_text())
     fixture["pageHelp"]["pageCount"] = 1
@@ -899,6 +1022,45 @@ def test_fetch_records_exact_official_static_cdn_final_url_and_caches_identity()
     assert first.final_url == expected_final
     assert first is second
     assert pdf_calls == [reference.canonical_url, expected_final]
+
+
+@pytest.mark.parametrize("mismatch", ["path", "query"])
+def test_fetch_rejects_static_cdn_final_document_identity_mismatch(mismatch: str):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+    target = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pdf_calls.append(str(request.url))
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(302, headers={"Location": target})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nwrong-static-document",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    static_url = reference.canonical_url.replace(
+        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+    )
+    target = (
+        "https://static.sse.com.cn/unrelated.pdf"
+        if mismatch == "path"
+        else f"{static_url}?download=1"
+    )
+
+    with pytest.raises(SourceProtocolError, match="final PDF URL"):
+        source.fetch(reference)
+
+    assert len(pdf_calls) == 3
+    assert pdf_calls[-2:] == [reference.canonical_url, target]
 
 
 def test_fetch_rejects_sse_static_sibling_redirect_without_requesting_it():

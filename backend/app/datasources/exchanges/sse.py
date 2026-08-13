@@ -9,7 +9,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -28,6 +28,7 @@ from app.datasources.exchanges.http import (
     ExchangeSourceDescriptor,
     SafeHttpResponse,
     SourceProtocolError,
+    _unsafe_url_path,
     create_exchange_http_client,
 )
 
@@ -407,7 +408,9 @@ class SSEAnnouncementSource(SourceAdapter):
             or "#" in candidate
             or "\\" in candidate
             or any(character.isspace() for character in candidate)
-            or parsed.scheme != "https"
+            or re.search(r"%(?![0-9A-Fa-f]{2})", candidate)
+            or _unsafe_url_path(candidate)
+            or parsed.scheme.casefold() != "https"
             or parsed.hostname != "www.sse.com.cn"
             or parsed.username is not None
             or parsed.password is not None
@@ -418,7 +421,16 @@ class SSEAnnouncementSource(SourceAdapter):
             or not parsed.path.casefold().endswith(".pdf")
         ):
             return None
-        return candidate
+        ascii_path = quote(
+            parsed.path,
+            safe="/!$&'()*+,-.:;=@_%~",
+        )
+        normalized_path = re.sub(
+            r"%[0-9A-Fa-f]{2}",
+            lambda match: match.group(0).upper(),
+            ascii_path,
+        )
+        return f"{_PDF_ORIGIN}{normalized_path}"
 
     def _rejection(
         self,
@@ -537,12 +549,16 @@ class SSEAnnouncementSource(SourceAdapter):
                 ) from None
         else:
             final = urlsplit(response.final_url)
+            canonical_path = urlsplit(reference.canonical_url).path
             if response.final_url != reference.canonical_url and not (
                 final.scheme == "https"
                 and final.hostname == "static.sse.com.cn"
                 and final.username is None
                 and final.password is None
+                and final.port in {None, 443}
+                and final.query == ""
                 and final.fragment == ""
+                and final.path == canonical_path
             ):
                 raise SourceProtocolError(
                     "SSE final PDF URL did not match reference"

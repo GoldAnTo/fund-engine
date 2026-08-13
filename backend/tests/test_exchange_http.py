@@ -94,6 +94,52 @@ def test_request_uses_exact_adapter_and_policy_url_boundary_without_network(url:
     assert url not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/%252e%252e/file.pdf",
+        "/parent%252fchild/file.pdf",
+        "/parent%255cchild/file.pdf",
+    ],
+)
+def test_request_rejects_recursively_encoded_path_before_network(path: str):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    value = transport_for(handler)
+
+    with pytest.raises(SourceProtocolError, match="URL boundary"):
+        value.request(
+            "GET", f"https://query.sse.com.cn{path}", expected="json"
+        )
+
+    assert calls == 0
+
+
+def test_request_allows_ordinary_safe_percent_encoded_path():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=b"{}",
+        )
+
+    value = transport_for(handler)
+    url = "https://query.sse.com.cn/disclosure/safe%20name.json"
+
+    response = value.request("GET", url, expected="json")
+
+    assert calls == [url]
+    assert response.final_url == url
+
+
 def test_adapter_host_scope_cannot_widen_policy():
     with pytest.raises(ValueError, match="allowed_hosts"):
         ExchangeHttpTransport(

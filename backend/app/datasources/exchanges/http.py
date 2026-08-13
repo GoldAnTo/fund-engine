@@ -151,7 +151,7 @@ def _unsafe_url_path(value: str) -> bool:
     except ValueError:
         return True
     lowered = path.casefold()
-    if "%2f" in lowered or "%5c" in lowered:
+    if "%25" in lowered or "%2f" in lowered or "%5c" in lowered:
         return True
     return any(
         segment in {".", "..", "%2e", "%2e%2e", ".%2e", "%2e."}
