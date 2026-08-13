@@ -37,6 +37,7 @@ _SEARCH_URL: Final = (
 )
 _REFERER: Final = "https://www.sse.com.cn/disclosure/listedinfo/announcement/"
 _PDF_ORIGIN: Final = "https://www.sse.com.cn"
+_PDF_MIRROR_PREFIX: Final = "https://big5.sse.com.cn/site/cht/www.sse.com.cn"
 _SHANGHAI: Final = ZoneInfo("Asia/Shanghai")
 _PAGE_SIZE: Final = 20
 _MAX_RESULTS: Final = _PAGE_SIZE * B_SCOPE_POLICY.per_adapter_page_limit
@@ -99,6 +100,23 @@ def _identity_key(reference: SourceReferenceValue) -> IdentityKey:
         reference.external_record_id,
         reference.external_version,
     )
+
+
+def _official_mirror_url(canonical_url: str) -> str:
+    parsed = urlsplit(canonical_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "www.sse.com.cn"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or not parsed.path.casefold().endswith(".pdf")
+    ):
+        raise ValueError("validated canonical SSE PDF URL required")
+    return f"{_PDF_MIRROR_PREFIX}{parsed.path}"
 
 
 class SSEAnnouncementSource(SourceAdapter):
@@ -502,18 +520,33 @@ class SSEAnnouncementSource(SourceAdapter):
             raise SourceProtocolError("SSE downloaded bytes were evicted") from None
         if len(self._fetched) >= _MAX_KNOWN_REFERENCES:
             raise SourceProtocolError("SSE fetched identity limit exceeded") from None
-        response = self._transport.request(
-            "GET", reference.canonical_url, expected="pdf"
-        )
-        final = urlsplit(response.final_url)
-        if response.final_url != reference.canonical_url and not (
-            final.scheme == "https"
-            and final.hostname == "static.sse.com.cn"
-            and final.username is None
-            and final.password is None
-            and final.fragment == ""
-        ):
-            raise SourceProtocolError("SSE final PDF URL did not match reference") from None
+        mirror_url: str | None = None
+        try:
+            response = self._transport.request(
+                "GET", reference.canonical_url, expected="pdf"
+            )
+        except SourceProtocolError as error:
+            if error.diagnostics.get("error_type") != "response_type":
+                raise
+            mirror_url = _official_mirror_url(reference.canonical_url)
+        if mirror_url is not None:
+            response = self._transport.request("GET", mirror_url, expected="pdf")
+            if response.final_url != mirror_url:
+                raise SourceProtocolError(
+                    "SSE official mirror final PDF URL did not match derived URL"
+                ) from None
+        else:
+            final = urlsplit(response.final_url)
+            if response.final_url != reference.canonical_url and not (
+                final.scheme == "https"
+                and final.hostname == "static.sse.com.cn"
+                and final.username is None
+                and final.password is None
+                and final.fragment == ""
+            ):
+                raise SourceProtocolError(
+                    "SSE final PDF URL did not match reference"
+                ) from None
         self._fetched[key] = None
         envelope = self._envelope(reference, response)
         self._cache_download(key, envelope)

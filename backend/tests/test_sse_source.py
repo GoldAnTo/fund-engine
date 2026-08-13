@@ -5,18 +5,25 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
 
 from app.acquisition.policy import B_SCOPE_POLICY
-from app.acquisition.sources import RejectedSearchItem, SourceAdapter, SourceReferenceValue
+from app.acquisition.sources import (
+    RejectedSearchItem,
+    SourceAdapter,
+    SourceReferenceValue,
+    SourceUnavailable,
+)
 from app.datasources.exchanges.http import ExchangeHttpTransport, SourceProtocolError
 from app.datasources.exchanges.sse import SSEAnnouncementSource
 
 
 FIXTURE = Path(__file__).parent / "fixtures/acquisition/sse-announcements.json"
 SEARCH_URL = "https://query.sse.com.cn/security/stock/queryCompanyBulletin.do"
+MIRROR_PREFIX = "https://big5.sse.com.cn/site/cht/www.sse.com.cn"
 
 
 def response_json(value: object) -> httpx.Response:
@@ -64,6 +71,10 @@ def fallback_id(row: dict) -> str:
         separators=(",", ":"),
     ).encode()
     return f"sse:{hashlib.sha256(material).hexdigest()[:24]}"
+
+
+def mirror_url(canonical_url: str) -> str:
+    return f"{MIRROR_PREFIX}{urlsplit(canonical_url).path}"
 
 
 def test_descriptor_and_contract_are_exact_and_do_not_widen_policy():
@@ -496,6 +507,156 @@ def test_fetch_requires_exact_tracked_reference_and_caches_duplicate_identity():
     assert first.metadata["external_record_id"] == reference.external_record_id
 
 
+def test_fetch_falls_back_from_static_html_to_exact_official_mirror_once():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        requested_url = str(request.url)
+        pdf_calls.append(requested_url)
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": requested_url.replace(
+                        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+                    )
+                },
+            )
+        if request.url.host == "static.sse.com.cn":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                content=b"<html>not a PDF</html>",
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nmirror",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    expected_mirror = mirror_url(reference.canonical_url)
+
+    envelope = source.fetch(reference)
+
+    expected_static = reference.canonical_url.replace(
+        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+    )
+    assert reference.canonical_url.startswith("https://www.sse.com.cn/")
+    assert expected_mirror == (
+        f"{MIRROR_PREFIX}{urlsplit(reference.canonical_url).path}"
+    )
+    assert urlsplit(expected_mirror).query == ""
+    assert urlsplit(expected_mirror).fragment == ""
+    assert pdf_calls == [reference.canonical_url, expected_static, expected_mirror]
+    assert envelope.final_url == expected_mirror
+    assert envelope.content == b"%PDF-1.7\nmirror"
+
+
+def test_fetch_valid_canonical_pdf_does_not_invoke_mirror():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        pdf_calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\ncanonical",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    envelope = source.fetch(reference)
+
+    assert pdf_calls == [reference.canonical_url]
+    assert envelope.final_url == reference.canonical_url
+    assert envelope.content == b"%PDF-1.7\ncanonical"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_exception", "message"),
+    [
+        ("timeout", SourceUnavailable, "timed out"),
+        ("http_status", SourceUnavailable, "unavailable"),
+        ("unsafe_redirect", SourceProtocolError, "redirect"),
+        ("unsupported_encoding", SourceProtocolError, "content encoding"),
+        ("oversized_body", SourceProtocolError, "byte limit"),
+        ("empty_body", SourceProtocolError, "empty body"),
+    ],
+)
+def test_fetch_non_response_type_failures_do_not_invoke_mirror(
+    failure: str, expected_exception: type[Exception], message: str
+):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        pdf_calls.append(str(request.url))
+        if request.url.host == "big5.sse.com.cn":
+            pytest.fail("official mirror must not be requested")
+        if failure == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if failure == "http_status":
+            return httpx.Response(503)
+        if failure == "unsafe_redirect":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://evil.static.sse.com.cn/disclosure/file.pdf"
+                },
+            )
+        if failure == "unsupported_encoding":
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "application/pdf",
+                    "Content-Encoding": "gzip",
+                },
+                stream=httpx.ByteStream(b"%PDF-1.7\nencoded"),
+            )
+        if failure == "empty_body":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/pdf"},
+                content=b"",
+            )
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Type": "application/pdf",
+                "Content-Length": str(B_SCOPE_POLICY.max_response_bytes + 1),
+            },
+            content=b"%PDF-1.7\noversized",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    with pytest.raises(expected_exception, match=message):
+        source.fetch(reference)
+
+    assert pdf_calls == [reference.canonical_url]
+
+
 def test_new_instance_restores_persisted_reference_without_search():
     fixture = json.loads(FIXTURE.read_text())
     fixture["pageHelp"]["pageCount"] = 1
@@ -519,6 +680,107 @@ def test_new_instance_restores_persisted_reference_without_search():
 
     assert recovered.fetch(reference).content == b"%PDF-1.7\nrestored"
     assert [request.method for request in calls] == ["GET"]
+
+
+def test_restored_reference_falls_back_to_official_mirror_without_search():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    original = make_source(lambda request: response_json(fixture))
+    reference = accepted(
+        original.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    calls: list[str] = []
+
+    def fetch_only(request: httpx.Request) -> httpx.Response:
+        requested_url = str(request.url)
+        calls.append(requested_url)
+        assert request.url.host != "query.sse.com.cn"
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                content=b"<html>not a PDF</html>",
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nrestored-mirror",
+        )
+
+    recovered = make_source(fetch_only)
+    recovered.restore_reference(reference)
+
+    envelope = recovered.fetch(reference)
+
+    assert calls == [reference.canonical_url, mirror_url(reference.canonical_url)]
+    assert envelope.final_url == mirror_url(reference.canonical_url)
+    assert envelope.content == b"%PDF-1.7\nrestored-mirror"
+
+
+def test_fetch_rejects_mirror_redirect_that_changes_final_path():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        requested_url = str(request.url)
+        calls.append(requested_url)
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+                content=b"<html>not a PDF</html>",
+            )
+        if requested_url == mirror_url(reference.canonical_url):
+            return httpx.Response(302, headers={"Location": "/changed.pdf"})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nwrong-path",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    with pytest.raises(SourceProtocolError, match="mirror final PDF URL"):
+        source.fetch(reference)
+
+    assert calls == [
+        reference.canonical_url,
+        mirror_url(reference.canonical_url),
+        "https://big5.sse.com.cn/changed.pdf",
+    ]
+
+
+def test_fetch_propagates_invalid_mirror_response_without_further_endpoint():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            content=b"<html>not a PDF</html>",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    with pytest.raises(SourceProtocolError, match="response type") as caught:
+        source.fetch(reference)
+
+    assert caught.value.diagnostics == {"error_type": "response_type"}
+    assert calls == [reference.canonical_url, mirror_url(reference.canonical_url)]
 
 
 @pytest.mark.parametrize(
