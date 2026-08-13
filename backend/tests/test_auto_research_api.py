@@ -448,6 +448,68 @@ def test_cancelled_run_discards_inflight_extraction_output(
         ) == 0
 
 
+def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
+    from app.api.v1.jobs import cancel_job
+    from app.models.operational import Job
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'cached-job-cancellation.db'}",
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local() as setup:
+        case = ResearchCase(
+            title="cached cancellation",
+            industry_topic="i",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        thesis = Thesis(
+            research_case_id=case.id,
+            statement="empty recall must still observe cancellation",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(thesis)
+        setup.flush()
+        repo = AutoResearchRepository(setup)
+        run = repo.create_run(
+            research_case_id=case.id,
+            max_rounds=1,
+            budget=1,
+            scope_thesis_ids=[str(thesis.id)],
+        )
+        task = repo.create_task(
+            run_id=run.id,
+            research_case_id=case.id,
+            thesis_id=thesis.id,
+            task_type="support",
+            query="no recalled statements",
+        )
+        job = repo.enqueue_run_job(run)
+        job.status = "running"
+        setup.commit()
+        run_id, task_id, job_id = run.id, task.id, job.id
+
+    with session_local() as worker:
+        run = worker.get(ResearchRun, run_id)
+        task = worker.get(ResearchTask, task_id)
+        cached_job = worker.get(Job, job_id)
+        assert run is not None and task is not None and cached_job is not None
+        assert cached_job.cancel_requested is False
+
+        with session_local() as cancelling:
+            response = cancel_job(job_id, db=cancelling)
+            assert response.cancel_requested is True
+
+        service = AutoResearchService(worker)
+        assert service._claim_task_output_slot(run, task) is False
+
+
 @pytest.mark.pg_only
 def test_postgres_extraction_failure_waits_for_cancellation_transition(
     engine, monkeypatch

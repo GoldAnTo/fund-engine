@@ -842,11 +842,13 @@ class AutoResearchService:
                 select(ResearchRun)
                 .where(ResearchRun.id == run.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
             current_task = self.session.scalar(
                 select(ResearchTask)
                 .where(ResearchTask.id == task.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
             job = self.session.scalar(
                 select(Job)
@@ -856,6 +858,7 @@ class AutoResearchService:
                 .order_by(Job.created_at.desc())
                 .limit(1)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         return bool(
             current_run is not None
