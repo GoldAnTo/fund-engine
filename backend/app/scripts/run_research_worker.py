@@ -16,6 +16,10 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 
+from app.env import load_local_env
+
+load_local_env()  # backend/.env (gitignored); exported process env still wins
+
 from app.db import SessionLocal
 from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
