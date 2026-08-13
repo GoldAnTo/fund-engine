@@ -334,6 +334,76 @@ class ResearchPreparationService:
         )
         return preparation
 
+    def start_system_step(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        *,
+        expected_version: int,
+        expected_fingerprint: str,
+    ) -> ResearchPreparation:
+        """Mark a freshly claimed worker step running under the Case lock."""
+        preparation = self._require_preparation(case_id)
+        if (
+            preparation.version != expected_version
+            or preparation.input_fingerprint != expected_fingerprint
+        ):
+            raise ConflictError("preparation job is stale")
+        # A stale worker is recovered by re-queuing its *same* Job.  The
+        # projection may still say running, so accepting that state here is
+        # the narrow, idempotent recovery path (the Job claim itself remains
+        # the concurrency authority).
+        self._require_eligible_step(preparation, step, allowed_states={"queued", "retrying", "running"})
+        setattr(preparation, _STEP_FIELDS[step], "running")
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_started",
+            step=step,
+            message="preparation system step started",
+            detail={},
+        )
+        return preparation
+
+    def reuse_existing_claim_candidates(
+        self,
+        case_id: uuid.UUID,
+        *,
+        candidate_ids: list[uuid.UUID],
+        every_candidate_reviewed: bool,
+    ) -> ResearchPreparation:
+        """Attach already-admitted candidates without re-running an LLM.
+
+        Backfill calls this immediately after ``create_for_case``.  It keeps
+        candidate ledger rows immutable and deliberately does *not* queue the
+        protocol step: a person must still advance the preparation explicitly.
+        """
+        preparation = self._require_preparation(case_id)
+        if preparation.parse_claims_state != "queued":
+            raise ConflictError("claim candidates cannot be reused for this preparation")
+        payload = {"candidates": [{"candidate_id": str(candidate_id)} for candidate_id in candidate_ids]}
+        preparation = self.complete_system_step(
+            case_id,
+            "parse_claims",
+            payload,
+            expected_version=preparation.version,
+            expected_fingerprint=preparation.input_fingerprint,
+        )
+        if every_candidate_reviewed:
+            preparation.claim_review_state = "confirmed"
+            self._set_aggregate_status(preparation)
+            preparation.updated_at = _utcnow()
+            self._repo.append_event(
+                preparation,
+                research_case_id=case_id,
+                type="preparation_claim_candidates_reused",
+                step="parse_claims",
+                message="existing reviewed claim candidates attached",
+                detail={"candidate_count": len(candidate_ids)},
+            )
+        return preparation
+
     def confirm_claims(
         self,
         case_id: uuid.UUID,
