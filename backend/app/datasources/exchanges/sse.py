@@ -53,7 +53,12 @@ _DESCRIPTOR: Final = ExchangeSourceDescriptor(
     provider_identity="Shanghai Stock Exchange",
     allowed_schemes=frozenset({"https"}),
     allowed_hosts=frozenset(
-        {"query.sse.com.cn", "www.sse.com.cn", "static.sse.com.cn"}
+        {
+            "query.sse.com.cn",
+            "www.sse.com.cn",
+            "static.sse.com.cn",
+            "big5.sse.com.cn",
+        }
     ),
     allowed_source_roles=frozenset({"company_disclosure"}),
 )

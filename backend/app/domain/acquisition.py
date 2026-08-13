@@ -9,7 +9,7 @@ from typing import Final
 from uuid import UUID
 
 
-B_SCOPE_POLICY_VERSION: Final = "b-scope-v1"
+B_SCOPE_POLICY_VERSION: Final = "b-scope-v2"
 ACQUISITION_SOURCE_ROLES: Final = frozenset(
     {"company_disclosure", "licensed_provider"}
 )

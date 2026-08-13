@@ -157,6 +157,7 @@ B_SCOPE_POLICY: Final = SourcePolicy(
             "query.sse.com.cn",
             "www.sse.com.cn",
             "static.sse.com.cn",
+            "big5.sse.com.cn",
             "www.szse.cn",
             "disc.static.szse.cn",
         }

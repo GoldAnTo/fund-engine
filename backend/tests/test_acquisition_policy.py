@@ -74,12 +74,17 @@ def test_b_scope_policy_only_enables_gildata_and_official_exchanges():
     } == B_SCOPE_POLICY.enabled_adapter_keys
 
 
+def test_b_scope_policy_version_tracks_exact_network_authority():
+    assert B_SCOPE_POLICY.version == "b-scope-v2"
+
+
 @pytest.mark.parametrize(
     "host",
     [
         "query.sse.com.cn",
         "www.sse.com.cn",
         "static.sse.com.cn",
+        "big5.sse.com.cn",
         "www.szse.cn",
         "disc.static.szse.cn",
     ],
@@ -97,6 +102,9 @@ def test_b_scope_policy_allows_only_declared_exchange_hosts(host: str):
         "evil.static.sse.com.cn",
         "notstatic.sse.com.cn",
         "static.sse.com.cn.evil.test",
+        "evil.big5.sse.com.cn",
+        "notbig5.sse.com.cn",
+        "big5.sse.com.cn.evil.test",
         "evil.szse.cn",
         "notdisc.static.szse.cn",
     ],

@@ -32,7 +32,12 @@ def make_source(handler, **kwargs: object) -> SSEAnnouncementSource:
     transport = ExchangeHttpTransport(
         client,
         allowed_hosts=frozenset(
-            {"query.sse.com.cn", "www.sse.com.cn", "static.sse.com.cn"}
+            {
+                "query.sse.com.cn",
+                "www.sse.com.cn",
+                "static.sse.com.cn",
+                "big5.sse.com.cn",
+            }
         ),
     )
     return SSEAnnouncementSource(transport=transport, **kwargs)
@@ -69,7 +74,12 @@ def test_descriptor_and_contract_are_exact_and_do_not_widen_policy():
     assert source.descriptor.provider_identity == "Shanghai Stock Exchange"
     assert source.descriptor.allowed_schemes == frozenset({"https"})
     assert source.descriptor.allowed_hosts == frozenset(
-        {"query.sse.com.cn", "www.sse.com.cn", "static.sse.com.cn"}
+        {
+            "query.sse.com.cn",
+            "www.sse.com.cn",
+            "static.sse.com.cn",
+            "big5.sse.com.cn",
+        }
     )
     assert source.descriptor.allowed_source_roles == frozenset(
         {"company_disclosure"}
