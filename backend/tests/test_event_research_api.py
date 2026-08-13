@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 import hashlib
 
+import httpx
 import pytest
 from sqlalchemy import event as sqlalchemy_event, select
 
@@ -198,16 +199,13 @@ def test_extract_event_maps_provider_setup_failure_to_safe_503(
     assert "sk-private" not in response.text
 
 
-def test_extract_event_redacts_provider_http_exception(
+def test_extract_event_redacts_provider_http_transport_exception(
     cmd_client, monkeypatch
 ) -> None:
-    from fastapi import HTTPException
-
     class HttpFailureClient:
         def chat_json(self, messages, schema_hint):
-            raise HTTPException(
-                status_code=418,
-                detail="provider HTTP failure exposed secret sk-private",
+            raise httpx.ConnectError(
+                "provider HTTP failure exposed secret sk-private"
             )
 
     monkeypatch.setattr(
@@ -230,17 +228,30 @@ def test_extract_event_redacts_provider_http_exception(
     assert "provider HTTP failure" not in response.text
 
 
-@pytest.mark.parametrize("programming_error", [AssertionError, AttributeError])
+@pytest.mark.parametrize("boundary", ["setup", "call"])
+@pytest.mark.parametrize(
+    "programming_error",
+    [TypeError, KeyError, NameError, AssertionError, AttributeError],
+)
 def test_extract_event_does_not_map_programming_errors_to_upstream_503(
-    cmd_client, monkeypatch, programming_error
+    cmd_client, monkeypatch, programming_error, boundary
 ) -> None:
-    class BrokenClient:
-        def chat_json(self, messages, schema_hint):
+    if boundary == "setup":
+        def broken_client_factory():
             raise programming_error("programming defect")
 
-    monkeypatch.setattr(
-        "app.services.event_extraction.LLMClient.from_env", BrokenClient
-    )
+        monkeypatch.setattr(
+            "app.services.event_extraction.LLMClient.from_env",
+            broken_client_factory,
+        )
+    else:
+        class BrokenClient:
+            def chat_json(self, messages, schema_hint):
+                raise programming_error("programming defect")
+
+        monkeypatch.setattr(
+            "app.services.event_extraction.LLMClient.from_env", BrokenClient
+        )
 
     response = cmd_client.post(
         "/api/v1/event-research/extract",
@@ -259,7 +270,7 @@ def test_extract_event_maps_provider_call_failure_to_safe_503(
 
     class FailingExtractionClient:
         def chat_json(self, messages, schema_hint):
-            raise ConnectionError("provider call exposed secret sk-private")
+            raise httpx.ConnectError("provider call exposed secret sk-private")
 
     monkeypatch.setattr(
         event_research_api,

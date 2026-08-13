@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.services.event_extraction import (
@@ -82,7 +83,7 @@ def test_extraction_wraps_llm_setup_failure_without_leaking_details(monkeypatch)
 def test_extraction_wraps_chat_json_failure_without_leaking_details() -> None:
     class UnavailableClient:
         def chat_json(self, messages, schema_hint):
-            raise RuntimeError("provider request exposed secret sk-private")
+            raise httpx.ConnectError("provider request exposed secret sk-private")
 
     with pytest.raises(EventExtractionProviderError) as exc_info:
         EventExtractionService(client=UnavailableClient()).extract(
@@ -92,11 +93,33 @@ def test_extraction_wraps_chat_json_failure_without_leaking_details() -> None:
 
     assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
     assert "sk-private" not in str(exc_info.value)
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
 
-@pytest.mark.parametrize("programming_error", [AssertionError, AttributeError])
-def test_extraction_does_not_wrap_programming_errors(programming_error) -> None:
+@pytest.mark.parametrize(
+    "programming_error",
+    [TypeError, KeyError, NameError, AssertionError, AttributeError],
+)
+def test_extraction_does_not_wrap_setup_programming_errors(
+    monkeypatch, programming_error
+) -> None:
+    def broken_client_factory():
+        raise programming_error("programming defect")
+
+    monkeypatch.setattr(
+        "app.services.event_extraction.LLMClient.from_env",
+        broken_client_factory,
+    )
+
+    with pytest.raises(programming_error, match="programming defect"):
+        EventExtractionService()
+
+
+@pytest.mark.parametrize(
+    "programming_error",
+    [TypeError, KeyError, NameError, AssertionError, AttributeError],
+)
+def test_extraction_does_not_wrap_call_programming_errors(programming_error) -> None:
     class BrokenClient:
         def chat_json(self, messages, schema_hint):
             raise programming_error("programming defect")

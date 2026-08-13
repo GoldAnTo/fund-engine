@@ -5,7 +5,10 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
+
+import httpx
+from openai import OpenAIError
 
 from app.ai.client import LLMClient
 
@@ -42,14 +45,13 @@ class EventExtractionService:
     """
 
     def __init__(self, client: Any | None = None) -> None:
-        if client is not None:
-            self._client = client
-            return
+        self._client = client if client is not None else self._provider_client()
+
+    @staticmethod
+    def _provider_client() -> Any:
         try:
-            self._client = LLMClient.from_env()
-        except (AssertionError, AttributeError):
-            raise
-        except Exception as exc:
+            return LLMClient.from_env()
+        except (RuntimeError, ValueError, OpenAIError, httpx.HTTPError) as exc:
             raise EventExtractionProviderError(
                 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
             ) from exc
@@ -63,13 +65,8 @@ class EventExtractionService:
         market_reaction = _supported_text(result.get("market_reaction"), raw_input)
         summary = _supported_text(result.get("summary"), raw_input)
         event_at = _supported_datetime(result.get("event_at"), raw_input)
-        try:
-            question = _question(result.get("research_question"))
-            factors = _factors(result.get("candidate_factors"))
-        except ValueError as exc:
-            raise EventExtractionProviderError(
-                EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
-            ) from exc
+        question = _question(result.get("research_question"))
+        factors = _factors(result.get("candidate_factors"))
         return EventExtraction(
             event_title=title,
             company_name=company_name,
@@ -98,21 +95,21 @@ class EventExtractionService:
                 ),
             },
         ]
+        return self._provider_result(messages)
+
+    def _provider_result(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         try:
             result = self._client.chat_json(
                 messages, schema_hint="event_research_extract"
             )
-        except (AssertionError, AttributeError):
-            raise
-        except Exception as exc:
+        except (OpenAIError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             raise EventExtractionProviderError(
                 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
             ) from exc
         if not isinstance(result, dict):
-            exc = ValueError("event extraction response must be a JSON object")
-            raise EventExtractionProviderError(
-                EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
-            ) from exc
+            _invalid_provider_response(
+                "event extraction response must be a JSON object"
+            )
         return result
 
 
@@ -162,26 +159,33 @@ def _fallback_title(raw_input: str) -> str:
     return first_sentence[:120]
 
 
+def _invalid_provider_response(detail: str) -> NoReturn:
+    exc = ValueError(detail)
+    raise EventExtractionProviderError(
+        EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
+    ) from exc
+
+
 def _question(value: object) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
-    raise ValueError(
+    _invalid_provider_response(
         "event extraction response requires a non-empty research_question"
     )
 
 
 def _factors(value: object) -> tuple[str, ...]:
     if not isinstance(value, list) or not 3 <= len(value) <= 5:
-        raise ValueError(
+        _invalid_provider_response(
             "event extraction response requires 3 to 5 unique candidate_factors"
         )
     if any(not isinstance(item, str) or not item.strip() for item in value):
-        raise ValueError(
+        _invalid_provider_response(
             "event extraction candidate_factors must be non-empty strings"
         )
     clean = [item.strip() for item in value]
     if len({_normalise(item) for item in clean}) != len(clean):
-        raise ValueError(
+        _invalid_provider_response(
             "event extraction candidate_factors must be unique after normalization"
         )
     return tuple(clean)
