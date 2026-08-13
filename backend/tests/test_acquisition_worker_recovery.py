@@ -227,6 +227,7 @@ def test_obsolete_or_mismatched_policy_claim_fails_closed_before_adapter_work(
     assert persisted is not None
     assert (persisted.status, persisted.stage) == ("failed", "failed")
     assert persisted.error_code == "unsupported_source_policy_version"
+    assert persisted.exception_count == 1
     assert exception is not None
     assert exception.reason_code == "unsupported_source_policy_version"
     assert exception.detail_json == {

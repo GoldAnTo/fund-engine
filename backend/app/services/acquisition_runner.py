@@ -353,11 +353,17 @@ class AcquisitionRunner:
                         "active_policy_version": B_SCOPE_POLICY.version,
                     },
                 )
+                exception_count = session.scalar(
+                    select(func.count()).select_from(AcquisitionException).where(
+                        AcquisitionException.job_id == claim.job_id
+                    )
+                ) or 0
                 repository.advance(
                     claim.job_id,
                     lease_token=claim.lease_token,
                     stage="failed",
                     status="failed",
+                    counters={"exception_count": exception_count},
                     message="acquisition source policy version is unsupported",
                     error_code="unsupported_source_policy_version",
                 )
