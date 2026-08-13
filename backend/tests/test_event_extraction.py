@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.event_extraction import EventExtractionService
+from app.services.event_extraction import (
+    EventExtractionProviderError,
+    EventExtractionService,
+)
+
+
+PROVIDER_ERROR_MESSAGE = (
+    "event extraction LLM is unavailable or returned an invalid response"
+)
 
 
 class ValidExtractionClient:
@@ -54,26 +62,47 @@ def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input()
     assert result.research_question == "为什么下跌？"
 
 
-def test_extraction_propagates_llm_setup_failure(monkeypatch) -> None:
+def test_extraction_wraps_llm_setup_failure_without_leaking_details(monkeypatch) -> None:
     def unavailable_client():
-        raise RuntimeError("local proxy is unavailable")
+        raise RuntimeError("local proxy exposed secret sk-private")
 
     monkeypatch.setattr(
         "app.services.event_extraction.LLMClient.from_env",
         unavailable_client,
     )
 
-    with pytest.raises(RuntimeError, match="local proxy is unavailable"):
+    with pytest.raises(EventExtractionProviderError) as exc_info:
         EventExtractionService()
 
+    assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
+    assert "sk-private" not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
-def test_extraction_propagates_chat_json_failure() -> None:
+
+def test_extraction_wraps_chat_json_failure_without_leaking_details() -> None:
     class UnavailableClient:
         def chat_json(self, messages, schema_hint):
-            raise RuntimeError("provider request failed")
+            raise RuntimeError("provider request exposed secret sk-private")
 
-    with pytest.raises(RuntimeError, match="provider request failed"):
+    with pytest.raises(EventExtractionProviderError) as exc_info:
         EventExtractionService(client=UnavailableClient()).extract(
+            raw_input="公司披露新的经营数据，等待人工核验。",
+            source_url=None,
+        )
+
+    assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
+    assert "sk-private" not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("programming_error", [AssertionError, AttributeError])
+def test_extraction_does_not_wrap_programming_errors(programming_error) -> None:
+    class BrokenClient:
+        def chat_json(self, messages, schema_hint):
+            raise programming_error("programming defect")
+
+    with pytest.raises(programming_error, match="programming defect"):
+        EventExtractionService(client=BrokenClient()).extract(
             raw_input="公司披露新的经营数据，等待人工核验。",
             source_url=None,
         )
@@ -119,8 +148,80 @@ def test_extraction_rejects_malformed_provider_results(
         def chat_json(self, messages, schema_hint):
             return provider_result
 
-    with pytest.raises(ValueError, match=error_message):
+    with pytest.raises(EventExtractionProviderError) as exc_info:
         EventExtractionService(client=MalformedClient()).extract(
             raw_input="公司披露新的经营数据，等待人工核验。",
             source_url=None,
         )
+
+    assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert error_message in str(exc_info.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    "candidate_factors",
+    [
+        ["因素一", "因素二"],
+        ["因素一", "因素二", "因素三", "因素四", "因素五", "因素六"],
+        ["因素一", "因素二", "因素三", 4],
+        ["因素一", "因素二", "因素三", "   "],
+        ["因素一", "因素 二", "因素二"],
+        ["因素一", "因素二", "因素三", "因素四", "因素五", "因素 五"],
+    ],
+)
+def test_extraction_rejects_any_invalid_raw_candidate_factor_list(
+    candidate_factors,
+) -> None:
+    class InvalidFactorsClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "research_question": "哪些因素需要验证？",
+                "candidate_factors": candidate_factors,
+            }
+
+    with pytest.raises(EventExtractionProviderError) as exc_info:
+        EventExtractionService(client=InvalidFactorsClient()).extract(
+            raw_input="公司披露新的经营数据，等待人工核验。",
+            source_url=None,
+        )
+
+    assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
+
+
+def test_extraction_rejects_ticker_and_date_that_only_match_inside_larger_tokens() -> None:
+    class BoundaryViolatingClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "ticker": "A",
+                "event_at": "2024-01-01",
+                "research_question": "哪些因素需要验证？",
+                "candidate_factors": ["因素一", "因素二", "因素三"],
+            }
+
+    result = EventExtractionService(client=BoundaryViolatingClient()).extract(
+        raw_input="Company announced on 2024-01-010",
+        source_url=None,
+    )
+
+    assert result.ticker is None
+    assert result.event_at is None
+
+
+def test_extraction_keeps_boundary_delimited_ticker_and_date() -> None:
+    class SupportedClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "ticker": "A",
+                "event_at": "2024-01-01",
+                "research_question": "哪些因素需要验证？",
+                "candidate_factors": ["因素一", "因素二", "因素三"],
+            }
+
+    result = EventExtractionService(client=SupportedClient()).extract(
+        raw_input="Company (A) announced on 2024-01-01.",
+        source_url=None,
+    )
+
+    assert result.ticker == "A"
+    assert result.event_at is not None

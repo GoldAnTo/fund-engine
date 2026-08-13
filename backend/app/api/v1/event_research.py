@@ -43,7 +43,10 @@ from app.schemas.v1.event_research import (
     UpdateEventResearchScopeResponse,
 )
 from app.queries.event_research import EventResearchQueries
-from app.services.event_extraction import EventExtractionService
+from app.services.event_extraction import (
+    EventExtractionProviderError,
+    EventExtractionService,
+)
 from app.services.event_research import EventResearchService
 from app.services.document_uploads import DocumentUploadService
 from app.services.source_governance import SourceGovernanceService
@@ -294,7 +297,7 @@ def extract_event(
         extracted = EventExtractionService().extract(
             raw_input=payload.raw_input, source_url=payload.source_url
         )
-    except Exception as exc:
+    except EventExtractionProviderError as exc:
         raise UpstreamUnavailableError(
             "event extraction LLM is unavailable or returned an invalid response"
         ) from exc

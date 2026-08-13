@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 import hashlib
 
+import pytest
 from sqlalchemy import event as sqlalchemy_event, select
 
 from app.models.event_research import (
@@ -175,14 +176,11 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
 def test_extract_event_maps_provider_setup_failure_to_safe_503(
     cmd_client, monkeypatch
 ) -> None:
-    from app.api.v1 import event_research as event_research_api
-
-    class SetupFailureService:
-        def __init__(self):
-            raise RuntimeError("provider setup failed with secret sk-private")
-
     monkeypatch.setattr(
-        event_research_api, "EventExtractionService", SetupFailureService
+        "app.services.event_extraction.LLMClient.from_env",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("provider setup failed with secret sk-private")
+        ),
     )
 
     response = cmd_client.post(
@@ -200,22 +198,20 @@ def test_extract_event_maps_provider_setup_failure_to_safe_503(
     assert "sk-private" not in response.text
 
 
-def test_extract_event_redacts_provider_setup_http_exception(
+def test_extract_event_redacts_provider_http_exception(
     cmd_client, monkeypatch
 ) -> None:
     from fastapi import HTTPException
 
-    from app.api.v1 import event_research as event_research_api
-
-    class HttpSetupFailureService:
-        def __init__(self):
+    class HttpFailureClient:
+        def chat_json(self, messages, schema_hint):
             raise HTTPException(
                 status_code=418,
                 detail="provider HTTP failure exposed secret sk-private",
             )
 
     monkeypatch.setattr(
-        event_research_api, "EventExtractionService", HttpSetupFailureService
+        "app.services.event_extraction.LLMClient.from_env", HttpFailureClient
     )
 
     response = cmd_client.post(
@@ -232,6 +228,27 @@ def test_extract_event_redacts_provider_setup_http_exception(
     )
     assert "sk-private" not in response.text
     assert "provider HTTP failure" not in response.text
+
+
+@pytest.mark.parametrize("programming_error", [AssertionError, AttributeError])
+def test_extract_event_does_not_map_programming_errors_to_upstream_503(
+    cmd_client, monkeypatch, programming_error
+) -> None:
+    class BrokenClient:
+        def chat_json(self, messages, schema_hint):
+            raise programming_error("programming defect")
+
+    monkeypatch.setattr(
+        "app.services.event_extraction.LLMClient.from_env", BrokenClient
+    )
+
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 500
+    assert "upstream_unavailable" not in response.text
 
 
 def test_extract_event_maps_provider_call_failure_to_safe_503(
