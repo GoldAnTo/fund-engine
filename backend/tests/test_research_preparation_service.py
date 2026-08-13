@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+import app.repositories.research_preparation as preparation_repository_module
 from app.errors import ConflictError
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.models.ledger import (
@@ -269,12 +270,14 @@ def test_artifact_replacement_keeps_one_current_and_supersedes_predecessor(sessi
 
     first = repository.append_artifact(
         preparation,
+        research_case_id=case.id,
         kind="atomic_claim_candidates",
         input_fingerprint=preparation.input_fingerprint,
         payload={"candidates": []},
     )
     second = repository.append_artifact(
         preparation,
+        research_case_id=case.id,
         kind="atomic_claim_candidates",
         input_fingerprint=preparation.input_fingerprint,
         payload={"candidates": [{"candidate_id": str(uuid.uuid4())}]},
@@ -295,6 +298,48 @@ def test_artifact_replacement_keeps_one_current_and_supersedes_predecessor(sessi
         (second.id, "current"),
     ]
     assert len([artifact for artifact in artifacts if artifact.state == "current"]) == 1
+
+
+def test_direct_repository_mutators_lock_case_before_preparation_write(session, monkeypatch) -> None:
+    case = _case(session)
+    preparation = _service(session).create_for_case(
+        case.id, input_fingerprint="p" * 64, actor="tester"
+    )
+    repository = ResearchPreparationRepository(session)
+    lock_calls: list[uuid.UUID] = []
+    original_lock = preparation_repository_module.lock_event_scope_case
+
+    def observe_case_lock(db_session, case_id):
+        lock_calls.append(case_id)
+        return original_lock(db_session, case_id)
+
+    monkeypatch.setattr(preparation_repository_module, "lock_event_scope_case", observe_case_lock)
+
+    artifact = repository.append_artifact(
+        preparation,
+        research_case_id=case.id,
+        kind="atomic_claim_candidates",
+        input_fingerprint=preparation.input_fingerprint,
+        payload={"candidates": []},
+    )
+    event = repository.append_event(
+        preparation,
+        research_case_id=case.id,
+        type="repository_direct_write",
+        step="parse_claims",
+        message="direct repository write",
+        detail={},
+    )
+    job = repository.queue_step_job(
+        preparation,
+        research_case_id=case.id,
+        step="parse_claims",
+    )
+
+    assert lock_calls == [case.id, case.id, case.id]
+    assert artifact.research_preparation_id == preparation.id
+    assert event.research_preparation_id == preparation.id
+    assert job.target_id == preparation.id
 
 
 def test_parse_completion_opens_only_claim_review_and_rejects_early_protocol(session) -> None:

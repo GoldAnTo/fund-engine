@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import ArtifactKind, PreparationStep
+from app.errors import ConflictError, NotFoundError
 from app.models.operational import Job
 from app.models.research_preparation import (
     ResearchPreparation,
@@ -29,7 +30,8 @@ class ResearchPreparationRepository:
 
     def lock_for_case(self, case_id: uuid.UUID) -> ResearchPreparation | None:
         """Lock the stable Case row before reading the preparation projection."""
-        lock_event_scope_case(self._session, case_id)
+        if lock_event_scope_case(self._session, case_id) is None:
+            raise NotFoundError(f"research case {case_id} not found")
         return self._session.scalar(
             select(ResearchPreparation)
             .where(ResearchPreparation.research_case_id == case_id)
@@ -37,22 +39,38 @@ class ResearchPreparationRepository:
             .execution_options(populate_existing=True)
         )
 
+    def _lock_case_then_preparation(
+        self, research_case_id: uuid.UUID, preparation_id: uuid.UUID
+    ) -> ResearchPreparation:
+        """Take the stable Case lock before mutating its preparation row."""
+        case = lock_event_scope_case(self._session, research_case_id)
+        if case is None:
+            raise ConflictError(f"research case {research_case_id} not found")
+        preparation = self._session.scalar(
+            select(ResearchPreparation)
+            .where(
+                ResearchPreparation.id == preparation_id,
+                ResearchPreparation.research_case_id == research_case_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if preparation is None:
+            raise ConflictError("preparation does not belong to research case")
+        return preparation
+
     def append_event(
         self,
         preparation: ResearchPreparation,
         *,
+        research_case_id: uuid.UUID,
         type: str,
         step: str | None,
         message: str | None,
         detail: dict[str, object],
     ) -> ResearchPreparationEvent:
-        # The preparation row is the per-case serialization point.  Re-lock it
-        # here so direct repository callers keep the append-only sequence safe.
-        self._session.scalar(
-            select(ResearchPreparation)
-            .where(ResearchPreparation.id == preparation.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        preparation = self._lock_case_then_preparation(
+            research_case_id, preparation.id
         )
         last_seq = self._session.scalar(
             select(func.max(ResearchPreparationEvent.seq)).where(
@@ -87,10 +105,14 @@ class ResearchPreparationRepository:
         self,
         preparation: ResearchPreparation,
         *,
+        research_case_id: uuid.UUID,
         kind: ArtifactKind,
         input_fingerprint: str,
         payload: dict[str, object],
     ) -> ResearchPreparationArtifact:
+        preparation = self._lock_case_then_preparation(
+            research_case_id, preparation.id
+        )
         current = self._session.scalar(
             select(ResearchPreparationArtifact)
             .where(
@@ -124,8 +146,15 @@ class ResearchPreparationRepository:
         return artifact
 
     def queue_step_job(
-        self, preparation: ResearchPreparation, step: PreparationStep
+        self,
+        preparation: ResearchPreparation,
+        *,
+        research_case_id: uuid.UUID,
+        step: PreparationStep,
     ) -> Job:
+        preparation = self._lock_case_then_preparation(
+            research_case_id, preparation.id
+        )
         correlation_id = f"{preparation.id}:{preparation.version}:{step}"
         active = self._session.scalar(
             select(Job)

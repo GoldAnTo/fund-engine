@@ -17,7 +17,6 @@ from app.models.research_preparation import (
 )
 from app.repositories.research_preparation import ResearchPreparationRepository
 from app.services.atomic_claims import AtomicClaimService
-from app.services.event_research_scope_evidence import lock_event_scope_case
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,12 +91,15 @@ class ResearchPreparationService:
             self._session.flush()
             self._repo.append_event(
                 preparation,
+                research_case_id=case_id,
                 type="preparation_created",
                 step=None,
                 message="research preparation created",
                 detail={"actor": actor},
             )
-            self._repo.queue_step_job(preparation, "parse_claims")
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="parse_claims"
+            )
             return preparation
         if preparation.input_fingerprint == input_fingerprint:
             return preparation
@@ -117,12 +119,15 @@ class ResearchPreparationService:
         preparation.updated_at = _utcnow()
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_inputs_replaced",
             step=None,
             message="research preparation inputs replaced",
             detail={"actor": actor, "version": preparation.version},
         )
-        self._repo.queue_step_job(preparation, "parse_claims")
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="parse_claims"
+        )
         return preparation
 
     def complete_system_step(
@@ -144,6 +149,7 @@ class ResearchPreparationService:
         ):
             self._repo.append_event(
                 preparation,
+                research_case_id=case_id,
                 type="preparation_output_discarded",
                 step=step,
                 message="stale preparation output discarded",
@@ -153,6 +159,7 @@ class ResearchPreparationService:
         self._require_eligible_step(preparation, step, allowed_states={"queued", "running", "retrying"})
         artifact = self._repo.append_artifact(
             preparation,
+            research_case_id=case_id,
             kind=_STEP_ARTIFACTS[step],
             input_fingerprint=preparation.input_fingerprint,
             payload=payload,
@@ -170,6 +177,7 @@ class ResearchPreparationService:
         preparation.updated_at = _utcnow()
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_step_completed",
             step=step,
             message="preparation system step completed",
@@ -200,6 +208,7 @@ class ResearchPreparationService:
         preparation.updated_at = _utcnow()
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_step_failed",
             step=step,
             message="preparation system step failed",
@@ -243,9 +252,12 @@ class ResearchPreparationService:
             self._invalidate_downstream(preparation, reason="claim_decisions_changed")
         self._set_aggregate_status(preparation)
         preparation.updated_at = _utcnow()
-        self._repo.queue_step_job(preparation, "draft_protocol")
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_protocol"
+        )
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_claims_confirmed",
             step="parse_claims",
             message="claim review confirmed",
@@ -275,9 +287,12 @@ class ResearchPreparationService:
         preparation.protocol_review_state = "confirmed"
         self._set_aggregate_status(preparation)
         preparation.updated_at = _utcnow()
-        self._repo.queue_step_job(preparation, "draft_evidence_plan")
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_evidence_plan"
+        )
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_protocol_confirmed",
             step="draft_protocol",
             message="protocol review confirmed",
@@ -305,9 +320,12 @@ class ResearchPreparationService:
         preparation.last_error_code = None
         preparation.status = "preparing"
         preparation.updated_at = _utcnow()
-        self._repo.queue_step_job(preparation, failed_step)
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step=failed_step
+        )
         self._repo.append_event(
             preparation,
+            research_case_id=case_id,
             type="preparation_step_retried",
             step=failed_step,
             message="preparation step requeued",
@@ -316,9 +334,6 @@ class ResearchPreparationService:
         return preparation
 
     def _lock(self, case_id: uuid.UUID) -> ResearchPreparation | None:
-        case = lock_event_scope_case(self._session, case_id)
-        if case is None:
-            raise NotFoundError(f"research case {case_id} not found")
         return self._repo.lock_for_case(case_id)
 
     def _require_preparation(self, case_id: uuid.UUID) -> ResearchPreparation:
