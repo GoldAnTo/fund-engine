@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import func, select
 
 ZERO_UUID = "00000000-0000-0000-0000-000000000000"
@@ -66,6 +67,40 @@ def test_extract_creates_review_gated_candidates_and_airun(cmd_client, cmd_seede
 def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/documents/{ZERO_UUID}/extract")
     assert resp.status_code == 404
+
+
+def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    from sqlalchemy.orm import Session
+
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun
+
+    version = _new_pending_version(cmd_seeded)
+    version_id = version.id
+
+    def fail_provider(*_args, **_kwargs):
+        raise RuntimeError("provider failed with secret-token")
+
+    monkeypatch.setattr(LLMClient, "chat_json", fail_provider)
+
+    response = cmd_client.post(f"/api/v1/documents/{version_id}/extract")
+    assert response.status_code == 500
+    assert "secret-token" not in response.text
+    cmd_seeded.rollback()
+
+    with Session(cmd_seeded.get_bind()) as check:
+        failed_run = check.scalar(
+            select(AIRun)
+            .where(AIRun.kind == "extract", AIRun.status == "failed")
+            .where(
+                AIRun.input_ref["document_version_id"].as_string()
+                == str(version_id)
+            )
+        )
+        assert failed_run is not None
+        assert "provider failed" in failed_run.error
 
 
 def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd_client, cmd_seeded):
@@ -283,6 +318,49 @@ def test_propose_creates_links_landing_in_review_queue(cmd_client, cmd_seeded):
 def test_propose_unknown_thesis_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/theses/{ZERO_UUID}/propose")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("provider_error", [RuntimeError, ValueError])
+def test_propose_provider_failure_keeps_failed_airun_and_failed_job(
+    cmd_client, cmd_seeded, monkeypatch, provider_error
+):
+    from sqlalchemy.orm import Session
+
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun, Thesis
+    from app.models.operational import Job
+
+    thesis = cmd_seeded.scalars(select(Thesis)).first()
+    thesis_id = thesis.id
+
+    def fail_provider(*_args, **_kwargs):
+        raise provider_error("provider failed with secret-token")
+
+    monkeypatch.setattr(LLMClient, "chat_json", fail_provider)
+
+    response = cmd_client.post(f"/api/v1/theses/{thesis_id}/propose")
+    assert response.status_code == 500
+    assert "secret-token" not in response.text
+    cmd_seeded.rollback()
+
+    with Session(cmd_seeded.get_bind()) as check:
+        failed_run = check.scalar(
+            select(AIRun)
+            .where(AIRun.kind == "propose", AIRun.status == "failed")
+            .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis_id))
+        )
+        assert failed_run is not None
+        assert "provider failed" in failed_run.error
+
+        job = check.scalar(
+            select(Job)
+            .where(Job.kind == "propose", Job.target_id == thesis_id)
+            .order_by(Job.created_at.desc())
+        )
+        assert job is not None
+        assert job.status == "failed"
+        assert job.error == "provider execution failed"
+        assert "secret-token" not in job.error
 
 
 def test_rerun_compliance_refusal_returns_422_and_keeps_audit(

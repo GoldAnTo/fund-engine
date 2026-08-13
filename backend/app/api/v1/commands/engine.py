@@ -208,10 +208,13 @@ def propose_evidence(
     jobs.start(job, step="recalling statements")
     try:
         proposal_ids = EvidenceProposer(client).propose(thesis_id, db)
-    except ValueError as exc:
-        jobs.finish(job, status="failed", error=str(exc))
+    except Exception:
+        # EvidenceProposer records the provider detail on its failed AIRun.
+        # Keep the operational Job safe for broad UI exposure while
+        # committing both failure records before the 500 boundary unwinds.
+        jobs.finish(job, status="failed", error="provider execution failed")
         commit_or_rollback(db)
-        raise NotFoundError(str(exc)) from exc
+        raise
     jobs.progress(job, step="proposed", progress=100)
     jobs.finish(job, status="succeeded", step="proposed")
     commit_or_rollback(db)
@@ -273,7 +276,13 @@ def extract_statements(
         commit_or_rollback(db)
         raise ValidationFailedError(message)
     client = LLMClient.from_env()
-    candidates = StatementExtractor(client).extract(document_version_id, db)
+    try:
+        candidates = StatementExtractor(client).extract(document_version_id, db)
+    except Exception:
+        # StatementExtractor appends the failed AIRun in the post-provider
+        # transaction; preserve it before the request unwinds to a generic 500.
+        commit_or_rollback(db)
+        raise
     commit_or_rollback(db)
     # Honest reason when no statements were produced — distinguishes
     # "nothing to extract" from "LLM refused / blank input".

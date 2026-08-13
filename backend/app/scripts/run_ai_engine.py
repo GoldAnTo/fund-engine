@@ -122,7 +122,13 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
         versions = _pending_versions(session, case.id)
         total_statements = 0
         for version in versions:
-            statements = extractor.extract(version.id, session)
+            try:
+                statements = extractor.extract(version.id, session)
+            except Exception:
+                # The extractor owns the failed AIRun in the current
+                # post-provider transaction. Preserve it, then fail closed.
+                session.commit()
+                raise
             total_statements += len(statements)
         session.commit()
         print(
@@ -140,7 +146,13 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     )
     total_links = 0
     for thesis in theses:
-        links = proposer.propose(thesis.id, session)
+        try:
+            links = proposer.propose(thesis.id, session)
+        except Exception:
+            # Do not let process teardown roll back the proposer-owned failed
+            # AIRun, and never continue into assessment after this failure.
+            session.commit()
+            raise
         total_links += len(links)
     session.commit()  # persist proposals before the assess loop
     print(f"[propose] {total_links} evidence links for {len(theses)} theses")

@@ -207,6 +207,133 @@ def test_start_and_get_run(session):
     assert job.status == "queued"
 
 
+def test_extraction_provider_failure_after_success_counts_both_attempts_and_stops(
+    session, monkeypatch
+):
+    from app.ai.client import LLMClient
+
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="provider failure",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="订单增长将改善收入",
+        created_by="u",
+        created_at=now,
+    )
+    first_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/provider-success",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    failed_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/provider-failure",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    session.add_all([thesis, first_document, failed_document])
+    session.flush()
+    session.add_all(
+        [
+            SourceSpan(
+                document_version_id=first_document.id,
+                locator={"page": 1},
+                verbatim_text=(
+                    "Management described sustained accelerator demand and "
+                    "a longer order backlog in the latest operating update."
+                ),
+            ),
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=first_document.id,
+                linked_at=now,
+            ),
+            SourceSpan(
+                document_version_id=failed_document.id,
+                locator={"page": 1},
+                verbatim_text=(
+                    "The second operating update contains another narrative "
+                    "source that requires provider extraction."
+                ),
+            ),
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=failed_document.id,
+                linked_at=now,
+            ),
+        ]
+    )
+    session.commit()
+
+    client = LLMClient(model_version="provider-test", mock=True)
+    service = AutoResearchService(session)
+    service._client = client
+    run = service.start(case.id, max_rounds=1, budget=10)
+    run_id = run.id
+
+    provider_calls = 0
+
+    def fail_second_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return {"statements": []}
+        raise RuntimeError("provider transport failed")
+
+    monkeypatch.setattr(client, "chat_json", fail_second_provider_call)
+
+    service.execute(run)
+    session.rollback()
+
+    with Session(session.get_bind()) as check:
+        persisted_run = check.get(ResearchRun, run_id)
+        assert persisted_run is not None
+        assert persisted_run.status == "failed"
+        assert persisted_run.stage == "failed"
+        assert persisted_run.stop_reason == "task_failed"
+        assert persisted_run.budget_used == 2
+
+        ai_runs = list(
+            check.scalars(select(AIRun).order_by(AIRun.started_at, AIRun.id))
+        )
+        assert [(item.kind, item.status) for item in ai_runs] == [
+            ("extract", "success"),
+            ("extract", "failed"),
+        ]
+        assert check.scalar(select(func.count()).select_from(Proposal)) == 0
+        assert check.scalar(select(func.count()).select_from(AIAssessment)) == 0
+        assert all(
+            task.status == "queued"
+            for task in check.scalars(
+                select(ResearchTask).where(ResearchTask.run_id == run_id)
+            )
+        )
+        failed_events = list(
+            check.scalars(
+                select(ResearchRunEvent)
+                .where(ResearchRunEvent.run_id == run_id)
+                .where(ResearchRunEvent.stage == "failed")
+                .where(ResearchRunEvent.status == "failed")
+            )
+        )
+        assert len(failed_events) == 1
+        assert failed_events[0].payload_json == {
+            "status": "failed",
+            "stop_reason": "task_failed",
+            "budget_used": 2,
+        }
+
+
 def test_tasks_created(session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     session.add(case); session.flush()

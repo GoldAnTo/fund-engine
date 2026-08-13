@@ -390,6 +390,7 @@ class AutoResearchService:
         used = run.budget_used or 0
         previous = self._run_evidence_count(run)
         failed = False
+        extraction_failed = False
         allowed_source_types = self._run_allowed_source_types(run)
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
@@ -420,9 +421,32 @@ class AutoResearchService:
                     StatementExtractor(self.client).extract(version.id, self.session)
                 except ComplianceRefusedError:
                     used += 1
+                    if self._is_cancelled(run):
+                        self.session.rollback()
+                        break
+                    extraction_failed = True
+                    failed = True
                 except Exception:
                     used += 1
+                    if self._is_cancelled(run):
+                        self.session.rollback()
+                        break
+                    extraction_failed = True
+                    failed = True
+                else:
+                    used += 1
+                if extraction_failed:
+                    self.repo.update_run(
+                        run,
+                        status="failed",
+                        stage="failed",
+                        budget_used=used,
+                        stop_reason="task_failed",
+                    )
+                    break
                 self.session.commit()
+            if extraction_failed or run.status == "cancelled":
+                break
             pending_claims = self._pending_atomic_claims(
                 run.research_case_id,
                 allowed_source_types=allowed_source_types,
@@ -568,6 +592,12 @@ class AutoResearchService:
             },
         )
         self.session.flush()
+        if extraction_failed:
+            # StatementExtractor owns creation of the failed AIRun.  Commit
+            # that audit together with the terminal run and completion event
+            # before returning to the worker, which records Job completion in
+            # its following transaction.
+            self.session.commit()
 
     def refresh_event_lifecycle(self, run) -> None:
         """Project one terminal event-run into its next user-facing state.

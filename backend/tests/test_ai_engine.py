@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
@@ -31,6 +32,7 @@ from app.models.ledger import (
     SourceStatement,
     ValidationError,
 )
+from app.scripts.run_ai_engine import run_engine
 from app.services.research_protocol import ResearchabilityResult
 from app.repositories.research import ResearchRepository
 from tests.protocol_provenance import seed_protocol_footprint
@@ -634,6 +636,56 @@ def test_ai_run_records_failure_on_extraction_error(session, span):
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
 
 
+def test_cli_extract_failure_commits_airun_and_stops_before_propose(
+    session, research_case, document_service
+):
+    version = document_service.freeze(
+        raw=b"provider failure source",
+        source_url="https://example.test/cli-extract-failure",
+    )
+    document_service.attach_to_case(
+        research_case_id=research_case.id,
+        document_version_id=version.id,
+    )
+    document_service.add_span(
+        document_version_id=version.id,
+        locator={"page": 1},
+        verbatim_text=(
+            "Management described sustained accelerator demand and a longer "
+            "order backlog in the latest operating update."
+        ),
+    )
+    version_id = version.id
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with (
+        patch("app.scripts.run_ai_engine.LLMClient.from_env", return_value=client),
+        patch.object(
+            client,
+            "chat_json",
+            side_effect=RuntimeError("extract provider failed"),
+        ),
+        patch("app.scripts.run_ai_engine.EvidenceProposer.propose") as propose,
+        patch("app.scripts.run_ai_engine.AssessmentGenerator.generate") as assess,
+        pytest.raises(RuntimeError, match="extract provider failed"),
+    ):
+        run_engine(session, research_case)
+
+    propose.assert_not_called()
+    assess.assert_not_called()
+    session.rollback()
+    with Session(session.get_bind()) as check:
+        run = check.scalar(
+            select(AIRun)
+            .where(AIRun.kind == "extract", AIRun.status == "failed")
+            .where(
+                AIRun.input_ref["document_version_id"].as_string()
+                == str(version_id)
+            )
+        )
+        assert run is not None
+
+
 def test_ai_run_records_failure_on_proposal_error(
     session, document_service, research_service, thesis, document
 ):
@@ -661,6 +713,46 @@ def test_ai_run_records_failure_on_proposal_error(
     assert "LLM error" in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == PROPOSE_PROMPT_VERSION
+
+
+def test_cli_propose_failure_commits_airun_and_stops_before_assess(
+    session, document_service, research_service, research_case, thesis, document
+):
+    span = document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="GPU demand is expected to grow with accelerator orders.",
+    )
+    research_service.add_statement(
+        span.id,
+        "GPU demand is expected to grow with accelerator orders.",
+        kind="research_opinion",
+    )
+    session.commit()
+    thesis_id = thesis.id
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with (
+        patch("app.scripts.run_ai_engine.LLMClient.from_env", return_value=client),
+        patch.object(
+            client,
+            "chat_json",
+            side_effect=RuntimeError("propose provider failed"),
+        ),
+        patch("app.scripts.run_ai_engine.AssessmentGenerator.generate") as assess,
+        pytest.raises(RuntimeError, match="propose provider failed"),
+    ):
+        run_engine(session, research_case, skip_extract=True)
+
+    assess.assert_not_called()
+    session.rollback()
+    with Session(session.get_bind()) as check:
+        run = check.scalar(
+            select(AIRun)
+            .where(AIRun.kind == "propose", AIRun.status == "failed")
+            .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis_id))
+        )
+        assert run is not None
 
 
 def test_ai_run_records_failure_on_assessment_error(
