@@ -206,6 +206,7 @@ class ResearchPreparationService:
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = _utcnow()
+        self._set_aggregate_status(preparation)
         self._repo.append_event(
             preparation,
             research_case_id=case_id,

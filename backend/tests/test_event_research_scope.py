@@ -218,6 +218,118 @@ def _complete_preparation_drafts(session, case_id: uuid.UUID) -> ResearchPrepara
     return preparation
 
 
+def _complete_preparation_parse(session, case_id: uuid.UUID) -> ResearchPreparation:
+    preparation = session.scalar(
+        select(ResearchPreparation).where(
+            ResearchPreparation.research_case_id == case_id
+        )
+    )
+    assert preparation is not None
+    span = session.scalar(
+        select(SourceSpan)
+        .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
+        .join(
+            CaseDocumentVersion,
+            CaseDocumentVersion.document_version_id == DocumentVersion.id,
+        )
+        .where(CaseDocumentVersion.research_case_id == case_id)
+    )
+    assert span is not None
+    candidate = AtomicClaimService(session).admit(
+        AtomicClaimDraft(
+            source_span_id=span.id,
+            quote=span.verbatim_text,
+            quote_start=0,
+            quote_end=len(span.verbatim_text),
+            normalized_text="尚待人工审核的事件陈述",
+            claim_type="reported_claim",
+            assertion_actor="company",
+            subject="company",
+            predicate="reported",
+            object_text=None,
+            numeric_value=None,
+            unit=None,
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="user_supplied",
+        run_ref="scope-preparation-unreviewed-fixture",
+    )
+    ResearchPreparationService(session).complete_system_step(
+        case_id,
+        "parse_claims",
+        {"candidates": [{"candidate_id": str(candidate.id)}]},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+    )
+    parse_job = session.scalar(
+        select(Job).where(
+            Job.target_id == preparation.id,
+            Job.correlation_id == f"{preparation.id}:1:parse_claims",
+        )
+    )
+    assert parse_job is not None
+    parse_job.status = "succeeded"
+    return preparation
+
+
+def test_scope_change_preserves_unreviewed_claims_without_queuing_a_new_step(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = _complete_preparation_parse(cmd_session, case_id)
+    claim_artifact = cmd_session.scalar(
+        select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation.id,
+            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+            ResearchPreparationArtifact.state == "current",
+        )
+    )
+    assert claim_artifact is not None
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                "未审核陈述时的范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": "scope changed while claims await review",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(preparation)
+    assert preparation.status == "awaiting_claim_review"
+    assert preparation.claim_review_state == "awaiting_review"
+    assert preparation.draft_protocol_state == "stale"
+    assert preparation.protocol_review_state == "locked"
+    assert preparation.draft_evidence_plan_state == "stale"
+    assert preparation.plan_review_state == "locked"
+    current_claim_artifact = cmd_session.scalar(
+        select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation.id,
+            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+            ResearchPreparationArtifact.state == "current",
+        )
+    )
+    assert current_claim_artifact is not None
+    assert current_claim_artifact.id == claim_artifact.id
+    assert current_claim_artifact.sequence == claim_artifact.sequence
+    active_jobs = list(
+        cmd_session.scalars(
+            select(Job).where(
+                Job.target_id == preparation.id,
+                Job.status.in_(("queued", "running")),
+            )
+        )
+    )
+    assert active_jobs == []
+
+
 def test_scope_change_invalidates_only_preparation_drafts_without_starting_a_run(
     cmd_client, cmd_session
 ) -> None:
