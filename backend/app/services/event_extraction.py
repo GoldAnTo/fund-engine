@@ -9,13 +9,6 @@ from typing import Any
 from app.ai.client import LLMClient
 
 
-_DEFAULT_FACTORS = (
-    "经营或业绩变化是否足以解释市场反应",
-    "现金流、资本开支或融资压力是否改变预期",
-    "估值或市场环境是否放大了价格波动",
-)
-
-
 @dataclass(frozen=True)
 class EventExtraction:
     event_title: str | None
@@ -34,21 +27,12 @@ class EventExtractionService:
 
     A language model may suggest a structured framing, but any populated fact
     is retained only when its text literally occurs in the user's supplied
-    material.  The question and factors are explicitly hypotheses, so they
-    are allowed to be generated and must be confirmed or edited by a human.
+    material. The question and factors must be valid provider output and must
+    be confirmed or edited by a human.
     """
 
     def __init__(self, client: Any | None = None) -> None:
-        self._client = client
-        if self._client is None:
-            try:
-                self._client = LLMClient.from_env()
-            except Exception:
-                # A client can fail before its first request (for example, a
-                # missing proxy transport).  The intake remains safe because
-                # extraction below will produce only the source-bound title
-                # plus editable hypothesis fields, never a factual assertion.
-                self._client = None
+        self._client = client if client is not None else LLMClient.from_env()
 
     def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
         raw_input = raw_input.strip()
@@ -59,7 +43,7 @@ class EventExtractionService:
         market_reaction = _supported_text(result.get("market_reaction"), raw_input)
         summary = _supported_text(result.get("summary"), raw_input)
         event_at = _supported_datetime(result.get("event_at"), raw_input)
-        question = _question(result.get("research_question"), title)
+        question = _question(result.get("research_question"))
         factors = _factors(result.get("candidate_factors"))
         return EventExtraction(
             event_title=title,
@@ -73,8 +57,6 @@ class EventExtractionService:
         )
 
     def _ask_model(self, raw_input: str, source_url: str | None) -> dict[str, Any]:
-        if self._client is None:
-            return {}
         messages = [
             {
                 "role": "system",
@@ -91,14 +73,10 @@ class EventExtractionService:
                 ),
             },
         ]
-        try:
-            result = self._client.chat_json(messages, schema_hint="event_research_extract")
-        except Exception:
-            # The creator can still proceed with a blank-safe draft when an
-            # external provider is unavailable; the outage never becomes a
-            # reason to invent facts.
-            return {}
-        return result if isinstance(result, dict) else {}
+        result = self._client.chat_json(messages, schema_hint="event_research_extract")
+        if not isinstance(result, dict):
+            raise ValueError("event extraction response must be a JSON object")
+        return result
 
 
 def _normalise(value: str) -> str:
@@ -131,10 +109,12 @@ def _fallback_title(raw_input: str) -> str:
     return first_sentence[:120]
 
 
-def _question(value: object, title: str) -> str:
+def _question(value: object) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
-    return f"“{title}”所反映的市场反应，主要由哪些可验证因素驱动？"
+    raise ValueError(
+        "event extraction response requires a non-empty research_question"
+    )
 
 
 def _factors(value: object) -> tuple[str, ...]:
@@ -146,11 +126,8 @@ def _factors(value: object) -> tuple[str, ...]:
         text = item.strip()
         if text not in clean:
             clean.append(text)
-        if len(clean) == 5:
-            break
-    for fallback in _DEFAULT_FACTORS:
-        if len(clean) >= 3:
-            break
-        if fallback not in clean:
-            clean.append(fallback)
-    return tuple(clean[:5])
+    if not 3 <= len(clean) <= 5:
+        raise ValueError(
+            "event extraction response requires 3 to 5 unique candidate_factors"
+        )
+    return tuple(clean)

@@ -5,12 +5,12 @@ import json
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.errors import ValidationFailedError
+from app.errors import UpstreamUnavailableError, ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
@@ -290,9 +290,16 @@ def extract_event(
     payload: ExtractEventResearchRequest,
     tenant_id: str = Depends(require_research_tenant),
 ) -> ExtractEventResearchResponse:
-    extracted = EventExtractionService().extract(
-        raw_input=payload.raw_input, source_url=payload.source_url
-    )
+    try:
+        extracted = EventExtractionService().extract(
+            raw_input=payload.raw_input, source_url=payload.source_url
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise UpstreamUnavailableError(
+            "event extraction LLM is unavailable or returned an invalid response"
+        ) from exc
     return ExtractEventResearchResponse(
         event_title=extracted.event_title,
         company_name=extracted.company_name,

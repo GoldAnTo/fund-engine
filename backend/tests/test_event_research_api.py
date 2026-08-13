@@ -137,7 +137,24 @@ def _evidence_proposal(
     return proposal
 
 
-def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_client) -> None:
+def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
+    cmd_client, monkeypatch
+) -> None:
+    from app.api.v1 import event_research as event_research_api
+    from app.services.event_extraction import EventExtractionService
+
+    class ValidExtractionClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "research_question": "新指引是否改变了市场预期？",
+                "candidate_factors": ["新指引", "盘后交易", "市场预期"],
+            }
+
+    monkeypatch.setattr(
+        event_research_api,
+        "EventExtractionService",
+        lambda: EventExtractionService(client=ValidExtractionClient()),
+    )
     response = cmd_client.post(
         "/api/v1/event-research/extract",
         json={
@@ -153,6 +170,98 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_clie
     assert body["confirmation_required"] is True
     assert body["research_question"]
     assert len(body["candidate_factors"]) in {3, 4, 5}
+
+
+def test_extract_event_maps_provider_setup_failure_to_safe_503(
+    cmd_client, monkeypatch
+) -> None:
+    from app.api.v1 import event_research as event_research_api
+
+    class SetupFailureService:
+        def __init__(self):
+            raise RuntimeError("provider setup failed with secret sk-private")
+
+    monkeypatch.setattr(
+        event_research_api, "EventExtractionService", SetupFailureService
+    )
+
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "upstream_unavailable"
+    assert (
+        error["message"]
+        == "event extraction LLM is unavailable or returned an invalid response"
+    )
+    assert "sk-private" not in response.text
+
+
+def test_extract_event_maps_provider_call_failure_to_safe_503(
+    cmd_client, monkeypatch
+) -> None:
+    from app.api.v1 import event_research as event_research_api
+    from app.services.event_extraction import EventExtractionService
+
+    class FailingExtractionClient:
+        def chat_json(self, messages, schema_hint):
+            raise ConnectionError("provider call exposed secret sk-private")
+
+    monkeypatch.setattr(
+        event_research_api,
+        "EventExtractionService",
+        lambda: EventExtractionService(client=FailingExtractionClient()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "upstream_unavailable"
+    assert (
+        error["message"]
+        == "event extraction LLM is unavailable or returned an invalid response"
+    )
+    assert "sk-private" not in response.text
+
+
+def test_extract_event_maps_invalid_provider_result_to_safe_503(
+    cmd_client, monkeypatch
+) -> None:
+    from app.api.v1 import event_research as event_research_api
+    from app.services.event_extraction import EventExtractionService
+
+    class InvalidExtractionClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "research_question": "哪些因素需要验证？",
+                "candidate_factors": ["重复因素", "重复因素"],
+            }
+
+    monkeypatch.setattr(
+        event_research_api,
+        "EventExtractionService",
+        lambda: EventExtractionService(client=InvalidExtractionClient()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "upstream_unavailable"
+    assert (
+        error["message"]
+        == "event extraction LLM is unavailable or returned an invalid response"
+    )
 
 
 def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_run(cmd_client, cmd_session) -> None:
