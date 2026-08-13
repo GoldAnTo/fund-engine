@@ -377,7 +377,10 @@ class ResearchPreparationRepository:
         if job is None:
             return None
         job.status = "running"
-        job.started_at = job.started_at or now
+        # A queued Job has no active lease.  Always stamp the lease at the
+        # point it becomes running; retaining a stale timestamp would let a
+        # second recovery sweep reclaim an actively executing worker.
+        job.started_at = now
         self._append_job_event(job, status="running", step=job.step, message="preparation job claimed")
         self._session.flush()
         return job
@@ -401,9 +404,30 @@ class ResearchPreparationRepository:
                 self._append_job_event(job, status="cancelled", step=job.step, message="preparation job cancelled")
             else:
                 job.status = "queued"
+                job.started_at = None
+                job.finished_at = None
                 self._append_job_event(job, status="queued", step=job.step, message="stale preparation job reclaimed")
         self._session.flush()
         return len(jobs)
+
+    def cancel_queued_preparation_jobs(self) -> list[Job]:
+        """Terminalize queued cancellation requests before any provider call."""
+        jobs = list(self._session.scalars(
+            select(Job)
+            .where(
+                Job.kind == "prepare_research",
+                Job.status == "queued",
+                Job.cancel_requested.is_(True),
+            )
+            .order_by(Job.created_at, Job.id)
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        ))
+        for job in jobs:
+            self.set_preparation_job_terminal(
+                job, status="cancelled", step=job.step, error="stale preparation output discarded"
+            )
+        return jobs
 
     def set_preparation_job_terminal(
         self, job: Job, *, status: str, step: str | None, error: str | None = None

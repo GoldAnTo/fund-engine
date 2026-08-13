@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -57,7 +57,9 @@ def _utcnow() -> datetime:
 
 
 def _worker_id() -> str:
-    return os.getenv("RESEARCH_PREPARATION_WORKER_ID", socket.gethostname())[:128]
+    return os.getenv(
+        "RESEARCH_PREPARATION_WORKER_ID", f"{socket.gethostname()}-preparation"
+    )[:128]
 
 
 def _touch(*, mode: str, state: str, session_factory=SessionLocal) -> None:
@@ -110,6 +112,35 @@ def _cancel(repo: ResearchPreparationRepository, job: Job, *, step: str | None) 
     )
 
 
+def _discard_output(
+    service: ResearchPreparationService,
+    repo: ResearchPreparationRepository,
+    job: Job,
+    input: _JobInput,
+    *,
+    reason: Literal["version_changed", "input_changed", "candidate_context_changed", "cancelled"],
+) -> None:
+    service.record_worker_output_discarded(
+        input.case_id,
+        input.step,  # type: ignore[arg-type]
+        job_id=job.id,
+        reason=reason,
+    )
+    _cancel(repo, job, step=input.step)
+
+
+def _fresh_job_reason(
+    job: Job, preparation: ResearchPreparation, input: _JobInput
+) -> Literal["version_changed", "input_changed", "cancelled"] | None:
+    if job.cancel_requested:
+        return "cancelled"
+    if preparation.version != input.version or _correlation_job_input(job, preparation) is None:
+        return "version_changed"
+    if preparation.input_fingerprint != input.fingerprint:
+        return "input_changed"
+    return None
+
+
 def _provider_failure(
     session_factory, *, job_id: uuid.UUID, input: _JobInput
 ) -> None:
@@ -121,14 +152,13 @@ def _provider_failure(
             session.commit()
             return
         preparation = repo.lock_for_case(input.case_id)
-        if (
-            preparation is None
-            or _correlation_job_input(job, preparation) is None
-            or preparation.version != input.version
-            or preparation.input_fingerprint != input.fingerprint
-            or job.cancel_requested
-        ):
+        if preparation is None:
             _cancel(repo, job, step=input.step)
+            session.commit()
+            return
+        reason = _fresh_job_reason(job, preparation, input)
+        if reason is not None:
+            _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
             session.commit()
             return
         service = ResearchPreparationService(session)
@@ -176,6 +206,9 @@ def _begin(session: Session, job: Job) -> _JobInput | None:
     if input is None:
         repo.set_preparation_job_terminal(job, status="failed", step=None, error=_SAFE_INTERNAL_ERROR)
         return None
+    if job.cancel_requested:
+        _discard_output(ResearchPreparationService(session), repo, job, input, reason="cancelled")
+        return None
     try:
         ResearchPreparationService(session).start_system_step(
             input.case_id,
@@ -189,6 +222,33 @@ def _begin(session: Session, job: Job) -> _JobInput | None:
     job.step = input.step
     session.flush()
     return input
+
+
+def _ready_for_provider(session_factory, *, job_id: uuid.UUID, input: _JobInput) -> bool:
+    """Give a just-cancelled Job one last lock-protected off-ramp."""
+    with session_factory() as session:
+        repo = ResearchPreparationRepository(session)
+        job = _locked_job(session, job_id)
+        if job is None or job.status != "running":
+            session.commit()
+            return False
+        try:
+            preparation = repo.lock_for_case(input.case_id)
+        except NotFoundError:
+            repo.set_preparation_job_terminal(job, status="failed", step=input.step, error=_SAFE_INTERNAL_ERROR)
+            session.commit()
+            return False
+        if preparation is None:
+            repo.set_preparation_job_terminal(job, status="failed", step=input.step, error=_SAFE_INTERNAL_ERROR)
+            session.commit()
+            return False
+        reason = _fresh_job_reason(job, preparation, input)
+        if reason is not None:
+            _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
+            session.commit()
+            return False
+        session.commit()
+        return True
 
 
 def _complete(
@@ -207,20 +267,19 @@ def _complete(
             session.commit()
             return
         preparation = repo.lock_for_case(input.case_id)
-        if (
-            preparation is None
-            or _correlation_job_input(job, preparation) is None
-            or preparation.version != input.version
-            or preparation.input_fingerprint != input.fingerprint
-            or job.cancel_requested
-        ):
+        if preparation is None:
             _cancel(repo, job, step=input.step)
+            session.commit()
+            return
+        reason = _fresh_job_reason(job, preparation, input)
+        if reason is not None:
+            _discard_output(ResearchPreparationService(session), repo, job, input, reason=reason)
             session.commit()
             return
         service = ResearchPreparationService(session)
         if input.step != "parse_claims":
             if getattr(loaded_input, "candidate_context_fingerprint") != service.current_candidate_context_fingerprint(input.case_id):
-                _cancel(repo, job, step=input.step)
+                _discard_output(service, repo, job, input, reason="candidate_context_changed")
                 session.commit()
                 return
             payload = output
@@ -240,7 +299,7 @@ def _complete(
             persister = generator if hasattr(generator, "persist_claim_drafts") else ResearchPreparationGenerator()
             payload = persister.persist_claim_drafts(loaded_input, output, session, before_persist=guard)
             if payload is None:
-                _cancel(repo, job, step=input.step)
+                _discard_output(service, repo, job, input, reason="cancelled")
                 session.commit()
                 return
         completed = service.complete_system_step(
@@ -253,12 +312,8 @@ def _complete(
                 None if input.step == "parse_claims" else getattr(loaded_input, "candidate_context_fingerprint")
             ),
         )
-        if (
-            completed.version != input.version
-            or completed.input_fingerprint != input.fingerprint
-            or getattr(completed, f"{input.step}_state") != "succeeded"
-        ):
-            _cancel(repo, job, step=input.step)
+        if completed.version != input.version or getattr(completed, f"{input.step}_state") != "succeeded":
+            _discard_output(service, repo, job, input, reason="version_changed")
         else:
             repo.set_preparation_job_terminal(job, status="succeeded", step=input.step)
         session.commit()
@@ -276,10 +331,32 @@ def run_once(
         repo.recover_stale_preparation_jobs(
             before=_utcnow() - timedelta(minutes=recover_after_minutes)
         )
+        cancelled = repo.cancel_queued_preparation_jobs()
+        for cancelled_job in cancelled:
+            if (
+                cancelled_job.target_type != "research_preparation"
+                or cancelled_job.target_id is None
+                or cancelled_job.research_case_id is None
+            ):
+                continue
+            try:
+                preparation = repo.lock_for_case(cancelled_job.research_case_id)
+            except NotFoundError:
+                continue
+            if preparation is None:
+                continue
+            cancelled_input = _correlation_job_input(cancelled_job, preparation)
+            if cancelled_input is not None:
+                ResearchPreparationService(session).record_worker_output_discarded(
+                    cancelled_input.case_id,
+                    cancelled_input.step,  # type: ignore[arg-type]
+                    job_id=cancelled_job.id,
+                    reason="cancelled",
+                )
         job = repo.claim_next_preparation_job()
         if job is None:
             session.commit()
-            return False
+            return bool(cancelled)
         job_id = job.id
         input = _begin(session, job)
         session.commit()  # publish claim/state before any provider wait
@@ -290,6 +367,9 @@ def run_once(
     try:
         with session_factory() as session:
             loaded_input = load_preparation_input(session, input.case_id)
+        if not _ready_for_provider(session_factory, job_id=job_id, input=input):
+            return True
+        with session_factory() as session:
             if input.step == "parse_claims":
                 output = generator.validate_claim_drafts(loaded_input)
             elif input.step == "draft_protocol":
@@ -330,14 +410,14 @@ def main() -> None:
     if not args.once and not args.loop:
         parser.error("choose --once or --loop")
     if args.once:
-        _touch(mode="research_preparation", state="executing")
+        _touch(mode="loop", state="polling")
         run_once()
-        _touch(mode="research_preparation", state="polling")
+        _touch(mode="loop", state="polling")
         return
     while True:
-        _touch(mode="research_preparation", state="polling")
+        _touch(mode="loop", state="polling")
         found = run_once()
-        _touch(mode="research_preparation", state="executing" if found else "polling")
+        _touch(mode="loop", state="polling")
         if not found:
             time.sleep(max(args.poll_seconds, 0.1))
 

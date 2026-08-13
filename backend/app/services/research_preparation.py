@@ -404,6 +404,31 @@ class ResearchPreparationService:
             )
         return preparation
 
+    def record_worker_output_discarded(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        *,
+        job_id: uuid.UUID,
+        reason: Literal[
+            "version_changed",
+            "input_changed",
+            "candidate_context_changed",
+            "cancelled",
+        ],
+    ) -> ResearchPreparation:
+        """Audit a worker output that lost its guarded output slot."""
+        preparation = self._require_preparation(case_id)
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_output_discarded",
+            step=step,
+            message="stale preparation output discarded",
+            detail={"job_id": str(job_id), "step": step, "reason": reason},
+        )
+        return preparation
+
     def confirm_claims(
         self,
         case_id: uuid.UUID,
