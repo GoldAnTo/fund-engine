@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -13,6 +13,8 @@ from sqlalchemy import select
 from app.ai.client import LLMClient, LLMMalformedResponseError
 from app.ai.research_preparation import (
     PREPARATION_PROVIDER_ERROR_MESSAGE,
+    PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
+    PreparationInputUnavailableError,
     ResearchPreparationGenerator,
     ResearchPreparationProviderError,
     load_preparation_input,
@@ -25,6 +27,7 @@ from app.models.event_research import (
 from app.models.ledger import (
     AtomicClaimCandidate,
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
@@ -32,6 +35,7 @@ from app.models.ledger import (
 )
 from app.models.operational import ResearchRun
 from app.models.research_preparation import ResearchPreparation
+from app.models.source_governance import SourceContract
 from app.models.research_protocol import (
     OutcomeBindingVersion,
     VerificationRuleVersion,
@@ -52,7 +56,15 @@ class FakeClient:
         return self.response  # type: ignore[return-value]
 
 
-def _input(session, *, span_text: str | None = "Issuer disclosed revenue grew 10%."):
+def _input(
+    session,
+    *,
+    span_text: str | None = "Issuer disclosed revenue grew 10%.",
+    allow_ai_processing: bool = True,
+    contract_effective_until: datetime | None = None,
+    source_type: str = "company_disclosure",
+    include_contract: bool = True,
+):
     now = datetime.now(UTC)
     case = ResearchCase(
         title="Preparation generator",
@@ -75,6 +87,33 @@ def _input(session, *, span_text: str | None = "Issuer disclosed revenue grew 10
         document_version_id=document.id,
         linked_at=now,
     ))
+    session.add(CaseTenantAdmission(
+        research_case_id=case.id,
+        tenant_id="test-team",
+        initial_document_version_id=document.id,
+        admitted_by="tester",
+        admitted_at=now,
+    ))
+    if include_contract:
+        session.add(SourceContract(
+            document_version_id=document.id,
+            source_type=source_type,
+            provider_or_tenant="issuer",
+            allow_ai_processing=allow_ai_processing,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="CN",
+            effective_from=None,
+            effective_until=contract_effective_until,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=[],
+            contract_version="test-v1",
+            intake_metadata={},
+            declared_by="tester",
+            created_at=now,
+        ))
     preparation = ResearchPreparation(
         research_case_id=case.id,
         version=3,
@@ -137,12 +176,11 @@ def _input(session, *, span_text: str | None = "Issuer disclosed revenue grew 10
 
 def _protocol() -> dict:
     return {
-        "outcomes": ["revenue growth"],
+        "outcomes": [{"metric": "revenue growth"}],
         "baseline": {"metric": "revenue"},
         "horizon": {"start": "2026-01-01", "end": "2026-12-31"},
-        "mechanisms": ["demand"],
-        "verification_rules": ["compare filings"],
-        "rationale": "draft only",
+        "mechanisms": [{"driver": "demand"}],
+        "verification_rules": [{"rule": "compare filings"}],
     }
 
 
@@ -188,6 +226,17 @@ def test_parse_with_no_spans_skips_llm(session) -> None:
     assert client.calls == []
 
 
+def test_parse_accepts_empty_provider_statements_for_nonempty_spans(session) -> None:
+    case, _, _ = _input(session)
+    client = FakeClient({"statements": []})
+
+    assert ResearchPreparationGenerator(client).parse_claims(
+        load_preparation_input(session, case.id), session
+    ) == {"candidates": []}
+    assert list(session.scalars(select(AtomicClaimCandidate))) == []
+    assert len(client.calls) == 1
+
+
 @pytest.mark.parametrize("statement", [
     {"source_span_id": "bad", "quote": "x"},
     {"source_span_id": "00000000-0000-0000-0000-000000000000", "quote": "x", "quote_start": 0, "quote_end": 1, "normalized_text": "x", "kind": "reported_claim"},
@@ -204,16 +253,87 @@ def test_parse_rejects_invalid_provider_response_atomically(session, statement) 
     assert list(session.scalars(select(AtomicClaimCandidate))) == []
 
 
-def test_protocol_returns_valid_draft_and_rejects_unknown_or_bad_horizon(session) -> None:
+def test_parse_does_not_admit_valid_prefix_when_later_statement_is_invalid(session) -> None:
+    case, _, span = _input(session)
+    start = span.verbatim_text.index("revenue")
+    valid = {
+        "source_span_id": str(span.id),
+        "quote": "revenue grew 10%",
+        "quote_start": start,
+        "quote_end": start + len("revenue grew 10%"),
+        "normalized_text": "Revenue grew.",
+        "kind": "reported_claim",
+    }
+    invalid = {**valid, "quote": "not a source quote"}
+
+    with pytest.raises(ResearchPreparationProviderError, match=PREPARATION_PROVIDER_ERROR_MESSAGE):
+        ResearchPreparationGenerator(FakeClient({"statements": [valid, invalid]})).parse_claims(
+            load_preparation_input(session, case.id), session
+        )
+    assert list(session.scalars(select(AtomicClaimCandidate))) == []
+
+
+def test_protocol_returns_exact_valid_draft_and_rejects_extra_or_bad_horizon(session) -> None:
     case, _, _ = _input(session)
     context = load_preparation_input(session, case.id)
     assert ResearchPreparationGenerator(FakeClient(_protocol())).draft_protocol(context) == _protocol()
-    for invalid in ({**_protocol(), "other": True}, {**_protocol(), "horizon": {"start": "2026-12-31", "end": "2026-01-01"}}):
+    for invalid in (
+        {**_protocol(), "rationale": "not permitted"},
+        {**_protocol(), "other": True},
+        {**_protocol(), "outcomes": ["not an object"]},
+        {**_protocol(), "horizon": {"start": "2026-12-31", "end": "2026-01-01"}},
+    ):
         with pytest.raises(ResearchPreparationProviderError, match=PREPARATION_PROVIDER_ERROR_MESSAGE):
             ResearchPreparationGenerator(FakeClient(invalid)).draft_protocol(context)
     assert list(session.scalars(select(ResearchRun))) == []
     assert list(session.scalars(select(OutcomeBindingVersion))) == []
     assert list(session.scalars(select(VerificationRuleVersion))) == []
+
+
+def test_load_input_uses_tenant_initial_document_not_earliest_case_attachment(session) -> None:
+    case, initial_document, _ = _input(session)
+    now = datetime.now(UTC)
+    earlier = DocumentVersion(
+        content_sha256=uuid.uuid4().hex * 2,
+        source_url="https://example.test/earlier",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test-v1",
+    )
+    session.add(earlier)
+    session.flush()
+    session.add(CaseDocumentVersion(
+        research_case_id=case.id,
+        document_version_id=earlier.id,
+        linked_at=now - timedelta(days=1),
+    ))
+    session.flush()
+
+    assert load_preparation_input(session, case.id).document_version_id == initial_document.id
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"allow_ai_processing": False},
+    {"contract_effective_until": datetime.now(UTC) - timedelta(days=1)},
+    {"source_type": "licensed_provider"},
+    {"include_contract": False},
+])
+def test_load_input_rejects_unavailable_governed_source_before_llm(session, kwargs) -> None:
+    case, _, _ = _input(session, **kwargs)
+    client = FakeClient(_protocol())
+
+    with pytest.raises(
+        PreparationInputUnavailableError,
+        match=PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
+    ):
+        load_preparation_input(session, case.id)
+    assert client.calls == []
+
+
+def test_load_input_accepts_active_primary_source_contract(session) -> None:
+    case, document, _ = _input(session)
+
+    assert load_preparation_input(session, case.id).document_version_id == document.id
 
 
 @pytest.mark.parametrize("invalid", [

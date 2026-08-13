@@ -30,7 +30,7 @@ Every quote must be a contiguous, verbatim slice of its supplied span. If no cla
 
 PREPARATION_PROTOCOL_SYSTEM = f"""You prepare a review-gated research protocol draft ({PREPARATION_PROTOCOL_PROMPT_VERSION}).
 This is a draft only: it grants no authorization and must not materialize an official protocol.
-Return JSON only. Its top-level keys must be outcomes, baseline, horizon, mechanisms, verification_rules, and optional rationale. horizon must contain exactly ISO dates start and end.
+Return JSON only. Its top-level keys must be exactly outcomes, baseline, horizon, mechanisms, and verification_rules. outcomes, mechanisms, and verification_rules are nonempty lists of nonempty objects. horizon must contain exactly ISO dates start and end.
 """
 
 PREPARATION_EVIDENCE_PLAN_SYSTEM = f"""You prepare a review-gated evidence acquisition plan draft ({PREPARATION_EVIDENCE_PLAN_PROMPT_VERSION}).

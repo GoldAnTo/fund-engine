@@ -26,18 +26,32 @@ from app.ai.prompts import (
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.errors import NotFoundError
 from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
-from app.models.ledger import AtomicClaimCandidate, CaseDocumentVersion, DocumentVersion, ResearchCase, SourceSpan
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    CaseDocumentVersion,
+    CaseTenantAdmission,
+    DocumentVersion,
+    ResearchCase,
+    SourceSpan,
+)
 from app.models.research_preparation import ResearchPreparation
+from app.models.source_governance import ProviderRecord, SourceContract
 from app.services.atomic_claims import AtomicClaimService
+from app.services.source_admission import source_contract_is_active
 
 
 PREPARATION_PROVIDER_ERROR_MESSAGE = (
     "preparation provider unavailable or returned an invalid response"
 )
+PREPARATION_INPUT_UNAVAILABLE_MESSAGE = "preparation input is unavailable for AI processing"
 
 
 class ResearchPreparationProviderError(RuntimeError):
     """A fixed, safe boundary for preparation-provider failures."""
+
+
+class PreparationInputUnavailableError(RuntimeError):
+    """Raised when case-governed frozen input cannot be sent to an LLM."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,17 +91,39 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
     )
     if preparation is None:
         raise NotFoundError("research preparation not found")
-    case_document = session.scalar(
-        select(CaseDocumentVersion)
-        .where(CaseDocumentVersion.research_case_id == case_id)
-        .order_by(CaseDocumentVersion.linked_at, CaseDocumentVersion.id)
+    admission = session.scalar(
+        select(CaseTenantAdmission)
+        .where(CaseTenantAdmission.research_case_id == case_id)
         .limit(1)
     )
+    if admission is None:
+        _unavailable_input()
+    case_document = session.scalar(
+        select(CaseDocumentVersion.id).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == admission.initial_document_version_id,
+        )
+    )
     if case_document is None:
-        raise NotFoundError("case document version not found")
-    document = session.get(DocumentVersion, case_document.document_version_id)
-    if document is None:  # protects the input boundary if an invalid FK was imported
-        raise NotFoundError("case document version not found")
+        _unavailable_input()
+    document = session.get(DocumentVersion, admission.initial_document_version_id)
+    if document is None:
+        _unavailable_input()
+    contract = session.scalar(
+        select(SourceContract).where(SourceContract.document_version_id == document.id)
+    )
+    if (
+        contract is None
+        or not contract.allow_ai_processing
+        or not source_contract_is_active(contract, at=document.available_at)
+    ):
+        _unavailable_input()
+    if contract.source_type == "licensed_provider":
+        provider_record = session.scalar(
+            select(ProviderRecord).where(ProviderRecord.document_version_id == document.id)
+        )
+        if provider_record is None or provider_record.content_sha256 != document.content_sha256:
+            _unavailable_input()
 
     spans = tuple(
         PreparationSourceSpan(source_span_id=span.id, verbatim_text=span.verbatim_text)
@@ -136,6 +172,10 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
         current_factors=factors,
         candidate_claim_summaries=candidates,
     )
+
+
+def _unavailable_input() -> None:
+    raise PreparationInputUnavailableError(PREPARATION_INPUT_UNAVAILABLE_MESSAGE)
 
 
 _T = TypeVar("_T")
@@ -271,8 +311,6 @@ def _validate_parse_response(result: object, input: PreparationInput) -> list[di
     raw_statements = result["statements"]
     if not isinstance(raw_statements, list):
         raise ValueError("parse statements must be a list")
-    if input.source_spans and not raw_statements:
-        raise ValueError("parse response must contain a statement for supplied spans")
     spans = {str(span.source_span_id): span for span in input.source_spans}
     statements: list[dict[str, Any]] = []
     required = {"source_span_id", "quote", "quote_start", "quote_end", "normalized_text", "kind"}
@@ -315,18 +353,16 @@ def _validate_parse_response(result: object, input: PreparationInput) -> list[di
 
 def _validate_protocol_response(result: object) -> dict[str, object]:
     required = {"outcomes", "baseline", "horizon", "mechanisms", "verification_rules"}
-    if not isinstance(result, dict) or not required.issubset(result) or set(result).difference(required | {"rationale"}):
+    if not isinstance(result, dict) or set(result) != required:
         raise ValueError("protocol response has invalid keys")
-    if not isinstance(result["outcomes"], list) or not result["outcomes"]:
+    if not _nonempty_object_list(result["outcomes"]):
         raise ValueError("protocol outcomes must be nonempty")
     if not isinstance(result["baseline"], dict):
         raise ValueError("protocol baseline must be an object")
-    if not isinstance(result["mechanisms"], list) or not result["mechanisms"]:
+    if not _nonempty_object_list(result["mechanisms"]):
         raise ValueError("protocol mechanisms must be nonempty")
-    if not isinstance(result["verification_rules"], list) or not result["verification_rules"]:
+    if not _nonempty_object_list(result["verification_rules"]):
         raise ValueError("protocol verification rules must be nonempty")
-    if "rationale" in result and not isinstance(result["rationale"], str):
-        raise ValueError("protocol rationale must be a string")
     horizon = result["horizon"]
     if not isinstance(horizon, dict) or set(horizon) != {"start", "end"}:
         raise ValueError("protocol horizon has invalid keys")
@@ -337,6 +373,14 @@ def _validate_protocol_response(result: object) -> dict[str, object]:
     if start_date > end_date:
         raise ValueError("protocol horizon is reversed")
     return result
+
+
+def _nonempty_object_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, dict) and bool(item) for item in value)
+    )
 
 
 def _strict_iso_date(value: str) -> date:
