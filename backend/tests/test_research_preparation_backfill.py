@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.atomic_claims import AtomicClaimDraft
+from app.domain.research_preparation import MAX_CANDIDATES
 from app.models.event_research import EventResearchScopeVersion
 from app.models.ledger import Base, CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase, SourceSpan
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun
@@ -164,12 +165,14 @@ def test_backfill_reused_reviewed_candidates_queue_protocol_but_partial_review_s
         assert check.scalars(select(ResearchRun)).all() == []
 
 
-@pytest.mark.parametrize("candidate_count, expected_state", [(500, "succeeded"), (501, "failed")])
+@pytest.mark.parametrize("candidate_count, expected_state", [(100, "succeeded"), (101, "failed")])
 def test_backfill_bounds_historical_candidate_reuse(tmp_path, candidate_count, expected_state) -> None:
     from app.services.research_preparation_backfill import (
         MAX_BACKFILL_REUSE_CANDIDATES,
         ResearchPreparationBackfill,
     )
+
+    assert MAX_BACKFILL_REUSE_CANDIDATES == MAX_CANDIDATES == 100
 
     engine = create_engine(f"sqlite:///{tmp_path / f'backfill-cap-{candidate_count}.db'}", future=True)
     Base.metadata.create_all(engine)
@@ -202,6 +205,67 @@ def test_backfill_bounds_historical_candidate_reuse(tmp_path, candidate_count, e
             artifact = check.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id == preparation_id, ResearchPreparationArtifact.kind == "atomic_claim_candidates"))
             assert artifact is not None and len(artifact.payload["candidates"]) == MAX_BACKFILL_REUSE_CANDIDATES
         assert check.scalars(select(ResearchRun)).all() == []
+
+
+def test_backfill_reuses_exact_generator_candidate_limit_then_runs_protocol(tmp_path) -> None:
+    from app.scripts import run_research_preparation_worker as worker
+    from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+    class ValidProtocolGenerator:
+        def draft_protocol(self, _input):
+            return {
+                "outcomes": [{"metric": "revenue"}],
+                "baseline": {"metric": "revenue"},
+                "horizon": {"start": "2026-01-01", "end": "2026-12-31"},
+                "mechanisms": [{"driver": "demand"}],
+                "verification_rules": [{"rule": "filing"}],
+            }
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'backfill-limit-protocol.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    now = datetime.now(UTC)
+    with sessions() as session:
+        case = _eligible_case(session, created_at=now)
+        document_id = session.scalar(select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case.id
+        ))
+        text = " ".join(f"Reviewed candidate {index}." for index in range(MAX_CANDIDATES))
+        span = SourceSpan(document_version_id=document_id, locator={"page": 1}, verbatim_text=text)
+        session.add(span)
+        session.flush()
+        for index in range(MAX_CANDIDATES):
+            quote = f"Reviewed candidate {index}."
+            quote_start = text.index(quote)
+            candidate = AtomicClaimService(session).admit(
+                AtomicClaimDraft(source_span_id=span.id, quote=quote, quote_start=quote_start, quote_end=quote_start + len(quote), normalized_text=quote, claim_type="reported_claim", assertion_actor=None, subject=None, predicate=None, object_text=None, numeric_value=None, unit=None, observed_period=None, scope={}),
+                authority_level="primary_disclosure", run_ref=f"reviewed-{index}",
+            )
+            AtomicClaimService(session).review(
+                candidate.id, outcome="confirmed", reviewer="reviewer",
+                reason="reviewed", idempotency_key=f"review-{index}",
+            )
+        preparation = ResearchPreparationBackfill(session).enqueue_eligible(limit=1)[0]
+        preparation_id, case_id = preparation.id, case.id
+        session.commit()
+    assert worker.run_once(session_factory=sessions, generator_factory=ValidProtocolGenerator)
+    with sessions() as check:
+        preparation = check.get(ResearchPreparation, preparation_id)
+        assert preparation is not None
+        assert preparation.parse_claims_state == "succeeded"
+        assert preparation.claim_review_state == "confirmed"
+        assert preparation.draft_protocol_state == "succeeded"
+        assert preparation.protocol_review_state == "awaiting_review"
+        assert check.scalar(select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation_id,
+            ResearchPreparationArtifact.kind == "research_protocol_draft",
+            ResearchPreparationArtifact.state == "current",
+        )) is not None
+        assert check.scalars(select(Job).where(
+            Job.target_id == preparation_id,
+            Job.status.in_(("queued", "running")),
+        )).all() == []
+        assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
 
 
 def test_backfill_excludes_an_ai_disallowed_initial_source(tmp_path) -> None:

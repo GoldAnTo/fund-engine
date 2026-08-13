@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import (
     ArtifactKind,
+    MAX_CANDIDATES,
     PreparationStep,
     candidate_context_fingerprint,
 )
@@ -374,7 +375,7 @@ class ResearchPreparationService:
             message="preparation backfill candidate limit exceeded",
             detail={
                 "error_code": "preparation_backfill_candidate_limit",
-                "candidate_limit": 500,
+                "candidate_limit": MAX_CANDIDATES,
             },
         )
         return preparation

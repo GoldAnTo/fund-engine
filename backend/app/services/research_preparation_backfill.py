@@ -6,7 +6,7 @@ from sqlalchemy import exists, func, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.ai.research_preparation import preparation_ai_input_is_available
-from app.domain.research_preparation import preparation_input_fingerprint
+from app.domain.research_preparation import MAX_CANDIDATES, preparation_input_fingerprint
 from app.models.event_research import EventResearchScopeVersion
 from app.models.ledger import (
     AtomicClaimCandidate,
@@ -22,7 +22,7 @@ from app.models.research_preparation import ResearchPreparation
 from app.services.research_preparation import ResearchPreparationService
 
 
-MAX_BACKFILL_REUSE_CANDIDATES = 500
+MAX_BACKFILL_REUSE_CANDIDATES = MAX_CANDIDATES
 
 
 class ResearchPreparationBackfill:

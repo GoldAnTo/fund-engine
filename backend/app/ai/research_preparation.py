@@ -25,7 +25,7 @@ from app.ai.prompts import (
     PREPARATION_PROTOCOL_SYSTEM,
 )
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.domain.research_preparation import candidate_context_fingerprint
+from app.domain.research_preparation import MAX_CANDIDATES, candidate_context_fingerprint
 from app.errors import NotFoundError
 from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.models.ledger import (
@@ -149,7 +149,7 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
         parse_artifact,
         spans,
     )
-    if len(candidates) > 100:
+    if len(candidates) > MAX_CANDIDATES:
         _unavailable_input()
     scope = session.scalar(
         select(EventResearchScopeVersion)
@@ -511,7 +511,7 @@ def _ensure_input_bounds(input: PreparationInput) -> None:
     if (
         len(input.source_spans) > 50
         or any(len(span.verbatim_text) > 20_000 for span in input.source_spans)
-        or len(input.candidate_claim_summaries) > 100
+        or len(input.candidate_claim_summaries) > MAX_CANDIDATES
     ):
         _unavailable_input()
 

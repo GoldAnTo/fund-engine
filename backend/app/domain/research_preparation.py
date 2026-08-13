@@ -26,6 +26,9 @@ ArtifactKind = Literal[
 
 _FINGERPRINT_VERSION = "research-preparation-input:v1"
 _CANDIDATE_CONTEXT_FINGERPRINT_VERSION = "research-preparation-candidates:v1"
+# Applies to every draft-input consumer.  Keep this domain limit shared by
+# worker input validation and historical backfill reuse.
+MAX_CANDIDATES = 100
 
 
 def preparation_input_fingerprint(
