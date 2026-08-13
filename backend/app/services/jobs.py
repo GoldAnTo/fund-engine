@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import ConflictError
@@ -77,10 +78,30 @@ class JobService:
         self._append_event(job, status=status, step=step, message=error)
 
     def request_cancel(self, job: Job) -> None:
-        if job.status in {"succeeded", "failed", "cancelled"}:
-            raise ConflictError(f"job {job.id} already terminal ({job.status})")
-        self._repo.mark_cancellation_requested(job)
-        self._append_event(job, status=job.status, message="cancel requested")
+        # Serialize cancellation with the provider's short post-return output
+        # slot.  A request that waited behind a successful terminal commit
+        # must re-read that status and fail instead of leaving a misleading
+        # succeeded+cancel_requested Job.
+        with self._session.no_autoflush:
+            current = self._session.scalar(
+                select(Job)
+                .where(Job.id == job.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        if current is None:
+            raise ConflictError(f"job {job.id} not found")
+        if current.status in {"succeeded", "failed", "cancelled"}:
+            raise ConflictError(
+                f"job {current.id} already terminal ({current.status})"
+            )
+        self._repo.mark_cancellation_requested(current)
+        self._append_event(
+            current,
+            status=current.status,
+            step=None,
+            message="cancel requested",
+        )
 
     def should_cancel(self, job: Job) -> bool:
         return bool(job.cancel_requested)

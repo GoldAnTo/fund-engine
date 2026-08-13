@@ -54,6 +54,59 @@ router = APIRouter(prefix="/theses", tags=["engine-commands-v1"])
 documents_router = APIRouter(prefix="/documents", tags=["engine-commands-v1"])
 
 
+def _lock_propose_job(db: Session, job_id: uuid.UUID) -> Job | None:
+    """Lock and refresh the short post-provider Job transition."""
+    with db.no_autoflush:
+        return db.scalar(
+            select(Job)
+            .where(Job.id == job_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+
+def _propose_job_accepts_output(db: Session, job_id: uuid.UUID) -> bool:
+    """Claim the output slot unless a committed cancellation won first."""
+    job = _lock_propose_job(db, job_id)
+    return bool(
+        job is not None
+        and job.status == "running"
+        and not job.cancel_requested
+    )
+
+
+def _propose_job_is_cancelled(job: Job | None) -> bool:
+    return bool(
+        job is not None
+        and (job.cancel_requested or job.status == "cancelled")
+    )
+
+
+def _propose_response(
+    *,
+    thesis_id: uuid.UUID,
+    client: LLMClient,
+    job_id: uuid.UUID,
+    proposal_ids: list[uuid.UUID],
+) -> ProposeResponse:
+    return ProposeResponse(
+        thesis_id=str(thesis_id),
+        mode="mock" if client._mock else client.model_version,
+        job_id=str(job_id),
+        link_count=len(proposal_ids),
+        links=[
+            ProposedLinkDTO(
+                proposal_id=str(pid),
+                source_statement_id="",
+                role="",
+                reason="",
+                scope={},
+            )
+            for pid in proposal_ids
+        ],
+    )
+
+
 @documents_router.post(
     "/{document_version_id}/supplements",
     response_model=CreateDocumentSupplementResponse,
@@ -212,12 +265,32 @@ def propose_evidence(
     # proposer may roll back its output transaction on any later failure.
     commit_or_rollback(db)
     try:
-        proposal_ids = EvidenceProposer(client).propose(thesis_id, db)
+        proposal_ids = EvidenceProposer(client).propose(
+            thesis_id,
+            db,
+            before_persist=lambda: _propose_job_accepts_output(db, job_id),
+        )
     except Exception:
         # EvidenceProposer records the provider detail on its failed AIRun.
-        # Keep the operational Job safe for broad UI exposure while
-        # committing both failure records before the 500 boundary unwinds.
-        failed_job = db.get(Job, job_id)
+        # A cancellation committed while the provider was in flight wins over
+        # both the provider failure and its audit row.
+        failed_job = _lock_propose_job(db, job_id)
+        if _propose_job_is_cancelled(failed_job):
+            db.rollback()
+            cancelled_job = _lock_propose_job(db, job_id)
+            if cancelled_job is not None:
+                jobs.finish(
+                    cancelled_job,
+                    status="cancelled",
+                    step="cancelled",
+                )
+            commit_or_rollback(db)
+            return _propose_response(
+                thesis_id=thesis_id,
+                client=client,
+                job_id=job_id,
+                proposal_ids=[],
+            )
         if failed_job is not None:
             jobs.finish(
                 failed_job,
@@ -226,24 +299,24 @@ def propose_evidence(
             )
         commit_or_rollback(db)
         raise
-    jobs.progress(job, step="proposed", progress=100)
-    jobs.finish(job, status="succeeded", step="proposed")
-    commit_or_rollback(db)
-    return ProposeResponse(
-        thesis_id=str(thesis_id),
-        mode="mock" if client._mock else client.model_version,
-        job_id=str(job.id),
-        link_count=len(proposal_ids),
-        links=[
-            ProposedLinkDTO(
-                proposal_id=str(pid),
-                source_statement_id="",
-                role="",
-                reason="",
-                scope={},
+    current_job = _lock_propose_job(db, job_id)
+    if _propose_job_is_cancelled(current_job):
+        if current_job is not None:
+            jobs.finish(
+                current_job,
+                status="cancelled",
+                step="cancelled",
             )
-            for pid in proposal_ids
-        ],
+        proposal_ids = []
+    elif current_job is not None:
+        jobs.progress(current_job, step="proposed", progress=100)
+        jobs.finish(current_job, status="succeeded", step="proposed")
+    commit_or_rollback(db)
+    return _propose_response(
+        thesis_id=thesis_id,
+        client=client,
+        job_id=job_id,
+        proposal_ids=proposal_ids,
     )
 
 

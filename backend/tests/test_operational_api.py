@@ -88,6 +88,19 @@ def test_jobs_api_cancel_endpoint(cmd_client, cmd_session):
     assert resp.json()["cancel_requested"] is True
 
 
+def test_jobs_api_cancel_rejects_terminal_job_as_conflict(cmd_client, cmd_session):
+    job = _make_job(cmd_session)
+    service = JobService(cmd_session)
+    service.start(job)
+    service.finish(job, status="succeeded")
+    cmd_session.commit()
+
+    resp = cmd_client.post(f"/api/v1/jobs/{job.id}/cancel")
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "conflict"
+
+
 def test_activity_feed_from_outbox(cmd_session):
     from app.repositories.outbox import emit_event
 

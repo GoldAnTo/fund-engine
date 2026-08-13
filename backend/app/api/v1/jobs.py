@@ -25,6 +25,7 @@ from app.schemas.v1.operational import (
     JobEventDTO,
     JobEventsResponse,
 )
+from app.services.jobs import JobService
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
 router = APIRouter(tags=["jobs-v1"])
@@ -96,23 +97,7 @@ def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
     job = repo.get_job(job_id)
     if job is None:
         raise NotFoundError(f"job {job_id} not found")
-    if job.status in {"succeeded", "failed", "cancelled"}:
-        raise NotFoundError(f"job {job_id} already terminal ({job.status})")
-    repo.mark_cancellation_requested(job)
-    repo.append_event(
-        job_id=job.id,
-        seq=repo.next_event_seq(job.id),
-        status=job.status,
-        message="cancel requested",
-    )
-    emit_event(
-        db,
-        type="job_progressed",
-        aggregate_type="job",
-        aggregate_id=job.id,
-        payload={"status": job.status, "cancel": True},
-        origin="operational",
-    )
+    JobService(db).request_cancel(job)
     db.commit()
     return _job_dto(job)
 

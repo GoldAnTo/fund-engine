@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from threading import Event, Thread
 
 import pytest
 from sqlalchemy import func, select
@@ -31,6 +32,67 @@ def _new_pending_version(cmd_session):
     )
     cmd_session.commit()
     return version
+
+
+def _seed_concurrent_propose_case(session):
+    from app.models.ledger import (
+        CaseDocumentVersion,
+        DocumentVersion,
+        ResearchCase,
+        SourceSpan,
+        SourceStatement,
+        Thesis,
+    )
+
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="concurrent propose",
+        industry_topic="GPU demand",
+        created_by="test",
+        created_at=now,
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="GPU accelerator demand will grow",
+        created_by="test",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url="https://example.test/concurrent-propose",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    session.add_all([thesis, document])
+    session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="GPU accelerator demand and order backlog continued to grow.",
+    )
+    session.add(span)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="research_opinion",
+        normalized_text="GPU accelerator demand and order backlog continued to grow.",
+        created_at=now,
+    )
+    session.add_all(
+        [
+            statement,
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=document.id,
+                linked_at=now,
+            ),
+        ]
+    )
+    session.commit()
+    return thesis.id, statement.id
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +432,211 @@ def test_propose_creates_links_landing_in_review_queue(cmd_client, cmd_seeded):
 def test_propose_unknown_thesis_returns_404(cmd_client, cmd_seeded):
     resp = cmd_client.post(f"/api/v1/theses/{ZERO_UUID}/propose")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("provider_fails", [False, True])
+def test_propose_job_cancellation_wins_over_inflight_provider_result(
+    tmp_path, monkeypatch, provider_fails
+):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from app.ai.client import LLMClient
+    from app.api.v1.commands.engine import propose_evidence
+    from app.api.v1.jobs import cancel_job
+    from app.models.events import DomainEvent
+    from app.models.ledger import AIRun, Base
+    from app.models.operational import Job, JobEvent
+    from app.models.proposals import Proposal
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'propose-cancel-{provider_fails}.db'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    with session_local() as setup:
+        thesis_id, statement_id = _seed_concurrent_propose_case(setup)
+
+    provider_entered = Event()
+    release_provider = Event()
+    endpoint_errors: list[BaseException] = []
+    endpoint_responses = []
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    def blocked_provider(*_args, **_kwargs):
+        provider_entered.set()
+        assert release_provider.wait(timeout=5)
+        if provider_fails:
+            raise RuntimeError("provider failed after cancellation")
+        return {
+            "links": [
+                {
+                    "source_statement_id": str(statement_id),
+                    "role": "supports",
+                    "reason": "demand growth supports the thesis",
+                    "scope": {"segment": "accelerators"},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "chat_json", blocked_provider)
+    monkeypatch.setattr(LLMClient, "from_env", classmethod(lambda cls: client))
+
+    def call_endpoint():
+        with session_local() as api_session:
+            try:
+                endpoint_responses.append(
+                    propose_evidence(thesis_id, db=api_session)
+                )
+            except BaseException as exc:
+                endpoint_errors.append(exc)
+
+    endpoint_thread = Thread(target=call_endpoint)
+    endpoint_thread.start()
+    assert provider_entered.wait(timeout=5)
+
+    with session_local() as cancelling:
+        job = cancelling.scalar(
+            select(Job).where(Job.kind == "propose", Job.target_id == thesis_id)
+        )
+        assert job is not None and job.status == "running"
+        cancel_job(job.id, db=cancelling)
+        job_id = job.id
+
+    release_provider.set()
+    endpoint_thread.join(timeout=10)
+    assert not endpoint_thread.is_alive()
+    assert endpoint_errors == []
+    assert len(endpoint_responses) == 1
+    assert endpoint_responses[0].link_count == 0
+
+    with Session(engine) as check:
+        job = check.get(Job, job_id)
+        assert job is not None
+        assert job.status == "cancelled"
+        assert job.cancel_requested is True
+        assert check.scalar(select(func.count()).select_from(Proposal)) == 0
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(AIRun.kind == "propose")
+        ) == 0
+        assert check.scalar(
+            select(func.count())
+            .select_from(DomainEvent)
+            .where(DomainEvent.type == "evidence_link_proposed")
+        ) == 0
+        job_events = list(
+            check.scalars(
+                select(JobEvent)
+                .where(JobEvent.job_id == job_id)
+                .order_by(JobEvent.seq)
+            )
+        )
+        assert job_events[-1].status == "cancelled"
+        assert not any(
+            event.status in {"succeeded", "failed"} for event in job_events
+        )
+
+
+@pytest.mark.pg_only
+def test_postgres_propose_output_lock_serializes_late_cancellation(
+    engine, session, monkeypatch
+):
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from app.ai.client import LLMClient
+    from app.api.v1.commands.engine import propose_evidence
+    from app.api.v1.jobs import cancel_job
+    from app.errors import ConflictError
+    from app.models.ledger import AIRun
+    from app.models.operational import Job
+    from app.models.proposals import Proposal
+    from app.services.proposals import ProposalService
+
+    thesis_id, statement_id = _seed_concurrent_propose_case(session)
+    session_local = sessionmaker(bind=engine, future=True)
+    output_persist_started = Event()
+    cancellation_started = Event()
+    cancellation_finished = Event()
+    endpoint_errors: list[BaseException] = []
+    cancellation_errors: list[BaseException] = []
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    monkeypatch.setattr(
+        client,
+        "chat_json",
+        lambda *_args, **_kwargs: {
+            "links": [
+                {
+                    "source_statement_id": str(statement_id),
+                    "role": "supports",
+                    "reason": "valid serialized proposal",
+                    "scope": {"segment": "accelerators"},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(LLMClient, "from_env", classmethod(lambda cls: client))
+    original_create = ProposalService.create_proposal
+
+    def hold_after_output_slot(self, **kwargs):
+        output_persist_started.set()
+        assert cancellation_started.wait(timeout=5)
+        assert not cancellation_finished.is_set()
+        return original_create(self, **kwargs)
+
+    monkeypatch.setattr(ProposalService, "create_proposal", hold_after_output_slot)
+
+    def call_endpoint():
+        with session_local() as api_session:
+            try:
+                propose_evidence(thesis_id, db=api_session)
+            except BaseException as exc:
+                endpoint_errors.append(exc)
+
+    def request_late_cancellation():
+        assert output_persist_started.wait(timeout=5)
+        with session_local() as cancelling:
+            job = cancelling.scalar(
+                select(Job).where(Job.kind == "propose", Job.target_id == thesis_id)
+            )
+            assert job is not None and job.status == "running"
+            cancellation_started.set()
+            try:
+                cancel_job(job.id, db=cancelling)
+            except BaseException as exc:
+                cancellation_errors.append(exc)
+                cancelling.rollback()
+            finally:
+                cancellation_finished.set()
+
+    endpoint_thread = Thread(target=call_endpoint)
+    cancellation_thread = Thread(target=request_late_cancellation)
+    endpoint_thread.start()
+    cancellation_thread.start()
+    endpoint_thread.join(timeout=10)
+    cancellation_thread.join(timeout=10)
+
+    assert not endpoint_thread.is_alive()
+    assert not cancellation_thread.is_alive()
+    assert endpoint_errors == []
+    assert len(cancellation_errors) == 1
+    assert isinstance(cancellation_errors[0], ConflictError)
+
+    with Session(engine) as check:
+        job = check.scalar(
+            select(Job).where(Job.kind == "propose", Job.target_id == thesis_id)
+        )
+        assert job is not None
+        assert job.status == "succeeded"
+        assert job.cancel_requested is False
+        assert check.scalar(select(func.count()).select_from(Proposal)) == 1
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(
+                AIRun.kind == "propose", AIRun.status == "success"
+            )
+        ) == 1
 
 
 @pytest.mark.parametrize("provider_error", [RuntimeError, ValueError])
