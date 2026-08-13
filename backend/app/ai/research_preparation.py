@@ -35,6 +35,7 @@ from app.models.ledger import (
     DocumentVersion,
     ResearchCase,
     SourceSpan,
+    SourceStatement,
 )
 from app.models.research_preparation import ResearchPreparation
 from app.models.research_preparation import ResearchPreparationArtifact
@@ -47,6 +48,10 @@ PREPARATION_PROVIDER_ERROR_MESSAGE = (
     "preparation provider unavailable or returned an invalid response"
 )
 PREPARATION_INPUT_UNAVAILABLE_MESSAGE = "preparation input is unavailable for AI processing"
+MAX_CONTEXT_CHARACTERS = 120_000
+MAX_FACTOR_CHARACTERS = 4_000
+MAX_CANDIDATE_QUOTE_CHARACTERS = 2_000
+MAX_CANDIDATE_NORMALIZED_CHARACTERS = 4_000
 
 
 class ResearchPreparationProviderError(RuntimeError):
@@ -236,26 +241,41 @@ def _confirmed_artifact_candidates(
         )
     ):
         latest_reviews.setdefault(review.atomic_claim_candidate_id, review)
-    decision_tuples: list[tuple[str, str, str, str | None]] = []
+    decision_tuples: list[tuple[str, str, str, str | None, str | None]] = []
     summaries: list[PreparationCandidateSummary] = []
     for candidate_id in candidate_ids:
         review = latest_reviews.get(candidate_id)
         if review is None:
             continue
+        candidate = candidate_by_id[candidate_id]
+        effective_text_hash: str | None = None
+        normalized_text: str | None = None
+        if review.outcome in {"confirmed", "modified"}:
+            normalized_text = candidate.normalized_text
+            if review.outcome == "modified":
+                normalized_text = _modified_statement_text(
+                    session,
+                    review,
+                    candidate,
+                    span_ids,
+                )
+            effective_text_hash = hashlib.sha256(
+                normalized_text.encode("utf-8")
+            ).hexdigest()
         decision_tuples.append((
             str(candidate_id),
             str(review.id),
             review.outcome,
             str(review.published_source_statement_id)
             if review.published_source_statement_id else None,
+            effective_text_hash,
         ))
-        if review.outcome in {"confirmed", "modified"}:
-            candidate = candidate_by_id[candidate_id]
+        if normalized_text is not None:
             summaries.append(PreparationCandidateSummary(
                 candidate_id=candidate.id,
                 source_span_id=candidate.source_span_id,
                 quote=candidate.quote,
-                normalized_text=candidate.normalized_text,
+                normalized_text=normalized_text,
                 claim_type=candidate.claim_type,
             ))
     return tuple(summaries), _candidate_context_fingerprint(
@@ -264,9 +284,30 @@ def _confirmed_artifact_candidates(
     )
 
 
+def _modified_statement_text(
+    session: Session,
+    review: AtomicClaimReview,
+    candidate: AtomicClaimCandidate,
+    span_ids: set[uuid.UUID],
+) -> str:
+    statement_id = review.published_source_statement_id
+    if statement_id is None:
+        _unavailable_input()
+    statement = session.get(SourceStatement, statement_id)
+    if (
+        statement is None
+        or statement.atomic_claim_candidate_id != candidate.id
+        or statement.source_span_id != candidate.source_span_id
+        or statement.source_span_id not in span_ids
+        or not statement.normalized_text.strip()
+    ):
+        _unavailable_input()
+    return statement.normalized_text
+
+
 def _candidate_context_fingerprint(
     sequence: int | None,
-    decisions: tuple[tuple[str, str, str, str | None], ...],
+    decisions: tuple[tuple[str, str, str, str | None, str | None], ...],
 ) -> str:
     payload = {"parse_artifact_sequence": sequence, "decisions": decisions}
     return hashlib.sha256(
@@ -379,7 +420,7 @@ class ResearchPreparationGenerator:
         return {"candidates": candidates}
 
     def draft_protocol(self, input: PreparationInput) -> dict[str, object]:
-        _ensure_input_bounds(input)
+        _ensure_draft_context_bounds(input)
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_PROTOCOL_SYSTEM,
             _draft_context(input),
@@ -389,7 +430,7 @@ class ResearchPreparationGenerator:
         return {**draft, "input_context": _input_context(input)}
 
     def draft_evidence_plan(self, input: PreparationInput) -> dict[str, object]:
-        _ensure_input_bounds(input)
+        _ensure_draft_context_bounds(input)
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_EVIDENCE_PLAN_SYSTEM,
             _draft_context(input),
@@ -450,6 +491,20 @@ def _ensure_input_bounds(input: PreparationInput) -> None:
         len(input.source_spans) > 50
         or any(len(span.verbatim_text) > 20_000 for span in input.source_spans)
         or len(input.candidate_claim_summaries) > 100
+    ):
+        _unavailable_input()
+
+
+def _ensure_draft_context_bounds(input: PreparationInput) -> None:
+    _ensure_input_bounds(input)
+    if (
+        any(len(factor) > MAX_FACTOR_CHARACTERS for factor in input.current_factors)
+        or any(
+            len(candidate.quote) > MAX_CANDIDATE_QUOTE_CHARACTERS
+            or len(candidate.normalized_text) > MAX_CANDIDATE_NORMALIZED_CHARACTERS
+            for candidate in input.candidate_claim_summaries
+        )
+        or len(json.dumps(_draft_context(input), ensure_ascii=False)) > MAX_CONTEXT_CHARACTERS
     ):
         _unavailable_input()
 

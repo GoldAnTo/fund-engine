@@ -13,6 +13,9 @@ from sqlalchemy import select
 
 from app.ai.client import LLMClient, LLMMalformedResponseError
 from app.ai.research_preparation import (
+    MAX_CANDIDATE_NORMALIZED_CHARACTERS,
+    MAX_CANDIDATE_QUOTE_CHARACTERS,
+    MAX_FACTOR_CHARACTERS,
     PREPARATION_PROVIDER_ERROR_MESSAGE,
     PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
     PreparationCandidateSummary,
@@ -202,7 +205,14 @@ def _plan() -> dict:
     }]}
 
 
-def _candidate(session, span: SourceSpan, quote: str, *, suffix: str):
+def _candidate(
+    session,
+    span: SourceSpan,
+    quote: str,
+    *,
+    suffix: str,
+    normalized_text: str | None = None,
+):
     start = span.verbatim_text.index(quote)
     return AtomicClaimService(session).admit(
         AtomicClaimDraft(
@@ -210,7 +220,7 @@ def _candidate(session, span: SourceSpan, quote: str, *, suffix: str):
             quote=quote,
             quote_start=start,
             quote_end=start + len(quote),
-            normalized_text=f"Normalized {suffix}",
+            normalized_text=normalized_text or f"Normalized {suffix}",
             claim_type="reported_claim",
             assertion_actor=None,
             subject=None,
@@ -501,6 +511,116 @@ def test_candidate_context_fingerprint_changes_with_latest_review_decision(sessi
 
     assert first.candidate_context_fingerprint != second.candidate_context_fingerprint
     assert second.candidate_claim_summaries == ()
+
+
+def test_modified_review_uses_published_human_text_in_context_and_prompt(session) -> None:
+    case, _, span = _input(session, span_text="Alpha claim.")
+    candidate = _candidate(
+        session,
+        span,
+        "Alpha claim",
+        suffix="modified",
+        normalized_text="machine text",
+    )
+    _parse_artifact(session, case.id, [candidate.id])
+    claims = AtomicClaimService(session)
+    claims.review(
+        candidate.id,
+        outcome="confirmed",
+        reviewer="reviewer",
+        reason="confirmed",
+        idempotency_key="confirmed",
+    )
+    confirmed_context = load_preparation_input(session, case.id)
+    claims.review(
+        candidate.id,
+        outcome="modified",
+        reviewer="reviewer",
+        reason="corrected",
+        normalized_text="human corrected text",
+        idempotency_key="modified",
+    )
+    modified_context = load_preparation_input(session, case.id)
+    client = FakeClient(_protocol())
+    ResearchPreparationGenerator(client).draft_protocol(modified_context)
+    user_payload = client.calls[0][0][1]["content"]
+
+    assert modified_context.candidate_claim_summaries[0].normalized_text == "human corrected text"
+    assert "human corrected text" in user_payload
+    assert "machine text" not in user_payload
+    assert modified_context.candidate_context_fingerprint != confirmed_context.candidate_context_fingerprint
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("factor", "x" * (MAX_FACTOR_CHARACTERS + 1)),
+        ("quote", "x" * (MAX_CANDIDATE_QUOTE_CHARACTERS + 1)),
+        ("normalized", "x" * (MAX_CANDIDATE_NORMALIZED_CHARACTERS + 1)),
+    ],
+)
+def test_draft_context_item_caps_reject_before_client_call(session, kind, value) -> None:
+    case, _, _ = _input(session)
+    context = load_preparation_input(session, case.id)
+    if kind == "factor":
+        oversized = replace(context, current_factors=(value,))
+    else:
+        summary = PreparationCandidateSummary(
+            candidate_id=uuid.uuid4(),
+            source_span_id=context.source_spans[0].source_span_id,
+            quote=value if kind == "quote" else "quote",
+            normalized_text=value if kind == "normalized" else "normalized",
+            claim_type="reported_claim",
+        )
+        oversized = replace(context, candidate_claim_summaries=(summary,))
+    client = FakeClient(_protocol())
+
+    with pytest.raises(PreparationInputUnavailableError, match=PREPARATION_INPUT_UNAVAILABLE_MESSAGE):
+        ResearchPreparationGenerator(client).draft_protocol(oversized)
+    assert client.calls == []
+
+
+def test_draft_context_total_cap_rejects_before_client_call(session, monkeypatch) -> None:
+    case, _, _ = _input(session)
+    context = load_preparation_input(session, case.id)
+    monkeypatch.setattr("app.ai.research_preparation.MAX_CONTEXT_CHARACTERS", 1)
+    client = FakeClient(_protocol())
+
+    with pytest.raises(PreparationInputUnavailableError, match=PREPARATION_INPUT_UNAVAILABLE_MESSAGE):
+        ResearchPreparationGenerator(client).draft_protocol(context)
+    assert client.calls == []
+
+
+def test_plan_context_caps_reject_before_client_call(session) -> None:
+    case, _, _ = _input(session)
+    context = load_preparation_input(session, case.id)
+    oversized = replace(context, current_factors=("x" * (MAX_FACTOR_CHARACTERS + 1),))
+    client = FakeClient(_plan())
+
+    with pytest.raises(PreparationInputUnavailableError, match=PREPARATION_INPUT_UNAVAILABLE_MESSAGE):
+        ResearchPreparationGenerator(client).draft_evidence_plan(oversized)
+    assert client.calls == []
+
+
+def test_draft_context_item_cap_boundaries_are_accepted(session) -> None:
+    case, _, _ = _input(session)
+    context = load_preparation_input(session, case.id)
+    summary = PreparationCandidateSummary(
+        candidate_id=uuid.uuid4(),
+        source_span_id=context.source_spans[0].source_span_id,
+        quote="q" * MAX_CANDIDATE_QUOTE_CHARACTERS,
+        normalized_text="n" * MAX_CANDIDATE_NORMALIZED_CHARACTERS,
+        claim_type="reported_claim",
+    )
+    bounded = replace(
+        context,
+        current_factors=("f" * MAX_FACTOR_CHARACTERS,),
+        candidate_claim_summaries=(summary,),
+    )
+    client = FakeClient(_protocol())
+
+    assert ResearchPreparationGenerator(client).draft_protocol(bounded)["outcomes"]
+    assert len(client.calls) == 1
 
 
 def test_candidate_context_rejects_current_artifact_cross_document_candidate(session) -> None:
