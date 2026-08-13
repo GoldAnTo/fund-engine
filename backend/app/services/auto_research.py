@@ -391,6 +391,7 @@ class AutoResearchService:
         previous = self._run_evidence_count(run)
         failed = False
         extraction_failed = False
+        extraction_cancelled = False
         allowed_source_types = self._run_allowed_source_types(run)
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
@@ -418,22 +419,35 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 try:
-                    StatementExtractor(self.client).extract(version.id, self.session)
+                    extracted = StatementExtractor(self.client).extract(
+                        version.id,
+                        self.session,
+                        before_persist=lambda: self._claim_extraction_output_slot(run),
+                    )
                 except ComplianceRefusedError:
                     used += 1
-                    if self._is_cancelled(run):
+                    if not self._claim_extraction_output_slot(run):
                         self.session.rollback()
+                        extraction_cancelled = True
+                        self._is_cancelled(run)
                         break
                     extraction_failed = True
                     failed = True
                 except Exception:
                     used += 1
-                    if self._is_cancelled(run):
+                    if not self._claim_extraction_output_slot(run):
                         self.session.rollback()
+                        extraction_cancelled = True
+                        self._is_cancelled(run)
                         break
                     extraction_failed = True
                     failed = True
                 else:
+                    if extracted is None:
+                        self.session.rollback()
+                        extraction_cancelled = True
+                        self._is_cancelled(run)
+                        break
                     used += 1
                 if extraction_failed:
                     self.repo.update_run(
@@ -445,7 +459,7 @@ class AutoResearchService:
                     )
                     break
                 self.session.commit()
-            if extraction_failed or run.status == "cancelled":
+            if extraction_failed or extraction_cancelled or run.status == "cancelled":
                 break
             pending_claims = self._pending_atomic_claims(
                 run.research_case_id,
@@ -592,12 +606,6 @@ class AutoResearchService:
             },
         )
         self.session.flush()
-        if extraction_failed:
-            # StatementExtractor owns creation of the failed AIRun.  Commit
-            # that audit together with the terminal run and completion event
-            # before returning to the worker, which records Job completion in
-            # its following transaction.
-            self.session.commit()
 
     def refresh_event_lifecycle(self, run) -> None:
         """Project one terminal event-run into its next user-facing state.
@@ -820,6 +828,32 @@ class AutoResearchService:
             and current_run.status != "cancelled"
             and current_task is not None
             and current_task.status != "cancelled"
+            and (job is None or not job.cancel_requested)
+        )
+
+    def _claim_extraction_output_slot(self, run) -> bool:
+        """Serialize extraction persistence with run cancellation/replacement."""
+        lock_event_scope_case(self.session, run.research_case_id)
+        with self.session.no_autoflush:
+            current_run = self.session.scalar(
+                select(ResearchRun)
+                .where(ResearchRun.id == run.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            job = self.session.scalar(
+                select(Job)
+                .where(Job.kind == "research_run")
+                .where(Job.target_type == "research_run")
+                .where(Job.target_id == run.id)
+                .order_by(Job.created_at.desc())
+                .limit(1)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        return bool(
+            current_run is not None
+            and current_run.status != "cancelled"
             and (job is None or not job.cancel_requested)
         )
 

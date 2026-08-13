@@ -103,6 +103,58 @@ def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
         assert "provider failed" in failed_run.error
 
 
+def test_extract_provider_failure_rolls_back_rule_based_candidates(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    from sqlalchemy.orm import Session
+
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun, AtomicClaimCandidate, SourceSpan
+
+    version = _new_pending_version(cmd_seeded)
+    version_id = version.id
+    cmd_seeded.add(
+        SourceSpan(
+            document_version_id=version_id,
+            locator={"page": 2},
+            verbatim_text=(
+                "主要会计数据 单位：千元\n"
+                "指标 2025年 2024年\n"
+                "营业收入 50,000,000 40,000,000\n"
+            ),
+        )
+    )
+    cmd_seeded.commit()
+
+    def fail_provider(*_args, **_kwargs):
+        raise RuntimeError("provider failed after deterministic extraction")
+
+    monkeypatch.setattr(LLMClient, "chat_json", fail_provider)
+
+    response = cmd_client.post(f"/api/v1/documents/{version_id}/extract")
+    assert response.status_code == 500
+    cmd_seeded.rollback()
+
+    with Session(cmd_seeded.get_bind()) as check:
+        assert check.scalar(
+            select(func.count())
+            .select_from(AtomicClaimCandidate)
+            .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+            .where(SourceSpan.document_version_id == version_id)
+        ) == 0
+        failed_runs = list(
+            check.scalars(
+                select(AIRun)
+                .where(AIRun.kind == "extract", AIRun.status == "failed")
+                .where(
+                    AIRun.input_ref["document_version_id"].as_string()
+                    == str(version_id)
+                )
+            )
+        )
+        assert len(failed_runs) == 1
+
+
 def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd_client, cmd_seeded):
     from app.models.ledger import AIRun
     from app.models.source_governance import SourceContract
@@ -361,6 +413,77 @@ def test_propose_provider_failure_keeps_failed_airun_and_failed_job(
         assert job.status == "failed"
         assert job.error == "provider execution failed"
         assert "secret-token" not in job.error
+
+
+def test_propose_partial_output_is_rolled_back_before_failed_audit(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    import json
+
+    from sqlalchemy.orm import Session
+
+    from app.ai.client import LLMClient
+    from app.models.events import DomainEvent
+    from app.models.ledger import AIRun, Thesis
+    from app.models.operational import Job
+    from app.models.proposals import Proposal
+
+    thesis = cmd_seeded.scalars(select(Thesis)).first()
+    thesis_id = thesis.id
+    proposals_before = cmd_seeded.scalar(
+        select(func.count()).select_from(Proposal).where(Proposal.kind == "evidence_link")
+    )
+    events_before = cmd_seeded.scalar(
+        select(func.count())
+        .select_from(DomainEvent)
+        .where(DomainEvent.type == "evidence_link_proposed")
+    )
+
+    def partial_then_invalid(self, messages, schema_hint=""):
+        statements = json.loads(messages[-1]["content"])["statements"]
+        assert len(statements) >= 2
+        return {
+            "links": [
+                {
+                    "source_statement_id": statements[0]["id"],
+                    "role": "supports",
+                    "reason": "valid first proposal",
+                    "scope": {"segment": "DC"},
+                },
+                {
+                    "source_statement_id": statements[1]["id"],
+                    "reason": "missing role after partial output",
+                    "scope": {"segment": "DC"},
+                },
+            ]
+        }
+
+    monkeypatch.setattr(LLMClient, "chat_json", partial_then_invalid)
+
+    response = cmd_client.post(f"/api/v1/theses/{thesis_id}/propose")
+    assert response.status_code == 500
+    cmd_seeded.rollback()
+
+    with Session(cmd_seeded.get_bind()) as check:
+        assert check.scalar(
+            select(func.count()).select_from(Proposal).where(Proposal.kind == "evidence_link")
+        ) == proposals_before
+        assert check.scalar(
+            select(func.count())
+            .select_from(DomainEvent)
+            .where(DomainEvent.type == "evidence_link_proposed")
+        ) == events_before
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(
+                AIRun.kind == "propose", AIRun.status == "failed"
+            )
+        ) == 1
+        job = check.scalar(
+            select(Job).where(Job.kind == "propose", Job.target_id == thesis_id)
+        )
+        assert job is not None
+        assert job.status == "failed"
+        assert job.error == "provider execution failed"
 
 
 def test_rerun_compliance_refusal_returns_422_and_keeps_audit(

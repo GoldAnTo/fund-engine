@@ -31,6 +31,7 @@ from app.models.ledger import (
     Thesis,
     ValidationError,
 )
+from app.models.operational import Job
 from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 from app.services.jobs import JobService
@@ -206,13 +207,23 @@ def propose_evidence(
         actor=f"ai:{client.model_version}",
     )
     jobs.start(job, step="recalling statements")
+    job_id = job.id
+    # Make the operational attempt observable before provider work.  The
+    # proposer may roll back its output transaction on any later failure.
+    commit_or_rollback(db)
     try:
         proposal_ids = EvidenceProposer(client).propose(thesis_id, db)
     except Exception:
         # EvidenceProposer records the provider detail on its failed AIRun.
         # Keep the operational Job safe for broad UI exposure while
         # committing both failure records before the 500 boundary unwinds.
-        jobs.finish(job, status="failed", error="provider execution failed")
+        failed_job = db.get(Job, job_id)
+        if failed_job is not None:
+            jobs.finish(
+                failed_job,
+                status="failed",
+                error="provider execution failed",
+            )
         commit_or_rollback(db)
         raise
     jobs.progress(job, step="proposed", progress=100)

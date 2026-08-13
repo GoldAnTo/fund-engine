@@ -186,6 +186,10 @@ class EvidenceProposer:
             return created_ids
 
         except Exception as exc:
+            # A malformed later link must not publish earlier proposals or
+            # outbox events.  Keep only one failed AIRun in a clean transaction
+            # for the API/CLI/worker boundary to commit.
+            session.rollback()
             record_run(
                 session,
                 kind="propose",

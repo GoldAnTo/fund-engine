@@ -169,7 +169,9 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
         def __init__(self, _client):
             pass
 
-        def extract(self, document_id, _session):
+        def extract(self, document_id, _session, *, before_persist=None):
+            if before_persist is not None and not before_persist():
+                return None
             extracted.append(document_id)
             return []
 
@@ -280,6 +282,15 @@ def test_extraction_provider_failure_after_success_counts_both_attempts_and_stop
     service._client = client
     run = service.start(case.id, max_rounds=1, budget=10)
     run_id = run.id
+    output_slot_calls = 0
+    original_output_slot = service._claim_extraction_output_slot
+
+    def count_output_slot(checked_run):
+        nonlocal output_slot_calls
+        output_slot_calls += 1
+        return original_output_slot(checked_run)
+
+    monkeypatch.setattr(service, "_claim_extraction_output_slot", count_output_slot)
 
     provider_calls = 0
 
@@ -293,7 +304,10 @@ def test_extraction_provider_failure_after_success_counts_both_attempts_and_stop
     monkeypatch.setattr(client, "chat_json", fail_second_provider_call)
 
     service.execute(run)
+    session.commit()
     session.rollback()
+
+    assert output_slot_calls == 2
 
     with Session(session.get_bind()) as check:
         persisted_run = check.get(ResearchRun, run_id)
@@ -332,6 +346,236 @@ def test_extraction_provider_failure_after_success_counts_both_attempts_and_stop
             "stop_reason": "task_failed",
             "budget_used": 2,
         }
+
+
+def test_cancelled_run_discards_inflight_extraction_output(
+    tmp_path, monkeypatch
+):
+    from app.ai.client import LLMClient
+    from app.models.operational import Job
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'extract-cancel.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local() as setup:
+        case = ResearchCase(
+            title="cancel extraction",
+            industry_topic="i",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        setup.add(
+            Thesis(
+                research_case_id=case.id,
+                statement="Late extraction must be discarded",
+                created_by="u",
+                created_at=now,
+            )
+        )
+        document = DocumentVersion(
+            content_sha256=uuid.uuid4().hex,
+            source_url="https://example.test/cancel-extraction",
+            available_at=now,
+            acquired_at=now,
+            parser_version="test",
+        )
+        setup.add(document)
+        setup.flush()
+        span = SourceSpan(
+            document_version_id=document.id,
+            locator={"page": 1},
+            verbatim_text="Management reported accelerator demand remained strong.",
+        )
+        setup.add_all(
+            [
+                span,
+                CaseDocumentVersion(
+                    research_case_id=case.id,
+                    document_version_id=document.id,
+                    linked_at=now,
+                ),
+            ]
+        )
+        setup.commit()
+        run = AutoResearchService(setup).start(case.id, max_rounds=1, budget=10)
+        run_id = run.id
+        span_id = span.id
+
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    def cancel_then_return(*_args, **_kwargs):
+        with session_local() as cancelling:
+            cancelled_run = cancelling.get(ResearchRun, run_id)
+            assert cancelled_run is not None
+            assert AutoResearchService(cancelling).repo.cancel_run(cancelled_run)
+            cancelling.commit()
+        text = "Management reported accelerator demand remained strong."
+        return {
+            "statements": [
+                {
+                    "span_id": str(span_id),
+                    "quote": text,
+                    "quote_start": 0,
+                    "quote_end": len(text),
+                    "normalized_text": "Accelerator demand remained strong.",
+                    "kind": "reported_claim",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(client, "chat_json", cancel_then_return)
+    with session_local() as worker:
+        run = worker.get(ResearchRun, run_id)
+        assert run is not None
+        service = AutoResearchService(worker)
+        service._client = client
+        service.execute(run)
+        worker.commit()
+
+    with Session(engine) as check:
+        run = check.get(ResearchRun, run_id)
+        job = check.scalar(
+            select(Job).where(Job.target_type == "research_run", Job.target_id == run_id)
+        )
+        assert run is not None and run.status == "cancelled"
+        assert job is not None and job.status == "cancelled"
+        assert check.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 0
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(AIRun.kind == "extract")
+        ) == 0
+
+
+@pytest.mark.pg_only
+def test_postgres_extraction_failure_waits_for_cancellation_transition(
+    engine, monkeypatch
+):
+    from app.ai.client import LLMClient
+
+    session_local = sessionmaker(bind=engine, future=True)
+    now = datetime.now(timezone.utc)
+    with session_local() as setup:
+        case = ResearchCase(
+            title="failure cancellation race",
+            industry_topic="i",
+            created_by="u",
+            created_at=now,
+        )
+        setup.add(case)
+        setup.flush()
+        setup.add(
+            Thesis(
+                research_case_id=case.id,
+                statement="Cancellation must win provider failure",
+                created_by="u",
+                created_at=now,
+            )
+        )
+        document = DocumentVersion(
+            content_sha256=uuid.uuid4().hex,
+            source_url="https://example.test/failure-cancel-race",
+            available_at=now,
+            acquired_at=now,
+            parser_version="test",
+        )
+        setup.add(document)
+        setup.flush()
+        setup.add_all(
+            [
+                SourceSpan(
+                    document_version_id=document.id,
+                    locator={"page": 1},
+                    verbatim_text="Provider work is still in flight for this source.",
+                ),
+                CaseDocumentVersion(
+                    research_case_id=case.id,
+                    document_version_id=document.id,
+                    linked_at=now,
+                ),
+            ]
+        )
+        setup.commit()
+        run = AutoResearchService(setup).start(case.id, max_rounds=1, budget=10)
+        run_id = run.id
+
+    cancellation_locked = Event()
+    provider_failed = Event()
+    worker_marked_failed = Event()
+    cancellation_errors: list[BaseException] = []
+    worker_errors: list[BaseException] = []
+    failed_before_cancel_commit: list[bool] = []
+
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    def fail_after_cancellation_locks(*_args, **_kwargs):
+        assert cancellation_locked.wait(timeout=5)
+        provider_failed.set()
+        raise RuntimeError("provider failed during cancellation")
+
+    monkeypatch.setattr(client, "chat_json", fail_after_cancellation_locks)
+    original_update_run = AutoResearchRepository.update_run
+
+    def observe_failed_transition(self, updated_run, **kwargs):
+        if updated_run.id == run_id and kwargs.get("status") == "failed":
+            worker_marked_failed.set()
+        return original_update_run(self, updated_run, **kwargs)
+
+    monkeypatch.setattr(
+        AutoResearchRepository, "update_run", observe_failed_transition
+    )
+
+    def execute_run():
+        with session_local() as worker:
+            try:
+                run = worker.get(ResearchRun, run_id)
+                assert run is not None
+                service = AutoResearchService(worker)
+                service._client = client
+                service.execute(run)
+                worker.commit()
+            except BaseException as exc:
+                worker_errors.append(exc)
+                worker.rollback()
+
+    def cancel_run_while_provider_is_inflight():
+        with session_local() as cancelling:
+            try:
+                service = AutoResearchService(cancelling)
+                run = service._lock_run_for_transition(run_id)
+                assert run is not None
+                assert service.repo.cancel_run(run)
+                cancelling.flush()
+                cancellation_locked.set()
+                assert provider_failed.wait(timeout=5)
+                failed_before_cancel_commit.append(
+                    worker_marked_failed.wait(timeout=1)
+                )
+                cancelling.commit()
+            except BaseException as exc:
+                cancellation_errors.append(exc)
+                cancelling.rollback()
+
+    worker_thread = Thread(target=execute_run)
+    cancellation_thread = Thread(target=cancel_run_while_provider_is_inflight)
+    worker_thread.start()
+    cancellation_thread.start()
+    worker_thread.join(timeout=10)
+    cancellation_thread.join(timeout=10)
+
+    assert not worker_thread.is_alive()
+    assert not cancellation_thread.is_alive()
+    assert not worker_errors
+    assert not cancellation_errors
+    assert failed_before_cancel_commit == [False]
+
+    with session_local() as check:
+        run = check.get(ResearchRun, run_id)
+        assert run is not None and run.status == "cancelled"
+        assert check.scalar(
+            select(func.count()).select_from(AIRun).where(AIRun.kind == "extract")
+        ) == 0
 
 
 def test_tasks_created(session):
