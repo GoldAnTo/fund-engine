@@ -73,22 +73,24 @@ class LLMClient:
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
+        app_env = os.getenv("APP_ENV", "").strip().lower()
+
+        if not api_key and app_env != "test":
+            raise RuntimeError(
+                "LLM_API_KEY is required outside APP_ENV=test; "
+                "live runtimes never fall back to mock output"
+            )
+
         temperature = float(os.getenv("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
         raw_seed = os.getenv("LLM_SEED", "").strip()
         seed: int | None = int(raw_seed) if raw_seed else None
 
         if not api_key:
-            app_env = os.getenv("APP_ENV", "").strip().lower()
-            if app_env == "test":
-                return cls(
-                    model_version=f"mock-{model}",
-                    mock=True,
-                    temperature=temperature,
-                    seed=seed,
-                )
-            raise RuntimeError(
-                "LLM_API_KEY is required outside APP_ENV=test; "
-                "live runtimes never fall back to mock output"
+            return cls(
+                model_version=f"mock-{model}",
+                mock=True,
+                temperature=temperature,
+                seed=seed,
             )
 
         from openai import OpenAI

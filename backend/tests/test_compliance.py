@@ -160,6 +160,20 @@ def test_live_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
         LLMClient.from_env()
 
 
+@pytest.mark.parametrize("invalid_knob", ["LLM_TEMPERATURE", "LLM_SEED"])
+def test_missing_live_api_key_error_precedes_invalid_knobs(
+    monkeypatch, invalid_knob
+):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("LLM_TEMPERATURE", raising=False)
+    monkeypatch.delenv("LLM_SEED", raising=False)
+    monkeypatch.setenv(invalid_knob, "invalid")
+
+    with pytest.raises(RuntimeError, match="LLM_API_KEY"):
+        LLMClient.from_env()
+
+
 def test_test_environment_without_api_key_uses_mock(monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setenv("APP_ENV", "test")
