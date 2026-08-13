@@ -16,6 +16,7 @@ from app.models.ledger import (
     ResearchCase,
     SourceSpan,
     SourceStatement,
+    ValidationError,
 )
 from app.models.operational import Job, ResearchRun
 from app.models.research_preparation import (
@@ -477,7 +478,7 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"draft": "protocol"},
+        {"rationale": "protocol"},
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
     )
@@ -485,7 +486,7 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
         case.id,
         actor="reviewer",
         revision=preparation.version,
-        payload=ProtocolConfirmation(draft_sequence=2, edits={"title": "confirmed"}),
+        payload=ProtocolConfirmation(draft_sequence=2, edits={"rationale": "confirmed"}),
     )
 
     assert protocol.protocol_review_state == "confirmed"
@@ -504,9 +505,9 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         case.id,
         "draft_protocol",
         {
-            "title": "Original protocol",
-            "nested": {"keep": "original", "replace": "old"},
-            "items": ["old"],
+            "outcomes": {"primary": {"rationale": "original", "baseline": "base"}},
+            "verification_rules": ["old"],
+            "rationale": "Original protocol",
         },
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
@@ -530,12 +531,15 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         )
     assert _snapshot(session, preparation) == stale_snapshot
 
-    with pytest.raises(ConflictError):
+    with pytest.raises(ValidationError):
         service.confirm_protocol(
             case.id,
             actor="reviewer",
             revision=preparation.version,
-            payload=ProtocolConfirmation(source.sequence, {1: "invalid key"}),
+            payload=ProtocolConfirmation(
+                source.sequence,
+                {"Bearer sk-secret-123": "sentinel-secret-value"},
+            ),
         )
     assert _snapshot(session, preparation) == stale_snapshot
 
@@ -545,7 +549,10 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         revision=preparation.version,
         payload=ProtocolConfirmation(
             source.sequence,
-            {"nested": {"replace": "new", "added": "value"}, "items": ["new"]},
+            {
+                "outcomes": {"primary": {"rationale": "sentinel-secret-value"}},
+                "verification_rules": ["new"],
+            },
         ),
     )
 
@@ -564,18 +571,18 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         (source.sequence + 1, "current"),
     ]
     assert artifacts[-1].payload == {
-        "title": "Original protocol",
-        "nested": {"keep": "original", "replace": "new", "added": "value"},
-        "items": ["new"],
+        "outcomes": {"primary": {"rationale": "sentinel-secret-value", "baseline": "base"}},
+        "verification_rules": ["new"],
+        "rationale": "Original protocol",
     }
     event = _events(session, preparation.id)[-1]
     assert event.detail == {
         "source_draft_sequence": source.sequence,
         "confirmed_draft_sequence": source.sequence + 1,
-        "changed_field_paths": ["items", "nested.added", "nested.replace"],
-        "changed_field_count": 3,
-        "changed_field_paths_truncated": False,
+        "edit_count": 2,
     }
+    assert "sentinel-secret-value" not in str(event.detail)
+    assert "verification_rules" not in str(event.detail)
     assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
 
 

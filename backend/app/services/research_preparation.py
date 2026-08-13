@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import ArtifactKind, PreparationStep
 from app.errors import ConflictError, NotFoundError
-from app.models.ledger import AtomicClaimCandidate
+from app.models.ledger import AtomicClaimCandidate, ValidationError
 from app.models.research_preparation import (
     ResearchPreparation,
     ResearchPreparationArtifact,
@@ -55,7 +55,16 @@ _PREPARATION_FAILURE_CODES = frozenset(
 )
 _PERSISTED_PROVIDER_FAILURE = "preparation_provider_unavailable"
 _CLAIM_OUTCOMES = frozenset({"confirmed", "modified", "rejected"})
-_MAX_RECORDED_EDIT_PATHS = 50
+_EDITABLE_PROTOCOL_KEYS = frozenset(
+    {
+        "outcomes",
+        "baseline",
+        "horizon",
+        "mechanisms",
+        "verification_rules",
+        "rationale",
+    }
+)
 
 
 def _utcnow() -> datetime:
@@ -301,11 +310,10 @@ class ResearchPreparationService:
         artifact = self._repo.current_artifact(preparation.id, "research_protocol_draft")
         if artifact is None or artifact.sequence != payload.draft_sequence:
             raise ConflictError("protocol draft revision is stale")
-        self._validate_protocol_edits(payload.edits)
+        self._validate_protocol_edits(artifact.payload, payload.edits)
         confirmed_draft_sequence = artifact.sequence
-        changed_paths: list[str] = []
         if payload.edits:
-            merged_payload, changed_paths = self._merge_protocol_edits(
+            merged_payload = self._merge_protocol_edits(
                 artifact.payload, payload.edits
             )
             successor = self._repo.append_artifact(
@@ -331,10 +339,7 @@ class ResearchPreparationService:
             detail={
                 "source_draft_sequence": artifact.sequence,
                 "confirmed_draft_sequence": confirmed_draft_sequence,
-                "changed_field_paths": changed_paths[:_MAX_RECORDED_EDIT_PATHS],
-                "changed_field_count": len(changed_paths),
-                "changed_field_paths_truncated": len(changed_paths)
-                > _MAX_RECORDED_EDIT_PATHS,
+                "edit_count": len(payload.edits),
             },
         )
         return preparation
@@ -482,41 +487,46 @@ class ResearchPreparationService:
             elif decision.normalized_text is not None:
                 raise ConflictError("only modified claim may provide normalized text")
 
-    def _validate_protocol_edits(self, edits: object) -> None:
-        if not isinstance(edits, dict) or not self._has_only_string_object_keys(edits):
-            raise ConflictError("protocol edits must be an object with string keys")
+    def _validate_protocol_edits(
+        self, source_payload: object, edits: object
+    ) -> None:
+        if not isinstance(source_payload, dict) or not isinstance(edits, dict):
+            raise ValidationError("protocol edits must be an object")
 
-    def _has_only_string_object_keys(self, value: object) -> bool:
-        if isinstance(value, dict):
-            return all(
-                isinstance(key, str) and self._has_only_string_object_keys(child)
-                for key, child in value.items()
-            )
-        if isinstance(value, list):
-            return all(self._has_only_string_object_keys(child) for child in value)
-        return True
+        def validate_object(
+            current: dict[str, object], patch: dict[object, object], *, top_level: bool
+        ) -> None:
+            for key, value in patch.items():
+                if not isinstance(key, str):
+                    raise ValidationError("protocol edit keys must be strings")
+                if top_level and key not in _EDITABLE_PROTOCOL_KEYS:
+                    raise ValidationError("protocol edit key is not allowed")
+                if key not in current:
+                    raise ValidationError("protocol edit does not match draft structure")
+                if isinstance(value, dict):
+                    existing = current[key]
+                    if not isinstance(existing, dict):
+                        raise ValidationError("protocol edit changes object structure")
+                    validate_object(existing, value, top_level=False)
+
+        validate_object(source_payload, edits, top_level=True)
 
     def _merge_protocol_edits(
         self, source_payload: dict[str, object], edits: dict[str, object]
-    ) -> tuple[dict[str, object], list[str]]:
+    ) -> dict[str, object]:
         merged = copy.deepcopy(source_payload)
-        changed_paths: list[str] = []
 
-        def overlay(
-            target: dict[str, object], patch: dict[str, object], prefix: str
-        ) -> None:
+        def overlay(target: dict[str, object], patch: dict[str, object]) -> None:
             for key in sorted(patch):
-                path = f"{prefix}.{key}" if prefix else key
                 incoming = copy.deepcopy(patch[key])
                 previous = target.get(key)
                 if isinstance(previous, dict) and isinstance(incoming, dict):
-                    overlay(previous, incoming, path)
+                    overlay(previous, incoming)
                 elif key not in target or previous != incoming:
                     target[key] = incoming
-                    changed_paths.append(path)
 
-        overlay(merged, edits, "")
-        return merged, changed_paths
+        overlay(merged, edits)
+        return merged
 
     def _set_aggregate_status(self, preparation: ResearchPreparation) -> None:
         if any(
