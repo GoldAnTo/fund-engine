@@ -5,12 +5,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta, timezone
-from threading import Event
+from threading import Barrier, Event
 from time import sleep
 
 import pytest
 from sqlalchemy import create_engine, select
-from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import sessionmaker
 
 from app.domain.acquisition import AdmittedEvidenceRef
@@ -232,6 +232,64 @@ def test_file_sqlite_atomic_claim_race_has_one_winner_and_one_none(tmp_path):
         engine.dispose()
 
 
+@pytest.mark.pg_only
+def test_postgres_skip_locked_takeover_and_stale_cas_use_independent_sessions(
+    engine, session, research_case, thesis
+):
+    now = datetime(2026, 8, 12, 8, tzinfo=UTC)
+    seed_repo = AcquisitionRepository(session, clock=lambda: now)
+    first_job = _create_job(seed_repo, research_case, thesis)
+    second_job = _create_job(seed_repo, research_case, thesis)
+    session.commit()
+    sessions = sessionmaker(bind=engine, future=True)
+    start = Barrier(2)
+    both_claimed = Barrier(2)
+
+    def claim(worker_id):
+        with sessions() as worker_session:
+            start.wait(timeout=5)
+            value = AcquisitionRepository(
+                worker_session, clock=lambda: now
+            ).claim_next(worker_id=worker_id, lease_for=timedelta(seconds=30))
+            assert value is not None
+            both_claimed.wait(timeout=5)
+            worker_session.commit()
+            return value
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = tuple(
+            future.result(timeout=10)
+            for future in (
+                pool.submit(claim, "worker-pg-a"),
+                pool.submit(claim, "worker-pg-b"),
+            )
+        )
+
+    assert {claim.job_id for claim in claims} == {first_job.id, second_job.id}
+    stale = claims[0]
+    with sessions() as cancel_session:
+        AcquisitionRepository(cancel_session, clock=lambda: now).cancel(
+            claims[1].job_id, lease_token=claims[1].lease_token
+        )
+        cancel_session.commit()
+    takeover_now = now + timedelta(seconds=31)
+    with sessions() as takeover_session:
+        replacement = AcquisitionRepository(
+            takeover_session, clock=lambda: takeover_now
+        ).claim_next(
+            worker_id="worker-pg-takeover", lease_for=timedelta(seconds=30)
+        )
+        assert replacement is not None
+        takeover_session.commit()
+    with sessions() as stale_session:
+        with pytest.raises(StaleLeaseError):
+            AcquisitionRepository(stale_session, clock=lambda: takeover_now).advance(
+                stale.job_id,
+                lease_token=stale.lease_token,
+                stage="fetching",
+            )
+
+
 def test_expired_lease_reclaim_rotates_token_and_fences_old_worker(
     repo, clock, research_case, thesis
 ):
@@ -290,6 +348,44 @@ def test_advance_validates_stages_updates_counters_and_freezes_terminal_job(
     with pytest.raises(TerminalJobError):
         repo.advance(job.id, lease_token=claim.lease_token, stage="failed", status="failed")
     assert repo.claim_next(worker_id="worker-b", lease_for=timedelta(seconds=30)) is None
+
+
+def test_advance_rejects_stage_regression_without_appending_event(
+    repo, session, research_case, thesis
+):
+    job = _create_job(repo, research_case, thesis)
+    claim = repo.claim_next(worker_id="worker-a", lease_for=timedelta(seconds=30))
+    assert claim is not None
+    repo.advance(job.id, lease_token=claim.lease_token, stage="admitting")
+    event_ids_before = tuple(event.id for event in repo.events(job.id))
+
+    with pytest.raises(ValueError, match="regress"):
+        repo.advance(job.id, lease_token=claim.lease_token, stage="searching")
+
+    session.expire_all()
+    stored = session.get(AcquisitionJob, job.id)
+    assert stored is not None
+    assert (stored.status, stored.stage) == ("running", "admitting")
+    assert tuple(event.id for event in repo.events(job.id)) == event_ids_before
+
+
+@pytest.mark.parametrize("dialect", [sqlite.dialect(), postgresql.dialect()])
+def test_advance_stage_cas_predicate_has_same_contract_on_sqlite_and_postgres(
+    dialect,
+):
+    predicate = AcquisitionRepository._advance_stage_predicate(
+        status="running", stage="extracting"
+    )
+    compiled = str(
+        select(AcquisitionJob.id)
+        .where(predicate)
+        .compile(dialect=dialect, compile_kwargs={"literal_binds": True})
+    ).casefold()
+
+    assert "acquisition_jobs.stage in" in compiled
+    for allowed in ("searching", "fetching", "freezing", "extracting"):
+        assert allowed in compiled
+    assert "admitting" not in compiled
 
 
 def test_retry_wait_releases_lease_and_is_not_claimable_until_due(

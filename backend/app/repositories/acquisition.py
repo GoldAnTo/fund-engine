@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.domain.acquisition import (
 from app.errors import ConflictError
 from app.models.acquisition import (
     AcquisitionAttempt,
+    AcquisitionException,
     AcquisitionJob,
     AcquisitionJobEvent,
     AutomaticAdmissionDecision,
@@ -59,6 +60,19 @@ _TERMINAL_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 _RUNNING_STAGES = frozenset(
     {"searching", "fetching", "freezing", "extracting", "admitting"}
 )
+_RUNNING_STAGE_ORDER = (
+    "searching",
+    "fetching",
+    "freezing",
+    "extracting",
+    "admitting",
+)
+_TERMINAL_SOURCE_STAGES = {
+    "succeeded": frozenset({"admitting"}),
+    "partial": frozenset({"freezing", "extracting", "admitting"}),
+    "failed": _RUNNING_STAGES,
+    "cancelled": _RUNNING_STAGES,
+}
 _COUNTER_FIELDS = frozenset(
     {
         "reference_count",
@@ -341,7 +355,10 @@ class AcquisitionRepository:
             )
             .values(
                 status="running",
-                stage="searching",
+                stage=case(
+                    (AcquisitionJob.status == "queued", "searching"),
+                    else_=AcquisitionJob.stage,
+                ),
                 attempt=AcquisitionJob.attempt + 1,
                 lease_owner=worker_id,
                 lease_token=token,
@@ -397,7 +414,10 @@ class AcquisitionRepository:
                 )
                 .values(
                     status="running",
-                    stage="searching",
+                    stage=case(
+                        (AcquisitionJob.status == "queued", "searching"),
+                        else_=AcquisitionJob.stage,
+                    ),
                     attempt=AcquisitionJob.attempt + 1,
                     lease_owner=normalized_worker,
                     lease_token=token,
@@ -427,6 +447,202 @@ class AcquisitionRepository:
             attempt=job.attempt,
         )
 
+    def fence(
+        self,
+        job_id: uuid.UUID,
+        *,
+        lease_token: str,
+        allowed_stages: frozenset[str] | None = None,
+    ) -> AcquisitionJob:
+        """CAS-check a fresh lease in the caller's short transaction."""
+        now = self._now()
+        predicates = [
+            AcquisitionJob.id == job_id,
+            AcquisitionJob.status == "running",
+            AcquisitionJob.lease_token == lease_token,
+            AcquisitionJob.lease_expires_at.is_not(None),
+            AcquisitionJob.lease_expires_at > now,
+        ]
+        if allowed_stages is not None:
+            predicates.append(AcquisitionJob.stage.in_(allowed_stages))
+        result = self._session.execute(
+            update(AcquisitionJob)
+            .where(*predicates)
+            .values(updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise StaleLeaseError("acquisition lease is stale")
+        job = self.get_record(job_id)
+        assert job is not None
+        self._session.refresh(job)
+        return job
+
+    def record_attempt(
+        self,
+        job_id: uuid.UUID,
+        *,
+        lease_token: str,
+        adapter_key: str,
+        operation: str,
+        started_at: datetime,
+        finished_at: datetime,
+        outcome: str,
+        retryable: bool,
+        safe_metadata: dict[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> AcquisitionAttempt:
+        """Append one completed provider call behind the active lease CAS."""
+        metadata = safe_metadata or {}
+        validate_persistable_json(metadata, path="$.attempt.safe_metadata")
+        validate_persistable_text(error_code, path="$.attempt.error_code")
+        for value, name in (
+            (adapter_key, "adapter_key"),
+            (operation, "operation"),
+            (outcome, "outcome"),
+        ):
+            validate_persistable_text(value, path=f"$.attempt.{name}")
+            if not value.strip():
+                raise ValueError(f"{name} must not be blank")
+        start = _aware_utc(started_at)
+        finish = _aware_utc(finished_at)
+        if finish < start:
+            raise ValueError("attempt finished_at must not precede started_at")
+        self.fence(job_id, lease_token=lease_token)
+        attempt_no = (
+            self._session.scalar(
+                select(func.max(AcquisitionAttempt.attempt_no)).where(
+                    AcquisitionAttempt.job_id == job_id,
+                    AcquisitionAttempt.adapter_key == adapter_key,
+                    AcquisitionAttempt.operation == operation,
+                )
+            )
+            or 0
+        ) + 1
+        attempt = AcquisitionAttempt(
+            job_id=job_id,
+            adapter_key=adapter_key,
+            operation=operation,
+            attempt_no=attempt_no,
+            started_at=start,
+            finished_at=finish,
+            outcome=outcome,
+            error_code=error_code,
+            retryable=retryable,
+            safe_metadata=metadata,
+        )
+        self._session.add(attempt)
+        self._session.flush()
+        return attempt
+
+    def create_or_get_reference(
+        self,
+        job_id: uuid.UUID,
+        *,
+        lease_token: str,
+        adapter_key: str,
+        external_record_id: str,
+        external_version: str,
+        canonical_url: str,
+        title: str,
+        published_at: datetime | None,
+        source_role: str,
+        metadata_json: dict[str, Any],
+    ) -> SourceReference:
+        """Idempotently append one provider identity behind a lease fence."""
+        validate_persistable_json(metadata_json, path="$.source_reference.metadata")
+        self.fence(job_id, lease_token=lease_token)
+        existing = self._session.scalar(
+            select(SourceReference).where(
+                SourceReference.job_id == job_id,
+                SourceReference.adapter_key == adapter_key,
+                SourceReference.external_record_id == external_record_id,
+                SourceReference.external_version == external_version,
+            )
+        )
+        normalized_published_at = (
+            _aware_utc(published_at) if published_at is not None else None
+        )
+        expected = {
+            "canonical_url": canonical_url,
+            "title": title,
+            "source_role": source_role,
+            "metadata_json": metadata_json,
+        }
+        if existing is not None:
+            existing_published_at = (
+                _aware_utc(existing.published_at)
+                if existing.published_at is not None
+                else None
+            )
+            if (
+                existing_published_at != normalized_published_at
+                or any(
+                    getattr(existing, key) != value
+                    for key, value in expected.items()
+                )
+            ):
+                raise ConflictError("source reference identity changed")
+            return existing
+        reference = SourceReference(
+            job_id=job_id,
+            adapter_key=adapter_key,
+            external_record_id=external_record_id,
+            external_version=external_version,
+            canonical_url=canonical_url,
+            title=title,
+            published_at=normalized_published_at,
+            source_role=source_role,
+            metadata_json=metadata_json,
+            created_at=self._now(),
+        )
+        self._session.add(reference)
+        self._session.flush()
+        return reference
+
+    def record_exception(
+        self,
+        job_id: uuid.UUID,
+        *,
+        lease_token: str,
+        reason_code: str,
+        detail_json: dict[str, Any],
+        source_reference_id: uuid.UUID | None = None,
+        retrieval_artifact_id: uuid.UUID | None = None,
+        candidate_id: uuid.UUID | None = None,
+    ) -> AcquisitionException:
+        """Append or reuse one identical sanitized orchestration exception."""
+        validate_persistable_text(reason_code, path="$.exception.reason_code")
+        validate_persistable_json(detail_json, path="$.exception.detail")
+        self.fence(job_id, lease_token=lease_token)
+        existing = self._session.scalar(
+            select(AcquisitionException)
+            .where(
+                AcquisitionException.job_id == job_id,
+                AcquisitionException.source_reference_id == source_reference_id,
+                AcquisitionException.retrieval_artifact_id
+                == retrieval_artifact_id,
+                AcquisitionException.candidate_id == candidate_id,
+                AcquisitionException.reason_code == reason_code,
+            )
+            .order_by(AcquisitionException.created_at, AcquisitionException.id)
+            .limit(1)
+        )
+        if existing is not None and existing.detail_json == detail_json:
+            return existing
+        exception = AcquisitionException(
+            job_id=job_id,
+            source_reference_id=source_reference_id,
+            retrieval_artifact_id=retrieval_artifact_id,
+            candidate_id=candidate_id,
+            reason_code=reason_code,
+            detail_json=detail_json,
+            created_at=self._now(),
+        )
+        self._session.add(exception)
+        self._session.flush()
+        return exception
+
     def advance(
         self,
         job_id: uuid.UUID,
@@ -449,7 +665,21 @@ class AcquisitionRepository:
         job = self.get_record(job_id)
         if job is not None and job.status in _TERMINAL_STATUSES:
             raise TerminalJobError(f"acquisition job is already {job.status}")
-        self._validate_transition(status=status, stage=stage, retry_at=retry_at)
+        now = self._now()
+        if (
+            job is None
+            or job.status != "running"
+            or job.lease_token != lease_token
+            or job.lease_expires_at is None
+            or _aware_utc(job.lease_expires_at) <= now
+        ):
+            raise StaleLeaseError("acquisition lease is stale")
+        self._validate_transition(
+            status=status,
+            stage=stage,
+            retry_at=retry_at,
+            current_stage=job.stage if job is not None else None,
+        )
         counter_values = dict(counters or {})
         unknown = set(counter_values) - _COUNTER_FIELDS
         if unknown or any(
@@ -458,7 +688,6 @@ class AcquisitionRepository:
         ):
             raise ValueError("counter values must be non-negative known counters")
 
-        now = self._now()
         values: dict[str, Any] = {
             "status": status,
             "stage": stage,
@@ -490,6 +719,7 @@ class AcquisitionRepository:
                 AcquisitionJob.lease_expires_at.is_not(None),
                 AcquisitionJob.lease_expires_at > now,
                 AcquisitionJob.status.not_in(_TERMINAL_STATUSES),
+                self._advance_stage_predicate(status=status, stage=stage),
             )
             .values(**values)
             .execution_options(synchronize_session=False)
@@ -510,14 +740,31 @@ class AcquisitionRepository:
         return self._view(updated)
 
     @staticmethod
+    def _advance_stage_predicate(*, status: str, stage: str):
+        if status in {"running", "retry_wait"} and stage in _RUNNING_STAGE_ORDER:
+            target_index = _RUNNING_STAGE_ORDER.index(stage)
+            return AcquisitionJob.stage.in_(
+                _RUNNING_STAGE_ORDER[: target_index + 1]
+            )
+        allowed = _TERMINAL_SOURCE_STAGES.get(status)
+        if allowed is not None:
+            return AcquisitionJob.stage.in_(allowed)
+        return AcquisitionJob.stage.in_(())
+
+    @staticmethod
     def _validate_transition(
-        *, status: str, stage: str, retry_at: datetime | None
+        *,
+        status: str,
+        stage: str,
+        retry_at: datetime | None,
+        current_stage: str | None = None,
     ) -> None:
         if status == "running":
             if stage not in _RUNNING_STAGES:
                 raise ValueError("stage is not a valid running stage")
             if retry_at is not None:
                 raise ValueError("retry_at is only valid for retry_wait")
+            AcquisitionRepository._validate_stage_progress(current_stage, stage)
             return
         if status == "retry_wait":
             if stage not in _RUNNING_STAGES:
@@ -526,12 +773,29 @@ class AcquisitionRepository:
                 raise ValueError("retry_wait requires retry_at")
             if retry_at.tzinfo is None or retry_at.utcoffset() is None:
                 raise ValueError("retry_at must be timezone-aware")
+            AcquisitionRepository._validate_stage_progress(current_stage, stage)
             return
         if status in _TERMINAL_STATUSES and stage == status:
             if retry_at is not None:
                 raise ValueError("terminal transitions cannot set retry_at")
+            if (
+                current_stage is not None
+                and current_stage not in _TERMINAL_SOURCE_STAGES[status]
+            ):
+                raise ValueError("terminal transition is not valid from current stage")
             return
         raise ValueError("status and stage are incoherent")
+
+    @staticmethod
+    def _validate_stage_progress(
+        current_stage: str | None, target_stage: str
+    ) -> None:
+        if current_stage is None or current_stage not in _RUNNING_STAGE_ORDER:
+            return
+        if _RUNNING_STAGE_ORDER.index(target_stage) < _RUNNING_STAGE_ORDER.index(
+            current_stage
+        ):
+            raise ValueError("running stage cannot regress")
 
     def cancel(
         self,

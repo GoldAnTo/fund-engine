@@ -380,6 +380,7 @@ def lease_write_fence(
     job_id: uuid.UUID,
     lease_token: str,
     now: datetime,
+    allowed_stages: frozenset[str] = frozenset({"admitting"}),
 ) -> None:
     """Serialize a worker write and compare-and-swap its lease eligibility."""
     checked_at = _require_aware(now, "lease fence clock")
@@ -389,7 +390,7 @@ def lease_write_fence(
             .where(
                 AcquisitionJob.id == job_id,
                 AcquisitionJob.status == "running",
-                AcquisitionJob.stage == "admitting",
+                AcquisitionJob.stage.in_(allowed_stages),
                 AcquisitionJob.lease_token == lease_token,
                 AcquisitionJob.lease_expires_at.is_not(None),
                 AcquisitionJob.lease_expires_at > checked_at,

@@ -485,7 +485,7 @@ def test_ai_run_records_failure_on_extraction_error(session, span):
     assert len(runs) == 1
     run = runs[0]
     assert run.status == "failed"
-    assert "LLM error" in run.error
+    assert run.error == "extraction_failed:RuntimeError"
     assert run.model_version == "mock-test"
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
 

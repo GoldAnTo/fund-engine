@@ -180,6 +180,46 @@ def _thaw_json(value: Any) -> Any:
 
 
 @dataclass(frozen=True, slots=True)
+class FetchCheckpointContext:
+    """Lease-fenced facts used to atomically checkpoint a provider response."""
+
+    job_id: uuid.UUID
+    research_case_id: uuid.UUID
+    tenant_id: str
+    declared_actor: str
+    lease_token: str
+    claim_attempt: int
+    retrieved_at: datetime
+
+    def __post_init__(self) -> None:
+        for field_name in ("job_id", "research_case_id"):
+            if not isinstance(getattr(self, field_name), uuid.UUID):
+                raise ValueError(f"{field_name} must be a UUID")
+        object.__setattr__(
+            self, "tenant_id", _required_identity(self.tenant_id, "tenant_id")
+        )
+        object.__setattr__(
+            self,
+            "declared_actor",
+            _required_identity(self.declared_actor, "declared_actor"),
+        )
+        object.__setattr__(
+            self,
+            "lease_token",
+            _required_identity(self.lease_token, "lease_token"),
+        )
+        if (
+            not isinstance(self.claim_attempt, int)
+            or isinstance(self.claim_attempt, bool)
+            or self.claim_attempt < 1
+        ):
+            raise ValueError("claim_attempt must be a positive integer")
+        if self.retrieved_at.tzinfo is None or self.retrieved_at.utcoffset() is None:
+            raise ValueError("retrieved_at must be timezone-aware")
+        object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
+
+
+@dataclass(frozen=True, slots=True)
 class FrozenRequestContext:
     """Secret-free worker facts required to freeze and govern one response.
 
@@ -367,22 +407,139 @@ class RetrievedDocumentFreezer:
         context: FrozenRequestContext,
         allowed_stages: frozenset[str],
     ) -> AcquisitionJob:
+        return self._require_lease_values(
+            session,
+            job_id=context.job_id,
+            lease_token=context.lease_token,
+            allowed_stages=allowed_stages,
+        )
+
+    def _require_lease_values(
+        self,
+        session: Session,
+        *,
+        job_id: uuid.UUID,
+        lease_token: str,
+        allowed_stages: frozenset[str],
+    ) -> AcquisitionJob:
         job = session.scalar(
             select(AcquisitionJob)
-            .where(AcquisitionJob.id == context.job_id)
+            .where(AcquisitionJob.id == job_id)
             .with_for_update()
         )
         now = self._now()
         if (
             job is None
             or job.status != "running"
-            or job.lease_token != context.lease_token
+            or job.lease_token != lease_token
             or job.lease_expires_at is None
             or _aware_utc(job.lease_expires_at) <= now
             or job.stage not in allowed_stages
         ):
             raise StaleLeaseError("acquisition lease is stale")
         return job
+
+    def checkpoint_fetch(
+        self,
+        reference: SourceReference | uuid.UUID,
+        envelope: RetrievedEnvelope,
+        context: FetchCheckpointContext,
+        *,
+        started_at: datetime,
+    ) -> tuple[uuid.UUID, uuid.UUID]:
+        """Atomically persist a successful fetch attempt and its raw artifact."""
+        reference_id = self._reference_id(reference)
+        if not isinstance(envelope, RetrievedEnvelope):
+            raise TypeError("envelope must be a RetrievedEnvelope")
+        if not isinstance(context, FetchCheckpointContext):
+            raise TypeError("context must be a FetchCheckpointContext")
+        started = _aware_utc(started_at)
+        finished = self._now()
+        if finished < started:
+            raise ValueError("attempt finished_at must not precede started_at")
+        digest = hashlib.sha256(envelope.content).hexdigest()
+
+        with self._write_session(sqlite_immediate=True) as session:
+            job = self._require_lease_values(
+                session,
+                job_id=context.job_id,
+                lease_token=context.lease_token,
+                allowed_stages=frozenset({"fetching"}),
+            )
+            reference_row = session.scalar(
+                select(SourceReference)
+                .where(SourceReference.id == reference_id)
+                .with_for_update()
+            )
+            if (
+                reference_row is None
+                or reference_row.job_id != context.job_id
+                or job.research_case_id != context.research_case_id
+                or job.tenant_id != context.tenant_id
+            ):
+                raise ValueError("source reference/job lineage mismatch")
+            self._validate_envelope_identity(reference_row, envelope)
+            existing = session.scalar(
+                select(RetrievalArtifact)
+                .where(RetrievalArtifact.source_reference_id == reference_id)
+                .order_by(RetrievalArtifact.retrieved_at, RetrievalArtifact.id)
+                .limit(1)
+            )
+            if existing is not None:
+                attempt = session.get(AcquisitionAttempt, existing.attempt_id)
+                if (
+                    existing.content_sha256 != digest
+                    or attempt is None
+                    or attempt.job_id != context.job_id
+                    or attempt.operation != "fetch"
+                    or attempt.outcome != "succeeded"
+                ):
+                    raise ValueError("persisted fetch checkpoint is inconsistent")
+                return existing.id, attempt.id
+
+            attempt_no = (
+                session.scalar(
+                    select(func.max(AcquisitionAttempt.attempt_no)).where(
+                        AcquisitionAttempt.job_id == context.job_id,
+                        AcquisitionAttempt.adapter_key == reference_row.adapter_key,
+                        AcquisitionAttempt.operation == "fetch",
+                    )
+                )
+                or 0
+            ) + 1
+            attempt = AcquisitionAttempt(
+                id=uuid.uuid4(),
+                job_id=context.job_id,
+                adapter_key=reference_row.adapter_key,
+                operation="fetch",
+                attempt_no=attempt_no,
+                started_at=started,
+                finished_at=finished,
+                outcome="succeeded",
+                error_code=None,
+                retryable=False,
+                safe_metadata={
+                    "source_reference_id": str(reference_row.id),
+                    "claim_attempt": context.claim_attempt,
+                },
+            )
+            artifact = RetrievalArtifact(
+                id=uuid.uuid4(),
+                source_reference_id=reference_row.id,
+                attempt_id=attempt.id,
+                content_sha256=digest,
+                raw_bytes=envelope.content,
+                mime_type=envelope.mime_type,
+                byte_size=len(envelope.content),
+                final_url=envelope.final_url,
+                etag=envelope.etag,
+                last_modified=envelope.last_modified,
+                provider_request_id=envelope.provider_request_id,
+                retrieved_at=context.retrieved_at,
+            )
+            session.add_all((attempt, artifact))
+            session.flush()
+            return artifact.id, attempt.id
 
     def freeze(
         self,
