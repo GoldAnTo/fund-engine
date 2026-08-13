@@ -20,6 +20,7 @@ from app.models.event_research import (
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.research_preparation import ResearchPreparation
+from app.models.research_monitor import ResearchRunEvent
 from app.services.auto_research import AutoResearchService
 from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_research_factors import (
@@ -192,25 +193,59 @@ class EventResearchScopeService:
             or preparation.research_run_id is None
         ):
             return
-        run_id = preparation.research_run_id
-        auto_research = AutoResearchService(self._session)
-        run = auto_research._lock_run_for_transition(run_id, case_locked=True)
-        if run is not None and auto_research.repo.cancel_run(run):
-            run.stop_reason = "scope_changed"
-            ResearchRunEventRepository(self._session).append(
-                run.id,
-                stage="stopped",
-                status="cancelled",
-                message="研究范围已变更；已撤销本次正式研究运行。",
-                payload_json={"stop_reason": "scope_changed"},
+        run_ids = {preparation.research_run_id}
+        if (
+            lifecycle is not None
+            and lifecycle.active_run_id is not None
+            and lifecycle.active_run_id != preparation.research_run_id
+            and self._is_preparation_successor(
+                lifecycle.active_run_id, preparation.research_run_id
             )
-        if lifecycle is not None:
+        ):
+            run_ids.add(lifecycle.active_run_id)
+        auto_research = AutoResearchService(self._session)
+        locked_runs: list[ResearchRun] = []
+        for run_id in sorted(run_ids, key=str):
+            run = auto_research._lock_run_for_transition(run_id, case_locked=True)
+            if run is not None and run.research_case_id == case_id:
+                locked_runs.append(run)
+        cancelled_run_ids: set[uuid.UUID] = set()
+        # All mutable run rows are now locked in canonical order before any
+        # cancellation traverses into Job rows.
+        for run in locked_runs:
+            if auto_research.repo.cancel_run(run):
+                run.stop_reason = "scope_changed"
+                cancelled_run_ids.add(run.id)
+                ResearchRunEventRepository(self._session).append(
+                    run.id,
+                    stage="stopped",
+                    status="cancelled",
+                    message="研究范围已变更；已撤销本次正式研究运行。",
+                    payload_json={"stop_reason": "scope_changed"},
+                )
+        if lifecycle is not None and lifecycle.active_run_id in cancelled_run_ids:
             lifecycle.active_run_id = None
             lifecycle.status = "awaiting_key_review"
             lifecycle.status_summary = "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
             lifecycle.current_gap = "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动"
             lifecycle.next_human_action = None
             lifecycle.updated_at = _utcnow()
+
+    def _is_preparation_successor(
+        self, run_id: uuid.UUID, predecessor_run_id: uuid.UUID
+    ) -> bool:
+        """Whether a run's immutable frozen scope declares this predecessor."""
+        events = self._session.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run_id)
+            .where(ResearchRunEvent.stage == "scope")
+            .order_by(ResearchRunEvent.seq)
+        )
+        return any(
+            event.payload_json.get("predecessor_run_id") == str(predecessor_run_id)
+            for event in events
+            if isinstance(event.payload_json, dict)
+        )
 
     def _backfill_legacy_scope(
         self, case_id: uuid.UUID

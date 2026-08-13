@@ -587,6 +587,100 @@ def test_scope_change_does_not_revoke_unlinked_run_for_nonauthorized_preparation
     ) == 1
 
 
+def test_scope_change_revokes_current_lineage_successor_of_authorized_preparation(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = _complete_preparation_drafts(cmd_session, case_id)
+    predecessor = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
+    )
+    predecessor.status = "succeeded"
+    predecessor.stage = "complete"
+    predecessor_job = cmd_session.scalar(
+        select(Job).where(
+            Job.target_type == "research_run", Job.target_id == predecessor.id
+        )
+    )
+    assert predecessor_job is not None
+    predecessor_job.status = "succeeded"
+    successor = AutoResearchService(cmd_session).start(
+        case_id,
+        max_rounds=3,
+        budget=100,
+        commit=False,
+        scope_context={"predecessor_run_id": str(predecessor.id)},
+    )
+    unrelated = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = successor.id
+    lifecycle.status = "continuing"
+    preparation.research_run_id = predecessor.id
+    preparation.status = "authorized"
+    successor_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == successor.id)
+    )
+    unrelated_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == unrelated.id)
+    )
+    successor_tasks = list(
+        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == successor.id))
+    )
+    unrelated_tasks = list(
+        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == unrelated.id))
+    )
+    assert successor_job is not None and unrelated_job is not None
+    assert successor_tasks and unrelated_tasks
+    cmd_session.commit()
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                "继任运行期间的范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": "scope changed with authorized run successor",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(preparation)
+    cmd_session.refresh(predecessor)
+    cmd_session.refresh(successor)
+    cmd_session.refresh(unrelated)
+    cmd_session.refresh(successor_job)
+    cmd_session.refresh(unrelated_job)
+    assert preparation.research_run_id is None
+    assert predecessor.status == "succeeded"
+    assert successor.status == "cancelled"
+    assert successor.stage == "stopped"
+    assert successor.stop_reason == "scope_changed"
+    assert successor_job.status == "cancelled"
+    assert successor_job.cancel_requested is True
+    assert {task.status for task in successor_tasks} == {"cancelled"}
+    assert unrelated.status == "queued"
+    assert unrelated_job.status == "queued"
+    assert unrelated_job.cancel_requested is False
+    assert {task.status for task in unrelated_tasks} == {"queued"}
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.active_run_id is None
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+            )
+        )
+    ) == 3
+
+
 def _reviewed_evidence(session, case_id: uuid.UUID, factor: str) -> EvidenceLink:
     now = datetime.now(timezone.utc)
     thesis = session.scalar(
