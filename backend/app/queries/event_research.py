@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError
 from app.models.event_research import (
     CaseRelation,
@@ -358,6 +359,7 @@ class EventResearchQueries:
     def _list_item(
         brief: EventResearchBrief, lifecycle: EventResearchLifecycle
     ) -> EventResearchListItemDTO:
+        next_action = EventResearchQueries._next_action(lifecycle)
         return EventResearchListItemDTO(
             case_id=str(brief.research_case_id),
             event_title=brief.event_title,
@@ -367,6 +369,7 @@ class EventResearchQueries:
             lifecycle_status=lifecycle.status,
             status_summary=lifecycle.status_summary,
             next_human_action=lifecycle.next_human_action,
+            next_action_kind=next_action.kind,
             updated_at=lifecycle.updated_at,
         )
 
@@ -743,6 +746,14 @@ class EventResearchQueries:
             )
         if lifecycle.status == "draft_ready":
             return EventNextActionDTO(kind="review_conclusion", label="审核结论草案")
+        if (
+            lifecycle.status == "awaiting_scope"
+            and lifecycle.next_human_action == PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
+        ):
+            return EventNextActionDTO(
+                kind="complete_research_protocol",
+                label=lifecycle.next_human_action,
+            )
         if lifecycle.status in {"awaiting_scope", "exhausted", "cannot_conclude"}:
             return EventNextActionDTO(
                 kind="edit_factors",

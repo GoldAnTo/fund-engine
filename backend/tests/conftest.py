@@ -181,10 +181,10 @@ def statement(research_service, span):
 
 
 @pytest.fixture
-def assessment_service(research_repository):
+def assessment_service(research_repository, session):
     from app.services.assessment import AssessmentService
 
-    return AssessmentService(research_repository)
+    return AssessmentService(research_repository, session)
 
 
 @pytest.fixture

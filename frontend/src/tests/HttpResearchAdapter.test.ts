@@ -1205,6 +1205,26 @@ describe("HttpResearchAdapter", () => {
     expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
   });
 
+  it("maps the generated list action kind for protocol-blocked Cases", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({
+        items: [{
+          case_id: "event-1", event_title: "Event", company_name: null, ticker: null,
+          event_at: null, lifecycle_status: "awaiting_scope", status_summary: "等待协议",
+          next_human_action: "完成新增因素的研究协议后再启动补证",
+          next_action_kind: "complete_research_protocol",
+          updated_at: "2026-08-08T00:00:00Z",
+        }],
+      })),
+    );
+
+    const events = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
+      .listEventResearch();
+
+    expect(events[0]?.nextActionKind).toBe("complete_research_protocol");
+  });
+
   it("maps event evidence to a Case-owned frozen-document action", async () => {
     vi.stubGlobal(
       "fetch",

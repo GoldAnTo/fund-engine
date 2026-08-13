@@ -87,6 +87,22 @@ async function apiJson(base, path, token, init = {}) {
   return body ? JSON.parse(body) : null;
 }
 
+function decimalEquivalent(actual, expected) {
+  const normalize = (value) => {
+    if (typeof value !== "string") return null;
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value);
+    if (!match) return null;
+    const integer = match[2].replace(/^0+(?=\d)/, "");
+    const fraction = (match[3] || "").replace(/0+$/, "");
+    const isZero = integer === "0" && !fraction;
+    return `${isZero ? "" : match[1]}${integer}${fraction ? `.${fraction}` : ""}`;
+  };
+
+  const normalizedActual = normalize(actual);
+  const normalizedExpected = normalize(expected);
+  return normalizedActual !== null && normalizedActual === normalizedExpected;
+}
+
 async function prepareReadyProtocol({ apiBase, token, caseId }) {
   // A fresh verifier database deliberately has no governed metric catalogue.
   // Seed the minimal reviewed protocol through the same public governance API,
@@ -311,6 +327,7 @@ async function main() {
   const uiPort = await freePort();
   const apiBase = `http://127.0.0.1:${apiPort}/api/v1`;
   const uiBase = `http://127.0.0.1:${uiPort}`;
+  const browserApiBase = `${uiBase}/api/v1`;
   const env = {
     ...process.env,
     DATABASE_URL: `sqlite:///${path.join(temporary, "live-ui.db")}`,
@@ -351,13 +368,13 @@ async function main() {
     const page = await browser.newPage();
     page.on("request", (request) => {
       const url = request.url();
-      if (url.startsWith(apiBase)) apiRequests.push(`${request.method()} ${url}`);
+      if (url.startsWith(browserApiBase)) apiRequests.push(`${request.method()} ${url}`);
     });
     page.on("response", (response) => {
-      if (response.url().startsWith(apiBase)) apiResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
+      if (response.url().startsWith(browserApiBase)) apiResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
     });
     page.on("requestfailed", (request) => {
-      if (request.url().startsWith(apiBase)) browserFailures.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText || "failed"}`);
+      if (request.url().startsWith(browserApiBase)) browserFailures.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText || "failed"}`);
     });
     page.on("console", (message) => {
       if (message.type() === "error") browserFailures.push(`console: ${message.text()}`);
@@ -487,7 +504,7 @@ async function main() {
     await page.getByLabel("人工裁决理由").fill("确认机器比较规则、冻结输入与后续公告原文一致。");
     await page.getByRole("button", { name: "发布人工裁决" }).click();
     await page.getByText("已追加人工发布裁决；历史预测验证将更新。").waitFor();
-    await page.getByText("得到支持", { selector: ".ros-forecast-verdict strong" }).waitFor();
+    await page.locator(".ros-forecast-verdict strong", { hasText: /^得到支持$/u }).waitFor();
     const forecastVerdicts = await apiJson(
       apiBase,
       `/research-cases/${caseId}/forecast-verdicts?cutoff=${encodeURIComponent(new Date().toISOString())}`,
@@ -498,8 +515,8 @@ async function main() {
       forecastVerdict?.outcome !== "supported"
       || forecastVerdict?.forecast_source?.source_statement_id !== reviewedSource.sourceStatementId
       || forecastVerdict?.actual_source?.source_statement_id !== actualSourceStatementId
-      || forecastVerdict?.inputs?.expected_value !== "100000000"
-      || forecastVerdict?.inputs?.actual_value !== "110000000"
+      || !decimalEquivalent(forecastVerdict?.inputs?.expected_value, "100000000")
+      || !decimalEquivalent(forecastVerdict?.inputs?.actual_value, "110000000")
     ) {
       throw new Error(`forecast verification was not persisted as a replayable human verdict: ${JSON.stringify(forecastVerdicts)}`);
     }
@@ -508,17 +525,17 @@ async function main() {
     await page.getByLabel("标的审核理由").fill("冻结原文已明确这家公司处于订单传导范围。 ");
     await page.getByRole("button", { name: "保存已审核标的关联" }).click();
     await page.getByText("已追加已审核标的关联").first().waitFor();
-    await page.goto(`${uiBase}/events/${caseId}/stocks/${marketCatalog.stock.id}`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "验收映射股票 · 股票研究档案" }).waitFor();
-    await page.goto(`${uiBase}/events/${caseId}/funds/${marketCatalog.fund.id}`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "验收历史披露基金 · 基金披露档案" }).waitFor();
-    await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "登记基本面传导" }).click();
     await page.getByLabel("传导标的").waitFor();
     await page.getByLabel("传导机制").fill("订单增长通过履约和确认节奏传导至收入。 ");
     await page.getByLabel("传导审核理由").fill("已核对标的关系、指标口径和原文定位。 ");
     await page.getByRole("button", { name: "保存已审核基本面传导" }).click();
     await page.getByText("已追加已审核基本面传导").first().waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/stocks/${marketCatalog.stock.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "验收映射股票 · 股票研究档案" }).waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/funds/${marketCatalog.fund.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "验收历史披露基金 · 基金披露档案" }).waitFor();
+    await page.goto(`${uiBase}/events/${caseId}/market`, { waitUntil: "networkidle" });
     await page.getByText("验收历史披露基金").first().waitFor();
     await page.getByRole("heading", { name: "建议补充的基金披露" }).waitFor();
     await page.getByLabel("补充频率").selectOption("monthly");

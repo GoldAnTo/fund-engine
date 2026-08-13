@@ -12,10 +12,12 @@ from app.models.ledger import (
     SourceSpan,
     Thesis,
 )
-from app.models.operational import ResearchTask
+from app.models.operational import ResearchRun, ResearchTask
+from app.models.research_monitor import ResearchRunEvent
 from app.models.source_governance import SourceContract
 from app.services.atomic_claims import AtomicClaimService
 from app.services.auto_research import AutoResearchService
+from app.services.case_monitor import ResearchRunEventRepository
 
 
 def _candidate_for_case(session):
@@ -148,6 +150,13 @@ def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_se
     job = service.repo.job_for_run(run.id)
     assert job is not None
     job.status = "waiting_for_review"
+    ResearchRunEventRepository(cmd_session).append(
+        run.id,
+        stage="claim_review",
+        status="waiting_for_review",
+        message="等待本次运行的原子陈述审核",
+        payload_json={"candidate_ids": [str(candidate.id)]},
+    )
     cmd_session.commit()
 
     response = cmd_client.post(
@@ -171,6 +180,116 @@ def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_se
     resumed_job = service.repo.job_for_run(run.id)
     assert resumed_job is not None
     assert resumed_job.status == "queued"
+
+
+def test_atomic_claim_review_resumes_only_runs_referencing_that_claim(
+    cmd_client, cmd_session
+) -> None:
+    case, first_candidate = _candidate_for_case(cmd_session)
+    now = datetime.now(timezone.utc)
+    second_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="https://disclosure.example.org/atomic-claim-second",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+    )
+    cmd_session.add(second_document)
+    cmd_session.flush()
+    second_text = "公司公告：2026年第二季度订单同比增长30%。"
+    second_quote = "订单同比增长30%"
+    second_span = SourceSpan(
+        document_version_id=second_document.id,
+        locator={"page": 3},
+        verbatim_text=second_text,
+    )
+    cmd_session.add_all([
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=second_document.id,
+            linked_at=now,
+        ),
+        SourceContract(
+            document_version_id=second_document.id,
+            source_type="company_disclosure",
+            provider_or_tenant="测试公司",
+            allow_ai_processing=True,
+            allow_display=True,
+            allow_export=False,
+            allow_api=False,
+            region="not_recorded",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="not_recorded",
+            downstream_restrictions=[],
+            contract_version="v1",
+            intake_metadata={},
+            declared_by="human",
+            created_at=now,
+        ),
+        second_span,
+    ])
+    cmd_session.flush()
+    second_candidate = AtomicClaimService(cmd_session).admit(
+        AtomicClaimDraft(
+            source_span_id=second_span.id,
+            quote=second_quote,
+            quote_start=second_text.index(second_quote),
+            quote_end=second_text.index(second_quote) + len(second_quote),
+            normalized_text="公司披露 2026 年第二季度订单同比增长 30%",
+            claim_type="disclosed_fact",
+            assertion_actor="公司",
+            subject="订单",
+            predicate="同比增长",
+            object_text="30%",
+            numeric_value="30",
+            unit="%",
+            observed_period=None,
+            scope={"company": "测试公司"},
+        ),
+        authority_level="primary_disclosure",
+        run_ref="extract:fixture-second",
+    )
+    service = AutoResearchService(cmd_session)
+    first_run = service.start(case.id)
+    second_run = service.start(case.id)
+    for run, candidate in (
+        (first_run, first_candidate),
+        (second_run, second_candidate),
+    ):
+        service.repo.update_run(
+            run,
+            status="waiting_for_review",
+            stage="claim_review",
+            stop_reason="pending_atomic_claim_review",
+        )
+        job = service.repo.job_for_run(run.id)
+        assert job is not None
+        job.status = "waiting_for_review"
+        ResearchRunEventRepository(cmd_session).append(
+            run.id,
+            stage="claim_review",
+            status="waiting_for_review",
+            message="等待本次运行的原子陈述审核",
+            payload_json={"candidate_ids": [str(candidate.id)]},
+        )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/atomic-claims/{first_candidate.id}/reviews",
+        json={
+            "outcome": "rejected",
+            "reviewer": "human:reviewer",
+            "reason": "第一条已审核",
+            "idempotency_key": "atomic-review-run-local-resume",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_session.expire_all()
+    assert service.repo.get_run(first_run.id).status == "queued"
+    assert service.repo.get_run(second_run.id).status == "waiting_for_review"
 
 
 def test_researcher_can_propose_one_frozen_source_span_for_review(

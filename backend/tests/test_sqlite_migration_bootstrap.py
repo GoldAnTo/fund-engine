@@ -33,10 +33,571 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assessment_columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("ai_assessments")
+        }
+        assert {
+            "research_protocol_status",
+            "effective_binding_id",
+            "mechanism_template_version_id",
+            "verification_rule_ids",
+        }.issubset(assessment_columns)
         assert {"key_factor_candidate_runs", "key_factor_candidates"}.issubset(
             sa.inspect(connection).get_table_names()
         )
+        trigger_count = connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ).scalar_one()
+        assert trigger_count == 1
+
+
+def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> None:
+    database_path = tmp_path / "assessment-provenance.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0050 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0050"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0050.returncode == 0, upgraded_to_0050.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    ids = {
+        "case": "00000000000000000000000000000001",
+        "thesis": "00000000000000000000000000000002",
+        "snapshot": "00000000000000000000000000000003",
+        "assessment": "00000000000000000000000000000004",
+    }
+    now = "2026-08-12 00:00:00"
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_cases "
+                "(id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, 'legacy case', 'test', :now, 'tester')"
+            ),
+            {"id": ids["case"], "now": now},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO theses "
+                "(id, research_case_id, statement, created_at, created_by, "
+                "creator_type, review_state, research_protocol_required) "
+                "VALUES (:id, :case_id, 'legacy strict thesis', :now, 'tester', "
+                "'human', 'confirmed', 1)"
+            ),
+            {"id": ids["thesis"], "case_id": ids["case"], "now": now},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO evidence_snapshots "
+                "(id, thesis_id, cutoff, evidence_link_ids, created_at) "
+                "VALUES (:id, :thesis_id, :now, '[]', :now)"
+            ),
+            {"id": ids["snapshot"], "thesis_id": ids["thesis"], "now": now},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO ai_assessments "
+                "(id, snapshot_id, conclusion, rationale, gaps, "
+                "displayed_as_provisional, creator_type, created_at) "
+                "VALUES (:id, :snapshot_id, 'insufficient_evidence', "
+                "'legacy row', '[]', 1, 'ai', :now)"
+            ),
+            {
+                "id": ids["assessment"],
+                "snapshot_id": ids["snapshot"],
+                "now": now,
+            },
+        )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        legacy = connection.execute(
+            sa.text(
+                "SELECT research_protocol_status, effective_binding_id, "
+                "mechanism_template_version_id, verification_rule_ids "
+                "FROM ai_assessments WHERE id = :id"
+            ),
+            {"id": ids["assessment"]},
+        ).one()
+        assert tuple(legacy) == (None, None, None, None)
+        assert connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ).scalar_one() == 1
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(
+                sa.text(
+                    "INSERT INTO ai_assessments "
+                    "(id, snapshot_id, conclusion, rationale, gaps, "
+                    "research_protocol_status, effective_binding_id, "
+                    "mechanism_template_version_id, verification_rule_ids, "
+                    "displayed_as_provisional, creator_type, created_at) "
+                    "VALUES ('00000000000000000000000000000005', :snapshot_id, "
+                    "'insufficient_evidence', 'invalid typed import', '[]', "
+                    "'ready', '00000000000000000000000000000006', "
+                    "'00000000000000000000000000000007', '[]', 1, 'ai', :now)"
+                ),
+                {"snapshot_id": ids["snapshot"], "now": now},
+            )
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0050"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT COUNT(*) FROM ai_assessments WHERE id = :id"),
+            {"id": ids["assessment"]},
+        ).scalar_one() == 1
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("ai_assessments")
+        }
+        assert "research_protocol_status" not in columns
+        assert connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ).scalar_one() == 0
+
+
+def test_0051_migration_trigger_enforces_typed_protocol_scope(tmp_path) -> None:
+    import app.models  # noqa: F401 - register protocol mappings
+    from app.models.ledger import AIAssessment, EvidenceSnapshot, ResearchCase, Thesis
+    from app.models.research_protocol import (
+        CaseMechanismSelectionVersion,
+        MechanismEdgeVersion,
+        OutcomeBindingVersion,
+        VerificationRuleVersion,
+    )
+    from sqlalchemy.orm import Session
+    from tests.protocol_provenance import seed_protocol_footprint
+
+    database_path = tmp_path / "assessment-protocol-scope.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    migrated = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert migrated.returncode == 0, migrated.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    now = datetime.now(UTC)
+
+    def assessment(snapshot, *, conclusion="insufficient_evidence", **protocol):
+        return AIAssessment(
+            snapshot_id=snapshot.id,
+            conclusion=conclusion,
+            rationale="migration trigger probe",
+            gaps=[],
+            displayed_as_provisional=True,
+            creator_type="ai",
+            created_at=now,
+            **protocol,
+        )
+
+    with Session(engine) as session:
+        first_case = ResearchCase(
+            title="first migrated scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        other_case = ResearchCase(
+            title="other migrated scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add_all([first_case, other_case])
+        session.flush()
+        first_thesis = Thesis(
+            research_case_id=first_case.id,
+            statement="first strict thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        other_thesis = Thesis(
+            research_case_id=other_case.id,
+            statement="other strict thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add_all([first_thesis, other_thesis])
+        session.flush()
+        first_snapshot = EvidenceSnapshot(
+            thesis_id=first_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        other_snapshot = EvidenceSnapshot(
+            thesis_id=other_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add_all([first_snapshot, other_snapshot])
+        session.flush()
+        first = seed_protocol_footprint(session, first_thesis, status="ready")
+        other = seed_protocol_footprint(session, other_thesis, status="ready")
+        valid_protocol = {
+            "research_protocol_status": "ready",
+            "effective_binding_id": first.binding.id,
+            "mechanism_template_version_id": first.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in first.rules],
+        }
+        session.add(assessment(first_snapshot, **valid_protocol))
+        session.flush()
+
+        invalid_protocols = [
+            {"research_protocol_status": "ready"},
+            {**valid_protocol, "research_protocol_status": None},
+            {**valid_protocol, "research_protocol_status": "blocked"},
+            {**valid_protocol, "effective_binding_id": other.binding.id},
+            {
+                **valid_protocol,
+                "mechanism_template_version_id": other.template.id,
+            },
+            {
+                **valid_protocol,
+                "verification_rule_ids": [str(rule.id) for rule in other.rules],
+            },
+            {**valid_protocol, "verification_rule_ids": ["not-a-uuid"]},
+            {**valid_protocol, "verification_rule_ids": {"not": "an array"}},
+            {
+                **valid_protocol,
+                "research_protocol_status": "single_metric_monitoring",
+            },
+            {
+                **valid_protocol,
+                "verification_rule_ids": valid_protocol[
+                    "verification_rule_ids"
+                ][:-1],
+            },
+            {
+                **valid_protocol,
+                "verification_rule_ids": [
+                    *valid_protocol["verification_rule_ids"],
+                    valid_protocol["verification_rule_ids"][0],
+                ],
+            },
+        ]
+        for invalid_protocol in invalid_protocols:
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(assessment(first_snapshot, **invalid_protocol))
+                session.flush()
+
+        monitoring_case = ResearchCase(
+            title="migrated monitoring scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(monitoring_case)
+        session.flush()
+        monitoring_thesis = Thesis(
+            research_case_id=monitoring_case.id,
+            statement="migrated monitoring thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(monitoring_thesis)
+        session.flush()
+        monitoring_snapshot = EvidenceSnapshot(
+            thesis_id=monitoring_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(monitoring_snapshot)
+        session.flush()
+        monitoring = seed_protocol_footprint(session, monitoring_thesis)
+        monitoring_protocol = {
+            "research_protocol_status": "single_metric_monitoring",
+            "effective_binding_id": monitoring.binding.id,
+            "mechanism_template_version_id": monitoring.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in monitoring.rules],
+        }
+        for invalid_assessment in (
+            assessment(
+                monitoring_snapshot,
+                conclusion="supported",
+                **monitoring_protocol,
+            ),
+            assessment(
+                monitoring_snapshot,
+                **{**monitoring_protocol, "research_protocol_status": "ready"},
+            ),
+        ):
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(invalid_assessment)
+                session.flush()
+
+        non_string_case = ResearchCase(
+            title="migrated non-string truthy business line",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(non_string_case)
+        session.flush()
+        non_string_thesis = Thesis(
+            research_case_id=non_string_case.id,
+            statement="migrated integer business line thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(non_string_thesis)
+        session.flush()
+        non_string_snapshot = EvidenceSnapshot(
+            thesis_id=non_string_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(non_string_snapshot)
+        session.flush()
+        non_string = seed_protocol_footprint(
+            session,
+            non_string_thesis,
+            business_line=1,
+        )
+        non_string_ready = {
+            "research_protocol_status": "ready",
+            "effective_binding_id": non_string.binding.id,
+            "mechanism_template_version_id": non_string.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in non_string.rules],
+        }
+        for claimed_status, conclusion in (
+            ("ready", "insufficient_evidence"),
+            ("single_metric_monitoring", "supported"),
+        ):
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(
+                    assessment(
+                        non_string_snapshot,
+                        conclusion=conclusion,
+                        **{
+                            **non_string_ready,
+                            "research_protocol_status": claimed_status,
+                        },
+                    )
+                )
+                session.flush()
+
+        scoped_rule = first.rules[0]
+        legacy_rule = VerificationRuleVersion(
+            research_case_id=None,
+            mechanism_edge_id=scoped_rule.mechanism_edge_id,
+            metric_definition_id=scoped_rule.metric_definition_id,
+            expected_direction=scoped_rule.expected_direction,
+            support_predicate=scoped_rule.support_predicate,
+            contradiction_predicate=scoped_rule.contradiction_predicate,
+            allowed_source_roles=list(scoped_rule.allowed_source_roles),
+            observed_period_start=scoped_rule.observed_period_start,
+            observed_period_end=scoped_rule.observed_period_end,
+            available_at_deadline=scoped_rule.available_at_deadline,
+            next_verification_event=scoped_rule.next_verification_event,
+            reviewer="legacy",
+            reason="migrated pre-case-scope rule",
+            created_at=datetime.now(UTC),
+        )
+        session.add(legacy_rule)
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    first_snapshot,
+                    **{
+                        **valid_protocol,
+                        "verification_rule_ids": [
+                            *valid_protocol["verification_rule_ids"],
+                            str(legacy_rule.id),
+                        ],
+                    },
+                )
+            )
+            session.flush()
+
+        old_binding = first.binding
+        current_binding = OutcomeBindingVersion(
+            thesis_id=old_binding.thesis_id,
+            metric_definition_id=old_binding.metric_definition_id,
+            entity_scope=dict(old_binding.entity_scope),
+            direction=old_binding.direction,
+            baseline=dict(old_binding.baseline),
+            horizon_start=old_binding.horizon_start,
+            horizon_end=old_binding.horizon_end,
+            state="approved",
+            supersedes_id=old_binding.id,
+            reviewer="tester",
+            reason="migrated current binding",
+            created_at=datetime.now(UTC),
+        )
+        old_rule = first.rules[0]
+        current_rule = VerificationRuleVersion(
+            research_case_id=old_rule.research_case_id,
+            mechanism_edge_id=old_rule.mechanism_edge_id,
+            metric_definition_id=old_rule.metric_definition_id,
+            expected_direction=old_rule.expected_direction,
+            support_predicate=old_rule.support_predicate,
+            contradiction_predicate=old_rule.contradiction_predicate,
+            allowed_source_roles=list(old_rule.allowed_source_roles),
+            observed_period_start=old_rule.observed_period_start,
+            observed_period_end=old_rule.observed_period_end,
+            available_at_deadline=old_rule.available_at_deadline,
+            next_verification_event=old_rule.next_verification_event,
+            supersedes_id=old_rule.id,
+            reviewer="tester",
+            reason="migrated current rule",
+            created_at=datetime.now(UTC),
+        )
+        session.add_all([current_binding, current_rule])
+        session.flush()
+        current_rule_ids = [
+            str(current_rule.id) if rule.id == old_rule.id else str(rule.id)
+            for rule in first.rules
+        ]
+        stale_protocols = [
+            {
+                **valid_protocol,
+                "effective_binding_id": old_binding.id,
+                "verification_rule_ids": current_rule_ids,
+            },
+            {
+                **valid_protocol,
+                "effective_binding_id": current_binding.id,
+            },
+        ]
+        for stale_protocol in stale_protocols:
+            with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+                session.add(assessment(first_snapshot, **stale_protocol))
+                session.flush()
+
+        first_edge = session.get(
+            MechanismEdgeVersion,
+            first.rules[0].mechanism_edge_id,
+        )
+        session.add(
+            MechanismEdgeVersion(
+                template_version_id=first.template.id,
+                edge_key="migrated-unruled-required-edge",
+                source_node_id=first_edge.source_node_id,
+                target_node_id=first_edge.target_node_id,
+                created_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    first_snapshot,
+                    **{
+                        **valid_protocol,
+                        "effective_binding_id": current_binding.id,
+                        "verification_rule_ids": current_rule_ids,
+                    },
+                )
+            )
+            session.flush()
+
+        no_counter_case = ResearchCase(
+            title="migrated no-counter scope",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(no_counter_case)
+        session.flush()
+        no_counter_thesis = Thesis(
+            research_case_id=no_counter_case.id,
+            statement="migrated no-counter thesis",
+            research_protocol_required=True,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(no_counter_thesis)
+        session.flush()
+        no_counter_snapshot = EvidenceSnapshot(
+            thesis_id=no_counter_thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(no_counter_snapshot)
+        session.flush()
+        no_counter = seed_protocol_footprint(
+            session,
+            no_counter_thesis,
+            status="ready",
+            counter_hypothesis=False,
+        )
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(
+                assessment(
+                    no_counter_snapshot,
+                    research_protocol_status="ready",
+                    effective_binding_id=no_counter.binding.id,
+                    mechanism_template_version_id=no_counter.template.id,
+                    verification_rule_ids=[
+                        str(rule.id) for rule in no_counter.rules
+                    ],
+                )
+            )
+            session.flush()
+
+        session.add(
+            CaseMechanismSelectionVersion(
+                research_case_id=first_case.id,
+                template_version_id=other.template.id,
+                reviewer="tester",
+                reason="new current template",
+                created_at=datetime.now(UTC),
+            )
+        )
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError), session.begin_nested():
+            session.add(assessment(first_snapshot, **valid_protocol))
+            session.flush()
 
 
 def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path) -> None:
@@ -78,7 +639,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -132,7 +693,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0050"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:

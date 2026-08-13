@@ -440,7 +440,7 @@ def seed(session: Session) -> None:
     """
     document_service = DocumentService(DocumentRepository(session))
     research_service = ResearchService(ResearchRepository(session))
-    assessment_service = AssessmentService(ResearchRepository(session))
+    assessment_service = AssessmentService(ResearchRepository(session), session)
     instruments = InstrumentRepository(session)
     research_repo = ResearchRepository(session)
 

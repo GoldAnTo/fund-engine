@@ -74,7 +74,11 @@ def get_monitor(
         next_scheduled_at=(MonitorScheduler.next_due_at(monitor.frequency) if monitor is not None and monitor.status == "active" else None),
         confirmed_factors=[
             ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
-            for factor in query.confirmed_factors(case_id)
+            for factor in query.confirmed_factors(case_id, monitor)
+        ],
+        available_confirmed_factors=[
+            ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
+            for factor in query.available_confirmed_factors(case_id)
         ],
     )
 

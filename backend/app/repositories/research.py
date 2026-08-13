@@ -380,6 +380,38 @@ class ResearchRepository:
             )
         )
 
+    def visible_links_by_ids(
+        self,
+        *,
+        thesis_id: uuid.UUID,
+        cutoff: datetime,
+        evidence_link_ids: list[uuid.UUID],
+    ) -> list[EvidenceLink]:
+        """Return the captured prompt links in caller order or fail closed."""
+        if len(evidence_link_ids) != len(set(evidence_link_ids)):
+            raise ValueError("captured evidence link IDs must be unique")
+        if not evidence_link_ids:
+            return []
+        links = {
+            link.id: link
+            for link in self._session.scalars(
+                select(EvidenceLink)
+                .where(EvidenceLink.id.in_(evidence_link_ids))
+                .where(EvidenceLink.thesis_id == thesis_id)
+                .where(EvidenceLink.available_at <= cutoff)
+                .where(EvidenceLink.created_at <= cutoff)
+            )
+        }
+        ordered: list[EvidenceLink] = []
+        for link_id in evidence_link_ids:
+            link = links.get(link_id)
+            if link is None:
+                raise ValueError(
+                    "captured evidence link is not visible for the snapshot thesis and cutoff"
+                )
+            ordered.append(link)
+        return ordered
+
     def insert_snapshot(
         self,
         *,
@@ -404,6 +436,10 @@ class ResearchRepository:
         conclusion: str,
         rationale: str,
         gaps: list[str],
+        research_protocol_status: str | None = None,
+        effective_binding_id: uuid.UUID | None = None,
+        mechanism_template_version_id: uuid.UUID | None = None,
+        verification_rule_ids: list[str] | None = None,
         displayed_as_provisional: bool = True,
         creator_type: str = "ai",
         model_version: str | None = None,
@@ -413,6 +449,10 @@ class ResearchRepository:
             conclusion=conclusion,
             rationale=rationale,
             gaps=gaps,
+            research_protocol_status=research_protocol_status,
+            effective_binding_id=effective_binding_id,
+            mechanism_template_version_id=mechanism_template_version_id,
+            verification_rule_ids=verification_rule_ids,
             displayed_as_provisional=displayed_as_provisional,
             creator_type=creator_type,
             model_version=model_version,
@@ -484,6 +524,14 @@ class ResearchRepository:
     def get_ai_assessment(self, assessment_id: uuid.UUID) -> AIAssessment | None:
         return self._session.scalar(
             select(AIAssessment).where(AIAssessment.id == assessment_id)
+        )
+
+    def assessment_thesis(self, assessment_id: uuid.UUID) -> Thesis | None:
+        return self._session.scalar(
+            select(Thesis)
+            .join(EvidenceSnapshot, EvidenceSnapshot.thesis_id == Thesis.id)
+            .join(AIAssessment, AIAssessment.snapshot_id == EvidenceSnapshot.id)
+            .where(AIAssessment.id == assessment_id)
         )
 
     # ------------------------------------------------------------------ readers (workbench / projection)

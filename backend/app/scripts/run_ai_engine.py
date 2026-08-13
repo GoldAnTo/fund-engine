@@ -36,6 +36,7 @@ from app.models.ledger import (
     SourceSpan,
     SourceStatement,
     Thesis,
+    ValidationError,
 )
 from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
@@ -144,20 +145,23 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     session.commit()  # persist proposals before the assess loop
     print(f"[propose] {total_links} evidence links for {len(theses)} theses")
 
-    # 3. Generate an AI assessment for every thesis.  A compliance refusal
-    # on one thesis must not kill the run: roll back that thesis's
-    # half-frozen snapshot + failed AIRun, report it, and continue.
+    # 3. Generate an AI assessment for every thesis. A compliance/protocol
+    # refusal on one thesis must not kill the run: roll back that thesis's
+    # half-frozen snapshot, preserve its failed AIRun, and continue.
     cutoff = datetime.now(timezone.utc)
     for thesis in theses:
         label = thesis.statement[:50]
         try:
             assessment = generator.generate(thesis.id, cutoff, session)
-        except ComplianceRefusedError as exc:
-            # Snapshot already deleted by the generator; keep the failed
-            # AIRun as the audit trail and continue with the next thesis.
+        except (ComplianceRefusedError, ValidationError) as exc:
+            # The generator rolled back partial immutable writes; keep its
+            # clean failed AIRun transaction and continue with the next thesis.
             session.commit()
-            print(f"[assess]  {label}… → COMPLIANCE REFUSED ({exc})")
+            print(f"[assess]  {label}… → ASSESSMENT REFUSED ({exc})")
             continue
+        except Exception:
+            session.commit()
+            raise
         session.commit()
         print(
             f"[assess]  {label}… → {assessment.conclusion} "

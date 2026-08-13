@@ -196,6 +196,11 @@ def _decide(
         ref_type="proposal",
         ref_id=proposal_id,
     )
+    AutoResearchService(db).reconcile_runs_for_output(
+        key="proposed_proposal_ids",
+        value=proposal_id,
+        trigger_ref=f"proposal:{proposal_id}",
+    )
     if proposal is not None:
         raw_thesis_id = (proposal.target_context or {}).get("thesis_id")
         try:

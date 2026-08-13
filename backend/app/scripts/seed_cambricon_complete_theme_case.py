@@ -129,7 +129,7 @@ def seed(session: Session):
     existing = session.scalar(select(ResearchCase).where(ResearchCase.title == CASE_TITLE))
     doc_repo = DocumentRepository(session); doc_service = DocumentService(doc_repo)
     research_repo = ResearchRepository(session); research = ResearchService(research_repo)
-    assessment_service = AssessmentService(research_repo)
+    assessment_service = AssessmentService(research_repo, session)
     data = _load_sources()
     case = existing or research.add_case(title=CASE_TITLE, industry_topic="ai_compute", created_by=CREATED_BY, research_object="寒武纪（688256）完整主题研究", phenomenon="盈利拐点与AI芯片需求、质量、机构和估值的共同验证", core_question="寒武纪盈利是否由可验证需求驱动、是否可持续、质量是否可靠且估值是否合理")
     thesis_specs = [

@@ -334,6 +334,113 @@ def test_rerun_compliance_refusal_returns_422_and_keeps_audit(
     assert "compliance refused" in latest.error
 
 
+def test_rerun_initial_protocol_block_returns_422_and_durable_failed_audit(
+    cmd_client, cmd_seeded
+):
+    from app.models.ledger import AIAssessment, AIRun, EvidenceSnapshot, ResearchCase
+    from app.repositories.research import ResearchRepository
+    from app.services.research import ResearchService
+    from sqlalchemy.orm import Session
+
+    case = cmd_seeded.scalar(select(ResearchCase))
+    thesis = ResearchService(ResearchRepository(cmd_seeded)).add_thesis(
+        case.id,
+        statement="Initial strict gate is blocked",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    cmd_seeded.commit()
+    thesis_id = thesis.id
+
+    response = cmd_client.post(f"/api/v1/theses/{thesis_id}/rerun")
+
+    assert response.status_code == 422, response.text
+    with Session(cmd_seeded.get_bind()) as check:
+        assert check.scalar(
+            select(func.count()).select_from(EvidenceSnapshot).where(
+                EvidenceSnapshot.thesis_id == thesis_id
+            )
+        ) == 0
+        assert check.scalar(
+            select(func.count())
+            .select_from(AIAssessment)
+            .join(EvidenceSnapshot, AIAssessment.snapshot_id == EvidenceSnapshot.id)
+            .where(EvidenceSnapshot.thesis_id == thesis_id)
+        ) == 0
+        runs = list(check.scalars(
+            select(AIRun)
+            .where(AIRun.kind == "assess", AIRun.status == "failed")
+            .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis_id))
+        ))
+    assert len(runs) == 1
+    assert "researchability gate blocked" in runs[0].error
+    assert runs[0].input_ref["research_protocol_status"] == "blocked"
+    assert runs[0].input_ref["verification_rule_ids"] == []
+
+
+def test_rerun_final_protocol_block_returns_422_and_durable_failed_audit(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    from app.models.ledger import AIAssessment, AIRun, EvidenceSnapshot, ResearchCase
+    from app.repositories.research import ResearchRepository
+    from app.services.research import ResearchService
+    from app.services.research_protocol import ResearchabilityResult
+    from sqlalchemy.orm import Session
+
+    case = cmd_seeded.scalar(select(ResearchCase))
+    thesis = ResearchService(ResearchRepository(cmd_seeded)).add_thesis(
+        case.id,
+        statement="Strict gate becomes blocked after the provider returns",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    cmd_seeded.commit()
+    thesis_id = thesis.id
+    gates = iter(
+        [
+            ResearchabilityResult("ready", [], None, "assess"),
+            ResearchabilityResult(
+                "blocked",
+                ["missing_verification_rule"],
+                None,
+                "complete protocol",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "app.ai.assessment_gen.ResearchProtocolService.check_researchability",
+        lambda _service, _thesis_id: next(gates),
+    )
+
+    response = cmd_client.post(f"/api/v1/theses/{thesis_id}/rerun")
+
+    assert response.status_code == 422, response.text
+    with Session(cmd_seeded.get_bind()) as check:
+        assert check.scalar(
+            select(func.count()).select_from(EvidenceSnapshot).where(
+                EvidenceSnapshot.thesis_id == thesis_id
+            )
+        ) == 0
+        assert check.scalar(
+            select(func.count())
+            .select_from(AIAssessment)
+            .join(EvidenceSnapshot, AIAssessment.snapshot_id == EvidenceSnapshot.id)
+            .where(EvidenceSnapshot.thesis_id == thesis_id)
+        ) == 0
+        runs = list(
+            check.scalars(
+                select(AIRun)
+                .where(AIRun.kind == "assess", AIRun.status == "failed")
+                .where(
+                    AIRun.input_ref["thesis_id"].as_string() == str(thesis_id)
+                )
+            )
+        )
+    assert len(runs) == 1
+    assert runs[0].input_ref["initial_protocol_status"] == "ready"
+    assert runs[0].input_ref["final_protocol_status"] == "blocked"
+
+
 def test_dossier_surfaces_fresh_assess_failure_and_hides_stale_one(
     cmd_client, cmd_seeded, monkeypatch
 ):

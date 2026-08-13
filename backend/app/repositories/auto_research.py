@@ -160,7 +160,15 @@ class AutoResearchRepository:
             task.status = "cancelled"
             task.stage = "stopped"
             task.updated_at = _utcnow()
-        job = self.job_for_run(run.id)
+        job = self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run.id)
+            .order_by(Job.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
         if job is not None and job.status not in {"succeeded", "failed", "cancelled"}:
             job.cancel_requested = True
             job.status = "cancelled"
@@ -187,6 +195,19 @@ class AutoResearchRepository:
             and run.stop_reason == "pending_atomic_claim_review"
         ):
             return False
+        job = self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run.id)
+            .order_by(Job.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if job is not None and job.status != "waiting_for_review":
+            # A concurrent worker/administrator action won the state change;
+            # do not overwrite it or create a duplicate job.
+            return False
         run.status = "queued"
         run.stage = "resume_after_claim_review"
         run.stop_reason = None
@@ -203,10 +224,9 @@ class AutoResearchRepository:
             task.status = "queued"
             task.stage = "planning"
             task.updated_at = _utcnow()
-        job = self.job_for_run(run.id)
         if job is None:
             self.enqueue_run_job(run)
-        elif job.status == "waiting_for_review":
+        else:
             job.status = "queued"
             job.step = "resume_after_claim_review"
             job.error = None
@@ -218,10 +238,6 @@ class AutoResearchRepository:
                 step="resume_after_claim_review",
                 message="atomic claim review completed; run requeued",
             )
-        else:
-            # A concurrent worker/administrator action won the state change;
-            # do not overwrite it or create a duplicate job.
-            return False
         return True
 
     def _append_job_event(self, job: Job, *, status: str, step: str, message: str) -> None:

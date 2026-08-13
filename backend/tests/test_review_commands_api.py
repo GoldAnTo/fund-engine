@@ -360,6 +360,70 @@ def test_assessment_review_missing_is_404(cmd_client, cmd_seeded):
     assert _error_code(response) == "not_found"
 
 
+def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
+    cmd_client, cmd_seeded
+):
+    from app.models.ledger import ResearchCase
+    from app.repositories.research import ResearchRepository
+    from app.services.assessment import AssessmentService
+    from app.services.research import ResearchService
+    from tests.protocol_provenance import seed_protocol_footprint
+
+    case = cmd_seeded.scalar(select(ResearchCase))
+    assert case is not None
+    repo = ResearchRepository(cmd_seeded)
+    thesis = ResearchService(repo).add_thesis(
+        case.id,
+        statement="Only one primary metric is available",
+        created_by="tester",
+        research_protocol_required=True,
+    )
+    service = AssessmentService(repo, cmd_seeded)
+    snapshot = service.freeze_snapshot(
+        thesis.id, cutoff=datetime(2026, 12, 31, tzinfo=timezone.utc)
+    )
+    footprint = seed_protocol_footprint(cmd_seeded, thesis)
+    assessment = service.create_ai_assessment(
+        snapshot.id,
+        conclusion="insufficient_evidence",
+        rationale="Protocol limits the conclusion.",
+        gaps=["insufficient_primary_metrics"],
+        research_protocol_status="single_metric_monitoring",
+        effective_binding_id=footprint.binding.id,
+        mechanism_template_version_id=footprint.template.id,
+        verification_rule_ids=[rule.id for rule in footprint.rules],
+    )
+    cmd_seeded.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/assessments/{assessment.id}/reviews",
+        json={
+            "outcome": "rejected",
+            "conclusion": "contradicted",
+            "reason": "attempted override",
+            "reviewer": "human:researcher",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert _error_code(response) == "validation_failed"
+
+    # The rejected+directional decision was not persisted: the read model,
+    # which consumes review.conclusion regardless of outcome, remains safely
+    # non-directional.
+    from app.queries.basis import HistoricalBasis
+    from app.queries.conclusion import ConclusionQueries
+
+    cmd_seeded.expire_all()
+    conclusion = ConclusionQueries(cmd_seeded).load(
+        case_id=case.id,
+        basis=HistoricalBasis.from_cutoff(
+            datetime(2027, 1, 1, tzinfo=timezone.utc)
+        ),
+    )
+    assert conclusion.header.conclusion_status == "insufficient_evidence"
+
+
 def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
     from app.models.ledger import AIAssessment
     from app.repositories.operational import TaskRepository
@@ -452,7 +516,7 @@ def test_assessment_review_completes_final_run_gate(cmd_client, cmd_seeded):
     assert run.stop_reason == "max_rounds_reached"
     assert any(
         event.stage == "review_complete"
-        and event.payload_json["assessment_id"] == str(assessment.id)
+        and event.payload_json["trigger_ref"] == f"assessment:{assessment.id}"
         for event in cmd_seeded.scalars(
             select(ResearchRunEvent).where(ResearchRunEvent.run_id == run.id)
         )

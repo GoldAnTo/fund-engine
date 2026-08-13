@@ -10,7 +10,12 @@ from sqlalchemy import update
 from app.models.ledger import CaseDocumentVersion, DocumentVersion, ImmutableLedgerError, ResearchCase, Thesis, ValidationError
 from app.models.research_protocol import MetricDefinitionVersion, OutcomeBindingVersion
 from app.models.source_governance import SourceContract
-from app.services.research_protocol import MetricDefinitionInput, OutcomeBindingInput, ResearchProtocolService
+from app.services.research_protocol import (
+    MetricDefinitionInput,
+    OutcomeBindingInput,
+    ResearchabilityResult,
+    ResearchProtocolService,
+)
 
 
 def test_metric_versions_and_outcome_bindings_are_append_only(session, thesis) -> None:
@@ -166,6 +171,50 @@ def test_researchability_is_not_applicable_to_legacy_thesis(session, thesis) -> 
     assert result.reason_codes == []
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (ResearchabilityResult("blocked", [], None, "complete protocol"), set()),
+        (
+            ResearchabilityResult(
+                "single_metric_monitoring",
+                ["insufficient_primary_metrics"],
+                None,
+                "monitor only",
+            ),
+            {"insufficient_evidence"},
+        ),
+        (
+            ResearchabilityResult("ready", [], None, "assess"),
+            {"supported", "contradicted", "insufficient_evidence"},
+        ),
+    ],
+)
+def test_single_metric_researchability_status_defines_allowed_assessment_conclusions(
+    result: ResearchabilityResult, expected: set[str]
+) -> None:
+    assert ResearchProtocolService.allowed_assessment_conclusions(result) == expected
+
+
+def test_researchability_result_exposes_an_immutable_protocol_footprint() -> None:
+    template_id = uuid.uuid4()
+    rule_ids = (uuid.uuid4(), uuid.uuid4())
+
+    result = ResearchabilityResult(
+        "ready",
+        [],
+        uuid.uuid4(),
+        "assess",
+        mechanism_template_version_id=template_id,
+        verification_rule_ids=rule_ids,
+    )
+
+    assert result.mechanism_template_version_id == template_id
+    assert result.verification_rule_ids == rule_ids
+    with pytest.raises(AttributeError):
+        result.verification_rule_ids = ()
+
+
 def test_protocol_thesis_without_outcome_binding_is_explicitly_blocked(session) -> None:
     thesis = _protocol_thesis(session)
     result = ResearchProtocolService(session).check_researchability(thesis.id)
@@ -174,8 +223,15 @@ def test_protocol_thesis_without_outcome_binding_is_explicitly_blocked(session) 
     assert result.reason_codes == ["missing_outcome_binding"]
 
 
-def test_approved_outcome_binding_exposes_remaining_protocol_blockers(session) -> None:
+def test_outcome_binding_mutations_take_the_shared_case_lock(
+    session, monkeypatch
+) -> None:
     thesis = _protocol_thesis(session)
+    locked_case_ids: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.services.research_protocol.lock_event_scope_case",
+        lambda _session, case_id: locked_case_ids.append(case_id),
+    )
     service = ResearchProtocolService(session)
     metric = service.add_metric_version(_metric_input(), approved_by="human:owner", reason="结果指标")
     document = _attach_frozen_baseline(session, thesis)
@@ -188,6 +244,7 @@ def test_approved_outcome_binding_exposes_remaining_protocol_blockers(session) -
 
     assert result.status == "blocked"
     assert result.reason_codes == ["missing_mechanism_template"]
+    assert locked_case_ids == [thesis.research_case_id, thesis.research_case_id]
 
 
 def test_strict_protocol_baseline_must_reference_current_case_authorized_frozen_document(session) -> None:

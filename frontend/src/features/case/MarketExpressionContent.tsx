@@ -6,6 +6,7 @@ import {
   sourceTypeListLabel,
 } from "../../domain/sourcePresentation";
 import {
+  ResearchOsRequestError,
   researchOsApi,
   type MarketExpression,
   type MarketInstrumentBindings,
@@ -56,6 +57,11 @@ const expectedDirectionLabels: Record<string, string> = {
   negative: "预期向下",
   neutral: "方向中性",
 };
+
+function requestErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof ResearchOsRequestError)) return fallback;
+  return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
+}
 
 function publicWebUrl(sourceUrl?: string | null): string | null {
   return sourceUrl?.match(/^https?:\/\//i) ? sourceUrl : null;
@@ -933,7 +939,7 @@ function ForecastVerificationWorkflow({
       });
       setTargetId(target.id); setReason("");
       setMessage("已冻结预测目标。接下来需要录入同实体、同单位、同期间的后续实际值。");
-    } catch { setMessage("预测目标未登记。请核对主张、因素、原文、期间、数值和审核理由。"); }
+    } catch (error) { setMessage(requestErrorMessage(error, "预测目标未登记。请核对主张、因素、原文、期间、数值和审核理由。")); }
     finally { setBusy(false); }
   }
 
@@ -950,7 +956,7 @@ function ForecastVerificationWorkflow({
       });
       setActualId(actual.id); setReason("");
       setMessage("已冻结后续实际值。它尚未是研究结论，需要先生成机器候选。");
-    } catch { setMessage("实际值未登记。它必须与冻结预测的实体、单位、期间和可得时间精确匹配。"); }
+    } catch (error) { setMessage(requestErrorMessage(error, "实际值未登记。它必须与冻结预测的实体、单位、期间和可得时间精确匹配。")); }
     finally { setBusy(false); }
   }
 
@@ -960,7 +966,7 @@ function ForecastVerificationWorkflow({
     try {
       const next = await researchOsApi.evaluateForecastTarget(targetId, { actual_observation_id: actualId, cutoff: new Date().toISOString() });
       setCandidate(next); setMessage(`已生成${verificationLabels[next.outcome] ?? next.outcome}候选；仍须人工发布。`);
-    } catch { setMessage("无法生成候选。系统没有改写任何已冻结记录。"); }
+    } catch (error) { setMessage(requestErrorMessage(error, "无法生成候选。系统没有改写任何已冻结记录。")); }
     finally { setBusy(false); }
   }
 
@@ -977,7 +983,7 @@ function ForecastVerificationWorkflow({
       });
       setMessage(decision === "rejected" ? "已记录否决，候选不会作为正式结论展示。" : "已追加人工发布裁决；历史预测验证将更新。 ");
       onPublished();
-    } catch { setMessage("裁决未发布。请记录明确的人工作出理由。 "); }
+    } catch (error) { setMessage(requestErrorMessage(error, "裁决未发布。请记录明确的人工作出理由。 ")); }
     finally { setBusy(false); }
   }
 

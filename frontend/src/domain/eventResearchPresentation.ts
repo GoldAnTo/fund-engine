@@ -1,4 +1,4 @@
-import type { EventWorkbench } from "./eventResearch";
+import type { EventResearchListItem, EventWorkbench } from "./eventResearch";
 
 export const EVENT_RESEARCH_STAGES = [
   { id: 1, label: "资料接入" },
@@ -88,6 +88,16 @@ export function eventActionPresentation(
         to: `${base}/scope`,
         buttonLabel: "调整研究范围",
       };
+    case "complete_research_protocol":
+      return {
+        owner: "你需要做",
+        title: workbench.nextAction.label,
+        why: workbench.lifecycle.currentGap || "新增因素必须先完成可研究性协议，系统才能安全启动补证。",
+        steps: ["为新增因素绑定结果指标与范围", "确认基线、时间窗和验证口径", "审核协议后重新启动补证"],
+        unlock: "协议完成后，系统才能为当前范围创建受控研究运行。",
+        to: `${base}/protocol`,
+        buttonLabel: "完成研究协议",
+      };
     case "view_conclusion_change":
       return {
         owner: "你需要做",
@@ -121,4 +131,10 @@ export function eventActionPresentation(
         buttonLabel: "查看系统正在做什么",
       };
   }
+}
+
+export function eventDeskRoute(event: EventResearchListItem): string {
+  const base = `/events/${event.id}`;
+  if (event.nextActionKind === "complete_research_protocol") return `${base}/protocol`;
+  return event.nextHumanAction ? `${base}/review` : base;
 }

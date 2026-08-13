@@ -7,7 +7,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
-import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
+import { ResearchOsRequestError, resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
@@ -280,6 +280,46 @@ describe("Research OS event entry", () => {
       screen.getAllByRole("link", { name: /Alphabet 财报超预期后股价下跌/ })
         .length,
     ).toBeGreaterThan(0);
+  });
+
+  it("routes protocol-blocked desk work to the Case protocol page", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockResolvedValue([{
+      id: "protocol-case",
+      eventTitle: "新增因素等待研究协议",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_scope",
+      statusSummary: "研究范围已更新，新增因素需先完成研究协议",
+      nextHumanAction: "完成新增因素的研究协议后再启动补证",
+      nextActionKind: "complete_research_protocol",
+      updatedAt: "2026-08-12T08:00:00Z",
+    }, {
+      id: "ordinary-case",
+      eventTitle: "普通证据审核",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_key_review",
+      statusSummary: "等待审核",
+      nextHumanAction: "审核 1 条关键证据",
+      nextActionKind: "review_evidence",
+      updatedAt: "2026-08-12T07:00:00Z",
+    }] as EventResearchListItem[]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: /当前优先/ }),
+    ).toHaveAttribute("href", "/events/protocol-case/protocol");
+    expect(screen.getByRole("link", { name: "普通证据审核" }))
+      .toHaveAttribute("href", "/events/ordinary-case/review");
   });
 
   it("does not call active Case work running when the execution worker is unavailable", async () => {
@@ -1418,6 +1458,43 @@ describe("Research OS event entry", () => {
         selector: ".ros-forecast-verdict strong",
       }),
     ).toBeVisible();
+  });
+
+  it("shows actionable request details when recording an actual observation fails", async () => {
+    const user = userEvent.setup();
+    const api = new MockResearchOsApi(new MockResearchAdapter());
+    vi.spyOn(api, "recordActualMetricObservation").mockRejectedValue(
+      new ResearchOsRequestError(
+        "available_at must include a timezone",
+        422,
+        "validation_failed",
+        "req-forecast-1",
+      ),
+    );
+    setResearchOsApi(api);
+    render(
+      <MemoryRouter initialEntries={["/events/event-tsm/market"]}>
+        <Routes>
+          <Route path="/events/:caseId/market" element={<CaseMarketPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "历史预测验证" });
+    await user.click(screen.getByRole("button", { name: "登记历史预测验证" }));
+    await user.type(screen.getByLabelText("冻结预测值"), "100");
+    await user.type(screen.getByLabelText("实体标识"), "TSM");
+    await user.type(screen.getByLabelText("单位"), "%");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "已核对研报表格、原文定位和期间口径。");
+    await user.click(screen.getByRole("button", { name: "冻结预测目标" }));
+    await screen.findByText(/已冻结预测目标/);
+    await user.type(screen.getByLabelText("后续实际值"), "80");
+    await user.type(screen.getByLabelText("本阶段审核理由"), "年报实际值与预测的实体、单位和期间一致。");
+    await user.click(screen.getByRole("button", { name: "冻结后续实际值" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "available_at must include a timezone（请求 req-forecast-1）",
+    );
   });
 
   it("keeps stock and fund drill-downs inside the Case's reviewed market-expression chain", async () => {
@@ -4755,11 +4832,16 @@ describe("Research OS event entry", () => {
       confirmed_factors: [
         { id: "event-tsm-factor-1", statement: "资本开支指引" },
       ],
+      available_confirmed_factors: [
+        { id: "event-tsm-factor-1", statement: "资本开支指引" },
+        { id: "event-tsm-factor-2", statement: "订单增长指引" },
+      ],
     };
     const saved = {
       ...initial.monitor,
       id: "monitor-v2",
       version: 2,
+      factor_ids: ["event-tsm-factor-1", "event-tsm-factor-2"],
       allowed_source_types: ["company_disclosure", "licensed_provider"],
       next_verification_event: "下一次财报后补证",
       change_reason: "补充授权来源",
@@ -4794,6 +4876,8 @@ describe("Research OS event entry", () => {
     );
 
     expect(await screen.findByText("当前生效版本 v1")).toBeVisible();
+    expect(screen.getByLabelText("订单增长指引")).not.toBeChecked();
+    await user.click(screen.getByLabelText("订单增长指引"));
     expect(screen.getByRole("status")).toHaveTextContent(
       "变更定时任务前还需填写：填写变更原因",
     );
@@ -4812,11 +4896,15 @@ describe("Research OS event entry", () => {
 
     expect(await screen.findByText("当前生效版本 v2")).toBeVisible();
     expect(screen.getByText(/已保存监控版本 v2/)).toBeVisible();
+    expect(screen.getByLabelText("订单增长指引")).toBeChecked();
     expect(await screen.findByText("v2 · 已启用")).toBeVisible();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/v1/research-cases/event-tsm/monitor",
-        expect.objectContaining({ method: "PUT" }),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining("event-tsm-factor-2"),
+        }),
       ),
     );
   });

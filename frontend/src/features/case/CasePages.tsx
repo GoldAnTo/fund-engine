@@ -5060,7 +5060,7 @@ function MonitorConfigForm({
         setDetail(value);
         setSelected(
           value.monitor?.factor_ids ??
-            value.confirmed_factors.map((factor) => factor.id),
+            value.available_confirmed_factors.map((factor) => factor.id),
         );
         setFrequency(value.monitor?.frequency ?? "weekday_08_30");
         setSources(
@@ -5151,7 +5151,7 @@ function MonitorConfigForm({
         <div className="ros-config-form">
           <fieldset>
             <legend>已确认关键因素</legend>
-            {detail.confirmed_factors.map((factor) => (
+            {detail.available_confirmed_factors.map((factor) => (
               <label key={factor.id}>
                 <input
                   type="checkbox"

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.event_research import (
     EventResearchBrief,
@@ -25,6 +26,7 @@ from app.services.event_research_factors import (
 )
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_protocol import ResearchProtocolService
 
 
 def _utcnow() -> datetime:
@@ -211,6 +213,7 @@ class EventResearchScopeService:
                     created_at=created_at,
                     creator_type="human",
                     review_state="confirmed",
+                    research_protocol_required=True,
                 )
                 self._session.add(thesis)
                 self._session.flush()
@@ -229,10 +232,41 @@ class EventResearchScopeService:
             else None
         )
         auto_research = AutoResearchService(self._session)
-        if current_run is not None and current_run.status in {"queued", "running"}:
+        if current_run is not None and current_run.status in {
+            "queued",
+            "running",
+            "waiting_for_review",
+        }:
             # Preserve the old run and its task/job audit trail, but prevent a
             # worker from continuing to research the superseded thesis set.
-            auto_research.repo.cancel_run(current_run)
+            locked_run = auto_research._lock_run_for_transition(
+                current_run.id,
+                case_locked=True,
+            )
+            if locked_run is not None:
+                auto_research.repo.cancel_run(locked_run)
+        blocked_protocols: list[tuple[Thesis, list[str]]] = []
+        protocol = ResearchProtocolService(self._session)
+        for thesis in active_theses:
+            if not thesis.research_protocol_required:
+                continue
+            result = protocol.check_researchability(thesis.id)
+            if result.status == "blocked":
+                blocked_protocols.append((thesis, result.reason_codes))
+        if blocked_protocols:
+            blocked_details = "；".join(
+                f"{thesis.statement}（{', '.join(reason_codes[:3]) or 'blocked'}）"
+                for thesis, reason_codes in blocked_protocols[:3]
+            )
+            if len(blocked_protocols) > 3:
+                blocked_details += f"；另有 {len(blocked_protocols) - 3} 个因素"
+            lifecycle.status = "awaiting_scope"
+            lifecycle.active_run_id = None
+            lifecycle.status_summary = "研究范围已更新，新增因素需先完成研究协议"
+            lifecycle.current_gap = f"研究协议未完成：{blocked_details}"
+            lifecycle.next_human_action = PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
+            lifecycle.updated_at = now
+            return
         successor = auto_research.start(
             lifecycle.research_case_id,
             max_rounds=current_run.max_rounds if current_run is not None else 3,
