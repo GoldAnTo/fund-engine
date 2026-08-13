@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -294,8 +294,6 @@ def extract_event(
         extracted = EventExtractionService().extract(
             raw_input=payload.raw_input, source_url=payload.source_url
         )
-    except HTTPException:
-        raise
     except Exception as exc:
         raise UpstreamUnavailableError(
             "event extraction LLM is unavailable or returned an invalid response"

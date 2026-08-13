@@ -200,6 +200,40 @@ def test_extract_event_maps_provider_setup_failure_to_safe_503(
     assert "sk-private" not in response.text
 
 
+def test_extract_event_redacts_provider_setup_http_exception(
+    cmd_client, monkeypatch
+) -> None:
+    from fastapi import HTTPException
+
+    from app.api.v1 import event_research as event_research_api
+
+    class HttpSetupFailureService:
+        def __init__(self):
+            raise HTTPException(
+                status_code=418,
+                detail="provider HTTP failure exposed secret sk-private",
+            )
+
+    monkeypatch.setattr(
+        event_research_api, "EventExtractionService", HttpSetupFailureService
+    )
+
+    response = cmd_client.post(
+        "/api/v1/event-research/extract",
+        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
+    )
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "upstream_unavailable"
+    assert (
+        error["message"]
+        == "event extraction LLM is unavailable or returned an invalid response"
+    )
+    assert "sk-private" not in response.text
+    assert "provider HTTP failure" not in response.text
+
+
 def test_extract_event_maps_provider_call_failure_to_safe_503(
     cmd_client, monkeypatch
 ) -> None:
