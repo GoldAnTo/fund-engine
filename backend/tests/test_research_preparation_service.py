@@ -105,6 +105,10 @@ def _parse(service, preparation, candidates) -> None:
     )
 
 
+def _candidate_context(service, case_id) -> str:
+    return service.current_candidate_context_fingerprint(case_id)
+
+
 def _confirm_claims(service, case_id, revision, candidates, *, modified: bool = False) -> None:
     decisions = [
         ClaimDecision(
@@ -481,6 +485,7 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
         {"rationale": "protocol"},
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=_candidate_context(service, case.id),
     )
     protocol = service.confirm_protocol(
         case.id,
@@ -492,6 +497,60 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
     assert protocol.protocol_review_state == "confirmed"
     assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
     assert session.scalars(select(ResearchRun)).all() == []
+
+
+def test_protocol_completion_freezes_current_candidate_context_and_discards_stale_context(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="v" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="context")
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    current = _candidate_context(service, case.id)
+    artifacts_before = len(session.scalars(select(ResearchPreparationArtifact)).all())
+
+    discarded = service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"draft": "stale"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint="0" * 64,
+    )
+
+    assert discarded is preparation
+    assert len(session.scalars(select(ResearchPreparationArtifact)).all()) == artifacts_before
+    assert _events(session, preparation.id)[-1].type == "preparation_output_discarded"
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"draft": "current"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=current,
+    )
+    artifact = service._repo.current_artifact(preparation.id, "research_protocol_draft")
+    assert artifact is not None and artifact.context_fingerprint == current
+
+
+def test_modified_review_changes_current_candidate_context_fingerprint(session) -> None:
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="w" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="context-modified")
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    confirmed = _candidate_context(service, case.id)
+    service._claims.review(
+        candidate.id,
+        outcome="modified",
+        reviewer="reviewer",
+        reason="human correction",
+        normalized_text="Human-corrected candidate context",
+        idempotency_key="context-modified",
+    )
+
+    assert service.current_candidate_context_fingerprint(case.id) != confirmed
 
 
 def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_sequence(session) -> None:
@@ -511,6 +570,7 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         },
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=_candidate_context(service, case.id),
     )
     source = session.scalar(
         select(ResearchPreparationArtifact).where(
@@ -663,6 +723,7 @@ def test_failed_plan_preserves_prior_artifacts_and_manual_retry_only_queues_plan
         {"draft": "protocol"},
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=_candidate_context(service, case.id),
     )
     service.confirm_protocol(case.id, actor="reviewer", revision=1, payload=ProtocolConfirmation(2, {}))
     service.mark_step_failed(

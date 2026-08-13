@@ -15,6 +15,8 @@ from app.models.research_preparation import (
     ResearchPreparationArtifact,
     ResearchPreparationEvent,
 )
+from app.repositories.research_preparation import ResearchPreparationRepository
+from app.errors import ConflictError
 
 
 def _case(session, *, title: str = "Preparation case") -> ResearchCase:
@@ -296,6 +298,60 @@ def test_preparation_event_step_is_constrained_and_message_is_optional(session) 
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(_event(preparation, seq=5, step="invalid_step"))
         session.flush()
+
+
+def test_artifact_context_fingerprint_is_nullable_fixed_width_provenance(session) -> None:
+    preparation = _preparation(_case(session, title="Context provenance"))
+    session.add(preparation)
+    session.flush()
+    parse = _artifact(preparation, sequence=1, context_fingerprint=None)
+    protocol = _artifact(
+        preparation,
+        sequence=2,
+        kind="research_protocol_draft",
+        state="current",
+        context_fingerprint="b" * 64,
+    )
+    session.add_all((parse, protocol))
+    session.flush()
+
+    assert ResearchPreparationArtifact.__table__.c.context_fingerprint.nullable is True
+    assert protocol.context_fingerprint == "b" * 64
+
+
+@pytest.mark.parametrize("fingerprint", ["a" * 63, "A" * 64, "z" * 64])
+def test_repository_rejects_invalid_context_fingerprint(session, fingerprint) -> None:
+    case = _case(session, title="Invalid context provenance")
+    preparation = _preparation(case)
+    session.add(preparation)
+    session.flush()
+
+    with pytest.raises(ConflictError):
+        ResearchPreparationRepository(session).append_artifact(
+            preparation,
+            research_case_id=case.id,
+            kind="research_protocol_draft",
+            input_fingerprint=preparation.input_fingerprint,
+            payload={"draft": "protocol"},
+            context_fingerprint=fingerprint,
+        )
+
+
+def test_repository_rejects_context_on_parse_candidate_artifact(session) -> None:
+    case = _case(session, title="Parse artifact context")
+    preparation = _preparation(case)
+    session.add(preparation)
+    session.flush()
+
+    with pytest.raises(ConflictError):
+        ResearchPreparationRepository(session).append_artifact(
+            preparation,
+            research_case_id=case.id,
+            kind="atomic_claim_candidates",
+            input_fingerprint=preparation.input_fingerprint,
+            payload={"candidates": []},
+            context_fingerprint="c" * 64,
+        )
 
 
 def test_preparation_events_are_append_only(session) -> None:

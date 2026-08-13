@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,9 +11,18 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.domain.research_preparation import ArtifactKind, PreparationStep
+from app.domain.research_preparation import (
+    ArtifactKind,
+    PreparationStep,
+    candidate_context_fingerprint,
+)
 from app.errors import ConflictError, NotFoundError
-from app.models.ledger import AtomicClaimCandidate, ValidationError
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    AtomicClaimReview,
+    SourceStatement,
+    ValidationError,
+)
 from app.models.research_preparation import (
     ResearchPreparation,
     ResearchPreparationArtifact,
@@ -155,6 +165,7 @@ class ResearchPreparationService:
         *,
         expected_version: int,
         expected_fingerprint: str,
+        expected_context_fingerprint: str | None = None,
     ) -> ResearchPreparation:
         preparation = self._require_preparation(case_id)
         if expected_version is None or expected_fingerprint is None:
@@ -173,13 +184,38 @@ class ResearchPreparationService:
                 detail={"current_version": preparation.version},
             )
             return preparation
-        self._require_eligible_step(preparation, step, allowed_states={"queued", "running", "retrying"})
+        self._require_eligible_step(
+            preparation, step, allowed_states={"queued", "running", "retrying"}
+        )
+        context_fingerprint = None
+        if step == "parse_claims":
+            if expected_context_fingerprint is not None:
+                raise ConflictError("parse claim output cannot carry a context fingerprint")
+        else:
+            current_context_fingerprint = self.current_candidate_context_fingerprint(
+                case_id
+            )
+            if (
+                expected_context_fingerprint is None
+                or expected_context_fingerprint != current_context_fingerprint
+            ):
+                self._repo.append_event(
+                    preparation,
+                    research_case_id=case_id,
+                    type="preparation_output_discarded",
+                    step=step,
+                    message="stale preparation output discarded",
+                    detail={"current_version": preparation.version},
+                )
+                return preparation
+            context_fingerprint = current_context_fingerprint
         artifact = self._repo.append_artifact(
             preparation,
             research_case_id=case_id,
             kind=_STEP_ARTIFACTS[step],
             input_fingerprint=preparation.input_fingerprint,
             payload=payload,
+            context_fingerprint=context_fingerprint,
         )
         setattr(preparation, _STEP_FIELDS[step], "succeeded")
         preparation.next_attempt_at = None
@@ -201,6 +237,70 @@ class ResearchPreparationService:
             detail={"artifact_sequence": artifact.sequence},
         )
         return preparation
+
+    def current_candidate_context_fingerprint(self, case_id: uuid.UUID) -> str:
+        """Return the ordered current-review context used to guard drafts."""
+        preparation = self._require_preparation(case_id)
+        artifact = self._repo.current_artifact(
+            preparation.id, "atomic_claim_candidates"
+        )
+        if artifact is None:
+            return candidate_context_fingerprint(None, ())
+        candidate_ids = self._ordered_candidate_ids(artifact)
+        if not candidate_ids:
+            return candidate_context_fingerprint(artifact.sequence, ())
+        candidates = {
+            candidate.id: candidate
+            for candidate in self._session.scalars(
+                select(AtomicClaimCandidate).where(
+                    AtomicClaimCandidate.id.in_(candidate_ids)
+                )
+            )
+        }
+        if set(candidates) != set(candidate_ids):
+            raise ConflictError("current claim candidates are missing")
+        latest_reviews: dict[uuid.UUID, AtomicClaimReview] = {}
+        for review in self._session.scalars(
+            select(AtomicClaimReview)
+            .where(AtomicClaimReview.atomic_claim_candidate_id.in_(candidate_ids))
+            .order_by(
+                AtomicClaimReview.atomic_claim_candidate_id,
+                AtomicClaimReview.created_at.desc(),
+                AtomicClaimReview.id.desc(),
+            )
+        ):
+            latest_reviews.setdefault(review.atomic_claim_candidate_id, review)
+        decisions: list[tuple[str, str, str, str | None, str | None]] = []
+        for candidate_id in candidate_ids:
+            review = latest_reviews.get(candidate_id)
+            if review is None:
+                continue
+            candidate = candidates[candidate_id]
+            normalized_text: str | None = None
+            if review.outcome == "confirmed":
+                normalized_text = candidate.normalized_text
+            elif review.outcome == "modified":
+                statement = self._session.get(
+                    SourceStatement, review.published_source_statement_id
+                )
+                if (
+                    statement is None
+                    or statement.atomic_claim_candidate_id != candidate.id
+                    or statement.source_span_id != candidate.source_span_id
+                    or not statement.normalized_text.strip()
+                ):
+                    raise ConflictError("modified claim context is unavailable")
+                normalized_text = statement.normalized_text
+            decisions.append((
+                str(candidate_id),
+                str(review.id),
+                review.outcome,
+                str(review.published_source_statement_id)
+                if review.published_source_statement_id else None,
+                hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+                if normalized_text is not None else None,
+            ))
+        return candidate_context_fingerprint(artifact.sequence, tuple(decisions))
 
     def mark_step_failed(
         self,
@@ -322,6 +422,7 @@ class ResearchPreparationService:
                 kind="research_protocol_draft",
                 input_fingerprint=preparation.input_fingerprint,
                 payload=merged_payload,
+                context_fingerprint=artifact.context_fingerprint,
             )
             confirmed_draft_sequence = successor.sequence
         preparation.protocol_review_state = "confirmed"
@@ -446,10 +547,15 @@ class ResearchPreparationService:
         preparation.plan_review_state = "locked"
 
     def _candidate_ids(self, artifact: ResearchPreparationArtifact) -> set[uuid.UUID]:
+        return set(self._ordered_candidate_ids(artifact))
+
+    def _ordered_candidate_ids(
+        self, artifact: ResearchPreparationArtifact
+    ) -> list[uuid.UUID]:
         candidates = artifact.payload.get("candidates")
         if not isinstance(candidates, list):
             raise ConflictError("claim candidate artifact is malformed")
-        ids: set[uuid.UUID] = set()
+        ids: list[uuid.UUID] = []
         for candidate in candidates:
             if not isinstance(candidate, dict) or not isinstance(candidate.get("candidate_id"), str):
                 raise ConflictError("claim candidate artifact is malformed")
@@ -459,7 +565,7 @@ class ResearchPreparationService:
                 raise ConflictError("claim candidate artifact is malformed") from exc
             if candidate_id in ids:
                 raise ConflictError("claim candidate artifact has duplicate candidates")
-            ids.add(candidate_id)
+            ids.append(candidate_id)
         return ids
 
     def _validate_claim_decisions(

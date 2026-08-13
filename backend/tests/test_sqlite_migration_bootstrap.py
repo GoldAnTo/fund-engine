@@ -165,6 +165,7 @@ with SessionLocal() as session:
             for column in sa.inspect(connection).get_columns("research_preparation_artifacts")
         }
         assert artifact_columns["preparation_version"]["nullable"] is False
+        assert artifact_columns["context_fingerprint"]["nullable"] is True
 
         now = "2026-08-13 00:00:00"
 

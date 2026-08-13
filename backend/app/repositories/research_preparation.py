@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -109,7 +110,14 @@ class ResearchPreparationRepository:
         kind: ArtifactKind,
         input_fingerprint: str,
         payload: dict[str, object],
+        context_fingerprint: str | None = None,
     ) -> ResearchPreparationArtifact:
+        if context_fingerprint is not None and re.fullmatch(
+            r"[0-9a-f]{64}", context_fingerprint
+        ) is None:
+            raise ConflictError("preparation context fingerprint is invalid")
+        if kind == "atomic_claim_candidates" and context_fingerprint is not None:
+            raise ConflictError("claim candidate artifacts cannot carry a context fingerprint")
         preparation = self._lock_case_then_preparation(
             research_case_id, preparation.id
         )
@@ -136,6 +144,7 @@ class ResearchPreparationRepository:
             sequence=(last_sequence or 0) + 1,
             preparation_version=preparation.version,
             input_fingerprint=input_fingerprint,
+            context_fingerprint=context_fingerprint,
             payload=payload,
             state="current",
             invalidated_reason=None,

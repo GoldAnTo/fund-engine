@@ -98,6 +98,7 @@ def upgrade() -> None:
         sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("preparation_version", sa.Integer(), nullable=False),
         sa.Column("input_fingerprint", sa.String(length=64), nullable=False),
+        sa.Column("context_fingerprint", sa.String(length=64), nullable=True),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("state", sa.String(length=16), nullable=False),
         sa.Column("invalidated_reason", sa.Text(), nullable=True),

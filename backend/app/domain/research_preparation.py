@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from typing import Literal
 
@@ -24,6 +25,7 @@ ArtifactKind = Literal[
 ]
 
 _FINGERPRINT_VERSION = "research-preparation-input:v1"
+_CANDIDATE_CONTEXT_FINGERPRINT_VERSION = "research-preparation-candidates:v1"
 
 
 def preparation_input_fingerprint(
@@ -32,3 +34,22 @@ def preparation_input_fingerprint(
     """Return the stable fingerprint for one frozen preparation input pair."""
     payload = f"{_FINGERPRINT_VERSION}|{document_version_id}|{scope_version_id}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def candidate_context_fingerprint(
+    parse_artifact_sequence: int | None,
+    decisions: tuple[tuple[str, str, str, str | None, str | None], ...],
+) -> str:
+    """Hash the ordered, effective human-review context for a draft.
+
+    Each record is candidate ID, latest review ID/outcome, published statement
+    ID, and the SHA-256 of the exact normalized text sent to the model.
+    """
+    payload = {
+        "version": _CANDIDATE_CONTEXT_FINGERPRINT_VERSION,
+        "parse_artifact_sequence": parse_artifact_sequence,
+        "decisions": decisions,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

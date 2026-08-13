@@ -143,6 +143,7 @@ class ResearchPreparationArtifact(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     preparation_version: Mapped[int] = mapped_column(Integer, nullable=False)
     input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
     invalidated_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

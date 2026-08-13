@@ -25,6 +25,7 @@ from app.ai.prompts import (
     PREPARATION_PROTOCOL_SYSTEM,
 )
 from app.domain.atomic_claims import AtomicClaimDraft
+from app.domain.research_preparation import candidate_context_fingerprint
 from app.errors import NotFoundError
 from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.models.ledger import (
@@ -315,10 +316,7 @@ def _candidate_context_fingerprint(
     sequence: int | None,
     decisions: tuple[tuple[str, str, str, str | None, str | None], ...],
 ) -> str:
-    payload = {"parse_artifact_sequence": sequence, "decisions": decisions}
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return candidate_context_fingerprint(sequence, decisions)
 
 
 _T = TypeVar("_T")
