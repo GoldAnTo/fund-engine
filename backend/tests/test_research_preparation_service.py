@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from threading import Event, Thread, get_ident
 
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
@@ -13,6 +15,7 @@ from app.domain.atomic_claims import AtomicClaimDraft
 from app.models.ledger import (
     AtomicClaimReview,
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
@@ -90,6 +93,21 @@ def _candidate(session, case: ResearchCase, *, suffix: str):
         authority_level="primary_disclosure",
         run_ref=f"preparation-test:{suffix}",
     )
+
+
+def _admit_candidate_document(session, case: ResearchCase, candidate) -> None:
+    span = session.get(SourceSpan, candidate.source_span_id)
+    assert span is not None
+    session.add(
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=span.document_version_id,
+            admitted_by="test-fixture",
+            admitted_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
 
 
 def _service(session) -> ResearchPreparationService:
@@ -715,6 +733,187 @@ def test_confirm_protocol_rejects_candidate_context_changed_after_draft(session)
     )
     assert preparation.protocol_review_state == "confirmed"
     assert len(_active_jobs(session, preparation.id, "draft_evidence_plan")) == 1
+
+
+def test_atomic_review_locks_current_preparation_case_then_preparation(session, monkeypatch) -> None:
+    """A current preparation candidate review obtains the shared Case → prep lock."""
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="z" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="review-lock-order")
+    _admit_candidate_document(session, case, candidate)
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+
+    lock_order: list[str] = []
+    original_case_lock = preparation_repository_module.lock_event_scope_case
+    original_preparation_lock = (
+        ResearchPreparationRepository._lock_preparation_after_case_lock
+    )
+
+    def record_case_lock(locking_session, case_id):
+        lock_order.append("case")
+        return original_case_lock(locking_session, case_id)
+
+    def record_preparation_lock(self, research_case_id, preparation_id):
+        preparation = original_preparation_lock(self, research_case_id, preparation_id)
+        lock_order.append("preparation")
+        return preparation
+
+    monkeypatch.setattr(
+        preparation_repository_module, "lock_event_scope_case", record_case_lock
+    )
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "_lock_preparation_after_case_lock",
+        record_preparation_lock,
+    )
+    review = AtomicClaimService(session).review(
+        candidate.id,
+        outcome="rejected",
+        reviewer="independent-reviewer",
+        reason="withdrawn",
+        idempotency_key="review-lock-order",
+    )
+
+    assert review.atomic_claim_candidate_id == candidate.id
+    assert lock_order == ["case", "preparation"]
+
+
+@pytest.mark.pg_only
+def test_postgres_candidate_review_waits_for_protocol_confirmation_context_lock(
+    engine, session, monkeypatch
+) -> None:
+    """A review cannot land between protocol context read and confirmation."""
+    session_factory = sessionmaker(bind=engine, future=True)
+    case = _case(session)
+    service = _service(session)
+    preparation = service.create_for_case(case.id, input_fingerprint="p" * 64, actor="tester")
+    candidate = _candidate(session, case, suffix="protocol-review-race")
+    _admit_candidate_document(session, case, candidate)
+    _parse(service, preparation, [candidate])
+    _confirm_claims(service, case.id, preparation.version, [candidate])
+    original_context = _candidate_context(service, case.id)
+    service.complete_system_step(
+        case.id,
+        "draft_protocol",
+        {"rationale": "serialized protocol draft"},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=original_context,
+    )
+    artifact = service._repo.current_artifact(preparation.id, "research_protocol_draft")
+    assert artifact is not None
+    case_id, preparation_id, candidate_id, draft_sequence = (
+        case.id,
+        preparation.id,
+        candidate.id,
+        artifact.sequence,
+    )
+    session.commit()
+
+    context_read, release_confirmation = Event(), Event()
+    review_lock_attempted, review_finished = Event(), Event()
+    confirmation_errors: list[BaseException] = []
+    review_errors: list[BaseException] = []
+    review_thread_id: list[int] = []
+
+    original_context_fingerprint = (
+        ResearchPreparationService.current_candidate_context_fingerprint
+    )
+
+    def pause_after_context_read(service, locked_case_id):
+        fingerprint = original_context_fingerprint(service, locked_case_id)
+        if locked_case_id == case_id:
+            context_read.set()
+            assert release_confirmation.wait(timeout=5)
+        return fingerprint
+
+    def observe_review_case_lock(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        if (
+            review_thread_id
+            and get_ident() == review_thread_id[0]
+            and "research_cases" in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            review_lock_attempted.set()
+
+    monkeypatch.setattr(
+        ResearchPreparationService,
+        "current_candidate_context_fingerprint",
+        pause_after_context_read,
+    )
+
+    def confirm() -> None:
+        confirmation_session = session_factory()
+        try:
+            ResearchPreparationService(confirmation_session).confirm_protocol(
+                case_id,
+                actor="reviewer",
+                revision=1,
+                payload=ProtocolConfirmation(draft_sequence, {}),
+            )
+            confirmation_session.commit()
+        except BaseException as exc:
+            confirmation_errors.append(exc)
+            confirmation_session.rollback()
+        finally:
+            confirmation_session.close()
+
+    def review() -> None:
+        review_session = session_factory()
+        try:
+            review_thread_id.append(get_ident())
+            AtomicClaimService(review_session).review(
+                candidate_id,
+                outcome="rejected",
+                reviewer="other-reviewer",
+                reason="late correction",
+                idempotency_key="serialized-review",
+            )
+            review_session.commit()
+            review_finished.set()
+        except BaseException as exc:
+            review_errors.append(exc)
+            review_session.rollback()
+        finally:
+            review_session.close()
+
+    confirmation_thread = Thread(target=confirm)
+    review_thread = Thread(target=review)
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_review_case_lock)
+    try:
+        confirmation_thread.start()
+        assert context_read.wait(timeout=5)
+        review_thread.start()
+        assert review_lock_attempted.wait(timeout=5)
+        assert not review_finished.is_set()
+        release_confirmation.set()
+        confirmation_thread.join(timeout=5)
+        review_thread.join(timeout=5)
+        assert not confirmation_thread.is_alive()
+        assert not review_thread.is_alive()
+        assert confirmation_errors == []
+        assert review_errors == []
+    finally:
+        release_confirmation.set()
+        confirmation_thread.join(timeout=5)
+        review_thread.join(timeout=5)
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_review_case_lock)
+
+    verifier = session_factory()
+    try:
+        persisted_preparation = verifier.get(ResearchPreparation, preparation_id)
+        assert persisted_preparation is not None
+        assert persisted_preparation.protocol_review_state == "confirmed"
+        assert (
+            ResearchPreparationService(verifier).current_candidate_context_fingerprint(case_id)
+            != original_context
+        )
+    finally:
+        verifier.close()
 
 
 def test_confirm_protocol_persists_stale_context_before_conflict(session, monkeypatch) -> None:

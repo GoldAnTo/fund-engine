@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.models.ledger import AtomicClaimCandidate, AtomicClaimReview, SourceSpan, SourceStatement, ValidationError
+from app.repositories.research_preparation import ResearchPreparationRepository
 
 
 _CLAIM_TYPES = frozenset({"disclosed_fact", "reported_claim", "management_attribution", "forecast", "research_opinion"})
@@ -72,6 +73,12 @@ class AtomicClaimService:
         normalized_text: str | None = None,
         observed_period: date | None = None,
     ) -> AtomicClaimReview:
+        # Current preparation candidates share this Case → preparation lock
+        # with protocol confirmation.  Unmapped legacy candidates retain the
+        # ordinary review path without acquiring unrelated Case locks.
+        ResearchPreparationRepository(
+            self._session
+        ).lock_preparation_for_candidate_review(candidate_id)
         if self._session.get(AtomicClaimCandidate, candidate_id) is None:
             raise ValidationError("atomic claim candidate not found")
         if outcome not in _REVIEW_OUTCOMES or not reviewer.strip() or not reason.strip() or not idempotency_key.strip():

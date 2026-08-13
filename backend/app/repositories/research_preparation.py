@@ -10,6 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.domain.research_preparation import ArtifactKind, PreparationStep
 from app.errors import ConflictError, NotFoundError
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    CaseTenantAdmission,
+    DocumentVersion,
+    SourceSpan,
+)
 from app.models.operational import Job
 from app.models.research_preparation import (
     ResearchPreparation,
@@ -40,6 +46,135 @@ class ResearchPreparationRepository:
             .execution_options(populate_existing=True)
         )
 
+    def lock_preparation_for_candidate_review(
+        self, candidate_id: uuid.UUID
+    ) -> ResearchPreparation | None:
+        """Lock the one current preparation affected by a claim review.
+
+        Candidate lookup is deliberately read-only until it has established a
+        current parse artifact for the candidate.  When such an artifact
+        exists, every affected Case is locked in UUID order and then its
+        preparation is locked.  This is
+        the same Case → preparation order used by protocol confirmation, so a
+        review cannot interleave after that command has read its context.
+        """
+        document_version_id = self._session.scalar(
+            select(SourceSpan.document_version_id)
+            .join(
+                AtomicClaimCandidate,
+                AtomicClaimCandidate.source_span_id == SourceSpan.id,
+            )
+            .where(AtomicClaimCandidate.id == candidate_id)
+        )
+        if document_version_id is None:
+            return None
+        if self._session.get(DocumentVersion, document_version_id) is None:
+            return None
+        candidate_case_ids = list(
+            self._session.scalars(
+                select(CaseTenantAdmission.research_case_id).where(
+                    CaseTenantAdmission.initial_document_version_id
+                    == document_version_id
+                )
+            )
+        )
+        if not candidate_case_ids:
+            return None
+        current_artifacts = list(
+            self._session.scalars(
+                select(ResearchPreparationArtifact)
+                .join(
+                    ResearchPreparation,
+                    ResearchPreparation.id
+                    == ResearchPreparationArtifact.research_preparation_id,
+                )
+                .where(
+                    ResearchPreparation.research_case_id.in_(candidate_case_ids),
+                    ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+                    ResearchPreparationArtifact.state == "current",
+                )
+            )
+        )
+        candidate_preparation_ids = {
+            artifact.research_preparation_id
+            for artifact in current_artifacts
+            if self._artifact_includes_candidate(artifact, candidate_id)
+        }
+        if not candidate_preparation_ids:
+            return None
+        candidate_case_ids = sorted(
+            {
+                case_id
+                for case_id in self._session.scalars(
+                    select(ResearchPreparation.research_case_id).where(
+                        ResearchPreparation.id.in_(candidate_preparation_ids)
+                    )
+                )
+            },
+            key=str,
+        )
+        if not candidate_case_ids:
+            return None
+
+        # Lock every possible Case first.  The ordered acquisition avoids a
+        # cycle if corrupted data ever maps one candidate to more than one
+        # preparation; preparation rows are locked only afterwards.
+        for case_id in candidate_case_ids:
+            if lock_event_scope_case(self._session, case_id) is None:
+                return None
+
+        locked_preparations: list[ResearchPreparation] = []
+        for case_id in candidate_case_ids:
+            preparation_id = self._session.scalar(
+                select(ResearchPreparation.id).where(
+                    ResearchPreparation.id.in_(candidate_preparation_ids),
+                    ResearchPreparation.research_case_id == case_id,
+                )
+            )
+            if preparation_id is None:
+                continue
+            preparation = self._lock_preparation_after_case_lock(
+                case_id, preparation_id
+            )
+            admission = self._session.scalar(
+                select(CaseTenantAdmission).where(
+                    CaseTenantAdmission.research_case_id == case_id,
+                    CaseTenantAdmission.initial_document_version_id
+                    == document_version_id,
+                )
+            )
+            artifact = self._session.scalar(
+                select(ResearchPreparationArtifact)
+                .where(
+                    ResearchPreparationArtifact.research_preparation_id
+                    == preparation.id,
+                    ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+                    ResearchPreparationArtifact.state == "current",
+                )
+                .with_for_update()
+            )
+            if (
+                admission is not None
+                and artifact is not None
+                and self._artifact_includes_candidate(artifact, candidate_id)
+            ):
+                locked_preparations.append(preparation)
+        if not locked_preparations:
+            return None
+        if len(locked_preparations) != 1:
+            raise ConflictError("claim candidate preparation mapping is ambiguous")
+        return locked_preparations[0]
+
+    @staticmethod
+    def _artifact_includes_candidate(
+        artifact: ResearchPreparationArtifact, candidate_id: uuid.UUID
+    ) -> bool:
+        candidates = artifact.payload.get("candidates")
+        return isinstance(candidates, list) and any(
+            isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)
+            for item in candidates
+        )
+
     def _lock_case_then_preparation(
         self, research_case_id: uuid.UUID, preparation_id: uuid.UUID
     ) -> ResearchPreparation:
@@ -47,6 +182,14 @@ class ResearchPreparationRepository:
         case = lock_event_scope_case(self._session, research_case_id)
         if case is None:
             raise ConflictError(f"research case {research_case_id} not found")
+        return self._lock_preparation_after_case_lock(
+            research_case_id, preparation_id
+        )
+
+    def _lock_preparation_after_case_lock(
+        self, research_case_id: uuid.UUID, preparation_id: uuid.UUID
+    ) -> ResearchPreparation:
+        """Lock one preparation after the caller has locked its Case."""
         preparation = self._session.scalar(
             select(ResearchPreparation)
             .where(
