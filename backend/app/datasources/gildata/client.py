@@ -33,6 +33,9 @@ _HEADERS = {
     "Accept": "application/json, text/event-stream",
 }
 
+GILDATA_REQUEST_ERROR_MESSAGE = "Gildata provider request failed"
+GILDATA_RESPONSE_ERROR_MESSAGE = "Gildata provider returned an invalid response"
+
 
 class GildataMCPError(Exception):
     """Raised on any transport, protocol, or application-level MCP failure."""
@@ -92,25 +95,21 @@ class GildataMCPClient:
                 self._url(), json=payload, headers=_HEADERS, timeout=timeout
             )
         except httpx.HTTPError as exc:
-            raise GildataMCPError(f"HTTP transport error: {exc}") from exc
+            raise GildataMCPError(GILDATA_REQUEST_ERROR_MESSAGE) from exc
 
         if response.status_code != 200:
-            raise GildataMCPError(
-                f"HTTP {response.status_code} from Gildata MCP: {response.text[:500]}"
-            )
+            raise GildataMCPError(GILDATA_REQUEST_ERROR_MESSAGE)
 
         try:
             outer = response.json()
         except ValueError as exc:
-            raise GildataMCPError(
-                f"response is not valid JSON: {response.text[:500]}"
-            ) from exc
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE) from exc
 
         if not isinstance(outer, dict):
-            raise GildataMCPError(f"response is not a JSON object: {outer!r}")
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
 
         if "error" in outer:
-            raise GildataMCPError(f"JSON-RPC error: {outer['error']}")
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
         return outer
 
     def _next_rpc_id(self) -> int:
@@ -141,18 +140,14 @@ class GildataMCPClient:
         outer = self._post(payload, timeout=timeout)
         result = outer.get("result")
         if not isinstance(result, dict):
-            raise GildataMCPError(
-                f"JSON-RPC response missing 'result' object: {outer!r}"
-            )
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
         content = result.get("content")
         if not isinstance(content, list) or not content:
-            raise GildataMCPError(
-                f"JSON-RPC result has no 'content' array: {result!r}"
-            )
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
         first = content[0]
         text = first.get("text") if isinstance(first, dict) else None
         if not isinstance(text, str):
-            raise GildataMCPError(f"content[0] has no 'text' string: {first!r}")
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
         return text
 
     def list_tools(self, timeout: float = 60) -> list[dict]:
@@ -166,9 +161,7 @@ class GildataMCPClient:
         outer = self._post(payload, timeout=timeout)
         result = outer.get("result")
         if not isinstance(result, dict):
-            raise GildataMCPError(
-                f"JSON-RPC response missing 'result' object: {outer!r}"
-            )
+            raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
         tools = result.get("tools")
         if not isinstance(tools, list):
             return []

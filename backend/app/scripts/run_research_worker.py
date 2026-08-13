@@ -20,6 +20,7 @@ from app.env import load_local_env
 
 load_local_env()  # backend/.env (gitignored); exported process env still wins
 
+from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.db import SessionLocal
 from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
@@ -69,13 +70,13 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
                 run=run,
             )
             session.commit()
-        except Exception as exc:
+        except Exception:
             service.repo.update_run(run, status="failed", stage="failed", stop_reason="execution_failed")
             service.repo.record_job_completion(
                 job,
                 status="failed",
                 step="failed",
-                error=str(exc),
+                error=AI_OPERATION_ERROR_MESSAGE,
                 run=run,
             )
             session.commit()

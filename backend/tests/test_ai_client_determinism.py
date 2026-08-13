@@ -19,7 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.ai.client import DEFAULT_TEMPERATURE, LLMClient
+from app.ai.client import (
+    DEFAULT_TEMPERATURE,
+    LLMClient,
+    LLMProviderError,
+    LLMMalformedResponseError,
+)
 
 
 def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,6 +65,26 @@ class _FakeChat:
 class _FakeOpenAIClient:
     def __init__(self) -> None:
         self.chat = _FakeChat()
+
+
+class _FailingCompletions:
+    def create(self, **kwargs: Any) -> MagicMock:
+        raise RuntimeError(
+            "upstream leaked https://llm.example/v1?token=sentinel-secret"
+        )
+
+
+class _MalformedCompletions:
+    def create(self, **kwargs: Any) -> MagicMock:
+        response = MagicMock()
+        response.choices = []
+        return response
+
+
+class _ClientWithCompletions:
+    def __init__(self, completions: Any) -> None:
+        self.chat = MagicMock()
+        self.chat.completions = completions
 
 
 class TestLLMClientDeterminism:
@@ -120,6 +145,31 @@ class TestLLMClientDeterminism:
             schema_hint="rewrite",
         )
         assert fake.chat.completions.calls == []
+
+    def test_live_provider_failure_uses_fixed_safe_message(self) -> None:
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(_FailingCompletions()),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+    def test_empty_choices_uses_dedicated_malformed_response_error(self) -> None:
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(_MalformedCompletions()),
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider returned an invalid response"
+        assert isinstance(exc_info.value.__cause__, IndexError)
 
 
 class TestFromEnvReadsReproducibilityKnobs:

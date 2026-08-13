@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.ai.client import LLMClient
+from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import PROPOSE_PROMPT_VERSION, PROPOSE_SYSTEM
 from app.ai.runs import record_run
 from app.models.ledger import ResearchCase, Thesis
@@ -187,7 +188,7 @@ class EvidenceProposer:
             )
             return created_ids
 
-        except Exception as exc:
+        except Exception:
             # A malformed later link must not publish earlier proposals or
             # outbox events.  Keep only one failed AIRun in a clean transaction
             # for the API/CLI/worker boundary to commit.
@@ -200,7 +201,7 @@ class EvidenceProposer:
                 input_ref=input_ref,
                 output_summary="",
                 status="failed",
-                error=str(exc),
+                error=AI_OPERATION_ERROR_MESSAGE,
                 started_at=started_at,
             )
             raise

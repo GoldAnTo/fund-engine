@@ -23,6 +23,16 @@ DEFAULT_MODEL = "gpt-4o-mini"
 # (versions/regions may still drift), but combined with temperature=0 it
 # closes the bulk of the variance.  See walkthrough defect 7.
 DEFAULT_TEMPERATURE = 0.0
+LLM_PROVIDER_ERROR_MESSAGE = "LLM provider request failed"
+LLM_MALFORMED_RESPONSE_MESSAGE = "LLM provider returned an invalid response"
+
+
+class LLMProviderError(RuntimeError):
+    """Stable public boundary for live LLM request failures."""
+
+
+class LLMMalformedResponseError(LLMProviderError):
+    """Raised when the provider response does not match the JSON protocol."""
 
 
 class LLMClient:
@@ -124,8 +134,22 @@ class LLMClient:
         }
         if self._seed is not None:
             create_kwargs["seed"] = self._seed
-        response = self._client.chat.completions.create(**create_kwargs)
-        content = response.choices[0].message.content
+        try:
+            response = self._client.chat.completions.create(**create_kwargs)
+        except Exception as exc:
+            raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
+
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError) as exc:
+            raise LLMMalformedResponseError(
+                LLM_MALFORMED_RESPONSE_MESSAGE
+            ) from exc
+        if not isinstance(content, str):
+            exc = TypeError("LLM response content must be a string")
+            raise LLMMalformedResponseError(
+                LLM_MALFORMED_RESPONSE_MESSAGE
+            ) from exc
         # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
         if "</think>" in content:
             content = content.split("</think>", 1)[1].strip()
@@ -135,11 +159,22 @@ class LLMClient:
         if start != -1 and end != -1:
             content = content[start : end + 1]
         try:
-            return json.loads(content)
+            parsed = json.loads(content)
         except json.JSONDecodeError:
             from json_repair import loads as repair_loads
 
-            return repair_loads(content)
+            try:
+                parsed = repair_loads(content)
+            except (TypeError, ValueError) as exc:
+                raise LLMMalformedResponseError(
+                    LLM_MALFORMED_RESPONSE_MESSAGE
+                ) from exc
+        if not isinstance(parsed, dict):
+            exc = TypeError("LLM JSON response must be an object")
+            raise LLMMalformedResponseError(
+                LLM_MALFORMED_RESPONSE_MESSAGE
+            ) from exc
+        return parsed
 
 
 # ---------------------------------------------------------------------------

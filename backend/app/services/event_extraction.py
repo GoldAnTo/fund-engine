@@ -10,7 +10,7 @@ from typing import Any, NoReturn
 import httpx
 from openai import OpenAIError
 
-from app.ai.client import LLMClient
+from app.ai.client import LLMClient, LLMProviderError
 
 
 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE = (
@@ -102,7 +102,13 @@ class EventExtractionService:
             result = self._client.chat_json(
                 messages, schema_hint="event_research_extract"
             )
-        except (OpenAIError, httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+        except (
+            LLMProviderError,
+            OpenAIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
             raise EventExtractionProviderError(
                 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE
             ) from exc

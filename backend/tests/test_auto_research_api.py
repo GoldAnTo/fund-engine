@@ -1229,6 +1229,61 @@ def test_failed_task_visible_in_detail(session):
     assert isinstance(detail["failed_tasks"], list)
 
 
+def test_failed_task_result_and_detail_do_not_persist_provider_exception(
+    session, monkeypatch
+):
+    case = ResearchCase(
+        title="safe provider task failure",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="provider errors stay private",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.flush()
+    repo = AutoResearchRepository(session)
+    run = repo.create_run(
+        research_case_id=case.id,
+        max_rounds=1,
+        budget=1,
+        scope_thesis_ids=[str(thesis.id)],
+    )
+    task = repo.create_task(
+        run_id=run.id,
+        research_case_id=case.id,
+        thesis_id=thesis.id,
+        task_type="support",
+        query="find evidence",
+    )
+    session.commit()
+    service = AutoResearchService(session)
+    monkeypatch.setattr(
+        service,
+        "_propose_for_task",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("upstream URL token=sentinel-secret")
+        ),
+    )
+
+    service.execute(run)
+    session.commit()
+
+    persisted = session.get(ResearchTask, task.id)
+    assert persisted is not None and persisted.status == "failed"
+    assert persisted.result["error"] == "AI operation failed"
+    assert "sentinel-secret" not in str(persisted.result)
+    detail = service.detail(run.id)
+    assert detail is not None
+    assert "sentinel-secret" not in str(detail["failed_tasks"])
+
+
 def test_support_contradict_balance_gap_created(session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     session.add(case); session.flush()

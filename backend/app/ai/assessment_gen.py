@@ -32,6 +32,11 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.ai.client import LLMClient
+from app.ai.error_safety import (
+    AI_COMPLIANCE_ERROR_MESSAGE,
+    AI_OPERATION_ERROR_MESSAGE,
+    AI_PROTOCOL_ERROR_MESSAGE,
+)
 from app.ai.prompts import (
     ASSESS_PROMPT_VERSION,
     ASSESS_SYSTEM,
@@ -250,6 +255,12 @@ class AssessmentGenerator:
             # durable audit row for the caller to commit with its failure
             # handling. Worker task state was committed before provider work.
             session.rollback()
+            if isinstance(exc, ComplianceRefusedError):
+                safe_error = AI_COMPLIANCE_ERROR_MESSAGE
+            elif isinstance(exc, ValidationError):
+                safe_error = AI_PROTOCOL_ERROR_MESSAGE
+            else:
+                safe_error = AI_OPERATION_ERROR_MESSAGE
             record_run(
                 session,
                 kind="assess",
@@ -258,7 +269,7 @@ class AssessmentGenerator:
                 input_ref=input_ref,
                 output_summary="",
                 status="failed",
-                error=str(exc),
+                error=safe_error,
                 started_at=started_at,
             )
             raise

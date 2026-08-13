@@ -153,24 +153,51 @@ def test_call_tool_returns_content_text(monkeypatch):
 
 
 def test_call_tool_raises_on_jsonrpc_error():
-    outer = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "bad"}}
+    outer = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32600, "message": "bad sentinel-secret"},
+    }
 
     def handler(request):
         return httpx.Response(200, json=outer)
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError):
+    with pytest.raises(GildataMCPError) as exc_info:
         client.call_tool("FinQuery", {"query": "x"})
+    assert str(exc_info.value) == "Gildata provider returned an invalid response"
+    assert "sentinel-secret" not in str(exc_info.value)
     client.close()
 
 
 def test_call_tool_raises_on_non_200():
     def handler(request):
-        return httpx.Response(500, text="server boom")
+        return httpx.Response(500, text="server boom sentinel-secret")
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError):
+    with pytest.raises(GildataMCPError) as exc_info:
         client.call_tool("FinQuery", {"query": "x"})
+    assert str(exc_info.value) == "Gildata provider request failed"
+    assert "sentinel-secret" not in str(exc_info.value)
+    client.close()
+
+
+def test_transport_error_does_not_echo_token_bearing_url():
+    def handler(request):
+        raise httpx.ConnectError(
+            f"failed request {request.url} sentinel-secret", request=request
+        )
+
+    client = GildataMCPClient(
+        token="token-sentinel", transport=_mock_transport(handler)
+    )
+    with pytest.raises(GildataMCPError) as exc_info:
+        client.call_tool("FinQuery", {"query": "x"})
+
+    assert str(exc_info.value) == "Gildata provider request failed"
+    assert "token-sentinel" not in str(exc_info.value)
+    assert "sentinel-secret" not in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
     client.close()
 
 

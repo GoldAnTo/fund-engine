@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.client import LLMClient
+from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
 from app.domain.atomic_claims import AtomicClaimDraft
@@ -217,7 +218,7 @@ class StatementExtractor:
             )
             return created
 
-        except Exception as exc:
+        except Exception:
             # Discard every candidate admitted before a malformed later item,
             # then create the failed audit in a clean transaction for the
             # caller to commit with its own terminal state.
@@ -230,7 +231,7 @@ class StatementExtractor:
                 input_ref=input_ref,
                 output_summary="",
                 status="failed",
-                error=str(exc),
+                error=AI_OPERATION_ERROR_MESSAGE,
                 started_at=started_at,
             )
             raise

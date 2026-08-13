@@ -691,16 +691,21 @@ def test_assessment_rechecks_protocol_after_provider_and_blocks_persistence(
 def test_ai_run_records_failure_on_extraction_error(session, span):
     client = LLMClient(model_version="mock-test", mock=True)
 
-    with patch.object(client, "chat_json", side_effect=RuntimeError("LLM error")):
+    with patch.object(
+        client,
+        "chat_json",
+        side_effect=RuntimeError("LLM error sentinel-secret"),
+    ):
         extractor = StatementExtractor(client)
-        with pytest.raises(RuntimeError, match="LLM error"):
+        with pytest.raises(RuntimeError, match="sentinel-secret"):
             extractor.extract(span.document_version_id, session)
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
     assert len(runs) == 1
     run = runs[0]
     assert run.status == "failed"
-    assert "LLM error" in run.error
+    assert run.error == "AI operation failed"
+    assert "sentinel-secret" not in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
 
@@ -799,16 +804,21 @@ def test_ai_run_records_failure_on_proposal_error(
     )
     client = LLMClient(model_version="mock-test", mock=True)
 
-    with patch.object(client, "chat_json", side_effect=RuntimeError("LLM error")):
+    with patch.object(
+        client,
+        "chat_json",
+        side_effect=RuntimeError("LLM error sentinel-secret"),
+    ):
         proposer = EvidenceProposer(client)
-        with pytest.raises(RuntimeError, match="LLM error"):
+        with pytest.raises(RuntimeError, match="sentinel-secret"):
             proposer.propose(thesis.id, session)
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
     assert len(runs) == 1
     run = runs[0]
     assert run.status == "failed"
-    assert "LLM error" in run.error
+    assert run.error == "AI operation failed"
+    assert "sentinel-secret" not in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == PROPOSE_PROMPT_VERSION
 
@@ -943,16 +953,21 @@ def test_ai_run_records_failure_on_assessment_error(
 
     client = LLMClient(model_version="mock-test", mock=True)
 
-    with patch.object(client, "chat_json", side_effect=RuntimeError("LLM error")):
+    with patch.object(
+        client,
+        "chat_json",
+        side_effect=RuntimeError("LLM error sentinel-secret"),
+    ):
         generator = AssessmentGenerator(client)
-        with pytest.raises(RuntimeError, match="LLM error"):
+        with pytest.raises(RuntimeError, match="sentinel-secret"):
             generator.generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
     assert len(runs) == 1
     run = runs[0]
     assert run.status == "failed"
-    assert "LLM error" in run.error
+    assert run.error == "AI operation failed"
+    assert "sentinel-secret" not in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == ASSESS_PROMPT_VERSION
 

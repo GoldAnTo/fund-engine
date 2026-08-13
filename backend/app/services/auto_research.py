@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
+from app.ai.error_safety import (
+    AI_COMPLIANCE_ERROR_MESSAGE,
+    AI_COMPLIANCE_ERROR_TYPE,
+    AI_OPERATION_ERROR_MESSAGE,
+    AI_PROVIDER_ERROR_TYPE,
+)
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
@@ -527,19 +533,27 @@ class AutoResearchService:
                             )
                     if not cancelled_during_task:
                         task.status, task.stage = "done", "completed"
-                except ComplianceRefusedError as exc:
+                except ComplianceRefusedError:
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
                         task.status, task.stage = "failed", "failed"
-                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": "compliance_refused"}
+                        task.result = {
+                            "task_type": task.task_type,
+                            "error": AI_COMPLIANCE_ERROR_MESSAGE,
+                            "error_type": AI_COMPLIANCE_ERROR_TYPE,
+                        }
                         failed = True
-                except Exception as exc:
+                except Exception:
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
                         task.status, task.stage = "failed", "failed"
-                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": type(exc).__name__}
+                        task.result = {
+                            "task_type": task.task_type,
+                            "error": AI_OPERATION_ERROR_MESSAGE,
+                            "error_type": AI_PROVIDER_ERROR_TYPE,
+                        }
                         failed = True
                 finally:
                     # Re-read both the run and task at the final write

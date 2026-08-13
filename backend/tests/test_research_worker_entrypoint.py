@@ -214,6 +214,39 @@ def test_worker_commits_failed_run_job_event_and_airun_atomically(
         assert event is not None and event.status == "failed"
 
 
+def test_worker_job_error_does_not_persist_unhandled_exception_details(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.models.ledger import Base
+    from app.models.operational import Job, ResearchRun
+    from app.scripts import run_research_worker
+    from app.services.auto_research import AutoResearchService
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'worker-safe-error.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    run_id, job_id = _seed_terminal_race(session_local)
+    _patch_worker_dependencies(monkeypatch, run_research_worker, session_local)
+
+    def fail_execute(self, run):
+        raise RuntimeError(
+            "upstream https://provider.invalid?token=sentinel-secret failed"
+        )
+
+    monkeypatch.setattr(AutoResearchService, "execute", fail_execute)
+
+    with pytest.raises(RuntimeError, match="sentinel-secret"):
+        run_research_worker.run_once()
+
+    with Session(engine) as check:
+        run = check.get(ResearchRun, run_id)
+        job = check.get(Job, job_id)
+        assert run is not None and run.status == "failed"
+        assert job is not None and job.status == "failed"
+        assert job.error == "AI operation failed"
+        assert "sentinel-secret" not in job.error
+
+
 def test_worker_stops_on_first_proposal_failure_and_commits_terminal_state_atomically(
     tmp_path: Path, monkeypatch
 ) -> None:

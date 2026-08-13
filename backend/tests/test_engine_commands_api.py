@@ -162,7 +162,8 @@ def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
             )
         )
         assert failed_run is not None
-        assert "provider failed" in failed_run.error
+        assert failed_run.error == "AI operation failed"
+        assert "secret-token" not in failed_run.error
 
 
 def test_extract_provider_failure_rolls_back_rule_based_candidates(
@@ -669,7 +670,8 @@ def test_propose_provider_failure_keeps_failed_airun_and_failed_job(
             .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis_id))
         )
         assert failed_run is not None
-        assert "provider failed" in failed_run.error
+        assert failed_run.error == "AI operation failed"
+        assert "secret-token" not in failed_run.error
 
         job = check.scalar(
             select(Job)

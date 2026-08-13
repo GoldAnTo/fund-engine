@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.ai.client import LLMMalformedResponseError
 from app.services.event_extraction import (
     EventExtractionProviderError,
     EventExtractionService,
@@ -94,6 +95,23 @@ def test_extraction_wraps_chat_json_failure_without_leaking_details() -> None:
     assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
     assert "sk-private" not in str(exc_info.value)
     assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+
+def test_extraction_maps_llm_protocol_error_to_fixed_provider_failure() -> None:
+    class MalformedProtocolClient:
+        def chat_json(self, messages, schema_hint):
+            raise LLMMalformedResponseError(
+                "LLM provider returned an invalid response"
+            )
+
+    with pytest.raises(EventExtractionProviderError) as exc_info:
+        EventExtractionService(client=MalformedProtocolClient()).extract(
+            raw_input="公司披露新的经营数据，等待人工核验。",
+            source_url=None,
+        )
+
+    assert str(exc_info.value) == PROVIDER_ERROR_MESSAGE
+    assert isinstance(exc_info.value.__cause__, LLMMalformedResponseError)
 
 
 @pytest.mark.parametrize(
