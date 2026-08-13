@@ -14,6 +14,7 @@ from app.ai.error_safety import (
     AI_OPERATION_ERROR_TYPE,
     provider_failure_payload,
 )
+from app.datasources.gildata.client import GildataMCPError
 from app.models.fund_disclosure_sync import (
     FundDisclosureSyncConfigVersion,
     FundDisclosureSyncRun,
@@ -156,7 +157,7 @@ class FundDisclosureSyncService:
         )
         try:
             capability = self._provider_capability_snapshot(client)
-        except Exception as exc:
+        except GildataMCPError as exc:
             self._append_event(
                 run.id,
                 stage="provider_capability",
@@ -205,7 +206,7 @@ class FundDisclosureSyncService:
                 permissions={"display": run.allow_display},
                 case_id=run.research_case_id,
             )
-        except Exception as exc:
+        except GildataMCPError:
             self._append_event(
                 run.id,
                 stage="failed",

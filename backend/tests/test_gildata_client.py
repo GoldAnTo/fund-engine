@@ -242,6 +242,17 @@ def test_parse_content_invalid_returns_empty():
     assert adapters.parse_content(json.dumps({"code": "0"})) == []
 
 
+@pytest.mark.parametrize(
+    "content",
+    ["", "not json", "[]", json.dumps({"code": "500", "results": []})],
+)
+def test_strict_content_parser_normalizes_malformed_provider_payload(content):
+    with pytest.raises(GildataMCPError) as exc_info:
+        adapters.parse_content_strict(content)
+
+    assert str(exc_info.value) == "Gildata provider returned an invalid response"
+
+
 # ---------------------------------------------------------------------------
 # Adapters: fetch_research_report / fetch_quote
 # ---------------------------------------------------------------------------
