@@ -18,7 +18,7 @@ from app.domain.acquisition import (
     AcquisitionRequest,
     AdmittedEvidenceRef,
 )
-from app.errors import NotFoundError, PermissionDeniedError
+from app.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.models.ledger import Thesis
 from app.models.operational import ResearchRun
 from app.models.acquisition import AcquisitionJobEvent
@@ -117,6 +117,38 @@ class AcquisitionModule:
             policy_snapshot=policy_snapshot,
             creation_payload={"actor": principal.actor},
         )
+
+    def replay_existing(
+        self,
+        *,
+        tenant_id: str,
+        idempotency_key: str,
+        case_id: uuid.UUID,
+        thesis_id: uuid.UUID,
+        objective: str,
+        principal: AcquisitionPrincipal,
+    ) -> AcquisitionJobRef | None:
+        """Authorize and validate an existing frozen HTTP command binding."""
+        if principal.tenant_id != tenant_id:
+            raise PermissionDeniedError("principal tenant does not match request tenant")
+        existing = self._repository.by_idempotency(tenant_id, idempotency_key)
+        if existing is None:
+            return None
+        self._authorize_job(existing.id, principal)
+        snapshot = (
+            existing.request_snapshot
+            if isinstance(existing.request_snapshot, dict)
+            else {}
+        )
+        if (
+            existing.research_case_id != case_id
+            or existing.thesis_id != thesis_id
+            or snapshot.get("objective") != objective
+        ):
+            raise ConflictError(
+                "idempotency key already identifies a different acquisition request"
+            )
+        return AcquisitionJobRef(id=existing.id, status=existing.status)
 
     def get(
         self,

@@ -264,6 +264,12 @@ class AcquisitionRepository:
             )
         )
 
+    def by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> AcquisitionJob | None:
+        """Return the frozen job before callers resolve any mutable scope."""
+        return self._by_idempotency(tenant_id, idempotency_key)
+
     @staticmethod
     def _require_same_frozen_request(
         existing: AcquisitionJob,
