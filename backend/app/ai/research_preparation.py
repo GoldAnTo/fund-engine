@@ -6,6 +6,7 @@ run, starts collection, or materializes a research protocol.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from app.errors import NotFoundError
 from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.models.ledger import (
     AtomicClaimCandidate,
+    AtomicClaimReview,
     CaseDocumentVersion,
     CaseTenantAdmission,
     DocumentVersion,
@@ -35,6 +37,7 @@ from app.models.ledger import (
     SourceSpan,
 )
 from app.models.research_preparation import ResearchPreparation
+from app.models.research_preparation import ResearchPreparationArtifact
 from app.models.source_governance import ProviderRecord, SourceContract
 from app.services.atomic_claims import AtomicClaimService
 from app.services.source_admission import source_contract_is_active
@@ -80,6 +83,8 @@ class PreparationInput:
     source_spans: tuple[PreparationSourceSpan, ...]
     current_factors: tuple[str, ...]
     candidate_claim_summaries: tuple[PreparationCandidateSummary, ...]
+    parse_artifact_sequence: int | None
+    candidate_context_fingerprint: str
 
 
 def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationInput:
@@ -116,6 +121,7 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
         contract is None
         or not contract.allow_ai_processing
         or not source_contract_is_active(contract, at=document.available_at)
+        or not source_contract_is_active(contract)
     ):
         _unavailable_input()
     if contract.source_type == "licensed_provider":
@@ -133,21 +139,24 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
             .order_by(SourceSpan.id)
         )
     )
-    candidates = tuple(
-        PreparationCandidateSummary(
-            candidate_id=candidate.id,
-            source_span_id=candidate.source_span_id,
-            quote=candidate.quote,
-            normalized_text=candidate.normalized_text,
-            claim_type=candidate.claim_type,
+    if len(spans) > 50 or any(len(span.verbatim_text) > 20_000 for span in spans):
+        _unavailable_input()
+    parse_artifact = session.scalar(
+        select(ResearchPreparationArtifact)
+        .where(
+            ResearchPreparationArtifact.research_preparation_id == preparation.id,
+            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
+            ResearchPreparationArtifact.state == "current",
         )
-        for candidate in session.scalars(
-            select(AtomicClaimCandidate)
-            .join(SourceSpan, AtomicClaimCandidate.source_span_id == SourceSpan.id)
-            .where(SourceSpan.document_version_id == document.id)
-            .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
-        )
+        .limit(1)
     )
+    candidates, candidate_context_fingerprint = _confirmed_artifact_candidates(
+        session,
+        parse_artifact,
+        spans,
+    )
+    if len(candidates) > 100:
+        _unavailable_input()
     scope = session.scalar(
         select(EventResearchScopeVersion)
         .where(EventResearchScopeVersion.research_case_id == case_id)
@@ -171,11 +180,98 @@ def load_preparation_input(session: Session, case_id: uuid.UUID) -> PreparationI
         source_spans=spans,
         current_factors=factors,
         candidate_claim_summaries=candidates,
+        parse_artifact_sequence=parse_artifact.sequence if parse_artifact else None,
+        candidate_context_fingerprint=candidate_context_fingerprint,
     )
 
 
 def _unavailable_input() -> None:
     raise PreparationInputUnavailableError(PREPARATION_INPUT_UNAVAILABLE_MESSAGE)
+
+
+def _confirmed_artifact_candidates(
+    session: Session,
+    artifact: ResearchPreparationArtifact | None,
+    spans: tuple[PreparationSourceSpan, ...],
+) -> tuple[tuple[PreparationCandidateSummary, ...], str]:
+    """Return latest-human-approved candidates in the artifact's stored order."""
+    if artifact is None:
+        return (), _candidate_context_fingerprint(None, ())
+    raw_candidates = artifact.payload.get("candidates")
+    if not isinstance(raw_candidates, list):
+        _unavailable_input()
+    candidate_ids: list[uuid.UUID] = []
+    for item in raw_candidates:
+        raw_id = item.get("candidate_id") if isinstance(item, dict) else None
+        if not isinstance(raw_id, str):
+            _unavailable_input()
+        try:
+            candidate_id = uuid.UUID(raw_id)
+        except ValueError:
+            _unavailable_input()
+        if candidate_id in candidate_ids:
+            _unavailable_input()
+        candidate_ids.append(candidate_id)
+    if not candidate_ids:
+        return (), _candidate_context_fingerprint(artifact.sequence, ())
+    candidate_by_id = {
+        candidate.id: candidate
+        for candidate in session.scalars(
+            select(AtomicClaimCandidate).where(AtomicClaimCandidate.id.in_(candidate_ids))
+        )
+    }
+    if set(candidate_by_id) != set(candidate_ids):
+        _unavailable_input()
+    span_ids = {span.source_span_id for span in spans}
+    if any(candidate.source_span_id not in span_ids for candidate in candidate_by_id.values()):
+        _unavailable_input()
+    latest_reviews: dict[uuid.UUID, AtomicClaimReview] = {}
+    for review in session.scalars(
+        select(AtomicClaimReview)
+        .where(AtomicClaimReview.atomic_claim_candidate_id.in_(candidate_ids))
+        .order_by(
+            AtomicClaimReview.atomic_claim_candidate_id,
+            AtomicClaimReview.created_at.desc(),
+            AtomicClaimReview.id.desc(),
+        )
+    ):
+        latest_reviews.setdefault(review.atomic_claim_candidate_id, review)
+    decision_tuples: list[tuple[str, str, str, str | None]] = []
+    summaries: list[PreparationCandidateSummary] = []
+    for candidate_id in candidate_ids:
+        review = latest_reviews.get(candidate_id)
+        if review is None:
+            continue
+        decision_tuples.append((
+            str(candidate_id),
+            str(review.id),
+            review.outcome,
+            str(review.published_source_statement_id)
+            if review.published_source_statement_id else None,
+        ))
+        if review.outcome in {"confirmed", "modified"}:
+            candidate = candidate_by_id[candidate_id]
+            summaries.append(PreparationCandidateSummary(
+                candidate_id=candidate.id,
+                source_span_id=candidate.source_span_id,
+                quote=candidate.quote,
+                normalized_text=candidate.normalized_text,
+                claim_type=candidate.claim_type,
+            ))
+    return tuple(summaries), _candidate_context_fingerprint(
+        artifact.sequence,
+        tuple(decision_tuples),
+    )
+
+
+def _candidate_context_fingerprint(
+    sequence: int | None,
+    decisions: tuple[tuple[str, str, str, str | None], ...],
+) -> str:
+    payload = {"parse_artifact_sequence": sequence, "decisions": decisions}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 _T = TypeVar("_T")
@@ -201,8 +297,21 @@ class ResearchPreparationGenerator:
         self._client = client
 
     def parse_claims(self, input: PreparationInput, session: Session) -> dict[str, object]:
+        drafts = self.validate_claim_drafts(input)
+        payload = self.persist_claim_drafts(
+            input,
+            drafts,
+            session,
+            before_persist=lambda: True,
+        )
+        assert payload is not None
+        return payload
+
+    def validate_claim_drafts(self, input: PreparationInput) -> list[AtomicClaimDraft]:
+        """Call the LLM and validate claim drafts without any database writes."""
+        _ensure_input_bounds(input)
         if not input.source_spans:
-            return {"candidates": []}
+            return []
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_PARSE_CLAIMS_SYSTEM,
             {"spans": [
@@ -212,30 +321,49 @@ class ResearchPreparationGenerator:
             "preparation_parse_claims",
         ))
         statements = self._provider_call(lambda: _validate_parse_response(result, input))
+        return [
+            AtomicClaimDraft(
+                source_span_id=statement["source_span_id"],
+                quote=statement["quote"],
+                quote_start=statement["quote_start"],
+                quote_end=statement["quote_end"],
+                normalized_text=statement["normalized_text"],
+                claim_type=statement["claim_type"],
+                assertion_actor=statement["actor"],
+                subject=None,
+                predicate=None,
+                object_text=None,
+                numeric_value=None,
+                unit=None,
+                observed_period=None,
+                scope={},
+            )
+            for statement in statements
+        ]
 
-        # Validation finishes before the first insert, ensuring malformed
-        # provider output cannot leave a partial candidate set behind.
+    def persist_claim_drafts(
+        self,
+        input: PreparationInput,
+        drafts: list[AtomicClaimDraft],
+        session: Session,
+        *,
+        before_persist: Callable[[], bool],
+    ) -> dict[str, object] | None:
+        """Persist validated drafts only after the caller owns its output slot.
+
+        Task4 calls ``validate_claim_drafts``, takes its case/preparation lock,
+        then calls this method with its freshness guard and completes the
+        preparation artifact in the same caller-managed transaction.
+        """
+        if not before_persist():
+            return None
+        _validate_drafts_for_input(drafts, input)
         claims = AtomicClaimService(session)
         run_ref = f"preparation:parse:{uuid.uuid4()}"
         candidates = []
-        for statement in statements:
+        for draft in drafts:
             candidate = claims.admit(
-                AtomicClaimDraft(
-                    source_span_id=statement["source_span_id"],
-                    quote=statement["quote"],
-                    quote_start=statement["quote_start"],
-                    quote_end=statement["quote_end"],
-                    normalized_text=statement["normalized_text"],
-                    claim_type=statement["claim_type"],
-                    assertion_actor=statement["actor"],
-                    subject=None,
-                    predicate=None,
-                    object_text=None,
-                    numeric_value=None,
-                    unit=None,
-                    observed_period=None,
-                    scope={},
-                ),
+                draft,
                 authority_level=input.source_authority,
                 run_ref=run_ref,
             )
@@ -251,20 +379,24 @@ class ResearchPreparationGenerator:
         return {"candidates": candidates}
 
     def draft_protocol(self, input: PreparationInput) -> dict[str, object]:
+        _ensure_input_bounds(input)
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_PROTOCOL_SYSTEM,
             _draft_context(input),
             "preparation_draft_protocol",
         ))
-        return self._provider_call(lambda: _validate_protocol_response(result))
+        draft = self._provider_call(lambda: _validate_protocol_response(result))
+        return {**draft, "input_context": _input_context(input)}
 
     def draft_evidence_plan(self, input: PreparationInput) -> dict[str, object]:
+        _ensure_input_bounds(input)
         result = self._provider_call(lambda: self._chat_json(
             PREPARATION_EVIDENCE_PLAN_SYSTEM,
             _draft_context(input),
             "preparation_draft_evidence_plan",
         ))
-        return self._provider_call(lambda: _validate_evidence_plan_response(result, input.current_factors))
+        draft = self._provider_call(lambda: _validate_evidence_plan_response(result, input.current_factors))
+        return {**draft, "input_context": _input_context(input)}
 
     def _chat_json(self, system: str, payload: dict[str, object], schema_hint: str) -> dict:
         client = self._client
@@ -292,6 +424,7 @@ class ResearchPreparationGenerator:
 def _draft_context(input: PreparationInput) -> dict[str, object]:
     return {
         "factors": list(input.current_factors),
+        "input_context": _input_context(input),
         "candidate_claims": [
             {
                 "candidate_id": str(candidate.candidate_id),
@@ -303,6 +436,51 @@ def _draft_context(input: PreparationInput) -> dict[str, object]:
             for candidate in input.candidate_claim_summaries
         ],
     }
+
+
+def _input_context(input: PreparationInput) -> dict[str, object]:
+    return {
+        "parse_artifact_sequence": input.parse_artifact_sequence,
+        "candidate_context_fingerprint": input.candidate_context_fingerprint,
+    }
+
+
+def _ensure_input_bounds(input: PreparationInput) -> None:
+    if (
+        len(input.source_spans) > 50
+        or any(len(span.verbatim_text) > 20_000 for span in input.source_spans)
+        or len(input.candidate_claim_summaries) > 100
+    ):
+        _unavailable_input()
+
+
+def _validate_drafts_for_input(
+    drafts: list[AtomicClaimDraft], input: PreparationInput
+) -> None:
+    """Recheck complete drafts before the first candidate write."""
+    spans = {span.source_span_id: span.verbatim_text for span in input.source_spans}
+    allowed_claim_types = {
+        "disclosed_fact",
+        "reported_claim",
+        "management_attribution",
+        "forecast",
+        "research_opinion",
+    }
+    for draft in drafts:
+        text = spans.get(draft.source_span_id)
+        if (
+            text is None
+            or draft.claim_type not in allowed_claim_types
+            or not draft.normalized_text.strip()
+            or draft.quote_start < 0
+            or draft.quote_end <= draft.quote_start
+            or text[draft.quote_start:draft.quote_end] != draft.quote
+            or (
+                draft.claim_type == "disclosed_fact"
+                and input.source_authority != "primary_disclosure"
+            )
+        ):
+            raise ValueError("claim drafts are not valid for this preparation input")
 
 
 def _validate_parse_response(result: object, input: PreparationInput) -> list[dict[str, Any]]:
