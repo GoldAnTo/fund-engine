@@ -526,6 +526,67 @@ def test_scope_change_revokes_authorized_preparation_without_deleting_its_run(
     ) == 1
 
 
+def test_scope_change_does_not_revoke_unlinked_run_for_nonauthorized_preparation(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = _complete_preparation_drafts(cmd_session, case_id)
+    run = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = run.id
+    lifecycle.status = "continuing"
+    preparation.research_run_id = None
+    preparation.status = "preparing"
+    run_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == run.id)
+    )
+    run_tasks = list(
+        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == run.id))
+    )
+    assert run_job is not None
+    assert run_tasks
+    cmd_session.commit()
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                "非授权准备阶段的范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": "scope changed without preparation authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(preparation)
+    cmd_session.refresh(run)
+    cmd_session.refresh(run_job)
+    assert preparation.research_run_id is None
+    assert preparation.status == "preparing"
+    assert run.status == "queued"
+    assert run_job.status == "queued"
+    assert run_job.cancel_requested is False
+    assert {task.status for task in run_tasks} == {"queued"}
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.active_run_id == run.id
+    assert lifecycle.status == "continuing"
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+            )
+        )
+    ) == 1
+
+
 def _reviewed_evidence(session, case_id: uuid.UUID, factor: str) -> EvidenceLink:
     now = datetime.now(timezone.utc)
     thesis = session.scalar(
@@ -1798,13 +1859,13 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
     assert response.status_code == 200
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    assert lifecycle.status == "awaiting_key_review"
-    assert lifecycle.next_human_action is None
-    assert lifecycle.active_run_id is None
+    assert lifecycle.status == paused_status
+    assert lifecycle.next_human_action == "补充来源或调整研究范围"
+    assert lifecycle.active_run_id == initial_run_id
     initial_run = cmd_session.get(ResearchRun, initial_run_id)
     assert initial_run is not None
-    assert initial_run.status == "cancelled"
-    assert initial_run.stop_reason == "scope_changed"
+    assert initial_run.status == "queued"
+    assert initial_run.stop_reason is None
     assert len(
         list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
     ) == 1
@@ -1857,26 +1918,26 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
 
     assert response.status_code == 200
     cmd_session.refresh(old_run)
-    assert old_run.status == "cancelled"
-    assert old_run.stop_reason == "scope_changed"
+    assert old_run.status == old_status
+    assert old_run.stop_reason is None
     old_job = cmd_session.scalar(
         select(Job).where(Job.target_type == "research_run", Job.target_id == old_run_id)
     )
     assert old_job is not None
-    assert old_job.status == "cancelled"
-    assert old_job.cancel_requested is True
+    assert old_job.status in {"queued", "running"}
+    assert old_job.cancel_requested is False
     old_tasks = list(
         cmd_session.scalars(
             select(ResearchTask).where(ResearchTask.id.in_(old_task_ids))
         )
     )
     assert old_tasks
-    assert {task.status for task in old_tasks} == {"cancelled"}
+    assert {task.status for task in old_tasks} != {"cancelled"}
 
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
     assert lifecycle.status == "awaiting_key_review"
-    assert lifecycle.active_run_id is None
+    assert lifecycle.active_run_id == old_run_id
     assert len(
         list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
     ) == 1

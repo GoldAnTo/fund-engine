@@ -181,16 +181,18 @@ class EventResearchScopeService:
         scope.  No successor is created here; a new run requires a later
         authorization.
         """
-        preparation_run_id = self._session.scalar(
-            select(ResearchPreparation.research_run_id).where(
+        preparation = self._session.scalar(
+            select(ResearchPreparation).where(
                 ResearchPreparation.research_case_id == case_id
             )
         )
-        run_id = preparation_run_id or (
-            lifecycle.active_run_id if lifecycle is not None else None
-        )
-        if run_id is None:
+        if (
+            preparation is None
+            or preparation.status != "authorized"
+            or preparation.research_run_id is None
+        ):
             return
+        run_id = preparation.research_run_id
         auto_research = AutoResearchService(self._session)
         run = auto_research._lock_run_for_transition(run_id, case_locked=True)
         if run is not None and auto_research.repo.cancel_run(run):
