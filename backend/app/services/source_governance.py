@@ -67,6 +67,15 @@ def _effective_at(metadata: dict[str, Any], name: str) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _contract_time_utc(value: datetime | None) -> datetime | None:
+    """Normalize DB-loaded contract timestamps for comparison only."""
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _normalize_research_source_type(
     *,
     source_type: str,
@@ -270,7 +279,11 @@ class SourceGovernanceService:
         for field, value in incoming.items():
             if value is None and field == "provider_or_tenant":
                 continue
-            if getattr(existing, field) != value:
+            existing_value = getattr(existing, field)
+            if field in {"effective_from", "effective_until"}:
+                existing_value = _contract_time_utc(existing_value)
+                value = _contract_time_utc(value)
+            if existing_value != value:
                 raise ValueError(
                     "deduplicated original has a different source contract; "
                     "do not reuse it under incompatible permissions"
