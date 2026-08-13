@@ -206,7 +206,6 @@ class ResearchPreparationService:
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = _utcnow()
-        self._set_aggregate_status(preparation)
         self._repo.append_event(
             preparation,
             research_case_id=case_id,
@@ -226,6 +225,7 @@ class ResearchPreparationService:
             self._repo.queue_step_job(
                 preparation, research_case_id=case_id, step="parse_claims"
             )
+        self._set_aggregate_status(preparation)
         return preparation
 
     def complete_system_step(

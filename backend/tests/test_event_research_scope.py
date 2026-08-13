@@ -330,6 +330,55 @@ def test_scope_change_preserves_unreviewed_claims_without_queuing_a_new_step(
     assert active_jobs == []
 
 
+def test_scope_change_requeues_failed_parse_and_refreshes_preparation_status(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(
+            ResearchPreparation.research_case_id == case_id
+        )
+    )
+    assert preparation is not None
+    preparation.status = "recoverable_failure"
+    preparation.parse_claims_state = "failed"
+    preparation.last_error_code = "preparation_provider_unavailable"
+    preparation.next_attempt_at = datetime.now(timezone.utc)
+    cmd_session.commit()
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                "解析失败后的范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": "scope changed after parse failure",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(preparation)
+    assert preparation.parse_claims_state == "queued"
+    assert preparation.status == "preparing"
+    assert preparation.last_error_code is None
+    assert preparation.next_attempt_at is None
+    parse_jobs = list(
+        cmd_session.scalars(
+            select(Job).where(
+                Job.target_id == preparation.id,
+                Job.correlation_id == f"{preparation.id}:{preparation.version}:parse_claims",
+                Job.status.in_(("queued", "running")),
+            )
+        )
+    )
+    assert len(parse_jobs) == 1
+    assert cmd_session.scalars(select(ResearchRun)).all() == []
+
+
 def test_scope_change_invalidates_only_preparation_drafts_without_starting_a_run(
     cmd_client, cmd_session
 ) -> None:
