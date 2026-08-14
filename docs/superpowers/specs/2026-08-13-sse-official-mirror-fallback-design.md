@@ -1,6 +1,6 @@
 # SSE Official Mirror Fallback Design
 
-**Date:** 2026-08-13  
+**Date:** 2026-08-13
 **Status:** Approved in principle; awaiting written-spec review
 
 ## Problem

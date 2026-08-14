@@ -14,6 +14,8 @@ from sqlalchemy.orm import sessionmaker
 from reportlab.pdfgen import canvas as rl_canvas
 
 from app.acquisition.policy import B_SCOPE_POLICY
+from app.acquisition.sources import RetrievedEnvelope
+from app.ai.extraction import StatementExtractor
 from app.datasources.docling import PARSER_VERSION_PYPDF, ParsedSpan, PypdfAdapter
 from app.documents.locators import compute_text_sha256, validate_locator_v1
 from app.errors import ConflictError
@@ -2456,5 +2458,3 @@ def test_publication_revalidates_immutable_source_attempt_and_temporal_facts(
         )
 
     assert _counts(session) == (1, 0, 0, 0, 0)
-from app.acquisition.sources import RetrievedEnvelope
-from app.ai.extraction import StatementExtractor

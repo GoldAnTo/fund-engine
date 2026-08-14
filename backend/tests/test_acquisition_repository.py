@@ -30,7 +30,6 @@ from app.models.ledger import (
     Base,
     EvidenceLink,
     ResearchCase,
-    SourceSpan,
     SourceStatement,
     Thesis,
 )

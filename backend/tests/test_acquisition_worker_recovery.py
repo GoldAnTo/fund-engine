@@ -57,7 +57,7 @@ class InjectedWorkerCrash(BaseException):
 
 class CrashAfterArtifactFreezer(RetrievedDocumentFreezer):
     def _commit_artifact(self, **kwargs):
-        result = super()._commit_artifact(**kwargs)
+        super()._commit_artifact(**kwargs)
         raise InjectedWorkerCrash
 
 
@@ -324,7 +324,7 @@ def test_persisted_official_reference_recovers_without_live_search(
         document_version_id=document.id,
     )
     principal = AcquisitionPrincipal("team-a", "system:task8-requester")
-    job = AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
+    AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
         make_request(
             research_case,
             thesis,

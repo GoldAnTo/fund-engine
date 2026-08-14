@@ -37,7 +37,6 @@ from app.domain.acquisition import AcquisitionRequest, EvidenceObjective
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionException,
-    AcquisitionJob,
     AutomaticAdmissionDecision,
     RetrievalArtifact,
     RetrievalArtifactDocument,
