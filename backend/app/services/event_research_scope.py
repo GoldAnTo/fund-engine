@@ -37,6 +37,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+MAX_PREPARATION_RUN_LINEAGE_DEPTH = 32
+
+
 @dataclass(frozen=True)
 class UpdatedEventResearchScope:
     version: int
@@ -199,7 +202,7 @@ class EventResearchScopeService:
             and lifecycle.active_run_id is not None
             and lifecycle.active_run_id != preparation.research_run_id
             and self._is_preparation_successor(
-                lifecycle.active_run_id, preparation.research_run_id
+                lifecycle.active_run_id, preparation.research_run_id, case_id
             )
         ):
             run_ids.add(lifecycle.active_run_id)
@@ -232,20 +235,47 @@ class EventResearchScopeService:
             lifecycle.updated_at = _utcnow()
 
     def _is_preparation_successor(
-        self, run_id: uuid.UUID, predecessor_run_id: uuid.UUID
+        self,
+        run_id: uuid.UUID,
+        predecessor_run_id: uuid.UUID,
+        case_id: uuid.UUID,
     ) -> bool:
-        """Whether a run's immutable frozen scope declares this predecessor."""
-        events = self._session.scalars(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run_id)
-            .where(ResearchRunEvent.stage == "scope")
-            .order_by(ResearchRunEvent.seq)
-        )
-        return any(
-            event.payload_json.get("predecessor_run_id") == str(predecessor_run_id)
-            for event in events
-            if isinstance(event.payload_json, dict)
-        )
+        """Prove an active run descends from an authorized preparation run.
+
+        Lineage is carried only in each run's immutable frozen-scope event.
+        Treat absent, malformed, cyclic, cross-case, and overlong histories
+        as unproven so a scope rewrite never cancels an unrelated run.
+        """
+        current_run_id = run_id
+        visited: set[uuid.UUID] = set()
+        for _ in range(MAX_PREPARATION_RUN_LINEAGE_DEPTH):
+            if current_run_id in visited:
+                return False
+            visited.add(current_run_id)
+            current_run = self._session.get(ResearchRun, current_run_id)
+            if current_run is None or current_run.research_case_id != case_id:
+                return False
+            if current_run_id == predecessor_run_id:
+                return True
+            event = self._session.scalar(
+                select(ResearchRunEvent)
+                .where(ResearchRunEvent.run_id == current_run_id)
+                .where(ResearchRunEvent.stage == "scope")
+                .order_by(ResearchRunEvent.seq)
+                .limit(1)
+            )
+            if event is None or not isinstance(event.payload_json, dict):
+                return False
+            raw_predecessor_id = event.payload_json.get("predecessor_run_id")
+            try:
+                next_run_id = uuid.UUID(str(raw_predecessor_id))
+            except (TypeError, ValueError, AttributeError):
+                return False
+            next_run = self._session.get(ResearchRun, next_run_id)
+            if next_run is None or next_run.research_case_id != case_id:
+                return False
+            current_run_id = next_run_id
+        return False
 
     def _backfill_legacy_scope(
         self, case_id: uuid.UUID

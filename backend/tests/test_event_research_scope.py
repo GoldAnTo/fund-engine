@@ -681,6 +681,191 @@ def test_scope_change_revokes_current_lineage_successor_of_authorized_preparatio
     ) == 3
 
 
+def test_scope_change_revokes_two_hop_active_descendant_of_authorized_preparation(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = _complete_preparation_drafts(cmd_session, case_id)
+    root = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
+    )
+    root.status = "succeeded"
+    root.stage = "complete"
+    root_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == root.id)
+    )
+    assert root_job is not None
+    root_job.status = "succeeded"
+    first_successor = AutoResearchService(cmd_session).start(
+        case_id,
+        max_rounds=3,
+        budget=100,
+        commit=False,
+        scope_context={"predecessor_run_id": str(root.id)},
+    )
+    first_successor.status = "succeeded"
+    first_successor.stage = "complete"
+    first_successor_job = cmd_session.scalar(
+        select(
+            Job
+        ).where(Job.target_type == "research_run", Job.target_id == first_successor.id)
+    )
+    assert first_successor_job is not None
+    first_successor_job.status = "succeeded"
+    active_descendant = AutoResearchService(cmd_session).start(
+        case_id,
+        max_rounds=3,
+        budget=100,
+        commit=False,
+        scope_context={"predecessor_run_id": str(first_successor.id)},
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = active_descendant.id
+    lifecycle.status = "continuing"
+    preparation.research_run_id = root.id
+    preparation.status = "authorized"
+    active_job = cmd_session.scalar(
+        select(Job).where(
+            Job.target_type == "research_run", Job.target_id == active_descendant.id
+        )
+    )
+    active_tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask).where(ResearchTask.run_id == active_descendant.id)
+        )
+    )
+    assert active_job is not None and active_tasks
+    cmd_session.commit()
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                "两跳继任运行期间的范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": "scope changed with two-hop successor",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(root)
+    cmd_session.refresh(first_successor)
+    cmd_session.refresh(active_descendant)
+    cmd_session.refresh(active_job)
+    assert root.status == "succeeded"
+    assert first_successor.status == "succeeded"
+    assert active_descendant.status == "cancelled"
+    assert active_descendant.stop_reason == "scope_changed"
+    assert active_job.status == "cancelled"
+    assert {task.status for task in active_tasks} == {"cancelled"}
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.active_run_id is None
+
+
+@pytest.mark.parametrize("lineage_mode", ["missing", "cycle"])
+def test_scope_change_fails_closed_for_unproven_preparation_successor_lineage(
+    cmd_client, cmd_session, lineage_mode: str
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    preparation = _complete_preparation_drafts(cmd_session, case_id)
+    root = AutoResearchService(cmd_session).start(
+        case_id, max_rounds=3, budget=100, commit=False
+    )
+    root.status = "succeeded"
+    root.stage = "complete"
+    root_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == root.id)
+    )
+    assert root_job is not None
+    root_job.status = "succeeded"
+    if lineage_mode == "missing":
+        active = AutoResearchService(cmd_session).start(
+            case_id,
+            max_rounds=3,
+            budget=100,
+            commit=False,
+            scope_context={"predecessor_run_id": str(uuid.uuid4())},
+        )
+    else:
+        now = datetime.now(timezone.utc)
+        active = ResearchRun(
+            id=uuid.uuid4(),
+            research_case_id=case_id,
+            status="queued",
+            stage="planning",
+            round=0,
+            max_rounds=3,
+            budget=100,
+            budget_used=0,
+            created_at=now,
+            updated_at=now,
+        )
+        cmd_session.add(active)
+        cmd_session.flush()
+        cmd_session.add(
+            Job(
+                kind="prepare_research",
+                status="queued",
+                target_type="research_run",
+                target_id=active.id,
+                research_case_id=case_id,
+                created_at=now,
+            )
+        )
+        cmd_session.add(
+            ResearchRunEvent(
+                run_id=active.id,
+                seq=1,
+                stage="scope",
+                status="completed",
+                message="fixture scope",
+                payload_json={"predecessor_run_id": str(active.id)},
+                created_at=now,
+            )
+        )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = active.id
+    lifecycle.status = "continuing"
+    preparation.research_run_id = root.id
+    preparation.status = "authorized"
+    active_job = cmd_session.scalar(
+        select(Job).where(Job.target_type == "research_run", Job.target_id == active.id)
+    )
+    assert active_job is not None
+    cmd_session.commit()
+
+    response = cmd_client.put(
+        f"/api/v1/event-research/{case_id}/scope",
+        json={
+            "factors": [
+                INITIAL_FACTORS[0],
+                INITIAL_FACTORS[1],
+                f"{lineage_mode} 继任关系范围变化因素",
+            ],
+            "changed_by": "reviewer",
+            "change_reason": f"scope changed with {lineage_mode} lineage",
+        },
+    )
+
+    assert response.status_code == 200
+    cmd_session.refresh(active)
+    cmd_session.refresh(active_job)
+    assert active.status == "queued"
+    assert active_job.status == "queued"
+    assert active_job.cancel_requested is False
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    assert lifecycle.active_run_id == active.id
+
+
 def _reviewed_evidence(session, case_id: uuid.UUID, factor: str) -> EvidenceLink:
     now = datetime.now(timezone.utc)
     thesis = session.scalar(
