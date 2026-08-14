@@ -27,7 +27,7 @@ def _prepared_case(session):
     now = datetime.now(timezone.utc)
     case = ResearchCase(title="preparation API", industry_topic="test", created_by="tester", created_at=now)
     session.add(case); session.flush()
-    document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/preparation", available_at=now, acquired_at=now, parser_version="test")
+    document = DocumentVersion(content_sha256=uuid.uuid4().hex * 2, source_url="https://example.test/preparation", available_at=now, acquired_at=now, parser_version="test", title="冻结测试材料", parse_state="success")
     session.add(document); session.flush()
     session.add_all([CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now), CaseTenantAdmission(research_case_id=case.id, tenant_id="test-team", initial_document_version_id=document.id, admitted_by="tester", admitted_at=now)])
     preparation = ResearchPreparationService(session).create_for_case(case.id, input_fingerprint="a" * 64, actor="tester")
@@ -47,6 +47,11 @@ def test_preparation_summary_is_tenant_scoped_and_hides_secret_event_detail(cmd_
     body = response.json()
     assert body["status"] == "preparing"
     assert body["research_run_id"] is None
+    assert body["case_title"] == "preparation API"
+    assert body["initial_material"]["document_version_id"]
+    assert body["initial_material"]["title"] == "冻结测试材料"
+    assert body["initial_material"]["parse_state"] == "success"
+    assert body["progress"] == {"completed_steps": 0, "total_steps": 3, "current_step": None, "failed_step": None}
     assert "sk-secret" not in response.text
     assert "Bearer" not in response.text
 

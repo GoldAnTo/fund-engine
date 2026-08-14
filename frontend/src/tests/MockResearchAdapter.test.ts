@@ -24,7 +24,7 @@ describe("MockResearchAdapter scenarios", () => {
     const adapter = new MockResearchAdapter({ preparationScenario: "review_claims" });
     const claims = await adapter.confirmResearchPreparationClaims({
       caseId: "event-preparation", revision: 1, actor: "human:researcher",
-      decisions: [{ candidateId: "candidate-1", outcome: "confirmed", reason: "原文一致" }],
+      decisions: [{ candidateId: "8a23ef12-9b37-4f54-8f2d-b938605a1d8d", outcome: "confirmed", reason: "原文一致" }],
     });
     const protocol = await adapter.confirmResearchPreparationProtocol({ caseId: "event-preparation", revision: claims.revision, actor: "human:researcher", draftSequence: 2 });
     const authorized = await adapter.authorizeResearchPreparation({ caseId: "event-preparation", revision: protocol.revision, actor: "human:researcher", planSequence: 3, idempotencyKey: "preparation-e2e" });

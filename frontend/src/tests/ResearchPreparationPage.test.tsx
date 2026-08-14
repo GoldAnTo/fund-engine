@@ -63,6 +63,77 @@ describe("ResearchPreparationPage", () => {
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
   });
 
+  it("submits the backend candidate UUID from a real claim artifact", async () => {
+    const user = userEvent.setup();
+    const candidateId = "8a23ef12-9b37-4f54-8f2d-b938605a1d8d";
+    const adapter = new MockResearchAdapter();
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await originalPreparation(caseId);
+      return {
+        ...preparation,
+        artifacts: {
+          ...preparation.artifacts,
+          candidateClaims: {
+            ...preparation.artifacts.candidateClaims!,
+            payload: {
+              candidates: [{
+                candidate_id: candidateId,
+                normalized_text: "公司披露订单同比增长 20%",
+                quote: "订单同比增长20%",
+              }],
+            },
+          },
+        },
+      };
+    });
+    const confirm = vi.spyOn(adapter, "confirmResearchPreparationClaims");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).getByText("公司披露订单同比增长 20%")).toBeVisible();
+    await user.selectOptions(within(task).getByLabelText("候选陈述 1 的决定"), "confirmed");
+    await user.type(within(task).getByLabelText("候选陈述 1 的核对说明"), "已与冻结原文核对一致。");
+    await user.click(within(task).getByRole("button", { name: "确认候选陈述" }));
+
+    expect(await within(screen.getByLabelText("当前人工任务")).findByRole("heading", { name: "确认研究协议" })).toBeVisible();
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+      decisions: [{ candidateId, outcome: "confirmed", reason: "已与冻结原文核对一致。", normalizedText: undefined }],
+    }));
+    expect(confirm).not.toHaveBeenCalledWith(expect.objectContaining({
+      decisions: [expect.objectContaining({ candidateId: "candidate-1" })],
+    }));
+  });
+
+  it("does not offer unsupported protocol notes or submit unexpected protocol edits", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_protocol" });
+    const confirm = vi.spyOn(adapter, "confirmResearchPreparationProtocol");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).queryByLabelText("研究员备注（可选）")).not.toBeInTheDocument();
+    await user.click(within(task).getByRole("button", { name: "确认研究协议" }));
+
+    expect(await within(screen.getByLabelText("当前人工任务")).findByRole("heading", { name: "授权补证计划" })).toBeVisible();
+    expect(confirm).toHaveBeenCalledWith({
+      caseId: "event-preparation",
+      revision: 1,
+      actor: "human:researcher",
+      draftSequence: 2,
+    });
+  });
+
   it("does not show a human confirmation action while the system is preparing drafts", async () => {
     renderPreparation("preparing");
 
@@ -70,6 +141,79 @@ describe("ResearchPreparationPage", () => {
     expect(within(task).getByRole("heading", { name: "系统正在准备" })).toBeVisible();
     expect(within(task).queryByRole("button", { name: /确认|授权/ })).not.toBeInTheDocument();
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
+  });
+
+  it("marks only the running preparation step as current while downstream work remains queued", async () => {
+    renderPreparation("preparing");
+
+    const timeline = await screen.findByLabelText("系统准备活动");
+    const steps = timeline.querySelector<HTMLElement>(".ros-preparation-timeline");
+    expect(steps).not.toBeNull();
+    expect(within(steps!).getByText("解析冻结原文", { selector: "strong" }).closest("li")).toHaveClass("is-current");
+    expect(within(steps!).getByText("生成研究协议草案", { selector: "strong" }).closest("li")).toHaveClass("is-waiting");
+    expect(within(steps!).getByText("生成补证计划草案", { selector: "strong" }).closest("li")).toHaveClass("is-waiting");
+  });
+
+  it("shows the case, frozen material, progress and only allowlisted activity detail", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "preparing" });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => ({
+      ...await originalPreparation(caseId),
+      caseTitle: "AI 服务器需求研究",
+      initialMaterial: {
+        documentVersionId: "91c8e13c-f649-4f6b-9330-0c9ae7cb6641",
+        title: "公司公告（冻结原文）",
+        parseState: "success",
+      },
+      progress: { completedSteps: 0, totalSteps: 3, currentStep: "parse_claims", failedStep: null },
+    }));
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockResolvedValue({
+      items: [{
+        seq: 1,
+        type: "preparation_step_started",
+        step: "parse_claims",
+        message: "provider token should never appear",
+        detail: { candidate_count: 3, artifact_sequence: 2, attempt: 2, duration_ms: 1200, input_scope: "frozen_original", source_url: "https://secret.example" },
+        createdAt: "2026-08-15T09:00:00Z",
+      }],
+      nextAfterSeq: null,
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("AI 服务器需求研究")).toBeVisible();
+    expect(screen.getByText("公司公告（冻结原文）")).toBeVisible();
+    expect(screen.getByText(/材料版本：91c8e13c/)).toBeVisible();
+    expect(document.querySelector(".ros-preparation-progress")).toHaveTextContent("准备进度：0 / 3");
+    const activity = screen.getByLabelText("准备活动记录");
+    expect(within(activity).getByText("输入范围：冻结原文")).toBeVisible();
+    expect(within(activity).getByText("候选陈述：3")).toBeVisible();
+    expect(within(activity).getByText("草案版本：2")).toBeVisible();
+    expect(within(activity).getByText("第 2 次尝试")).toBeVisible();
+    expect(within(activity).getByText("耗时：1.2 秒")).toBeVisible();
+    expect(within(activity).queryByText(/provider token|secret\.example/)).not.toBeInTheDocument();
+  });
+
+  it("identifies the failed preparation step and its safe next retry time", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "recoverable_failure" });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => ({
+      ...await originalPreparation(caseId),
+      progress: { completedSteps: 0, totalSteps: 3, currentStep: null, failedStep: "parse_claims" },
+    }));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("失败步骤：解析冻结原文")).toBeVisible();
+    expect(screen.getByText(/下次重试：/)).toBeVisible();
   });
 
   it("keeps a newly polled claim-review status visible when polling activity records fails", async () => {
@@ -194,7 +338,7 @@ describe("ResearchPreparationPage", () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/活动 55/)).toBeVisible();
+    expect((await screen.findByLabelText("准备活动记录")).querySelectorAll("ol > li")).toHaveLength(55);
   });
 
   it("polls from the latest event after an initially paginated activity load", async () => {
@@ -216,7 +360,7 @@ describe("ResearchPreparationPage", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText(/活动 55/);
+    expect((await screen.findByLabelText("准备活动记录")).querySelectorAll("ol > li")).toHaveLength(55);
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 2100));
     });
@@ -242,7 +386,7 @@ describe("ResearchPreparationPage", () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText(/短页活动 3/);
+    expect((await screen.findByLabelText("准备活动记录")).querySelectorAll("ol > li")).toHaveLength(3);
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 2100));
     });

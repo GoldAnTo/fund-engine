@@ -6,6 +6,7 @@ import {
   ConflictError,
   type ResearchPreparation,
   type ResearchPreparationEvent,
+  type ResearchPreparationEventStep,
   type ResearchPreparationStatus,
 } from "../../domain/researchPreparation";
 
@@ -44,27 +45,49 @@ function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function candidatesFrom(preparation: ResearchPreparation): Candidate[] {
   const raw = preparation.artifacts.candidateClaims?.payload.candidates;
   if (!Array.isArray(raw)) return [];
-  return raw.map((candidate, index) => {
+  return raw.flatMap((candidate) => {
     const item = record(candidate);
-    return {
-      id: stringValue(item?.id, `candidate-${index + 1}`),
-      text: stringValue(item?.text, "未命名候选陈述"),
-    };
+    const id = stringValue(item?.candidate_id).trim();
+    const normalizedText = stringValue(item?.normalized_text).trim();
+    const quote = stringValue(item?.quote).trim();
+    if (!UUID_PATTERN.test(id) || (!normalizedText && !quote)) return [];
+    return [{ id, text: normalizedText || quote }];
   });
 }
 
-function eventLabel(event: ResearchPreparationEvent): string {
-  const step = event.step === "parse_claims"
-    ? "解析原文"
-    : event.step === "draft_protocol"
-      ? "起草协议"
-      : event.step === "draft_evidence_plan"
-        ? "起草补证计划"
+function stepLabel(step: ResearchPreparationEventStep | null): string {
+  return step === "parse_claims"
+    ? "解析冻结原文"
+    : step === "draft_protocol"
+      ? "生成研究协议草案"
+      : step === "draft_evidence_plan"
+        ? "生成补证计划草案"
         : "准备工作";
-  return event.message ? `${step}：${event.message}` : step;
+}
+
+function eventLabel(event: ResearchPreparationEvent): string {
+  return stepLabel(event.step);
+}
+
+function eventDetails(event: ResearchPreparationEvent): string[] {
+  const detail = event.detail ?? {};
+  const output: string[] = [];
+  if (detail.input_scope === "frozen_original") output.push("输入范围：冻结原文");
+  const candidateCount = detail.candidate_count;
+  if (typeof candidateCount === "number" && Number.isInteger(candidateCount) && candidateCount >= 0) output.push(`候选陈述：${candidateCount}`);
+  const artifactSequence = detail.artifact_sequence;
+  if (typeof artifactSequence === "number" && Number.isInteger(artifactSequence) && artifactSequence > 0) output.push(`草案版本：${artifactSequence}`);
+  const attempt = detail.attempt;
+  if (typeof attempt === "number" && Number.isInteger(attempt) && attempt > 0) output.push(`第 ${attempt} 次尝试`);
+  const durationMs = detail.duration_ms;
+  if (typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs >= 0) output.push(`耗时：${(durationMs / 1000).toFixed(durationMs % 1000 === 0 ? 0 : 1)} 秒`);
+  if (detail.retry_scheduled === true) output.push("已安排重试");
+  return output;
 }
 
 function protocolText(preparation: ResearchPreparation): string {
@@ -101,7 +124,7 @@ function timelineState(preparation: ResearchPreparation, index: number): "done" 
   if (review === "awaiting_review" || (index === 0 && preparation.status === "awaiting_claim_review") || (index === 1 && preparation.status === "awaiting_protocol_confirmation") || (index === 2 && preparation.status === "awaiting_plan_authorization")) return "current";
   if (review === "confirmed") return "done";
   if (system === "succeeded" && review === "locked") return "waiting";
-  return system === "queued" || system === "running" || system === "retrying" ? "current" : "waiting";
+  return system === "running" || system === "retrying" ? "current" : "waiting";
 }
 
 export function ResearchPreparationPage() {
@@ -116,7 +139,6 @@ export function ResearchPreparationPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [claimDecisions, setClaimDecisions] = useState<Record<string, ClaimDecision>>({});
-  const [protocolEdits, setProtocolEdits] = useState("");
   const activityCursor = useRef<number | null>(null);
   const requestEpoch = useRef(0);
   const activeCaseId = useRef(caseId);
@@ -128,7 +150,6 @@ export function ResearchPreparationPage() {
 
   const clearReviewDrafts = useCallback(() => {
     setClaimDecisions({});
-    setProtocolEdits("");
   }, []);
 
   const loadActivity = useCallback(async (options: { afterSeq?: number; replace?: boolean } = {}) => {
@@ -234,6 +255,10 @@ export function ResearchPreparationPage() {
   }, [caseId, isCurrentRequest, loadActivity, preparation?.status]);
 
   const candidates = useMemo(() => preparation ? candidatesFrom(preparation) : [], [preparation]);
+  const candidateDisplayWithheld = useMemo(() => {
+    const raw = preparation?.artifacts.candidateClaims?.payload.candidates;
+    return Array.isArray(raw) && raw.length > candidates.length;
+  }, [candidates.length, preparation]);
   const claimsReady = candidates.length > 0 && candidates.every((candidate) => {
     const decision = claimDecisions[candidate.id];
     return decision?.outcome && decision.reason.trim() && (decision.outcome !== "modified" || decision.normalizedText.trim());
@@ -301,11 +326,16 @@ export function ResearchPreparationPage() {
   const runStarted = preparation.status === "authorized" && preparation.researchRunId;
   const evidencePlanSequence = preparation.artifacts.evidencePlan?.sequence;
   const canAuthorizeEvidencePlan = typeof evidencePlanSequence === "number" && Number.isInteger(evidencePlanSequence) && evidencePlanSequence > 0;
+  const material = preparation.initialMaterial;
+  const progress = preparation.progress;
   return <main className="ros-page ros-preparation-page">
     <header className="ros-page-head ros-preparation-head">
       <div>
         <p className="ros-eyebrow">事件研究 · 准备工作台</p>
         <h1>研究准备</h1>
+        {preparation.caseTitle && <p className="ros-preparation-case-title">{preparation.caseTitle}</p>}
+        {material && <p className="ros-preparation-material"><strong>{material.title || "冻结原文"}</strong><span>材料版本：{material.documentVersionId.slice(0, 8)}</span></p>}
+        {progress && <p className="ros-preparation-progress">准备进度：{progress.completedSteps} / {progress.totalSteps}{progress.currentStep ? ` · 当前：${stepLabel(progress.currentStep)}` : ""}</p>}
         <p>{runStarted ? "正式研究运行已建立，后续补证将按已授权计划受控执行。" : "系统只准备草案，研究员逐步确认；在授权前不会创建 ResearchRun 或运行任何外部 Provider。"}</p>
       </div>
       <p className={runStarted ? "ros-preparation-run is-started" : "ros-preparation-run"}>{runStarted ? "正式研究已启动" : "正式研究尚未启动"}</p>
@@ -331,7 +361,7 @@ export function ResearchPreparationPage() {
         <section className="ros-preparation-events" aria-label="准备活动记录">
           <h3>活动记录</h3>
           {activityError && <p className="ros-error" role="alert">无法读取活动记录，不影响准备状态。<button className="ros-button ros-button--secondary" type="button" onClick={retryActivity}>重新读取活动记录</button></p>}
-          {events.length ? <ol>{events.map((event) => <li key={event.seq}><time dateTime={event.createdAt}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(event.createdAt))}</time><span>{eventLabel(event)}</span></li>)}</ol> : <p>尚无可显示的活动记录。</p>}
+          {events.length ? <ol>{events.map((event) => <li key={event.seq}><time dateTime={event.createdAt}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(event.createdAt))}</time><span>{eventLabel(event)}</span>{eventDetails(event).map((detail) => <small key={detail}>{detail}</small>)}</li>)}</ol> : <p>尚无可显示的活动记录。</p>}
         </section>
       </section>
 
@@ -340,11 +370,11 @@ export function ResearchPreparationPage() {
         <h2>{summary.title}</h2>
         <p>{summary.detail}</p>
         {preparation.status === "preparing" && <section className="ros-preparation-note"><strong>无需操作</strong><p>系统会每两秒更新此页。它只能生成草案，不会采纳陈述、批准协议或启动外部数据请求。</p></section>}
-        {preparation.status === "awaiting_claim_review" && <ClaimTask candidates={candidates} decisions={claimDecisions} busy={busy} ready={claimsReady} onChange={(id, patch) => setClaimDecisions((current) => {
+        {preparation.status === "awaiting_claim_review" && <ClaimTask candidates={candidates} displayWithheld={candidateDisplayWithheld} decisions={claimDecisions} busy={busy} ready={claimsReady} onChange={(id, patch) => setClaimDecisions((current) => {
           const currentDecision = current[id] ?? { outcome: "" as const, reason: "", normalizedText: "" };
           return { ...current, [id]: { ...currentDecision, ...patch } };
         })} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationClaims({ caseId, revision: preparation.revision, actor: ACTOR, decisions: candidates.map((candidate) => { const decision = claimDecisions[candidate.id]; return { candidateId: candidate.id, outcome: decision.outcome as "confirmed" | "modified" | "rejected", reason: decision.reason.trim(), normalizedText: decision.outcome === "modified" ? decision.normalizedText.trim() : undefined }; }) }), { correctedClaims: candidates.some((candidate) => claimDecisions[candidate.id]?.outcome === "modified") })} />}
-        {preparation.status === "awaiting_protocol_confirmation" && <ProtocolTask preparation={preparation} edits={protocolEdits} busy={busy} onChange={setProtocolEdits} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationProtocol({ caseId, revision: preparation.revision, actor: ACTOR, draftSequence: preparation.artifacts.protocol?.sequence ?? 0, ...(protocolEdits.trim() ? { edits: { reviewer_note: protocolEdits.trim() } } : {}) }))} />}
+        {preparation.status === "awaiting_protocol_confirmation" && <ProtocolTask preparation={preparation} busy={busy} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationProtocol({ caseId, revision: preparation.revision, actor: ACTOR, draftSequence: preparation.artifacts.protocol?.sequence ?? 0 }))} />}
         {preparation.status === "awaiting_plan_authorization" && <PlanTask preparation={preparation} busy={busy} canAuthorize={canAuthorizeEvidencePlan} onAuthorize={() => {
           if (!canAuthorizeEvidencePlan || typeof evidencePlanSequence !== "number") return;
           void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: evidencePlanSequence, idempotencyKey: authorizationKeyFor(preparation) }));
@@ -357,23 +387,23 @@ export function ResearchPreparationPage() {
   </main>;
 }
 
-function ClaimTask({ candidates, decisions, busy, ready, onChange, onConfirm }: { candidates: Candidate[]; decisions: Record<string, ClaimDecision>; busy: boolean; ready: boolean; onChange: (id: string, patch: Partial<ClaimDecision>) => void; onConfirm: () => void }) {
+function ClaimTask({ candidates, displayWithheld, decisions, busy, ready, onChange, onConfirm }: { candidates: Candidate[]; displayWithheld: boolean; decisions: Record<string, ClaimDecision>; busy: boolean; ready: boolean; onChange: (id: string, patch: Partial<ClaimDecision>) => void; onConfirm: () => void }) {
   const hasCorrection = candidates.some((candidate) => decisions[candidate.id]?.outcome === "modified");
   return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); onConfirm(); }}>
     {candidates.map((candidate, index) => {
       const decision = decisions[candidate.id] ?? { outcome: "", reason: "", normalizedText: "" };
       return <fieldset key={candidate.id}><legend>候选陈述 {index + 1}</legend><p>{candidate.text}</p><label>决定<select aria-label={`候选陈述 ${index + 1} 的决定`} value={decision.outcome} onChange={(event) => onChange(candidate.id, { outcome: event.target.value as ClaimDecision["outcome"] })}><option value="">请选择</option><option value="confirmed">确认</option><option value="modified">修正</option><option value="rejected">不采纳</option></select></label>{decision.outcome === "modified" && <label>修正后陈述<textarea value={decision.normalizedText} onChange={(event) => onChange(candidate.id, { normalizedText: event.target.value })} /></label>}<label>核对说明<textarea aria-label={`候选陈述 ${index + 1} 的核对说明`} value={decision.reason} onChange={(event) => onChange(candidate.id, { reason: event.target.value })} placeholder="说明与冻结原文的核对结果" /></label></fieldset>;
     })}
-    {!candidates.length && <p className="ros-error">候选陈述草案不完整，请重新加载后再确认。</p>}
+    {!candidates.length && <p className="ros-error">{displayWithheld ? "候选陈述受来源展示许可限制，无法在此页显示。请在已授权材料中核对后重试。" : "候选陈述草案不完整，请重新加载后再确认。"}</p>}
     {hasCorrection && <p className="ros-preparation-boundary">协议草案与补证计划会标记为过期并由系统重生成。重新生成完成后，仍需按顺序再次确认；不会启动正式研究。</p>}
     <button className="ros-button ros-button--primary" type="submit" disabled={busy || !ready}>{busy ? "正在保存确认…" : "确认候选陈述"}</button>
   </form>;
 }
 
-function ProtocolTask({ preparation, edits, busy, onChange, onConfirm }: { preparation: ResearchPreparation; edits: string; busy: boolean; onChange: (value: string) => void; onConfirm: () => void }) {
+function ProtocolTask({ preparation, busy, onConfirm }: { preparation: ResearchPreparation; busy: boolean; onConfirm: () => void }) {
   const draftSequence = preparation.artifacts.protocol?.sequence;
   const canConfirm = typeof draftSequence === "number" && Number.isInteger(draftSequence) && draftSequence > 0;
-  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<label>研究员备注（可选）<textarea value={edits} onChange={(event) => onChange(event.target.value)} placeholder="只记录本次审阅的必要修订说明" /></label><p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
+  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
 }
 
 function PlanTask({ preparation, busy, canAuthorize, onAuthorize }: { preparation: ResearchPreparation; busy: boolean; canAuthorize: boolean; onAuthorize: () => void }) {
@@ -381,7 +411,10 @@ function PlanTask({ preparation, busy, canAuthorize, onAuthorize }: { preparatio
 }
 
 function RecoveryTask({ preparation, busy, onRetry }: { preparation: ResearchPreparation; busy: boolean; onRetry: () => void }) {
-  return <section className="ros-preparation-form"><p className="ros-error">{preparation.lastErrorMessage ?? "准备草案未能生成。"}</p><p>重新准备只会重新生成待审核草案，不会创建正式研究或调用补证 Provider。</p><ArtifactPreviews preparation={preparation} keys={["candidateClaims", "protocol", "evidencePlan"]} readOnly /><button className="ros-button ros-button--primary" type="button" disabled={busy} onClick={onRetry}>{busy ? "正在重新排队…" : "重新准备研究草案"}</button></section>;
+  const failedStep = preparation.progress?.failedStep;
+  const retryAt = preparation.nextAttemptAt ? new Date(preparation.nextAttemptAt) : null;
+  const retryLabel = retryAt && !Number.isNaN(retryAt.valueOf()) ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(retryAt) : null;
+  return <section className="ros-preparation-form"><p className="ros-error">{preparation.lastErrorMessage ?? "准备草案未能生成。"}</p>{failedStep && <p>失败步骤：{stepLabel(failedStep)}</p>}{retryLabel && <p>下次重试：{retryLabel}</p>}<p>重新准备只会重新生成待审核草案，不会创建正式研究或调用补证 Provider。</p><ArtifactPreviews preparation={preparation} keys={["candidateClaims", "protocol", "evidencePlan"]} readOnly /><button className="ros-button ros-button--primary" type="button" disabled={busy} onClick={onRetry}>{busy ? "正在重新排队…" : "重新准备研究草案"}</button></section>;
 }
 
 function ArtifactPreviews({ preparation, keys, readOnly = false }: { preparation: ResearchPreparation; keys: Array<keyof ResearchPreparation["artifacts"]>; readOnly?: boolean }) {

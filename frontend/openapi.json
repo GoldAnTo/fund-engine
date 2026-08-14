@@ -19164,6 +19164,82 @@
         ],
         "title": "PreparationArtifactDTO"
       },
+      "PreparationInitialMaterialDTO": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Version Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "parse_state": {
+            "type": "string",
+            "title": "Parse State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "parse_state"
+        ],
+        "title": "PreparationInitialMaterialDTO"
+      },
+      "PreparationProgressDTO": {
+        "properties": {
+          "completed_steps": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Completed Steps"
+          },
+          "total_steps": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Total Steps"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "failed_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Step"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "completed_steps",
+          "total_steps"
+        ],
+        "title": "PreparationProgressDTO"
+      },
       "PreparationStepDTO": {
         "properties": {
           "state": {
@@ -20328,6 +20404,23 @@
             "format": "uuid",
             "title": "Case Id"
           },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "initial_material": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparationInitialMaterialDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "$ref": "#/components/schemas/PreparationProgressDTO"
+          },
           "revision": {
             "type": "integer",
             "title": "Revision"
@@ -20415,6 +20508,8 @@
         "type": "object",
         "required": [
           "case_id",
+          "case_title",
+          "progress",
           "revision",
           "status",
           "system",

@@ -5940,6 +5940,29 @@ export interface components {
             /** Context Fingerprint */
             context_fingerprint?: string | null;
         };
+        /** PreparationInitialMaterialDTO */
+        PreparationInitialMaterialDTO: {
+            /**
+             * Document Version Id
+             * Format: uuid
+             */
+            document_version_id: string;
+            /** Title */
+            title?: string | null;
+            /** Parse State */
+            parse_state: string;
+        };
+        /** PreparationProgressDTO */
+        PreparationProgressDTO: {
+            /** Completed Steps */
+            completed_steps: number;
+            /** Total Steps */
+            total_steps: number;
+            /** Current Step */
+            current_step?: string | null;
+            /** Failed Step */
+            failed_step?: string | null;
+        };
         /** PreparationStepDTO */
         PreparationStepDTO: {
             /** State */
@@ -6428,6 +6451,10 @@ export interface components {
              * Format: uuid
              */
             case_id: string;
+            /** Case Title */
+            case_title: string;
+            initial_material?: components["schemas"]["PreparationInitialMaterialDTO"] | null;
+            progress: components["schemas"]["PreparationProgressDTO"];
             /** Revision */
             revision: number;
             /** Status */

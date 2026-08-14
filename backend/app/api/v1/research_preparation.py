@@ -9,7 +9,7 @@ from app.db import get_db
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.services.research_preparation import ResearchPreparationService, ClaimDecision, ProtocolConfirmation
-from app.models.ledger import AtomicClaimCandidate, CaseTenantAdmission, SourceSpan, ValidationError
+from app.models.ledger import AtomicClaimCandidate, CaseTenantAdmission, DocumentVersion, ResearchCase, SourceSpan, ValidationError
 from app.errors import ValidationFailedError
 from app.errors import ConflictError
 from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact, ResearchPreparationEvent
@@ -28,6 +28,16 @@ _WRITE_ERRORS = {
     422: {"model": ErrorEnvelope, "description": "Validation failed"},
 }
 def _case(db, case_id, tenant): CaseTenantAccess(db).require_case(case_id, tenant)
+
+_PROGRESS_STEPS = (("parse_claims", "parse_claims_state"), ("draft_protocol", "draft_protocol_state"), ("draft_evidence_plan", "draft_evidence_plan_state"))
+
+def _progress(preparation: ResearchPreparation) -> PreparationProgressDTO:
+    states = {step: getattr(preparation, field) for step, field in _PROGRESS_STEPS}
+    failed_step = next((step for step, state in states.items() if state == "failed"), None)
+    current_step = next((step for step, state in states.items() if state in {"running", "retrying"}), None)
+    if current_step is None and failed_step is None:
+        current_step = {"awaiting_claim_review": "parse_claims", "awaiting_protocol_confirmation": "draft_protocol", "awaiting_plan_authorization": "draft_evidence_plan"}.get(preparation.status)
+    return PreparationProgressDTO(completed_steps=sum(state == "succeeded" for state in states.values()), total_steps=len(_PROGRESS_STEPS), current_step=current_step, failed_step=failed_step)
 
 
 def _sensitive_key(value: object) -> bool:
@@ -110,6 +120,9 @@ def _safe(value):
 def _dto(db, case_id):
     prep = db.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
     if prep is None: from app.errors import NotFoundError; raise NotFoundError("research preparation not found")
+    case = db.get(ResearchCase, case_id)
+    admission = db.scalar(select(CaseTenantAdmission).where(CaseTenantAdmission.research_case_id == case_id))
+    material = db.get(DocumentVersion, admission.initial_document_version_id) if admission is not None else None
     arts = {a.kind:a for a in db.scalars(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id==prep.id, ResearchPreparationArtifact.state=="current"))}
     def art(kind):
         a=arts.get(kind)
@@ -118,7 +131,7 @@ def _dto(db, case_id):
         if not _artifact_allows_display(db, case_id, a.payload):
             payload = _hide_restricted_display_text(payload)
         return PreparationArtifactDTO(sequence=a.sequence,payload=payload,state=a.state,context_fingerprint=a.context_fingerprint)
-    return ResearchPreparationDTO(case_id=case_id,revision=prep.version,status=prep.status,research_run_id=prep.research_run_id,next_attempt_at=prep.next_attempt_at.isoformat() if prep.next_attempt_at else None,last_error_message=_ERRORS.get(prep.last_error_code),system={"claims":PreparationStepDTO(state=prep.parse_claims_state,artifact_sequence=arts.get("atomic_claim_candidates").sequence if arts.get("atomic_claim_candidates") else None),"protocol":PreparationStepDTO(state=prep.draft_protocol_state,artifact_sequence=arts.get("research_protocol_draft").sequence if arts.get("research_protocol_draft") else None),"plan":PreparationStepDTO(state=prep.draft_evidence_plan_state,artifact_sequence=arts.get("evidence_acquisition_plan").sequence if arts.get("evidence_acquisition_plan") else None)},review={"claims":PreparationStepDTO(state=prep.claim_review_state),"protocol":PreparationStepDTO(state=prep.protocol_review_state),"plan":PreparationStepDTO(state=prep.plan_review_state)},artifacts={"claims":art("atomic_claim_candidates"),"protocol":art("research_protocol_draft"),"plan":art("evidence_acquisition_plan")}, authorized_evidence_plan=_safe(prep.authorized_evidence_plan) if prep.status == "authorized" else None)
+    return ResearchPreparationDTO(case_id=case_id,case_title=case.title if case is not None else "研究 Case",initial_material=PreparationInitialMaterialDTO(document_version_id=material.id,title=material.title,parse_state=material.parse_state) if material is not None else None,progress=_progress(prep),revision=prep.version,status=prep.status,research_run_id=prep.research_run_id,next_attempt_at=prep.next_attempt_at.isoformat() if prep.next_attempt_at else None,last_error_message=_ERRORS.get(prep.last_error_code),system={"claims":PreparationStepDTO(state=prep.parse_claims_state,artifact_sequence=arts.get("atomic_claim_candidates").sequence if arts.get("atomic_claim_candidates") else None),"protocol":PreparationStepDTO(state=prep.draft_protocol_state,artifact_sequence=arts.get("research_protocol_draft").sequence if arts.get("research_protocol_draft") else None),"plan":PreparationStepDTO(state=prep.draft_evidence_plan_state,artifact_sequence=arts.get("evidence_acquisition_plan").sequence if arts.get("evidence_acquisition_plan") else None)},review={"claims":PreparationStepDTO(state=prep.claim_review_state),"protocol":PreparationStepDTO(state=prep.protocol_review_state),"plan":PreparationStepDTO(state=prep.plan_review_state)},artifacts={"claims":art("atomic_claim_candidates"),"protocol":art("research_protocol_draft"),"plan":art("evidence_acquisition_plan")}, authorized_evidence_plan=_safe(prep.authorized_evidence_plan) if prep.status == "authorized" else None)
 @router.get("/{case_id}/preparation", response_model=ResearchPreparationDTO)
 def get_preparation(case_id: uuid.UUID, db:Session=Depends(get_db), tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id); return _dto(db,case_id)

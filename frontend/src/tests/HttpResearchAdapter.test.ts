@@ -24,7 +24,7 @@ describe("HttpResearchAdapter", () => {
         });
       }
       return jsonResponse({
-        case_id: "event-1", revision: 3, status: "awaiting_protocol_confirmation", research_run_id: null,
+        case_id: "event-1", case_title: "真实事件研究", initial_material: { document_version_id: "91c8e13c-f649-4f6b-9330-0c9ae7cb6641", title: "冻结公告", parse_state: "success" }, progress: { completed_steps: 1, total_steps: 3, current_step: "draft_protocol", failed_step: null }, revision: 3, status: "awaiting_protocol_confirmation", research_run_id: null,
         system: { claims: { state: "succeeded", artifact_sequence: 1 }, protocol: { state: "succeeded", artifact_sequence: 2 }, plan: { state: "succeeded", artifact_sequence: 3 } },
         review: { claims: { state: "confirmed" }, protocol: { state: "awaiting_review" }, plan: { state: "locked" } },
         next_attempt_at: null, last_error_message: null,
@@ -39,6 +39,9 @@ describe("HttpResearchAdapter", () => {
 
     expect(preparation).toMatchObject({
       caseId: "event-1", revision: 3, status: "awaiting_protocol_confirmation",
+      caseTitle: "真实事件研究",
+      initialMaterial: { documentVersionId: "91c8e13c-f649-4f6b-9330-0c9ae7cb6641", title: "冻结公告", parseState: "success" },
+      progress: { completedSteps: 1, totalSteps: 3, currentStep: "draft_protocol", failedStep: null },
       system: { candidateClaims: { state: "succeeded", artifactSequence: 1 } },
       artifacts: { candidateClaims: { sequence: 1, contextFingerprint: "a" } },
     });
@@ -73,7 +76,7 @@ describe("HttpResearchAdapter", () => {
       caseId: "event-1", revision: 1, actor: "human:researcher",
       decisions: [{ candidateId: "candidate-1", outcome: "modified", reason: "保留原文语义", normalizedText: "修订后的候选因素" }],
     });
-    await adapter.confirmResearchPreparationProtocol({ caseId: "event-1", revision: 2, actor: "human:researcher", draftSequence: 2, edits: { title: "协议" } });
+    await adapter.confirmResearchPreparationProtocol({ caseId: "event-1", revision: 2, actor: "human:researcher", draftSequence: 2, edits: { baseline: { review_note: "协议" } } });
     await adapter.retryResearchPreparation({ caseId: "event-1", revision: 3, actor: "human:researcher" });
     const result = await adapter.authorizeResearchPreparation({ caseId: "event-1", revision: 4, actor: "human:researcher", planSequence: 3, idempotencyKey: "authorize-event-1-v4" });
 
@@ -85,7 +88,7 @@ describe("HttpResearchAdapter", () => {
     ]);
     expect(bodies).toEqual([
       { revision: 1, actor: "human:researcher", decisions: [{ candidate_id: "candidate-1", outcome: "modified", reason: "保留原文语义", normalized_text: "修订后的候选因素" }] },
-      { revision: 2, actor: "human:researcher", draft_sequence: 2, edits: { title: "协议" } },
+      { revision: 2, actor: "human:researcher", draft_sequence: 2, edits: { baseline: { review_note: "协议" } } },
       { revision: 3, actor: "human:researcher" },
       { revision: 4, actor: "human:researcher", plan_sequence: 3, idempotency_key: "authorize-event-1-v4" },
     ]);

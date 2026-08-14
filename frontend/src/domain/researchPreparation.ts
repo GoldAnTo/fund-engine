@@ -33,6 +33,19 @@ export type ResearchPreparationEventStep =
   | "draft_protocol"
   | "draft_evidence_plan";
 
+export interface ResearchPreparationInitialMaterial {
+  documentVersionId: string;
+  title: string | null;
+  parseState: string;
+}
+
+export interface ResearchPreparationProgress {
+  completedSteps: number;
+  totalSteps: number;
+  currentStep: ResearchPreparationEventStep | null;
+  failedStep: ResearchPreparationEventStep | null;
+}
+
 export interface ResearchPreparationSystemStep {
   state: ResearchPreparationSystemStepState;
   artifactSequence: number | null;
@@ -57,6 +70,9 @@ export interface ResearchPreparationArtifact {
 
 export interface ResearchPreparation {
   caseId: string;
+  caseTitle?: string | null;
+  initialMaterial?: ResearchPreparationInitialMaterial | null;
+  progress?: ResearchPreparationProgress | null;
   revision: number;
   status: ResearchPreparationStatus;
   researchRunId: string | null;

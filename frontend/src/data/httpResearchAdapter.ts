@@ -3147,8 +3147,30 @@ export class HttpResearchAdapter implements ActiveResearchClient {
             ? artifact.context_fingerprint
             : null,
         };
+    const initialMaterial = this.optionalPreparationContainer(payload.initial_material);
+    const progress = this.optionalPreparationContainer(payload.progress);
     return {
       caseId: this.requirePreparationString(payload.case_id),
+      caseTitle: this.optionalPreparationString(payload.case_title),
+      initialMaterial: initialMaterial
+        ? {
+            documentVersionId: this.requirePreparationString(initialMaterial.document_version_id),
+            title: this.optionalPreparationString(initialMaterial.title),
+            parseState: this.requirePreparationString(initialMaterial.parse_state),
+          }
+        : null,
+      progress: progress
+        ? {
+            completedSteps: this.requirePreparationNumber(progress.completed_steps),
+            totalSteps: this.requirePreparationNumber(progress.total_steps),
+            currentStep: progress.current_step === null || progress.current_step === undefined
+              ? null
+              : this.requirePreparationValue(progress.current_step, RESEARCH_PREPARATION_EVENT_STEPS, "当前准备步骤") as ResearchPreparationEventStep,
+            failedStep: progress.failed_step === null || progress.failed_step === undefined
+              ? null
+              : this.requirePreparationValue(progress.failed_step, RESEARCH_PREPARATION_EVENT_STEPS, "失败准备步骤") as ResearchPreparationEventStep,
+          }
+        : null,
       revision: this.requirePreparationNumber(payload.revision),
       status: this.requirePreparationValue(
         this.requirePreparationString(payload.status),

@@ -3101,6 +3101,9 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
   };
   const preparation: ResearchPreparation = {
     caseId: "event-preparation",
+    caseTitle: "AI 服务器需求研究",
+    initialMaterial: { documentVersionId: "91c8e13c-f649-4f6b-9330-0c9ae7cb6641", title: "模拟冻结原文", parseState: "success" },
+    progress: { completedSteps: 1, totalSteps: 3, currentStep: "parse_claims", failedStep: null },
     revision: 1,
     status: "awaiting_claim_review",
     researchRunId: null,
@@ -3113,7 +3116,7 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     nextAttemptAt: null,
     lastErrorMessage: null,
     artifacts: {
-      candidateClaims: { sequence: 1, state: "current", payload: { candidates: [{ id: "candidate-1", text: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1" },
+      candidateClaims: { sequence: 1, state: "current", payload: { candidates: [{ candidate_id: "8a23ef12-9b37-4f54-8f2d-b938605a1d8d", normalized_text: "订单增长可以转化为收入", quote: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1" },
       protocol: { sequence: 2, state: "current", payload: { research_question: "事件是否改变关键因素？" }, contextFingerprint: "mock-source-v1" },
       evidencePlan: { sequence: 3, state: "current", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1" },
     },
@@ -3125,16 +3128,19 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     preparation.system.protocol = { state: "queued", artifactSequence: null };
     preparation.system.evidencePlan = { state: "queued", artifactSequence: null };
     preparation.review.candidateClaims = { state: "locked" };
+    preparation.progress = { completedSteps: 0, totalSteps: 3, currentStep: "parse_claims", failedStep: null };
   }
   if (scenario === "review_protocol") {
     preparation.status = "awaiting_protocol_confirmation";
     preparation.review.candidateClaims = { state: "confirmed" };
+    preparation.progress = { completedSteps: 2, totalSteps: 3, currentStep: "draft_protocol", failedStep: null };
   }
   if (scenario === "review_plan") {
     preparation.status = "awaiting_plan_authorization";
     preparation.review.candidateClaims = { state: "confirmed" };
     preparation.review.protocol = { state: "confirmed" };
     preparation.review.evidencePlan = { state: "awaiting_review" };
+    preparation.progress = { completedSteps: 3, totalSteps: 3, currentStep: "draft_evidence_plan", failedStep: null };
   }
   if (scenario === "recoverable_failure") {
     preparation.status = "recoverable_failure";
@@ -3144,6 +3150,7 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     preparation.review.candidateClaims = { state: "locked" };
     preparation.nextAttemptAt = "2026-08-15T10:05:00Z";
     preparation.lastErrorMessage = "准备任务暂时未完成，可由研究员重试。";
+    preparation.progress = { completedSteps: 0, totalSteps: 3, currentStep: null, failedStep: "parse_claims" };
   }
   if (scenario === "authorized") {
     preparation.status = "authorized";
@@ -3152,6 +3159,7 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     preparation.review.protocol = { state: "confirmed" };
     preparation.review.evidencePlan = { state: "confirmed" };
     preparation.authorizedEvidencePlan = { sources: ["公司公告"] };
+    preparation.progress = { completedSteps: 3, totalSteps: 3, currentStep: null, failedStep: null };
   }
   return preparation;
 }
