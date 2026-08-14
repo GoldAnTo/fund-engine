@@ -134,6 +134,7 @@ def test_preparation_has_one_current_row_and_no_run_before_authorization(session
             authorized_case,
             status="authorized",
             research_run_id=authorized_run.id,
+            authorized_evidence_plan={"items": []},
         )
     )
     session.flush()
@@ -193,11 +194,28 @@ def test_preparation_state_values_are_constrained(session, field, legal_values, 
         overrides = {field: value}
         if value == "authorized":
             overrides["research_run_id"] = _run(session, case).id
+            overrides["authorized_evidence_plan"] = {"items": []}
         session.add(_preparation(case, **overrides))
     session.commit()
 
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(_preparation(_case(session, title=f"Invalid {field}"), **{field: invalid_value}))
+        session.flush()
+
+
+def test_authorized_plan_and_run_are_a_database_lockstep(session) -> None:
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            _preparation(
+                _case(session, title="Unauthorized frozen plan"),
+                authorized_evidence_plan={"items": []},
+            )
+        )
+        session.flush()
+
+    case = _case(session, title="Authorized without plan")
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(_preparation(case, status="authorized", research_run_id=_run(session, case).id))
         session.flush()
 
 

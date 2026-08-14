@@ -33,7 +33,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0055"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -117,9 +117,9 @@ with SessionLocal() as session:
         "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
     ), {'id': run_a, 'case_id': case_a, 'now': now})
     session.execute(text(
-        'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) '
-        "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :now, :now)"
-    ), {'id': prep_a, 'case_id': case_a, 'fingerprint': 'a' * 64, 'run_id': run_a, 'now': now})
+        'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, authorized_evidence_plan, created_at, updated_at) '
+        "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :plan, :now, :now)"
+    ), {'id': prep_a, 'case_id': case_a, 'fingerprint': 'a' * 64, 'run_id': run_a, 'plan': '{"items": []}', 'now': now})
     session.execute(text(
         'INSERT INTO research_preparation_events (id, research_preparation_id, seq, type, step, message, detail, created_at) '
         "VALUES ('00000000000000000000000000000018', :preparation_id, 1, 'claims_parsed', NULL, NULL, '{}', :now)"
@@ -131,9 +131,9 @@ with SessionLocal() as session:
     ):
         try:
             session.execute(text(
-                'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) '
-                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :now, :now)"
-            ), {'id': prep_id, 'case_id': case_id, 'fingerprint': 'a' * 64, 'run_id': referenced_run_id, 'now': now})
+                'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, authorized_evidence_plan, created_at, updated_at) '
+                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :plan, :now, :now)"
+            ), {'id': prep_id, 'case_id': case_id, 'fingerprint': 'a' * 64, 'run_id': referenced_run_id, 'plan': '{"items": []}', 'now': now})
         except IntegrityError:
             session.rollback()
         else:
@@ -162,7 +162,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0055"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -926,7 +926,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0055"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -980,7 +980,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0055"
 
 
 def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:
