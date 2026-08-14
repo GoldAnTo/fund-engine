@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
+import { ConflictError } from "../domain/researchPreparation";
 import { ResearchPreparationPage } from "../features/events/ResearchPreparationPage";
 
 type PreparationScenario = "preparing" | "review_claims" | "review_protocol" | "review_plan" | "recoverable_failure" | "authorized";
@@ -40,7 +41,7 @@ describe("ResearchPreparationPage", () => {
     expect(screen.getByRole("heading", { name: "核对候选陈述" })).toBeVisible();
     expect(screen.getByRole("button", { name: "确认候选陈述" })).toBeDisabled();
     expect(screen.getAllByText("等待上一步确认").length).toBeGreaterThanOrEqual(2);
-    expect(within(screen.getByLabelText("当前人工任务")).getAllByText("等待上一步确认")).toHaveLength(2);
+    expect(within(screen.getByLabelText("当前人工任务")).getAllByText("等待上一步确认")).toHaveLength(4);
   });
 
   it("only advances to protocol confirmation after the researcher explicitly confirms claims", async () => {
@@ -91,5 +92,91 @@ describe("ResearchPreparationPage", () => {
     expect(within(task).getByRole("heading", { name: "授权补证计划" })).toBeVisible();
     expect(within(task).getByRole("button", { name: "授权补证计划并启动正式研究" })).toBeEnabled();
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
+  });
+
+  it("automatically reloads preparation and activity after a command conflict", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const getPreparation = vi.spyOn(adapter, "getResearchPreparation");
+    vi.spyOn(adapter, "confirmResearchPreparationClaims").mockRejectedValue(new ConflictError());
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const task = await screen.findByLabelText("当前人工任务");
+    await user.selectOptions(within(task).getByLabelText("候选陈述 1 的决定"), "confirmed");
+    await user.type(within(task).getByLabelText("候选陈述 1 的核对说明"), "已核对冻结原文。");
+    await user.click(within(task).getByRole("button", { name: "确认候选陈述" }));
+
+    expect(await screen.findByText("此准备版本已更新，已显示最新内容")).toBeVisible();
+    expect(getPreparation.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole("button", { name: "重新加载" })).not.toBeInTheDocument();
+  });
+
+  it("keeps all existing drafts readable when preparation can be retried", async () => {
+    renderPreparation("recoverable_failure");
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).getByDisplayValue(/订单增长可以转化为收入/)).toBeVisible();
+    expect(within(task).getByDisplayValue(/事件是否改变关键因素/)).toBeVisible();
+    expect(within(task).getByDisplayValue(/公司公告/)).toBeVisible();
+    expect(within(task).getByRole("button", { name: "重新准备研究草案" })).toBeEnabled();
+  });
+
+  it("shows locked generated previews as disabled downstream forms", async () => {
+    renderPreparation();
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).getByLabelText("研究协议草案预览")).toBeDisabled();
+    expect(within(task).getByLabelText("补证计划草案预览")).toBeDisabled();
+    expect(within(task).getAllByText("等待上一步确认")).toHaveLength(4);
+  });
+
+  it("persists the regeneration notice after successfully submitting a corrected claim", async () => {
+    const user = userEvent.setup();
+    renderPreparation();
+
+    const task = await screen.findByLabelText("当前人工任务");
+    await user.selectOptions(within(task).getByLabelText("候选陈述 1 的决定"), "modified");
+    await user.type(within(task).getByLabelText("候选陈述 1 的核对说明"), "原文表述需要修正。");
+    await user.type(within(task).getByLabelText("修正后陈述"), "订单增长可能转化为收入。");
+    await user.click(within(task).getByRole("button", { name: "确认候选陈述" }));
+
+    expect(await screen.findByText("候选陈述已修正，协议草案与补证计划已标记为过期，系统正在重新生成。"))
+      .toBeVisible();
+  });
+
+  it("loads all paginated activity records instead of stopping at the first 50", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation(async (_caseId, cursor = {}) => {
+      const start = cursor.afterSeq ?? 0;
+      const items = Array.from({ length: start === 0 ? 50 : 5 }, (_, index) => {
+        const seq = start + index + 1;
+        return { seq, type: "draft_ready", step: "draft_protocol" as const, message: `活动 ${seq}`, detail: null, createdAt: "2026-08-15T09:00:00Z" };
+      });
+      return { items, nextAfterSeq: start === 0 ? 50 : null };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/活动 55/)).toBeVisible();
+  });
+
+  it("cleans up the two-second preparation poll when the page unmounts", async () => {
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    const rendered = renderPreparation("preparing");
+
+    await screen.findByRole("heading", { name: "系统正在准备" });
+    rendered.unmount();
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    clearIntervalSpy.mockRestore();
   });
 });
