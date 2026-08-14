@@ -258,6 +258,31 @@ describe("HttpResearchAdapter", () => {
     expect((requestBody as Record<string, unknown> | null)?.research_protocol_required).toBe(true);
   });
 
+  it("posts uploaded Case creation through the generated multipart endpoint contract", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return jsonResponse({ case_id: "event-uploaded-1", brief_id: "brief-uploaded-1", lifecycle: { status: "awaiting_key_review", active_run_id: null, current_round: 0, status_summary: "等待核验", current_gap: null, next_human_action: null } }, true, 201);
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await adapter.createEventResearchFromUpload({
+      rawInput: "用于识别事件的摘要", eventTitle: "上传原件事件", companyName: null, ticker: null,
+      eventAt: null, marketReaction: null, summary: null, researchQuestion: "影响是什么？",
+      candidateFactors: ["因素一", "因素二", "因素三"], confirmationRequired: true,
+      sourceMetadata: { authority_level: "user_supplied" }, createdBy: "human:researcher",
+      file: new File(["上传原件正文"], "original.txt", { type: "text/plain" }),
+    });
+
+    expect(requestUrl).toBe("http://api.test/api/v1/event-research/uploaded");
+    expect(requestInit?.headers).toEqual({ Accept: "application/json" });
+    const form = requestInit?.body as FormData;
+    expect((form.get("file") as File).name).toBe("original.txt");
+    expect(JSON.parse(String(form.get("payload")))).toMatchObject({ source_type: "uploaded_file", raw_input: "用于识别事件的摘要" });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -281,6 +281,8 @@ export function ResearchPreparationPage() {
 
   const summary = STATUS_COPY[preparation.status];
   const runStarted = preparation.status === "authorized" && preparation.researchRunId;
+  const evidencePlanSequence = preparation.artifacts.evidencePlan?.sequence;
+  const canAuthorizeEvidencePlan = typeof evidencePlanSequence === "number" && Number.isInteger(evidencePlanSequence) && evidencePlanSequence > 0;
   return <main className="ros-page ros-preparation-page">
     <header className="ros-page-head ros-preparation-head">
       <div>
@@ -325,7 +327,10 @@ export function ResearchPreparationPage() {
           return { ...current, [id]: { ...currentDecision, ...patch } };
         })} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationClaims({ caseId, revision: preparation.revision, actor: ACTOR, decisions: candidates.map((candidate) => { const decision = claimDecisions[candidate.id]; return { candidateId: candidate.id, outcome: decision.outcome as "confirmed" | "modified" | "rejected", reason: decision.reason.trim(), normalizedText: decision.outcome === "modified" ? decision.normalizedText.trim() : undefined }; }) }), { correctedClaims: candidates.some((candidate) => claimDecisions[candidate.id]?.outcome === "modified") })} />}
         {preparation.status === "awaiting_protocol_confirmation" && <ProtocolTask preparation={preparation} edits={protocolEdits} busy={busy} onChange={setProtocolEdits} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationProtocol({ caseId, revision: preparation.revision, actor: ACTOR, draftSequence: preparation.artifacts.protocol?.sequence ?? 0, ...(protocolEdits.trim() ? { edits: { reviewer_note: protocolEdits.trim() } } : {}) }))} />}
-        {preparation.status === "awaiting_plan_authorization" && <PlanTask preparation={preparation} busy={busy} onAuthorize={() => void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: preparation.artifacts.evidencePlan?.sequence ?? 0, idempotencyKey: authorizationKeyFor(preparation) }))} />}
+        {preparation.status === "awaiting_plan_authorization" && <PlanTask preparation={preparation} busy={busy} canAuthorize={canAuthorizeEvidencePlan} onAuthorize={() => {
+          if (!canAuthorizeEvidencePlan || typeof evidencePlanSequence !== "number") return;
+          void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: evidencePlanSequence, idempotencyKey: authorizationKeyFor(preparation) }));
+        }} />}
         {preparation.status === "recoverable_failure" && <RecoveryTask preparation={preparation} busy={busy} onRetry={() => void execute(() => researchClient.retryResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR }))} />}
         {preparation.status === "authorized" && <section className="ros-preparation-note"><strong>研究运行已建立</strong><p>已授权计划被冻结在本次研究运行中。后续变更需要回到研究范围与运行记录处理。</p>{preparation.researchRunId && <Link to={`/events/${caseId}/monitor`} className="ros-button ros-button--secondary">查看研究运行</Link>}</section>}
         <FutureReviewPreview preparation={preparation} />
@@ -353,8 +358,8 @@ function ProtocolTask({ preparation, edits, busy, onChange, onConfirm }: { prepa
   return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<label>研究员备注（可选）<textarea value={edits} onChange={(event) => onChange(event.target.value)} placeholder="只记录本次审阅的必要修订说明" /></label><p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
 }
 
-function PlanTask({ preparation, busy, onAuthorize }: { preparation: ResearchPreparation; busy: boolean; onAuthorize: () => void }) {
-  return <section className="ros-preparation-form"><h3>待授权补证计划</h3><pre>{planText(preparation)}</pre><p className="ros-preparation-boundary">只有点击下方按钮，系统才会创建一个正式 ResearchRun，并按这份冻结计划开始受控补证。</p><button className="ros-button ros-button--primary" type="button" disabled={busy || !preparation.artifacts.evidencePlan} onClick={onAuthorize}>{busy ? "正在授权…" : "授权补证计划并启动正式研究"}</button></section>;
+function PlanTask({ preparation, busy, canAuthorize, onAuthorize }: { preparation: ResearchPreparation; busy: boolean; canAuthorize: boolean; onAuthorize: () => void }) {
+  return <section className="ros-preparation-form"><h3>待授权补证计划</h3><pre>{planText(preparation)}</pre>{!canAuthorize && <p className="ros-error">补证计划草案缺失或版本无效，无法授权。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">只有点击下方按钮，系统才会创建一个正式 ResearchRun，并按这份冻结计划开始受控补证。</p><button className="ros-button ros-button--primary" type="button" disabled={busy || !canAuthorize} onClick={onAuthorize}>{busy ? "正在授权…" : "授权补证计划并启动正式研究"}</button></section>;
 }
 
 function RecoveryTask({ preparation, busy, onRetry }: { preparation: ResearchPreparation; busy: boolean; onRetry: () => void }) {

@@ -4557,6 +4557,66 @@
         }
       }
     },
+    "/api/v1/event-research/uploaded": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Create Event Research From Uploaded Original",
+        "description": "Atomically create a Case from one uploaded frozen original.\n\nThe JSON summary is retained only as the human-confirmed event brief.  It\nis never frozen as a competing source document and preparation is queued\nonly after the file becomes the initial tenant-admitted document.",
+        "operationId": "create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/tenant-admission": {
       "post": {
         "tags": [
@@ -9398,6 +9458,25 @@
           "idempotency_key"
         ],
         "title": "AuthorizeEvidencePlanRequest"
+      },
+      "Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post": {
+        "properties": {
+          "payload": {
+            "type": "string",
+            "title": "Payload"
+          },
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload",
+          "file"
+        ],
+        "title": "Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"
       },
       "Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post": {
         "properties": {

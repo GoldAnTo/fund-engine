@@ -1174,6 +1174,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/event-research/uploaded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Event Research From Uploaded Original
+         * @description Atomically create a Case from one uploaded frozen original.
+         *
+         *     The JSON summary is retained only as the human-confirmed event brief.  It
+         *     is never frozen as a competing source document and preparation is queued
+         *     only after the file becomes the initial tenant-admitted document.
+         */
+        post: operations["create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research/{case_id}/tenant-admission": {
         parameters: {
             query?: never;
@@ -2498,6 +2522,13 @@ export interface components {
             plan_sequence: number;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post */
+        Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post: {
+            /** Payload */
+            payload: string;
+            /** File */
+            file: string;
         };
         /** Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post */
         Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post: {
@@ -10284,6 +10315,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExtractEventResearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateEventResearchResponse"];
                 };
             };
             /** @description Validation Error */

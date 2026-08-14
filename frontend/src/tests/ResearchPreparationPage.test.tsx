@@ -290,6 +290,33 @@ describe("ResearchPreparationPage", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("does not authorize a plan without a positive current plan sequence", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_plan" });
+    const original = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await original(caseId);
+      return {
+        ...preparation,
+        artifacts: {
+          ...preparation.artifacts,
+          evidencePlan: { ...preparation.artifacts.evidencePlan!, sequence: 0 },
+        },
+      };
+    });
+    const authorize = vi.spyOn(adapter, "authorizeResearchPreparation");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("补证计划草案缺失或版本无效，无法授权。请重新读取准备状态。"))
+      .toBeVisible();
+    expect(screen.getByRole("button", { name: "授权补证计划并启动正式研究" })).toBeDisabled();
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
   it("ignores a stale case response after navigating to another preparation", async () => {
     const adapter = new MockResearchAdapter();
     const original = adapter.getResearchPreparation.bind(adapter);
