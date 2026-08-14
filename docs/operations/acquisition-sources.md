@@ -46,12 +46,13 @@ Asia/Shanghai 来源日历包含今天和前一天：在 2026-08-13 对应
 
 ```bash
 .venv/bin/python -m app.scripts.smoke_acquisition_sources \
-  --source sse --security-code 600000 --days 2 \
+  --source sse --security-code 600000 \
+  --start 2025-08-14 --end 2026-08-14 \
   --output ../docs/evaluation/reports/acquisition-sse.json
 
 .venv/bin/python -m app.scripts.smoke_acquisition_sources \
   --source szse --security-code 000001 \
-  --start 2026-08-12 --end 2026-08-13 \
+  --start 2025-08-14 --end 2026-08-14 \
   --output ../docs/evaluation/reports/acquisition-szse.json
 
 .venv/bin/python -m app.scripts.smoke_acquisition_sources \
