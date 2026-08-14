@@ -4,6 +4,8 @@ import uuid
 import os
 import copy
 import pytest
+from threading import Event, Thread
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
 
 from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
@@ -177,3 +179,47 @@ def test_public_authorization_invalid_matrix_rolls_back_protocol_and_run(cmd_cli
     refreshed = cmd_session.get(type(preparation), preparation.id)
     assert after == before
     assert refreshed.status == "awaiting_plan_authorization" and refreshed.plan_review_state == "awaiting_review"
+
+
+@pytest.mark.pg_only
+def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monkeypatch):
+    """The route's Case/preparation row locks serialize competing authorizations."""
+    from app.api.v1.research_preparation import confirm_claims, confirm_protocol, authorize
+    from app.schemas.v1.research_preparation import ConfirmClaimsRequest, ConfirmProtocolRequest, AuthorizeEvidencePlanRequest
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    class PublicClient:
+        def __init__(self, db): self.db = db
+        def post(self, path, json):
+            case_id = uuid.UUID(path.split("/")[4])
+            if path.endswith("claims/confirm"):
+                confirm_claims(case_id, ConfirmClaimsRequest.model_validate(json), db=self.db, tenant_id="test-team")
+            else:
+                confirm_protocol(case_id, ConfirmProtocolRequest.model_validate(json), db=self.db, tenant_id="test-team")
+            return type("Reply", (), {"status_code": 200, "text": ""})()
+    setup = SessionLocal()
+    try:
+        case, preparation, plan, _ = _ready_authorization_case(setup, PublicClient(setup))
+        case_id, plan_sequence = case.id, plan.sequence
+    finally:
+        setup.close()
+    entered, release = Event(), Event()
+    original = __import__("app.services.research_preparation", fromlist=["AutoResearchService"]).AutoResearchService.start
+    def paused_start(self, *args, **kwargs):
+        entered.set(); release.wait(3); return original(self, *args, **kwargs)
+    monkeypatch.setattr("app.services.research_preparation.AutoResearchService.start", paused_start)
+    outcomes=[]
+    def request(key):
+        db=SessionLocal()
+        try:
+            try:
+                authorize(case_id, AuthorizeEvidencePlanRequest(revision=1, actor="human", plan_sequence=plan_sequence, idempotency_key=key), db=db, tenant_id="test-team")
+                outcomes.append(201)
+            except Exception as exc:
+                from app.errors import ConflictError
+                assert isinstance(exc, ConflictError); outcomes.append(409)
+        finally: db.close()
+    first=Thread(target=request,args=("race-one",)); second=Thread(target=request,args=("race-two",)); first.start(); assert entered.wait(3); second.start(); release.set(); first.join(5); second.join(5)
+    assert sorted(outcomes) == [201, 409]
+    with SessionLocal() as check:
+        assert len(list(check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))) == 1
+        assert len(list(check.scalars(select(MetricDefinitionVersion)))) == 3
