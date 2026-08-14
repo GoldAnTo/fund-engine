@@ -4,14 +4,14 @@ import uuid
 import os
 import copy
 import pytest
-from threading import Event, Thread
+from threading import Barrier, Event, Thread
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
 
 from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
 from app.services.research_preparation import ResearchPreparationService
 from app.models.operational import Job, ResearchRun, ResearchTask
-from app.models.research_preparation import ResearchPreparationArtifact
+from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact
 from app.models.ledger import SourceSpan, AtomicClaimReview
 from app.models.ledger import Thesis
 from app.models.source_governance import SourceContract
@@ -395,7 +395,7 @@ def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monk
         case_id, plan_sequence = case.id, plan.sequence
     finally:
         setup.close()
-    entered, release = Event(), Event()
+    ready, entered, release = Barrier(2), Event(), Event()
     original = __import__("app.services.research_preparation", fromlist=["AutoResearchService"]).AutoResearchService.start
     def paused_start(self, *args, **kwargs):
         entered.set(); release.wait(3); return original(self, *args, **kwargs)
@@ -404,6 +404,17 @@ def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monk
     def request(key):
         db=SessionLocal()
         try:
+            # Both independent database sessions must observe the same ready
+            # preparation before either enters the authorization write path.
+            preparation = db.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
+            current_plan = db.scalar(select(ResearchPreparationArtifact).where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id,
+                ResearchPreparationArtifact.kind == "evidence_acquisition_plan",
+                ResearchPreparationArtifact.state == "current",
+            )) if preparation is not None else None
+            assert preparation is not None and preparation.status == "awaiting_plan_authorization"
+            assert current_plan is not None and current_plan.sequence == plan_sequence
+            ready.wait(timeout=5)
             try:
                 response = authorize(case_id, AuthorizeEvidencePlanRequest(revision=1, actor="human", plan_sequence=plan_sequence, idempotency_key=key), db=db, tenant_id="test-team")
                 outcomes.append((201, response.research_run_id))

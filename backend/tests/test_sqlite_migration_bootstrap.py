@@ -1158,3 +1158,68 @@ def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert "alembic_version" not in sa.inspect(connection).get_table_names()
+
+
+def test_0051_upgrade_requires_an_explicit_preparation_backfill(tmp_path) -> None:
+    """Migrations add schema only; the operator explicitly admits old Cases."""
+    database_path = tmp_path / "explicit-preparation-backfill.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    seeded = subprocess.run(
+        [sys.executable, "-c", """
+from datetime import UTC, datetime
+from app.db import SessionLocal
+from app.models.event_research import EventResearchScopeVersion
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
+from app.models.operational import EventResearchLifecycle
+from app.models.source_governance import SourceContract
+
+now = datetime.now(UTC)
+with SessionLocal() as session:
+    case = ResearchCase(title='legacy eligible case', industry_topic='test', created_by='test', created_at=now)
+    document = DocumentVersion(content_sha256='a' * 64, source_url='https://example.test/legacy', available_at=now, acquired_at=now, parser_version='test', source_authority='primary_disclosure')
+    session.add_all((case, document)); session.flush()
+    session.add_all((
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
+        CaseTenantAdmission(research_case_id=case.id, tenant_id='test', initial_document_version_id=document.id, admitted_by='test', admitted_at=now),
+        EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by='test', change_summary='legacy scope', created_at=now),
+        EventResearchLifecycle(research_case_id=case.id, status='awaiting_scope', active_run_id=None, current_round=0, status_summary='legacy', current_gap=None, next_human_action=None, updated_at=now),
+        SourceContract(document_version_id=document.id, source_type='uploaded_file', provider_or_tenant='test', allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region='CN', effective_from=None, effective_until=None, retention_policy='case_retained', deletion_policy='manual', downstream_restrictions=[], contract_version='test', intake_metadata={}, declared_by='test', created_at=now),
+    ))
+    session.commit()
+"""],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert seeded.returncode == 0, seeded.stderr
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    verified = subprocess.run(
+        [sys.executable, "-c", """
+from sqlalchemy import select
+from app.db import SessionLocal
+from app.models.operational import Job
+from app.models.research_preparation import ResearchPreparation
+from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+with SessionLocal() as session:
+    assert session.scalars(select(ResearchPreparation)).all() == []
+    assert session.scalars(select(Job).where(Job.kind == 'prepare_research')).all() == []
+    preparations = ResearchPreparationBackfill(session).enqueue_eligible(limit=1)
+    assert len(preparations) == 1
+    session.commit()
+    assert len(session.scalars(select(ResearchPreparation)).all()) == 1
+    jobs = session.scalars(select(Job).where(Job.kind == 'prepare_research')).all()
+    assert len(jobs) == 1 and jobs[0].correlation_id.endswith(':parse_claims')
+"""],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert verified.returncode == 0, verified.stderr + verified.stdout

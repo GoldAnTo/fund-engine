@@ -225,6 +225,10 @@ def test_live_compatible_fake_provider_prepares_then_explicit_authorization_star
     plan_ready = cmd_client.get(f"/api/v1/event-research/{case_id}/preparation").json()
     assert plan_ready["status"] == "awaiting_plan_authorization"
     plan = plan_ready["artifacts"]["plan"]
+    assert len(fake_openai_server.calls) == 3
+    assert cmd_session.scalars(
+        select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+    ).all() == []
     authorized = cmd_client.post(f"/api/v1/event-research/{case_id}/preparation/authorize", json={
         "revision": plan_ready["revision"], "actor": "integration-reviewer",
         "plan_sequence": plan["sequence"], "idempotency_key": "integration-authorize-once",
