@@ -122,6 +122,77 @@ def test_preparation_reads_redact_sensitive_key_variants_and_url_queries(cmd_cli
     assert summary.json()["artifacts"]["plan"]["payload"]["safe"] == "artifact-safe"
 
 
+def test_preparation_summary_hides_candidate_text_when_source_contract_forbids_display(cmd_client, cmd_session):
+    case, preparation = _prepared_case(cmd_session)
+    now = datetime.now(timezone.utc)
+    document = cmd_session.scalar(
+        select(DocumentVersion)
+        .join(CaseDocumentVersion)
+        .where(CaseDocumentVersion.research_case_id == case.id)
+    )
+    assert document is not None
+    cmd_session.add(SourceContract(
+        document_version_id=document.id,
+        source_type="licensed_provider",
+        provider_or_tenant="licensed",
+        allow_ai_processing=True,
+        allow_display=False,
+        allow_export=False,
+        allow_api=False,
+        region="cn",
+        effective_from=None,
+        effective_until=None,
+        retention_policy="case_retained",
+        deletion_policy="manual",
+        downstream_restrictions=[],
+        contract_version="test",
+        intake_metadata={},
+        declared_by="human",
+        created_at=now,
+    ))
+    quote = "licensed quote must not be displayed"
+    normalized = "licensed normalized claim must not be displayed"
+    span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text=quote)
+    cmd_session.add(span)
+    cmd_session.flush()
+    candidate = AtomicClaimService(cmd_session).admit(
+        AtomicClaimDraft(
+            source_span_id=span.id,
+            quote=quote,
+            quote_start=0,
+            quote_end=len(quote),
+            normalized_text=normalized,
+            claim_type="forecast",
+            assertion_actor="company",
+            subject="company",
+            predicate="expects",
+            object_text=None,
+            numeric_value=None,
+            unit=None,
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="primary_disclosure",
+        run_ref="display-policy-test",
+    )
+    ResearchPreparationService(cmd_session)._repo.append_artifact(
+        preparation,
+        research_case_id=case.id,
+        kind="atomic_claim_candidates",
+        input_fingerprint=preparation.input_fingerprint,
+        payload={"candidates": [{"candidate_id": str(candidate.id), "quote": quote, "normalized_text": normalized, "safe": "kept"}]},
+    )
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation")
+
+    assert response.status_code == 200, response.text
+    assert quote not in response.text
+    assert normalized not in response.text
+    candidate_payload = response.json()["artifacts"]["claims"]["payload"]["candidates"][0]
+    assert candidate_payload == {"candidate_id": str(candidate.id), "safe": "kept"}
+
+
 def test_retry_requires_exact_revision_and_only_requeues_a_failed_step(cmd_client, cmd_session):
     case, preparation = _prepared_case(cmd_session)
     preparation.parse_claims_state = "failed"

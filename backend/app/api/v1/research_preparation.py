@@ -9,16 +9,19 @@ from app.db import get_db
 from app.api.v1.tenant_context import require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.services.research_preparation import ResearchPreparationService, ClaimDecision, ProtocolConfirmation
-from app.models.ledger import ValidationError
+from app.models.ledger import AtomicClaimCandidate, CaseTenantAdmission, SourceSpan, ValidationError
 from app.errors import ValidationFailedError
 from app.errors import ConflictError
 from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact, ResearchPreparationEvent
+from app.models.source_governance import SourceContract
 from app.schemas.v1.research_preparation import *
 from app.schemas.v1.common import ErrorEnvelope
+from app.services.source_admission import source_contract_is_active
 
 router = APIRouter(prefix="/event-research", tags=["research-preparation-v1"], dependencies=[Depends(require_research_tenant)])
 _SECRET_VALUE = re.compile(r"(?i)(?:\b(?:token|authorization|password|secret|bearer)\b|sk-[\w-]+)")
 _SENSITIVE_KEY_PARTS = ("token", "authorization", "password", "secret", "bearer", "apikey", "accesskey", "signature")
+_RESTRICTED_DISPLAY_FIELDS = {"quote", "normalizedtext", "verbatimtext", "text", "content", "rawtext", "rawresponse", "excerpt", "snippet", "body"}
 _ERRORS = {"preparation_provider_unavailable": "准备服务暂时不可用", "preparation_internal_error": "准备任务暂时失败", "preparation_backfill_candidate_limit": "候选数量超出处理限制"}
 _WRITE_ERRORS = {
     409: {"model": ErrorEnvelope, "description": "Conflict"},
@@ -44,6 +47,62 @@ def _sensitive_query(value: str) -> bool:
         return False
 
 
+def _restricted_display_field(value: object) -> bool:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower()) in _RESTRICTED_DISPLAY_FIELDS
+
+
+def _hide_restricted_display_text(value):
+    if isinstance(value, dict):
+        return {
+            str(key): _hide_restricted_display_text(item)
+            for key, item in value.items()
+            if not _restricted_display_field(key)
+        }
+    if isinstance(value, list):
+        return [_hide_restricted_display_text(item) for item in value]
+    return value
+
+
+def _artifact_allows_display(db: Session, case_id: uuid.UUID, payload: object) -> bool:
+    document_id = db.scalar(
+        select(CaseTenantAdmission.initial_document_version_id).where(
+            CaseTenantAdmission.research_case_id == case_id
+        )
+    )
+    if document_id is not None:
+        contract = db.scalar(
+            select(SourceContract).where(SourceContract.document_version_id == document_id)
+        )
+        if contract is not None and (
+            not contract.allow_display or not source_contract_is_active(contract)
+        ):
+            return False
+    if not isinstance(payload, dict) or not isinstance(payload.get("candidates"), list):
+        return True
+    candidate_ids: set[uuid.UUID] = set()
+    for item in payload["candidates"]:
+        if not isinstance(item, dict) or not isinstance(item.get("candidate_id"), str):
+            return False
+        try:
+            candidate_ids.add(uuid.UUID(item["candidate_id"]))
+        except ValueError:
+            return False
+    if not candidate_ids:
+        return True
+    rows = list(db.execute(
+        select(AtomicClaimCandidate.id, SourceContract)
+        .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+        .outerjoin(SourceContract, SourceContract.document_version_id == SourceSpan.document_version_id)
+        .where(AtomicClaimCandidate.id.in_(candidate_ids))
+    ))
+    if {candidate_id for candidate_id, _ in rows} != candidate_ids:
+        return False
+    return all(
+        contract is None or (contract.allow_display and source_contract_is_active(contract))
+        for _, contract in rows
+    )
+
+
 def _safe(value):
     if isinstance(value, dict): return {str(k): _safe(v) for k,v in value.items() if not _sensitive_key(k)}
     if isinstance(value, list): return [_safe(v) for v in value]
@@ -53,7 +112,12 @@ def _dto(db, case_id):
     if prep is None: from app.errors import NotFoundError; raise NotFoundError("research preparation not found")
     arts = {a.kind:a for a in db.scalars(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id==prep.id, ResearchPreparationArtifact.state=="current"))}
     def art(kind):
-        a=arts.get(kind); return None if a is None else PreparationArtifactDTO(sequence=a.sequence,payload=_safe(a.payload),state=a.state,context_fingerprint=a.context_fingerprint)
+        a=arts.get(kind)
+        if a is None: return None
+        payload = _safe(a.payload)
+        if not _artifact_allows_display(db, case_id, a.payload):
+            payload = _hide_restricted_display_text(payload)
+        return PreparationArtifactDTO(sequence=a.sequence,payload=payload,state=a.state,context_fingerprint=a.context_fingerprint)
     return ResearchPreparationDTO(case_id=case_id,revision=prep.version,status=prep.status,research_run_id=prep.research_run_id,next_attempt_at=prep.next_attempt_at.isoformat() if prep.next_attempt_at else None,last_error_message=_ERRORS.get(prep.last_error_code),system={"claims":PreparationStepDTO(state=prep.parse_claims_state,artifact_sequence=arts.get("atomic_claim_candidates").sequence if arts.get("atomic_claim_candidates") else None),"protocol":PreparationStepDTO(state=prep.draft_protocol_state,artifact_sequence=arts.get("research_protocol_draft").sequence if arts.get("research_protocol_draft") else None),"plan":PreparationStepDTO(state=prep.draft_evidence_plan_state,artifact_sequence=arts.get("evidence_acquisition_plan").sequence if arts.get("evidence_acquisition_plan") else None)},review={"claims":PreparationStepDTO(state=prep.claim_review_state),"protocol":PreparationStepDTO(state=prep.protocol_review_state),"plan":PreparationStepDTO(state=prep.plan_review_state)},artifacts={"claims":art("atomic_claim_candidates"),"protocol":art("research_protocol_draft"),"plan":art("evidence_acquisition_plan")}, authorized_evidence_plan=_safe(prep.authorized_evidence_plan) if prep.status == "authorized" else None)
 @router.get("/{case_id}/preparation", response_model=ResearchPreparationDTO)
 def get_preparation(case_id: uuid.UUID, db:Session=Depends(get_db), tenant_id:str=Depends(require_research_tenant)):
