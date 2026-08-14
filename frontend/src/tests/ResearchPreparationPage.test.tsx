@@ -317,6 +317,75 @@ describe("ResearchPreparationPage", () => {
     expect(authorize).not.toHaveBeenCalled();
   });
 
+  it("does not show a stale regeneration notice after switching Cases while a corrected-claim activity refresh is pending", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const originalEvents = adapter.listResearchPreparationEvents.bind(adapter);
+    let resolveRefresh: ((value: Awaited<ReturnType<typeof originalEvents>>) => void) | undefined;
+    let correctedClaimsSubmitted = false;
+    let refreshPending = false;
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation((caseId, cursor) => {
+      if (caseId === "event-preparation" && correctedClaimsSubmitted && !refreshPending) {
+        refreshPending = true;
+        return new Promise((resolve) => { resolveRefresh = resolve; });
+      }
+      return originalEvents(caseId === "case-b" ? "event-preparation" : caseId, cursor);
+    });
+    const originalConfirm = adapter.confirmResearchPreparationClaims.bind(adapter);
+    vi.spyOn(adapter, "confirmResearchPreparationClaims").mockImplementation(async (input) => {
+      correctedClaimsSubmitted = true;
+      return originalConfirm(input);
+    });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(() => originalPreparation("event-preparation"));
+    setResearchClient(adapter);
+    function Switcher() {
+      const navigate = useNavigate();
+      return <><button type="button" onClick={() => navigate("/events/case-b/preparation")}>切换 Case</button><Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes></>;
+    }
+    render(<MemoryRouter initialEntries={["/events/event-preparation/preparation"]}><Switcher /></MemoryRouter>);
+
+    const task = await screen.findByLabelText("当前人工任务", {}, { timeout: 3000 });
+    await user.selectOptions(within(task).getByLabelText("候选陈述 1 的决定"), "modified");
+    await user.type(within(task).getByLabelText("候选陈述 1 的核对说明"), "需按原文修正。");
+    await user.type(within(task).getByLabelText("修正后陈述"), "修正后的候选陈述。");
+    await user.click(within(task).getByRole("button", { name: "确认候选陈述" }));
+    await user.click(screen.getByRole("button", { name: "切换 Case" }));
+    await screen.findByLabelText("当前人工任务");
+    await act(async () => { resolveRefresh?.(await originalEvents("event-preparation")); });
+
+    expect(screen.queryByText("协议草案和补证计划已因原文核验变更失效，系统将仅重新生成受影响步骤")).not.toBeInTheDocument();
+  });
+
+  it("does not clear the new Case activity error when an old Case retry resolves", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const originalEvents = adapter.listResearchPreparationEvents.bind(adapter);
+    let resolveRetry: ((value: Awaited<ReturnType<typeof originalEvents>>) => void) | undefined;
+    let sourceCaseEventCalls = 0;
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation((caseId, cursor) => {
+      if (caseId === "case-b") return Promise.reject(new Error("活动记录暂不可用"));
+      if (++sourceCaseEventCalls === 1) return Promise.reject(new Error("活动记录暂不可用"));
+      return new Promise((resolve) => { resolveRetry = resolve; });
+    });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(() => originalPreparation("event-preparation"));
+    setResearchClient(adapter);
+    function Switcher() {
+      const navigate = useNavigate();
+      return <><button type="button" onClick={() => navigate("/events/case-b/preparation")}>切换 Case</button><Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes></>;
+    }
+    render(<MemoryRouter initialEntries={["/events/event-preparation/preparation"]}><Switcher /></MemoryRouter>);
+
+    await screen.findByRole("button", { name: "重新读取活动记录" });
+    await user.click(screen.getByRole("button", { name: "重新读取活动记录" }));
+    await user.click(screen.getByRole("button", { name: "切换 Case" }));
+    expect(await screen.findByText("无法读取活动记录，不影响准备状态。")).toBeVisible();
+    await act(async () => { resolveRetry?.(await originalEvents("event-preparation")); });
+
+    expect(screen.getByText("无法读取活动记录，不影响准备状态。")).toBeVisible();
+  });
+
   it("ignores a stale case response after navigating to another preparation", async () => {
     const adapter = new MockResearchAdapter();
     const original = adapter.getResearchPreparation.bind(adapter);

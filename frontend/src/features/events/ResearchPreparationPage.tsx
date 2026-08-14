@@ -250,7 +250,7 @@ export function ResearchPreparationPage() {
       } catch (activityFailure) {
         if (isCurrentRequest(expectedCaseId, epoch)) setActivityError(preparationErrorMessage(activityFailure));
       }
-      if (options.correctedClaims) setRegenerationNotice(true);
+      if (options.correctedClaims && isCurrentRequest(expectedCaseId, epoch)) setRegenerationNotice(true);
     } catch (commandFailure) {
       if (!isCurrentRequest(expectedCaseId, epoch)) return;
       if (isConflict(commandFailure)) {
@@ -275,6 +275,18 @@ export function ResearchPreparationPage() {
     }
     return authorizationKey.current.key;
   }, [caseId]);
+
+  const retryActivity = useCallback(() => {
+    const epoch = requestEpoch.current;
+    const expectedCaseId = caseId;
+    void loadActivity({ replace: true })
+      .then(() => {
+        if (isCurrentRequest(expectedCaseId, epoch)) setActivityError(null);
+      })
+      .catch((activityFailure) => {
+        if (isCurrentRequest(expectedCaseId, epoch)) setActivityError(preparationErrorMessage(activityFailure));
+      });
+  }, [caseId, isCurrentRequest, loadActivity]);
 
   if (loading) return <main className="ros-page ros-preparation-page" aria-busy="true"><section className="ros-preparation-skeleton" aria-label="正在读取研究准备"><i /><i /><i /></section></main>;
   if (!preparation) return <main className="ros-page ros-preparation-page"><section className="ros-empty ros-empty--large" role="alert"><h1>无法读取研究准备</h1><p>{error ?? "这个 Case 没有可读取的研究准备状态。"}</p><button className="ros-button ros-button--secondary" type="button" onClick={() => void loadPreparation()}>重新读取</button></section></main>;
@@ -312,7 +324,7 @@ export function ResearchPreparationPage() {
         </ol>
         <section className="ros-preparation-events" aria-label="准备活动记录">
           <h3>活动记录</h3>
-          {activityError && <p className="ros-error" role="alert">无法读取活动记录，不影响准备状态。<button className="ros-button ros-button--secondary" type="button" onClick={() => void loadActivity({ replace: true }).then(() => setActivityError(null)).catch((activityFailure) => setActivityError(preparationErrorMessage(activityFailure)))}>重新读取活动记录</button></p>}
+          {activityError && <p className="ros-error" role="alert">无法读取活动记录，不影响准备状态。<button className="ros-button ros-button--secondary" type="button" onClick={retryActivity}>重新读取活动记录</button></p>}
           {events.length ? <ol>{events.map((event) => <li key={event.seq}><time dateTime={event.createdAt}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(event.createdAt))}</time><span>{eventLabel(event)}</span></li>)}</ol> : <p>尚无可显示的活动记录。</p>}
         </section>
       </section>
