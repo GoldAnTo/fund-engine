@@ -40,6 +40,15 @@ import type {
   EventSourceType,
   EventWorkbench,
 } from "../domain/eventResearch";
+import {
+  ConflictError,
+  type AuthorizeResearchPreparationInput,
+  type ConfirmResearchPreparationClaimsInput,
+  type ConfirmResearchPreparationProtocolInput,
+  type ResearchPreparation,
+  type ResearchPreparationEventsPage,
+  type RetryResearchPreparationInput,
+} from "../domain/researchPreparation";
 import type { ActiveResearchClient } from "../domain/prototypeTypes";
 import type {
   AssessmentReviewPayload,
@@ -337,7 +346,25 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
-  private async get<T>(path: string): Promise<T> {
+  private async responseError(
+    response: Response,
+    options: { preparationSafe?: boolean; notFoundMessage?: string } = {},
+  ): Promise<Error> {
+    if (options.preparationSafe && response.status === 409) return new ConflictError();
+    // Provider proxies can accidentally put credentials or provider diagnostics
+    // in their error envelope.  The UI needs a retryable state, never that body.
+    if (options.preparationSafe && response.status === 503) {
+      return new PageStateError("backend_unavailable", "服务暂时不可用，请稍后重试。");
+    }
+    const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
+    const code = payload?.error?.code;
+    const message = response.status === 404 && options.notFoundMessage
+      ? options.notFoundMessage
+      : payload?.error?.message;
+    return new PageStateError(asPageStateErrorKind(code), message);
+  }
+
+  private async get<T>(path: string, preparationSafe = false): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
@@ -348,19 +375,15 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      const code = payload?.error?.code;
-      const message = response.status === 404
-        ? "自动研究接口不存在，请重启后端服务后重试"
-        : payload?.error?.message;
-      throw new PageStateError(asPageStateErrorKind(code), message);
+      throw await this.responseError(response, {
+        preparationSafe,
+        notFoundMessage: "自动研究接口不存在，请重启后端服务后重试",
+      });
     }
     return (await response.json()) as T;
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async post<T>(path: string, body: unknown, preparationSafe = false): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
@@ -377,14 +400,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      const code = payload?.error?.code;
-      throw new PageStateError(
-        asPageStateErrorKind(code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response, { preparationSafe });
     }
     return (await response.json()) as T;
   }
@@ -402,13 +418,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      throw new PageStateError(
-        asPageStateErrorKind(payload?.error?.code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response);
     }
     return (await response.json()) as T;
   }
@@ -433,11 +443,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
-      throw new PageStateError(
-        asPageStateErrorKind(payload?.error?.code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response);
     }
     return (await response.json()) as T;
   }
@@ -2705,6 +2711,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
       next_action: { kind: EventNextActionKind; label: string; count?: number | null };
+      preparation?: Schemas["EventPreparationSummaryDTO"] | null;
     }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
@@ -2726,6 +2733,19 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
+      preparation: dto.preparation
+        ? {
+            status: dto.preparation.status,
+            revision: dto.preparation.revision,
+            researchRunId: dto.preparation.research_run_id,
+            nextAttemptAt: dto.preparation.next_attempt_at,
+            lastErrorMessage: dto.preparation.last_error_message,
+            system: Object.fromEntries(Object.entries(dto.preparation.system).map(([key, step]) => [key, { state: step.state }])),
+            review: Object.fromEntries(Object.entries(dto.preparation.review).map(([key, step]) => [key, { state: step.state }])),
+          }
+        : dto.preparation === null
+          ? null
+          : undefined,
     };
   }
 
@@ -2864,6 +2884,148 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       { text: input.text, reviewer: input.reviewer },
     );
     return { conclusionId: dto.conclusion_id, state: dto.state };
+  }
+
+  async getResearchPreparation(caseId: string): Promise<ResearchPreparation> {
+    const dto = await this.get<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(caseId)}/preparation`,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async listResearchPreparationEvents(
+    caseId: string,
+    cursor: { afterSeq?: number; limit?: number } = {},
+  ): Promise<ResearchPreparationEventsPage> {
+    const params = new URLSearchParams();
+    if (cursor.afterSeq !== undefined) params.set("after_seq", String(cursor.afterSeq));
+    if (cursor.limit !== undefined) params.set("limit", String(cursor.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const dto = await this.get<Schemas["ResearchPreparationEventsResponse"]>(
+      `/event-research/${encodeURIComponent(caseId)}/preparation/events${suffix}`,
+      true,
+    );
+    return {
+      items: dto.items.map((item) => ({
+        seq: item.seq,
+        type: item.type,
+        step: item.step ?? null,
+        message: item.message ?? null,
+        detail: item.detail ?? null,
+        createdAt: item.created_at,
+      })),
+      nextAfterSeq: dto.next_after_seq ?? null,
+    };
+  }
+
+  async confirmResearchPreparationClaims(
+    input: ConfirmResearchPreparationClaimsInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["ConfirmClaimsRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      decisions: input.decisions.map((decision) => ({
+        candidate_id: decision.candidateId,
+        outcome: decision.outcome,
+        reason: decision.reason,
+        ...(decision.normalizedText !== undefined
+          ? { normalized_text: decision.normalizedText }
+          : {}),
+      })),
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/claims/confirm`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async confirmResearchPreparationProtocol(
+    input: ConfirmResearchPreparationProtocolInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["ConfirmProtocolRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      draft_sequence: input.draftSequence,
+      ...(input.edits !== undefined ? { edits: input.edits } : {}),
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/protocol/confirm`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async retryResearchPreparation(
+    input: RetryResearchPreparationInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["RetryResearchPreparationRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/retry`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async authorizeResearchPreparation(
+    input: AuthorizeResearchPreparationInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["AuthorizeEvidencePlanRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      plan_sequence: input.planSequence,
+      idempotency_key: input.idempotencyKey,
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/authorize`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  private mapResearchPreparation(
+    dto: Schemas["ResearchPreparationDTO"],
+  ): ResearchPreparation {
+    const mapStep = (step: Schemas["PreparationStepDTO"]) => ({
+      state: step.state,
+      reviewState: step.review_state ?? null,
+      artifactSequence: step.artifact_sequence ?? null,
+    });
+    const mapArtifact = (artifact: Schemas["PreparationArtifactDTO"] | null) => artifact === null
+      ? null
+      : {
+          sequence: artifact.sequence,
+          state: artifact.state,
+          payload: artifact.payload,
+          contextFingerprint: artifact.context_fingerprint ?? null,
+        };
+    return {
+      caseId: dto.case_id,
+      revision: dto.revision,
+      status: dto.status,
+      researchRunId: dto.research_run_id ?? null,
+      system: Object.fromEntries(Object.entries(dto.system).map(([key, step]) => [key, mapStep(step)])),
+      review: Object.fromEntries(Object.entries(dto.review).map(([key, step]) => [key, mapStep(step)])),
+      nextAttemptAt: dto.next_attempt_at ?? null,
+      lastErrorMessage: dto.last_error_message ?? null,
+      artifacts: Object.fromEntries(Object.entries(dto.artifacts).map(([key, artifact]) => [
+        key === "candidate_claims"
+          ? "candidateClaims"
+          : key === "evidence_plan"
+            ? "evidencePlan"
+            : key,
+        mapArtifact(artifact),
+      ])),
+      authorizedEvidencePlan: dto.authorized_evidence_plan ?? null,
+    };
   }
 
   private mapEventLifecycle(value: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null }): EventLifecycle {

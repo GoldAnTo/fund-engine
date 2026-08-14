@@ -85,6 +85,17 @@ export interface WorkbenchProgress {
   currentGap: string | null;
 }
 
+/** Safe preparation projection carried by the existing event workbench read model. */
+export interface EventPreparationSummary {
+  status: string;
+  revision: number;
+  researchRunId: string | null;
+  nextAttemptAt: string | null;
+  lastErrorMessage: string | null;
+  system: Record<string, { state: string }>;
+  review: Record<string, { state: string }>;
+}
+
 export interface EventResearchScope {
   version: number;
   factors: EventResearchScopeFactor[];
@@ -171,6 +182,7 @@ export interface EventWorkbench {
   progress: WorkbenchProgress;
   scope: EventResearchScope;
   nextAction: { kind: EventNextActionKind; label: string; count?: number };
+  preparation?: EventPreparationSummary | null;
 }
 
 export interface EventConclusionVersion {
@@ -214,4 +226,10 @@ export interface EventResearchClient {
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
+  getResearchPreparation(caseId: string): Promise<import("./researchPreparation").ResearchPreparation>;
+  listResearchPreparationEvents(caseId: string, cursor?: { afterSeq?: number; limit?: number }): Promise<import("./researchPreparation").ResearchPreparationEventsPage>;
+  confirmResearchPreparationClaims(input: import("./researchPreparation").ConfirmResearchPreparationClaimsInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  confirmResearchPreparationProtocol(input: import("./researchPreparation").ConfirmResearchPreparationProtocolInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  retryResearchPreparation(input: import("./researchPreparation").RetryResearchPreparationInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  authorizeResearchPreparation(input: import("./researchPreparation").AuthorizeResearchPreparationInput): Promise<import("./researchPreparation").ResearchPreparation>;
 }

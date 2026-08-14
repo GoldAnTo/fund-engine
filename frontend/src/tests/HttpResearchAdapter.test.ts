@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { HttpResearchAdapter } from "../data/httpResearchAdapter";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { PageStateError } from "../domain/types";
+import { ConflictError } from "../domain/researchPreparation";
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -12,6 +13,101 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe("HttpResearchAdapter", () => {
+  it("reads a preparation and its cursor-paginated activity from the generated contract", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      if (String(input).endsWith("/events?after_seq=7&limit=20")) {
+        return jsonResponse({
+          items: [{ seq: 8, type: "protocol_drafted", step: "protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, created_at: "2026-08-14T10:00:00Z" }],
+          next_after_seq: 8,
+        });
+      }
+      return jsonResponse({
+        case_id: "event-1", revision: 3, status: "awaiting_protocol_review", research_run_id: null,
+        system: { parse: { state: "completed", artifact_sequence: 1 }, protocol: { state: "completed", artifact_sequence: 2 }, evidence_plan: { state: "completed", artifact_sequence: 3 } },
+        review: { claims: { state: "confirmed", review_state: "confirmed" }, protocol: { state: "pending", review_state: "pending" }, evidence_plan: { state: "pending", review_state: "pending" } },
+        next_attempt_at: null, last_error_message: null,
+        artifacts: { candidate_claims: { sequence: 1, state: "draft", payload: { candidates: [] }, context_fingerprint: "a" }, protocol: null, evidence_plan: null },
+        authorized_evidence_plan: null,
+      });
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    const preparation = await adapter.getResearchPreparation("event-1");
+    const events = await adapter.listResearchPreparationEvents("event-1", { afterSeq: 7, limit: 20 });
+
+    expect(preparation).toMatchObject({
+      caseId: "event-1", revision: 3, status: "awaiting_protocol_review",
+      system: { parse: { state: "completed", artifactSequence: 1 } },
+      artifacts: { candidateClaims: { sequence: 1, contextFingerprint: "a" } },
+    });
+    expect(events).toEqual({
+      items: [{ seq: 8, type: "protocol_drafted", step: "protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, createdAt: "2026-08-14T10:00:00Z" }],
+      nextAfterSeq: 8,
+    });
+    expect(urls).toEqual([
+      "http://api.test/api/v1/event-research/event-1/preparation",
+      "http://api.test/api/v1/event-research/event-1/preparation/events?after_seq=7&limit=20",
+    ]);
+  });
+
+  it("posts review decisions and explicit authorization without starting an implicit run", async () => {
+    const bodies: unknown[] = [];
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse({
+        case_id: "event-1", revision: 4, status: "authorized", research_run_id: "run-1",
+        system: {}, review: {}, next_attempt_at: null, last_error_message: null, artifacts: {}, authorized_evidence_plan: { sources: [] },
+      }, true, String(input).endsWith("/authorize") ? 201 : 200);
+    }));
+
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await adapter.confirmResearchPreparationClaims({
+      caseId: "event-1", revision: 1, actor: "human:researcher",
+      decisions: [{ candidateId: "candidate-1", outcome: "modified", reason: "保留原文语义", normalizedText: "修订后的候选因素" }],
+    });
+    await adapter.confirmResearchPreparationProtocol({ caseId: "event-1", revision: 2, actor: "human:researcher", draftSequence: 2, edits: { title: "协议" } });
+    await adapter.retryResearchPreparation({ caseId: "event-1", revision: 3, actor: "human:researcher" });
+    const result = await adapter.authorizeResearchPreparation({ caseId: "event-1", revision: 4, actor: "human:researcher", planSequence: 3, idempotencyKey: "authorize-event-1-v4" });
+
+    expect(urls).toEqual([
+      "http://api.test/api/v1/event-research/event-1/preparation/claims/confirm",
+      "http://api.test/api/v1/event-research/event-1/preparation/protocol/confirm",
+      "http://api.test/api/v1/event-research/event-1/preparation/retry",
+      "http://api.test/api/v1/event-research/event-1/preparation/authorize",
+    ]);
+    expect(bodies).toEqual([
+      { revision: 1, actor: "human:researcher", decisions: [{ candidate_id: "candidate-1", outcome: "modified", reason: "保留原文语义", normalized_text: "修订后的候选因素" }] },
+      { revision: 2, actor: "human:researcher", draft_sequence: 2, edits: { title: "协议" } },
+      { revision: 3, actor: "human:researcher" },
+      { revision: 4, actor: "human:researcher", plan_sequence: 3, idempotency_key: "authorize-event-1-v4" },
+    ]);
+    expect(result).toMatchObject({ status: "authorized", researchRunId: "run-1" });
+  });
+
+  it("exposes conflicts and never shows a raw service-unavailable response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: { code: "stale", message: "revision is stale" } }, false, 409)));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+    await expect(adapter.retryResearchPreparation({ caseId: "event-1", revision: 1, actor: "human:researcher" })).rejects.toBeInstanceOf(ConflictError);
+
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: { code: "provider_secret", message: "upstream token: secret-value" } }, false, 503)));
+    await expect(adapter.getResearchPreparation("event-1")).rejects.toMatchObject({
+      kind: "backend_unavailable",
+      message: "服务暂时不可用，请稍后重试。",
+    });
+  });
+
+  it("does not change existing non-preparation conflict handling", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: { code: "stale", message: "scope changed" } }, false, 409)));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    await expect(adapter.updateEventResearchScope({
+      caseId: "event-1", factors: ["因素"], changedBy: "human:researcher", changeReason: "范围调整",
+    })).rejects.toMatchObject({ kind: "stale", message: "scope changed" });
+  });
   it("does not retain retired prototype screen methods on the live adapter", () => {
     const prototype = Object.getPrototypeOf(
       new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }),
@@ -1185,6 +1281,12 @@ describe("HttpResearchAdapter", () => {
         progress: { verified: 3, pending: 2, invalid_source: 1, current_gap: "缺少反证" },
         scope: { version: 4, factors: ["资本开支担忧", "盈利预期变化", "估值重定价"], unmapped_evidence_count: 2 },
         next_action: { kind: "edit_factors", label: "编辑并继续自动研究", count: null },
+        preparation: {
+          status: "awaiting_protocol_review", revision: 5, research_run_id: null,
+          next_attempt_at: null, last_error_message: null,
+          system: { parse: { state: "completed" } },
+          review: { claims: { state: "confirmed" }, protocol: { state: "pending" } },
+        },
       })),
     );
 
@@ -1203,6 +1305,12 @@ describe("HttpResearchAdapter", () => {
     });
     expect(view.conclusion.confidence).toBe("medium");
     expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
+    expect(view.preparation).toEqual({
+      status: "awaiting_protocol_review", revision: 5, researchRunId: null,
+      nextAttemptAt: null, lastErrorMessage: null,
+      system: { parse: { state: "completed" } },
+      review: { claims: { state: "confirmed" }, protocol: { state: "pending" } },
+    });
   });
 
   it("maps the generated list action kind for protocol-blocked Cases", async () => {
