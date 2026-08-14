@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 import os
+import copy
+import pytest
 from datetime import datetime, timezone
 
 from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
@@ -154,3 +156,24 @@ def test_public_authorization_materializes_protocol_once_and_replays_idempotentl
     assert len(list(cmd_session.scalars(select(VerificationRuleVersion)))) == 3
     conflict=cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize",json={**body,"idempotency_key":"another-key"})
     assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize("kind", ["missing_binding", "scope_omitted", "invalid_rule", "budget_limit"])
+def test_public_authorization_invalid_matrix_rolls_back_protocol_and_run(cmd_client, cmd_session, kind):
+    case, preparation, plan, theses = _ready_authorization_case(cmd_session, cmd_client)
+    protocol = cmd_session.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id == preparation.id, ResearchPreparationArtifact.kind == "research_protocol_draft", ResearchPreparationArtifact.state == "current"))
+    payload = copy.deepcopy(protocol.payload)
+    if kind == "missing_binding": payload["outcomes"][0].pop("binding")
+    elif kind == "scope_omitted": payload["outcomes"].pop()
+    elif kind == "invalid_rule": payload["outcomes"][0]["verification_rules"][0]["allowed_source_roles"] = []
+    else: plan.payload = {"items": [{"budget": 10001}]}
+    if kind != "budget_limit": protocol.payload = payload
+    cmd_session.commit()
+    before = [len(list(cmd_session.scalars(select(model)))) for model in (MetricDefinitionVersion, OutcomeBindingVersion, CaseMechanismSelectionVersion, VerificationRuleVersion, ResearchRun)]
+    response = cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json={"revision":1,"actor":"human","plan_sequence":plan.sequence,"idempotency_key":f"rollback-{kind}"})
+    assert response.status_code == 422, response.text
+    cmd_session.expire_all()
+    after = [len(list(cmd_session.scalars(select(model)))) for model in (MetricDefinitionVersion, OutcomeBindingVersion, CaseMechanismSelectionVersion, VerificationRuleVersion, ResearchRun)]
+    refreshed = cmd_session.get(type(preparation), preparation.id)
+    assert after == before
+    assert refreshed.status == "awaiting_plan_authorization" and refreshed.plan_review_state == "awaiting_review"
