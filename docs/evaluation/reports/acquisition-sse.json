@@ -20,7 +20,7 @@
   },
   "fetch_limit": 3,
   "fetches": [],
-  "git_commit": "0aeb9585505effae91b75dcf684de0d363da86f7",
+  "git_commit": "0919d8e6129516f70a6a89f961805e33fdf8d570",
   "live_success": false,
   "not_fetched_count": 0,
   "query": {
@@ -56,5 +56,5 @@
     }
   },
   "status": "failed",
-  "timestamp_utc": "2026-08-14T15:53:20.868035Z"
+  "timestamp_utc": "2026-08-14T15:53:49.663335Z"
 }
