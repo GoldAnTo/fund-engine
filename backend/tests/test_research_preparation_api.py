@@ -120,7 +120,7 @@ def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews
     assert cmd_session.get(type(preparation), preparation.id).claim_review_state == "awaiting_review"
 
 
-def _ready_authorization_case(session, client):
+def _protocol_draft_case(session, client, mutate_protocol=None):
     case, preparation = _prepared_case(session)
     now = datetime.now(timezone.utc)
     document = session.scalar(select(DocumentVersion).join(CaseDocumentVersion).where(CaseDocumentVersion.research_case_id == case.id))
@@ -142,11 +142,62 @@ def _ready_authorization_case(session, client):
     baseline={"source_ref":f"document:{document.id}","value":"1","unit":"yuan","observed_period":"2025-12-31","available_at":document.available_at.replace(tzinfo=timezone.utc).isoformat()}
     outcomes=[]
     for thesis in theses:
-        outcomes.append({"thesis_id":str(thesis.id),"metric":{"metric_id":f"metric-{thesis.id}","display_name":"Revenue","canonical_definition":"Revenue", "entity_scope":"business_line","unit":"yuan","frequency":"quarterly","period_semantics":"period_end","allowed_source_roles":["primary_disclosure"],"role_eligibility":["outcome"]},"binding":{"entity_scope":{"company_id":"company","business_line":"line"},"direction":"increase","baseline":baseline,"horizon_start":"2026-01-01","horizon_end":"2026-12-31"},"template_version_id":str(template.id),"verification_rules":[{"mechanism_edge_id":str(edge.id),"expected_direction":"increase","support_predicate":"support","contradiction_predicate":"contradict","allowed_source_roles":["primary_disclosure"],"observed_period_start":"2026-01-01","observed_period_end":"2026-12-31","available_at_deadline":"2027-01-01","next_verification_event":"earnings"}]})
-    draft=service.complete_system_step(case.id,"draft_protocol",{"outcomes":outcomes,"baseline":{},"horizon":{},"mechanisms":{},"verification_rules":[]},expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()
-    confirmed=client.post(f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",json={"revision":1,"actor":"human","draft_sequence":session.scalar(select(ResearchPreparationArtifact.sequence).where(ResearchPreparationArtifact.research_preparation_id==preparation.id,ResearchPreparationArtifact.kind=="research_protocol_draft",ResearchPreparationArtifact.state=="current")),"edits":{}}); assert confirmed.status_code==200,confirmed.text
+        outcomes.append({"thesis_id":str(thesis.id),"metric":{"metric_id":f"metric-{thesis.id}","display_name":"Revenue","canonical_definition":"Revenue", "entity_scope":"company","unit":"yuan","frequency":"quarterly","period_semantics":"period_end","allowed_source_roles":["primary_disclosure"],"role_eligibility":["outcome"]},"binding":{"entity_scope":{"company_id":"company","company":"company"},"direction":"increase","baseline":baseline,"horizon_start":"2026-01-01","horizon_end":"2026-12-31"},"template_version_id":str(template.id),"verification_rules":[{"mechanism_edge_id":str(edge.id),"expected_direction":"increase","support_predicate":"support","contradiction_predicate":"contradict","allowed_source_roles":["primary_disclosure"],"observed_period_start":"2026-01-01","observed_period_end":"2026-12-31","available_at_deadline":"2027-01-01","next_verification_event":"earnings"}]})
+    protocol_payload={"outcomes":outcomes,"baseline":{"document_id":str(document.id)},"horizon":{"start":"2026-01-01","end":"2026-12-31"},"mechanisms":[{"template_version_id":str(template.id)}],"verification_rules":[{"rule":"per-outcome rules below"}]}
+    if mutate_protocol is not None:
+        mutate_protocol(protocol_payload)
+    service.complete_system_step(case.id,"draft_protocol",protocol_payload,expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()
+    sequence=session.scalar(select(ResearchPreparationArtifact.sequence).where(ResearchPreparationArtifact.research_preparation_id==preparation.id,ResearchPreparationArtifact.kind=="research_protocol_draft",ResearchPreparationArtifact.state=="current"))
+    return case, preparation, theses, context, sequence
+
+
+def _ready_authorization_case(session, client):
+    case, preparation, theses, context, sequence = _protocol_draft_case(session, client)
+    service = ResearchPreparationService(session)
+    confirmed=client.post(f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",json={"revision":1,"actor":"human","draft_sequence":sequence,"edits":{}}); assert confirmed.status_code==200,confirmed.text
     session.refresh(preparation); service.complete_system_step(case.id,"draft_evidence_plan",{"items":[{"factor": thesis.statement, "evidence_target": "primary source", "allowed_source_roles": ["primary_disclosure"], "priority": "normal", "stop_condition": "one reviewed source", "budget": 3} for thesis in theses]},expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()
     plan=session.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id==preparation.id,ResearchPreparationArtifact.kind=="evidence_acquisition_plan",ResearchPreparationArtifact.state=="current")); return case, preparation, plan, theses
+
+
+@pytest.mark.parametrize("missing", ["baseline", "horizon", "mechanisms", "verification_rules"])
+def test_public_protocol_confirmation_rejects_incomplete_draft_without_formal_rows(cmd_client, cmd_session, missing):
+    case, preparation, _theses, _context, sequence = _protocol_draft_case(
+        cmd_session,
+        cmd_client,
+        lambda payload: payload.pop(missing),
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",
+        json={"revision": 1, "actor": "human", "draft_sequence": sequence, "edits": {}},
+    )
+
+    assert response.status_code == 422, response.text
+    cmd_session.expire_all()
+    refreshed = cmd_session.get(type(preparation), preparation.id)
+    assert refreshed.protocol_review_state == "awaiting_review"
+    assert list(cmd_session.scalars(select(MetricDefinitionVersion))) == []
+    assert list(cmd_session.scalars(select(OutcomeBindingVersion))) == []
+    assert list(cmd_session.scalars(select(CaseMechanismSelectionVersion))) == []
+    assert list(cmd_session.scalars(select(VerificationRuleVersion))) == []
+
+
+def test_public_protocol_confirmation_rejects_an_outcome_without_rules(cmd_client, cmd_session):
+    case, preparation, _theses, _context, sequence = _protocol_draft_case(
+        cmd_session,
+        cmd_client,
+        lambda payload: payload["outcomes"][0].pop("verification_rules"),
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",
+        json={"revision": 1, "actor": "human", "draft_sequence": sequence, "edits": {}},
+    )
+
+    assert response.status_code == 422, response.text
+    cmd_session.expire_all()
+    assert cmd_session.get(type(preparation), preparation.id).protocol_review_state == "awaiting_review"
+    assert list(cmd_session.scalars(select(MetricDefinitionVersion))) == []
 
 
 def test_public_authorization_materializes_protocol_once_and_replays_idempotently(cmd_client, cmd_session):
@@ -301,17 +352,19 @@ def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monk
         db=SessionLocal()
         try:
             try:
-                authorize(case_id, AuthorizeEvidencePlanRequest(revision=1, actor="human", plan_sequence=plan_sequence, idempotency_key=key), db=db, tenant_id="test-team")
-                outcomes.append(201)
+                response = authorize(case_id, AuthorizeEvidencePlanRequest(revision=1, actor="human", plan_sequence=plan_sequence, idempotency_key=key), db=db, tenant_id="test-team")
+                outcomes.append((201, response.research_run_id))
             except Exception as exc:
                 from app.errors import ConflictError
-                assert isinstance(exc, ConflictError); outcomes.append(409)
+                assert isinstance(exc, ConflictError); outcomes.append((409, None))
         finally: db.close()
     first=Thread(target=request,args=(keys[0],)); second=Thread(target=request,args=(keys[1],)); first.start(); assert entered.wait(3); second.start(); release.set(); first.join(5); second.join(5)
+    statuses = sorted(status for status, _ in outcomes)
     if keys[0] != keys[1]:
-        assert sorted(outcomes) == [201, 409]
+        assert statuses == [201, 409]
     else:
-        assert sorted(outcomes) in ([201, 201], [201, 409])
+        assert statuses == [201, 201]
+        assert len({run_id for status, run_id in outcomes if status == 201}) == 1
     with SessionLocal() as check:
         assert len(list(check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))) == 1
         assert len(list(check.scalars(select(MetricDefinitionVersion)))) == 3

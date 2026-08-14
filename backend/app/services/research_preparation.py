@@ -894,8 +894,8 @@ class ResearchPreparationService:
         return budget
 
     def _materialize_protocol(self, case_id: uuid.UUID, payload: object, actor: str, sequence: int) -> None:
-        if not isinstance(payload, dict) or not isinstance(payload.get("outcomes"), list):
-            raise ValidationError("protocol draft requires outcomes")
+        self._validate_materializable_protocol_payload(payload)
+        assert isinstance(payload, dict)  # narrowed by the validator above
         scope=current_scope_thesis_ids(self._session, case_id)
         if scope is None:
             scope={x.id for x in self._session.scalars(select(__import__('app.models.ledger', fromlist=['Thesis']).Thesis).where(__import__('app.models.ledger', fromlist=['Thesis']).Thesis.research_case_id==case_id))}
@@ -916,6 +916,50 @@ class ResearchPreparationService:
                     service.add_verification_rule(case_id, edge, VerificationRuleInput(**raw, reviewer=actor, reason=reason))
             except (KeyError, TypeError, ValueError) as exc: raise ValidationError("protocol outcome is invalid") from exc
         if seen != scope: raise ValidationError("protocol outcomes must cover current scope exactly once")
+        for thesis_id in scope:
+            if service.check_researchability(thesis_id).status != "ready":
+                raise ValidationError("protocol draft does not satisfy researchability")
+
+    @staticmethod
+    def _validate_materializable_protocol_payload(payload: object) -> None:
+        """Accept only the generator's complete protocol draft envelope.
+
+        Formal protocol rows are represented per outcome, while the top-level
+        fields remain an immutable reviewed rationale. Both representations
+        are mandatory: neither is silently defaulted at confirmation time.
+        """
+        required = {"outcomes", "baseline", "horizon", "mechanisms", "verification_rules"}
+        if not isinstance(payload, dict) or set(payload) != required:
+            raise ValidationError("protocol draft has invalid keys")
+        outcomes = payload["outcomes"]
+        if not isinstance(outcomes, list) or not outcomes or any(
+            not isinstance(outcome, dict) or not outcome for outcome in outcomes
+        ):
+            raise ValidationError("protocol draft requires nonempty outcomes")
+        if not isinstance(payload["baseline"], dict):
+            raise ValidationError("protocol draft baseline is invalid")
+        horizon = payload["horizon"]
+        if not isinstance(horizon, dict) or set(horizon) != {"start", "end"}:
+            raise ValidationError("protocol draft horizon is invalid")
+        try:
+            start = date.fromisoformat(horizon["start"])
+            end = date.fromisoformat(horizon["end"])
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("protocol draft horizon is invalid") from exc
+        if start.isoformat() != horizon["start"] or end.isoformat() != horizon["end"] or start > end:
+            raise ValidationError("protocol draft horizon is invalid")
+        for field in ("mechanisms", "verification_rules"):
+            value = payload[field]
+            if not isinstance(value, list) or not value or any(
+                not isinstance(item, dict) or not item for item in value
+            ):
+                raise ValidationError(f"protocol draft {field} is invalid")
+        for outcome in outcomes:
+            rules = outcome.get("verification_rules")
+            if not isinstance(rules, list) or not rules or any(
+                not isinstance(rule, dict) or not rule for rule in rules
+            ):
+                raise ValidationError("protocol outcome requires verification rules")
 
     def _lock(
         self, case_id: uuid.UUID, *, case_locked: bool = False

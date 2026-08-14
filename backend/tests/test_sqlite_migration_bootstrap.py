@@ -65,6 +65,90 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         assert trigger_count == 1
 
 
+def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> None:
+    database_path = tmp_path / "authorized-preparations.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0054"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    now = "2026-08-14 00:00:00"
+    valid_plan = {
+        "items": [{
+            "factor": "authorized factor",
+            "evidence_target": "primary disclosure",
+            "allowed_source_roles": ["primary_disclosure"],
+            "priority": "high",
+            "stop_condition": "one reviewed source",
+            "budget": 10,
+        }]
+    }
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        for case_id, run_id, preparation_id, title in (
+            ("00000000000000000000000000000001", "00000000000000000000000000000011", "00000000000000000000000000000021", "case 01"),
+            ("00000000000000000000000000000002", "00000000000000000000000000000012", "00000000000000000000000000000022", "case 02"),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO research_cases (id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, 'test', :now, 'tester')"
+            ), {"id": case_id, "title": title, "now": now})
+            connection.execute(sa.text(
+                "INSERT INTO research_runs (id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) "
+                "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+            ), {"id": run_id, "case_id": case_id, "now": now})
+            connection.execute(sa.text(
+                "INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) "
+                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'succeeded', 'succeeded', 'succeeded', 'confirmed', 'confirmed', 'confirmed', :run_id, :now, :now)"
+            ), {"id": preparation_id, "case_id": case_id, "fingerprint": "a" * 64, "run_id": run_id, "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
+            "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
+        ), {"id": "00000000000000000000000000000031", "preparation_id": "00000000000000000000000000000021", "fingerprint": "a" * 64, "payload": __import__("json").dumps(valid_plan), "now": now})
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0055"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr + upgraded.stdout
+    with engine.connect() as connection:
+        kept = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000021'"
+        )).one()
+        recovered = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000022'"
+        )).one()
+        assert kept.status == "authorized" and kept.research_run_id is not None
+        assert __import__("json").loads(kept.authorized_evidence_plan) == valid_plan
+        assert recovered == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0054"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    assert "authorized_evidence_plan" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("research_preparations")
+    }
+
+
 def test_0052_upgrades_a_0051_database_with_preparation_constraints(tmp_path) -> None:
     database_path = tmp_path / "research-preparation.db"
     backend = Path(__file__).parents[1]
