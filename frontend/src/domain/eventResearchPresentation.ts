@@ -36,6 +36,18 @@ export function eventDeskNeedsHumanReview(event: EventResearchListItem): boolean
   return isPreparationReviewAction(event.nextActionKind) || Boolean(event.nextHumanAction);
 }
 
+export function hasPendingResearchPreparation(workbench: EventWorkbench): boolean {
+  return Boolean(
+    workbench.preparation && workbench.preparation.status !== "authorized",
+  );
+}
+
+export function researchPreparationStatusLabel(workbench: EventWorkbench): string | null {
+  if (!hasPendingResearchPreparation(workbench)) return null;
+  return PREPARATION_TASK_LABELS[workbench.preparation!.status]
+    || "系统正在准备研究材料";
+}
+
 export const EVENT_RESEARCH_STAGES = [
   { id: 1, label: "资料接入" },
   { id: 2, label: "定义研究" },
@@ -83,8 +95,8 @@ export function eventActionPresentation(
   caseId: string,
 ): EventActionPresentation {
   const base = `/events/${caseId}`;
-  if (workbench.preparation && workbench.preparation.status !== "authorized") {
-    const preparationTaskLabel = PREPARATION_TASK_LABELS[workbench.preparation.status];
+  if (hasPendingResearchPreparation(workbench)) {
+    const preparationTaskLabel = researchPreparationStatusLabel(workbench);
     const isHumanPreparationTask = Boolean(preparationTaskLabel);
     return {
       owner: isHumanPreparationTask ? "你需要做" : "现在不用做",

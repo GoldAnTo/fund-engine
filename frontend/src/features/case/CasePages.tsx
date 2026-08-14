@@ -31,6 +31,8 @@ import {
   EVENT_RESEARCH_STAGES,
   eventActionPresentation,
   eventResearchStage,
+  hasPendingResearchPreparation,
+  researchPreparationStatusLabel,
 } from "../../domain/eventResearchPresentation";
 import type {
   ResearchRunDetail,
@@ -396,9 +398,11 @@ function CaseFrame({
           {[data.event.companyName, data.event.ticker, `范围版本 v${data.scope.version}`].filter(Boolean).join(" · ")}
         </p>
         <h1>{data.event.eventTitle}</h1>
-        <p>{data.lifecycle.summary}</p>
+        <p>{hasPendingResearchPreparation(data) ? researchPreparationStatusLabel(data) : data.lifecycle.summary}</p>
         <ol className="ros-event-progress" aria-label="当前事件研究进展">
-          {EVENT_RESEARCH_STAGES.map((stage) => {
+          {hasPendingResearchPreparation(data) ? (
+            <li className="is-current" aria-current="step"><span>准备</span><strong>研究准备</strong></li>
+          ) : EVENT_RESEARCH_STAGES.map((stage) => {
             const currentStage = eventResearchStage(data);
             const state = stage.id < currentStage ? "done" : stage.id === currentStage ? "current" : "upcoming";
             return <li className={`is-${state}`} key={stage.id} aria-current={state === "current" ? "step" : undefined}><span>{String(stage.id).padStart(2, "0")}</span><strong>{stage.label}</strong></li>;
@@ -409,7 +413,9 @@ function CaseFrame({
           <span>待审核 {data.progress.pending}</span>
           <span>无效来源 {data.progress.invalidSource}</span>
           <span>
-            {data.lifecycle.activeRunId
+            {hasPendingResearchPreparation(data)
+              ? "正式研究未启动"
+              : data.lifecycle.activeRunId
               ? "主研究运行可查看"
               : data.lifecycle.status === "published"
                 ? "结论已发布；补证见监测"
@@ -1782,9 +1788,7 @@ export function CaseConclusionPage() {
     <CaseFrame>
       {(data, caseId) => {
         const action = eventActionPresentation(data, caseId);
-        const preparationPending = Boolean(
-          data.preparation && data.preparation.status !== "authorized",
-        );
+        const preparationPending = hasPendingResearchPreparation(data);
         return <>
           {workflowNotice && (
             <p className="ros-success" role="status">{workflowNotice}</p>
@@ -1815,7 +1819,7 @@ export function CaseConclusionPage() {
           </div>
           <aside className="ros-case-rail">
             <section className="ros-action-card">
-              <div className="ros-action-card__owner"><span>{action.owner}</span><small>{data.nextAction.count ? `${data.nextAction.count} 项待处理` : EVENT_STATUS_LABEL[data.lifecycle.status]}</small></div>
+              <div className="ros-action-card__owner"><span>{action.owner}</span><small>{preparationPending ? researchPreparationStatusLabel(data) : data.nextAction.count ? `${data.nextAction.count} 项待处理` : EVENT_STATUS_LABEL[data.lifecycle.status]}</small></div>
               <h2>{action.title}</h2>
               <p>{action.why}</p>
               <div className="ros-action-card__steps">

@@ -330,7 +330,7 @@ describe("Research OS event entry", () => {
       companyName: null,
       ticker: null,
       eventAt: null,
-      status: "researching",
+      status: "awaiting_key_review",
       statusSummary: "系统正在准备研究材料",
       nextHumanAction: null,
       nextActionKind: "wait",
@@ -341,7 +341,7 @@ describe("Research OS event entry", () => {
       companyName: null,
       ticker: null,
       eventAt: null,
-      status: "researching",
+      status: "awaiting_key_review",
       statusSummary: "等待核验原文与候选陈述",
       nextHumanAction: "核验原文与候选陈述",
       nextActionKind: "review_preparation_claims",
@@ -360,9 +360,30 @@ describe("Research OS event entry", () => {
       .toHaveAttribute("href", "/events/preparation-running/preparation");
     expect(screen.getByRole("link", { name: "等待核验原文与候选陈述" }))
       .toHaveAttribute("href", "/events/preparation-claims/preparation");
+    expect(screen.getByText("正式运行中 Case")).toBeVisible();
+    expect(screen.getByText("研究准备中")).toBeVisible();
+    expect(screen.getByText("正在准备研究材料")).toBeVisible();
+    expect(screen.getByText("2 个 Case 正在准备研究材料，尚未创建正式研究运行。"))
+      .toBeVisible();
   });
 
   it("sends a Case with unapproved preparation to the preparation workbench, not evidence verification", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventWorkbench = adapter.getEventWorkbench.bind(adapter);
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation(async (caseId) => {
+      const workbench = await getEventWorkbench(caseId);
+      return {
+        ...workbench,
+        event: { ...workbench.event, status: "awaiting_key_review", statusSummary: "等待证据审核" },
+        lifecycle: {
+          ...workbench.lifecycle,
+          status: "awaiting_key_review",
+          summary: "等待证据审核",
+          activeRunId: "legacy-run-must-not-be-presented",
+        },
+      };
+    });
+    setResearchClient(adapter);
     render(
       <MemoryRouter initialEntries={["/events/event-preparation"]}>
         <Routes>
@@ -380,6 +401,28 @@ describe("Research OS event entry", () => {
       .not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看研究准备 →" }))
       .toHaveAttribute("href", "/events/event-preparation/preparation");
+    const progress = screen.getByLabelText("当前事件研究进展");
+    expect(within(progress).getByText("研究准备")).toBeVisible();
+    expect(within(progress).queryByText("执行补证")).not.toBeInTheDocument();
+    expect(screen.getByText("正式研究未启动")).toBeVisible();
+  });
+
+  it("returns an authorized preparation Case to the formal research stage", async () => {
+    setResearchClient(new MockResearchAdapter({ preparationScenario: "authorized" }));
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const progress = await screen.findByLabelText("当前事件研究进展");
+    expect(within(progress).getByText("执行补证")).toBeVisible();
+    expect(within(progress).queryByText("研究准备")).not.toBeInTheDocument();
+    expect(screen.getByText("主研究运行可查看")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看系统正在做什么" }))
+      .toHaveAttribute("href", "/events/event-preparation/monitor");
   });
 
   it("does not call active Case work running when the execution worker is unavailable", async () => {
