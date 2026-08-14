@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
@@ -231,5 +231,84 @@ describe("ResearchPreparationPage", () => {
 
     expect(clearIntervalSpy).toHaveBeenCalled();
     clearIntervalSpy.mockRestore();
+  });
+
+  it("keeps the authorization idempotency key stable when a transient response failure is retried", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_plan" });
+    const authorize = vi.spyOn(adapter, "authorizeResearchPreparation").mockRejectedValueOnce(new Error("响应暂时不可用"));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByRole("button", { name: "授权补证计划并启动正式研究" });
+    await user.click(button);
+    expect(await screen.findByText("响应暂时不可用")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "授权补证计划并启动正式研究" }));
+
+    await screen.findByText("正式研究已启动");
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(authorize.mock.calls[0][0].idempotencyKey).toBe(authorize.mock.calls[1][0].idempotencyKey);
+  });
+
+  it("keeps the preparation summary usable when loading its activity log fails", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockRejectedValue(new Error("活动记录暂不可用"));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "核对候选陈述" })).toBeVisible();
+    expect(screen.getByText("无法读取活动记录，不影响准备状态。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新读取活动记录" })).toBeEnabled();
+  });
+
+  it("does not submit a protocol confirmation without a current protocol artifact", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_protocol" });
+    const original = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await original(caseId);
+      return { ...preparation, artifacts: { ...preparation.artifacts, protocol: null } };
+    });
+    const confirm = vi.spyOn(adapter, "confirmResearchPreparationProtocol");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("协议草案缺失，无法提交确认。请重新读取准备状态。"))
+      .toBeVisible();
+    expect(screen.getByRole("button", { name: "确认研究协议" })).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale case response after navigating to another preparation", async () => {
+    const adapter = new MockResearchAdapter();
+    const original = adapter.getResearchPreparation.bind(adapter);
+    let resolveA: ((value: Awaited<ReturnType<typeof original>>) => void) | undefined;
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation((caseId) => {
+      if (caseId === "case-a") return new Promise((resolve) => { resolveA = resolve; });
+      return original("event-preparation").then((preparation) => ({ ...preparation, status: "awaiting_plan_authorization" }));
+    });
+    setResearchClient(adapter);
+    function Switcher() {
+      const navigate = useNavigate();
+      return <><button type="button" onClick={() => navigate("/events/case-b/preparation")}>切换 Case</button><Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes></>;
+    }
+    render(<MemoryRouter initialEntries={["/events/case-a/preparation"]}><Switcher /></MemoryRouter>);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "切换 Case" }));
+    expect(await screen.findByRole("heading", { name: "授权补证计划" })).toBeVisible();
+    await act(async () => { resolveA?.(await original("event-preparation")); });
+    expect(screen.getByRole("heading", { name: "授权补证计划" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "核对候选陈述" })).not.toBeInTheDocument();
   });
 });

@@ -2049,6 +2049,30 @@ describe("Research OS event entry", () => {
     expect(screen.getByText(/原件待冻结 · event-note.txt/)).toBeVisible();
   });
 
+  it("creates an uploaded Case through the atomic original-first preparation path", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const createFromUpload = vi.spyOn(adapter, "createEventResearchFromUpload");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes>
+          <Route path="/events/new" element={<EventCreatePage />} />
+          <Route path="/events/:caseId/preparation" element={<p>已进入准备工作台</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.selectOptions(screen.getByLabelText("来源接入方式"), "uploaded_file");
+    const file = new File(["上传原文，而不是事件摘要。"], "original.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("选择上传原件文件"), file);
+    await user.click(screen.getByRole("button", { name: "识别事件与研究问题" }));
+    await user.click(await screen.findByRole("button", { name: "建立 Case，进入资料核验" }));
+
+    await waitFor(() => expect(createFromUpload).toHaveBeenCalledWith(expect.objectContaining({ file })));
+    expect(await screen.findByText("已进入准备工作台")).toBeVisible();
+  });
+
   it("makes the frozen source authority explicit before event creation", async () => {
     render(
       <MemoryRouter initialEntries={["/events/new"]}>

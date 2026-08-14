@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 import hashlib
 
@@ -34,6 +35,7 @@ from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
+from app.domain.research_preparation import preparation_input_fingerprint
 
 
 def _confirmed_event() -> dict:
@@ -427,6 +429,36 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
             .order_by(EventResearchScopeFactor.position)
         )
     ) == _confirmed_event()["candidate_factors"]
+
+
+def test_uploaded_case_creation_uses_the_uploaded_original_as_its_initial_admission_and_preparation_input(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload["raw_input"] = "这是仅供识别事件的摘要，绝不能成为准备任务的原文输入。"
+    payload["source_type"] = "uploaded_file"
+    payload["source_metadata"] = {"authority_level": "user_supplied"}
+    uploaded_original = "这是上传原件的完整正文，必须成为冻结原文。".encode("utf-8")
+
+    response = cmd_client.post(
+        "/api/v1/event-research/uploaded",
+        data={"payload": json.dumps(payload)},
+        files={"file": ("original.txt", uploaded_original, "text/plain")},
+    )
+
+    assert response.status_code == 201, response.json()
+    case_id = uuid.UUID(response.json()["case_id"])
+    admission = cmd_session.scalar(select(CaseTenantAdmission).where(CaseTenantAdmission.research_case_id == case_id))
+    preparation = cmd_session.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
+    scope = cmd_session.scalar(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case_id))
+    assert admission is not None
+    assert preparation is not None
+    assert scope is not None
+    document = cmd_session.get(DocumentVersion, admission.initial_document_version_id)
+    assert document is not None
+    assert document.title == "original.txt"
+    assert document.source_url.startswith("upload://")
+    spans = list(cmd_session.scalars(select(SourceSpan.verbatim_text).where(SourceSpan.document_version_id == document.id)))
+    assert spans == [uploaded_original.decode("utf-8")]
+    assert preparation.input_fingerprint == preparation_input_fingerprint(document.id, scope.id)
 
 
 def test_create_event_case_rolls_back_every_staged_row_when_preparation_creation_fails(

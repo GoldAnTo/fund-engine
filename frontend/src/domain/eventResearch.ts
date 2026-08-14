@@ -50,6 +50,10 @@ export interface CreateEventResearchInput extends EventExtraction {
   createdBy: string;
 }
 
+export interface CreateUploadedEventResearchInput extends CreateEventResearchInput {
+  file: File;
+}
+
 export interface EventLifecycle {
   status: EventLifecycleStatus;
   activeRunId: string | null;
@@ -222,6 +226,7 @@ export interface PublishedMaterialDecision {
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
+  createEventResearchFromUpload(input: CreateUploadedEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }>;
   uploadEventMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string; parseState: "parsed" | "partial" | "failed"; nextAction: "review_original" | "supplement_original" }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;

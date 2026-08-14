@@ -28,6 +28,7 @@ import type {
 import { PageStateError } from "../domain/types";
 import type {
   CreateEventResearchInput,
+  CreateUploadedEventResearchInput,
   EventExtraction,
   EventLifecycle,
   EventLifecycleStatus,
@@ -2755,6 +2756,31 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       research_protocol_required: input.researchProtocolRequired ?? true,
       created_by: input.createdBy,
     });
+    return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
+  async createEventResearchFromUpload(input: CreateUploadedEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    const form = new FormData();
+    form.set("file", input.file);
+    form.set("payload", JSON.stringify({
+      raw_input: input.rawInput,
+      source_url: input.sourceUrl || null,
+      source_type: "uploaded_file",
+      source_metadata: input.sourceMetadata ?? {},
+      event_title: input.eventTitle,
+      company_name: input.companyName,
+      ticker: input.ticker,
+      event_at: input.eventAt,
+      market_reaction: input.marketReaction,
+      research_question: input.researchQuestion,
+      candidate_factors: input.candidateFactors,
+      research_protocol_required: input.researchProtocolRequired ?? true,
+      created_by: input.createdBy,
+    }));
+    const dto = await this.postForm<{ case_id: string; brief_id: string; lifecycle: {
+      status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
+      status_summary: string; current_gap: string | null; next_human_action: string | null;
+    } }>("/event-research/uploaded", form);
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 

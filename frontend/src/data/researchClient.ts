@@ -29,6 +29,7 @@ export function resetResearchClient(): void {
 export const researchClient: ActiveResearchClient = {
   extractEventResearch: (input) => _client.extractEventResearch(input),
   createEventResearch: (input) => _client.createEventResearch(input),
+  createEventResearchFromUpload: (input) => _client.createEventResearchFromUpload(input),
   attachEventMaterial: (input) => _client.attachEventMaterial(input),
   uploadEventMaterial: (input) => _client.uploadEventMaterial(input),
   listEventResearch: (status) => _client.listEventResearch(status),

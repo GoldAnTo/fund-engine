@@ -6,6 +6,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -47,7 +48,7 @@ from app.services.event_extraction import (
     EventExtractionProviderError,
     EventExtractionService,
 )
-from app.services.event_research import EventResearchService
+from app.services.event_research import EventResearchService, InitialUploadedOriginal
 from app.services.document_uploads import DocumentUploadService
 from app.services.source_governance import SourceGovernanceService
 from app.services.event_conclusion import EventConclusionService
@@ -323,6 +324,59 @@ def create_event_research(
     try:
         created = EventResearchService(db).create(payload, tenant_id=tenant_id)
     except (ValueError, ValidationFailedError) as exc:
+        db.rollback()
+        raise ValidationFailedError(str(exc)) from exc
+    lifecycle = created.lifecycle
+    return CreateEventResearchResponse(
+        case_id=created.case_id,
+        brief_id=created.brief_id,
+        lifecycle=EventResearchLifecycleDTO(
+            status=lifecycle.status,
+            active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
+            current_round=lifecycle.current_round,
+            status_summary=lifecycle.status_summary,
+            current_gap=lifecycle.current_gap,
+            next_human_action=lifecycle.next_human_action,
+        ),
+    )
+
+
+@router.post("/uploaded", response_model=CreateEventResearchResponse, status_code=status.HTTP_201_CREATED)
+async def create_event_research_from_uploaded_original(
+    payload: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
+) -> CreateEventResearchResponse:
+    """Atomically create a Case from one uploaded frozen original.
+
+    The JSON summary is retained only as the human-confirmed event brief.  It
+    is never frozen as a competing source document and preparation is queued
+    only after the file becomes the initial tenant-admitted document.
+    """
+    try:
+        request = CreateEventResearchRequest.model_validate_json(payload)
+        if not file.filename:
+            raise ValidationFailedError("uploaded file must have a file name")
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
+            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
+        source_metadata = {**request.source_metadata, "tenant": tenant_id}
+        request = request.model_copy(update={
+            "source_type": "uploaded_file",
+            "source_metadata": source_metadata,
+        })
+        created = EventResearchService(db).create(
+            request,
+            tenant_id=tenant_id,
+            initial_uploaded_original=InitialUploadedOriginal(
+                raw=raw,
+                file_name=file.filename,
+                mime_type=file.content_type or "application/octet-stream",
+                source_metadata=source_metadata,
+            ),
+        )
+    except (ValueError, PydanticValidationError, ValidationFailedError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
     lifecycle = created.lifecycle

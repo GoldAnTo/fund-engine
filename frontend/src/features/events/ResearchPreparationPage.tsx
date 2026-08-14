@@ -109,6 +109,7 @@ export function ResearchPreparationPage() {
   const [preparation, setPreparation] = useState<ResearchPreparation | null>(null);
   const [events, setEvents] = useState<ResearchPreparationEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [commandNotice, setCommandNotice] = useState<string | null>(null);
   const [regenerationNotice, setRegenerationNotice] = useState(false);
@@ -117,13 +118,27 @@ export function ResearchPreparationPage() {
   const [claimDecisions, setClaimDecisions] = useState<Record<string, ClaimDecision>>({});
   const [protocolEdits, setProtocolEdits] = useState("");
   const activityCursor = useRef<number | null>(null);
+  const requestEpoch = useRef(0);
+  const activeCaseId = useRef(caseId);
+  const authorizationKey = useRef<{ identity: string; key: string } | null>(null);
+
+  const isCurrentRequest = useCallback((expectedCaseId: string, expectedEpoch: number) => (
+    activeCaseId.current === expectedCaseId && requestEpoch.current === expectedEpoch
+  ), []);
+
+  const clearReviewDrafts = useCallback(() => {
+    setClaimDecisions({});
+    setProtocolEdits("");
+  }, []);
 
   const loadActivity = useCallback(async (options: { afterSeq?: number; replace?: boolean } = {}) => {
     if (!caseId) return;
+    const epoch = requestEpoch.current;
     let afterSeq = options.afterSeq;
     const received: ResearchPreparationEvent[] = [];
     for (;;) {
       const page = await researchClient.listResearchPreparationEvents(caseId, { afterSeq, limit: 50 });
+      if (!isCurrentRequest(caseId, epoch)) return;
       received.push(...page.items);
       if (page.nextAfterSeq === null || page.nextAfterSeq === afterSeq || page.items.length === 0) {
         const latestSeq = Math.max(
@@ -136,49 +151,81 @@ export function ResearchPreparationPage() {
       afterSeq = page.nextAfterSeq;
     }
     setEvents((current) => {
+      if (!isCurrentRequest(caseId, epoch)) return current;
       const combined = options.replace ? received : [...current, ...received];
       return [...new Map(combined.map((event) => [event.seq, event])).values()]
         .sort((left, right) => left.seq - right.seq);
     });
-  }, [caseId]);
+  }, [caseId, isCurrentRequest]);
 
   const refreshView = useCallback(async () => {
     if (!caseId) return null;
+    const epoch = requestEpoch.current;
     const next = await researchClient.getResearchPreparation(caseId);
-    await loadActivity({ replace: true });
+    if (!isCurrentRequest(caseId, epoch)) return null;
     setPreparation(next);
     setError(null);
+    clearReviewDrafts();
+    try {
+      await loadActivity({ replace: true });
+      if (isCurrentRequest(caseId, epoch)) setActivityError(null);
+    } catch (activityFailure) {
+      if (isCurrentRequest(caseId, epoch)) {
+        setActivityError(preparationErrorMessage(activityFailure));
+      }
+    }
     return next;
-  }, [caseId, loadActivity]);
+  }, [caseId, clearReviewDrafts, isCurrentRequest, loadActivity]);
 
   const loadPreparation = useCallback(async () => {
+    const epoch = requestEpoch.current;
     try {
       await refreshView();
     } catch (loadError) {
-      setError(preparationErrorMessage(loadError));
+      if (isCurrentRequest(caseId, epoch)) setError(preparationErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      if (isCurrentRequest(caseId, epoch)) setLoading(false);
     }
-  }, [refreshView]);
+  }, [caseId, isCurrentRequest, refreshView]);
 
-  useEffect(() => { void loadPreparation(); }, [loadPreparation]);
+  useEffect(() => {
+    requestEpoch.current += 1;
+    activeCaseId.current = caseId;
+    activityCursor.current = null;
+    authorizationKey.current = null;
+    setPreparation(null);
+    setEvents([]);
+    setError(null);
+    setActivityError(null);
+    setCommandError(null);
+    setCommandNotice(null);
+    setRegenerationNotice(false);
+    setBusy(false);
+    clearReviewDrafts();
+    setLoading(true);
+    void loadPreparation();
+  }, [caseId, clearReviewDrafts, loadPreparation]);
 
   useEffect(() => {
     if (!caseId || preparation?.status !== "preparing") return undefined;
     let active = true;
+    const epoch = requestEpoch.current;
     const refresh = async () => {
       try {
         const next = await researchClient.getResearchPreparation(caseId);
+        if (!active || !isCurrentRequest(caseId, epoch)) return;
         await loadActivity({ afterSeq: activityCursor.current ?? undefined });
-        if (!active) return;
+        if (!active || !isCurrentRequest(caseId, epoch)) return;
         setPreparation(next);
       } catch (pollError) {
-        if (active) setError(preparationErrorMessage(pollError));
+        if (active && isCurrentRequest(caseId, epoch)) {
+          setActivityError(preparationErrorMessage(pollError));
+        }
       }
     };
     const interval = window.setInterval(() => { void refresh(); }, 2000);
     return () => { active = false; window.clearInterval(interval); };
-  }, [caseId, loadActivity, preparation?.status]);
+  }, [caseId, isCurrentRequest, loadActivity, preparation?.status]);
 
   const candidates = useMemo(() => preparation ? candidatesFrom(preparation) : [], [preparation]);
   const claimsReady = candidates.length > 0 && candidates.every((candidate) => {
@@ -187,29 +234,47 @@ export function ResearchPreparationPage() {
   });
 
   const execute = useCallback(async (command: () => Promise<ResearchPreparation>, options: { correctedClaims?: boolean } = {}) => {
+    const epoch = requestEpoch.current;
+    const expectedCaseId = caseId;
     setBusy(true);
     setCommandError(null);
     setCommandNotice(null);
     try {
       const next = await command();
+      if (!isCurrentRequest(expectedCaseId, epoch)) return;
       setPreparation(next);
-      await loadActivity({ replace: true });
+      clearReviewDrafts();
+      try {
+        await loadActivity({ replace: true });
+        if (isCurrentRequest(expectedCaseId, epoch)) setActivityError(null);
+      } catch (activityFailure) {
+        if (isCurrentRequest(expectedCaseId, epoch)) setActivityError(preparationErrorMessage(activityFailure));
+      }
       if (options.correctedClaims) setRegenerationNotice(true);
     } catch (commandFailure) {
+      if (!isCurrentRequest(expectedCaseId, epoch)) return;
       if (isConflict(commandFailure)) {
         try {
           await refreshView();
-          setCommandNotice("此准备版本已更新，已显示最新内容");
+          if (isCurrentRequest(expectedCaseId, epoch)) setCommandNotice("此准备版本已更新，已显示最新内容");
         } catch (refreshFailure) {
-          setCommandError(preparationErrorMessage(refreshFailure));
+          if (isCurrentRequest(expectedCaseId, epoch)) setCommandError(preparationErrorMessage(refreshFailure));
         }
       } else {
         setCommandError(preparationErrorMessage(commandFailure));
       }
     } finally {
-      setBusy(false);
+      if (isCurrentRequest(expectedCaseId, epoch)) setBusy(false);
     }
-  }, [loadActivity, refreshView]);
+  }, [caseId, clearReviewDrafts, isCurrentRequest, loadActivity, refreshView]);
+
+  const authorizationKeyFor = useCallback((next: ResearchPreparation) => {
+    const identity = `${caseId}:${next.revision}:${next.artifacts.evidencePlan?.sequence ?? "missing"}`;
+    if (authorizationKey.current?.identity !== identity) {
+      authorizationKey.current = { identity, key: crypto.randomUUID() };
+    }
+    return authorizationKey.current.key;
+  }, [caseId]);
 
   if (loading) return <main className="ros-page ros-preparation-page" aria-busy="true"><section className="ros-preparation-skeleton" aria-label="正在读取研究准备"><i /><i /><i /></section></main>;
   if (!preparation) return <main className="ros-page ros-preparation-page"><section className="ros-empty ros-empty--large" role="alert"><h1>无法读取研究准备</h1><p>{error ?? "这个 Case 没有可读取的研究准备状态。"}</p><button className="ros-button ros-button--secondary" type="button" onClick={() => void loadPreparation()}>重新读取</button></section></main>;
@@ -245,6 +310,7 @@ export function ResearchPreparationPage() {
         </ol>
         <section className="ros-preparation-events" aria-label="准备活动记录">
           <h3>活动记录</h3>
+          {activityError && <p className="ros-error" role="alert">无法读取活动记录，不影响准备状态。<button className="ros-button ros-button--secondary" type="button" onClick={() => void loadActivity({ replace: true }).then(() => setActivityError(null)).catch((activityFailure) => setActivityError(preparationErrorMessage(activityFailure)))}>重新读取活动记录</button></p>}
           {events.length ? <ol>{events.map((event) => <li key={event.seq}><time dateTime={event.createdAt}>{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(event.createdAt))}</time><span>{eventLabel(event)}</span></li>)}</ol> : <p>尚无可显示的活动记录。</p>}
         </section>
       </section>
@@ -259,7 +325,7 @@ export function ResearchPreparationPage() {
           return { ...current, [id]: { ...currentDecision, ...patch } };
         })} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationClaims({ caseId, revision: preparation.revision, actor: ACTOR, decisions: candidates.map((candidate) => { const decision = claimDecisions[candidate.id]; return { candidateId: candidate.id, outcome: decision.outcome as "confirmed" | "modified" | "rejected", reason: decision.reason.trim(), normalizedText: decision.outcome === "modified" ? decision.normalizedText.trim() : undefined }; }) }), { correctedClaims: candidates.some((candidate) => claimDecisions[candidate.id]?.outcome === "modified") })} />}
         {preparation.status === "awaiting_protocol_confirmation" && <ProtocolTask preparation={preparation} edits={protocolEdits} busy={busy} onChange={setProtocolEdits} onConfirm={() => void execute(() => researchClient.confirmResearchPreparationProtocol({ caseId, revision: preparation.revision, actor: ACTOR, draftSequence: preparation.artifacts.protocol?.sequence ?? 0, ...(protocolEdits.trim() ? { edits: { reviewer_note: protocolEdits.trim() } } : {}) }))} />}
-        {preparation.status === "awaiting_plan_authorization" && <PlanTask preparation={preparation} busy={busy} onAuthorize={() => void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: preparation.artifacts.evidencePlan?.sequence ?? 0, idempotencyKey: crypto.randomUUID() }))} />}
+        {preparation.status === "awaiting_plan_authorization" && <PlanTask preparation={preparation} busy={busy} onAuthorize={() => void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: preparation.artifacts.evidencePlan?.sequence ?? 0, idempotencyKey: authorizationKeyFor(preparation) }))} />}
         {preparation.status === "recoverable_failure" && <RecoveryTask preparation={preparation} busy={busy} onRetry={() => void execute(() => researchClient.retryResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR }))} />}
         {preparation.status === "authorized" && <section className="ros-preparation-note"><strong>研究运行已建立</strong><p>已授权计划被冻结在本次研究运行中。后续变更需要回到研究范围与运行记录处理。</p>{preparation.researchRunId && <Link to={`/events/${caseId}/monitor`} className="ros-button ros-button--secondary">查看研究运行</Link>}</section>}
         <FutureReviewPreview preparation={preparation} />
@@ -282,7 +348,9 @@ function ClaimTask({ candidates, decisions, busy, ready, onChange, onConfirm }: 
 }
 
 function ProtocolTask({ preparation, edits, busy, onChange, onConfirm }: { preparation: ResearchPreparation; edits: string; busy: boolean; onChange: (value: string) => void; onConfirm: () => void }) {
-  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label><label>研究员备注（可选）<textarea value={edits} onChange={(event) => onChange(event.target.value)} placeholder="只记录本次审阅的必要修订说明" /></label><p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
+  const draftSequence = preparation.artifacts.protocol?.sequence;
+  const canConfirm = typeof draftSequence === "number" && draftSequence > 0;
+  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<label>研究员备注（可选）<textarea value={edits} onChange={(event) => onChange(event.target.value)} placeholder="只记录本次审阅的必要修订说明" /></label><p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
 }
 
 function PlanTask({ preparation, busy, onAuthorize }: { preparation: ResearchPreparation; busy: boolean; onAuthorize: () => void }) {

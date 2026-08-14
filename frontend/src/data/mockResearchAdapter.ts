@@ -31,6 +31,7 @@ import type { components } from "../contracts/v1";
 import { PageStateError } from "../domain/types";
 import type {
   CreateEventResearchInput,
+  CreateUploadedEventResearchInput,
   EventConclusionVersion,
   EventExtraction,
   EventLifecycle,
@@ -4334,6 +4335,14 @@ export class MockResearchAdapter implements ResearchClient {
     return simulateLatency({
       caseId, briefId: `brief-created-${this.createdEventCount}`,
       lifecycle,
+    });
+  }
+
+  async createEventResearchFromUpload(input: CreateUploadedEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    return this.createEventResearch({
+      ...input,
+      sourceType: "uploaded_file",
+      sourceMetadata: { ...input.sourceMetadata, file_name: input.file.name, mime_type: input.file.type, byte_size: input.file.size },
     });
   }
 
