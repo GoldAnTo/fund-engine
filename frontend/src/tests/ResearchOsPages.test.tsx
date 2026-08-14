@@ -322,6 +322,66 @@ describe("Research OS event entry", () => {
       .toHaveAttribute("href", "/events/ordinary-case/review");
   });
 
+  it("keeps system preparation separate from the one claim review awaiting a researcher", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockResolvedValue([{
+      id: "preparation-running",
+      eventTitle: "系统正在准备研究材料",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "researching",
+      statusSummary: "系统正在准备研究材料",
+      nextHumanAction: null,
+      nextActionKind: "wait",
+      updatedAt: "2026-08-15T09:00:00Z",
+    }, {
+      id: "preparation-claims",
+      eventTitle: "等待核验原文与候选陈述",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "researching",
+      statusSummary: "等待核验原文与候选陈述",
+      nextHumanAction: "核验原文与候选陈述",
+      nextActionKind: "review_preparation_claims",
+      updatedAt: "2026-08-15T08:00:00Z",
+    }] as EventResearchListItem[]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("1 项需要人工决定")).toBeVisible();
+    expect(screen.getByRole("link", { name: "系统正在准备研究材料" }))
+      .toHaveAttribute("href", "/events/preparation-running/preparation");
+    expect(screen.getByRole("link", { name: "等待核验原文与候选陈述" }))
+      .toHaveAttribute("href", "/events/preparation-claims/preparation");
+  });
+
+  it("sends a Case with unapproved preparation to the preparation workbench, not evidence verification", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("你需要做")).toBeVisible();
+    expect(screen.getByRole("link", { name: "进入研究准备" }))
+      .toHaveAttribute("href", "/events/event-preparation/preparation");
+    expect(screen.getByText("研究准备尚未完成，尚不能形成研究结论。"))
+      .toBeVisible();
+    expect(screen.queryByText("尚不能下结论：系统正在核验各项解释及其反证。"))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看研究准备 →" }))
+      .toHaveAttribute("href", "/events/event-preparation/preparation");
+  });
+
   it("does not call active Case work running when the execution worker is unavailable", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "workerStatus").mockResolvedValue({

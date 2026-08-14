@@ -1,4 +1,40 @@
-import type { EventResearchListItem, EventWorkbench } from "./eventResearch";
+import type { EventNextActionKind, EventResearchListItem, EventWorkbench } from "./eventResearch";
+import type { ResearchPreparationStatus } from "./researchPreparation";
+
+const PREPARATION_REVIEW_ACTION_KINDS: readonly EventNextActionKind[] = [
+  "review_preparation_claims",
+  "review_preparation_protocol",
+  "authorize_preparation_plan",
+  "recover_preparation",
+];
+
+const PREPARATION_TASK_LABELS: Partial<Record<ResearchPreparationStatus, string>> = {
+  awaiting_claim_review: "核验原文与候选陈述",
+  awaiting_protocol_confirmation: "确认研究协议草案",
+  awaiting_plan_authorization: "审核补证计划并授权启动",
+  recoverable_failure: "恢复研究准备",
+};
+
+export function isPreparationReviewAction(
+  kind: EventNextActionKind | null | undefined,
+): boolean {
+  return kind !== null
+    && kind !== undefined
+    && PREPARATION_REVIEW_ACTION_KINDS.includes(kind);
+}
+
+export function isPreparationInProgress(event: EventResearchListItem): boolean {
+  return event.nextActionKind === "wait"
+    && event.statusSummary === "系统正在准备研究材料";
+}
+
+export function isPreparationDeskEvent(event: EventResearchListItem): boolean {
+  return isPreparationReviewAction(event.nextActionKind) || isPreparationInProgress(event);
+}
+
+export function eventDeskNeedsHumanReview(event: EventResearchListItem): boolean {
+  return isPreparationReviewAction(event.nextActionKind) || Boolean(event.nextHumanAction);
+}
 
 export const EVENT_RESEARCH_STAGES = [
   { id: 1, label: "资料接入" },
@@ -47,6 +83,29 @@ export function eventActionPresentation(
   caseId: string,
 ): EventActionPresentation {
   const base = `/events/${caseId}`;
+  if (workbench.preparation && workbench.preparation.status !== "authorized") {
+    const preparationTaskLabel = PREPARATION_TASK_LABELS[workbench.preparation.status];
+    const isHumanPreparationTask = Boolean(preparationTaskLabel);
+    return {
+      owner: isHumanPreparationTask ? "你需要做" : "现在不用做",
+      title: isHumanPreparationTask
+          ? isPreparationReviewAction(workbench.nextAction.kind)
+          ? workbench.nextAction.label
+          : preparationTaskLabel || "确认研究准备"
+        : "系统正在准备研究材料",
+      why: isHumanPreparationTask
+        ? "系统已完成草案准备，仍需由你逐项确认；未确认前不会采纳候选、启动数据 Provider 或运行正式研究。"
+        : "系统正在解析冻结原文并生成协议与补证计划草案；它不会自行采纳、授权或启动正式研究。",
+      steps: isHumanPreparationTask
+        ? ["核对当前准备材料与冻结原文", "逐项确认候选、协议或补证计划", "明确授权后才会创建正式研究运行"]
+        : ["解析冻结原文", "生成研究协议草案", "生成补证计划草案"],
+      unlock: isHumanPreparationTask
+        ? "确认顺序完成后，系统才会创建一条可回放的正式研究运行。"
+        : "准备完成后，系统会明确提示你确认下一项材料。",
+      to: `${base}/preparation`,
+      buttonLabel: isHumanPreparationTask ? "进入研究准备" : "查看研究准备进度",
+    };
+  }
   switch (workbench.nextAction.kind) {
     case "review_intake":
       return {
@@ -135,6 +194,7 @@ export function eventActionPresentation(
 
 export function eventDeskRoute(event: EventResearchListItem): string {
   const base = `/events/${event.id}`;
+  if (isPreparationDeskEvent(event)) return `${base}/preparation`;
   if (event.nextActionKind === "complete_research_protocol") return `${base}/protocol`;
   return event.nextHumanAction ? `${base}/review` : base;
 }

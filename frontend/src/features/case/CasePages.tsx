@@ -1782,6 +1782,9 @@ export function CaseConclusionPage() {
     <CaseFrame>
       {(data, caseId) => {
         const action = eventActionPresentation(data, caseId);
+        const preparationPending = Boolean(
+          data.preparation && data.preparation.status !== "authorized",
+        );
         return <>
           {workflowNotice && (
             <p className="ros-success" role="status">{workflowNotice}</p>
@@ -1791,15 +1794,19 @@ export function CaseConclusionPage() {
             <article className="ros-panel ros-panel--conclusion">
               <p className="ros-eyebrow">
                 当前判断 ·{" "}
-                {data.conclusion.state === "published"
+                {preparationPending
+                  ? "研究准备中，未形成结论"
+                  : data.conclusion.state === "published"
                   ? "已人工发布"
                   : data.conclusion.state === "ai_draft"
                     ? "AI 草案，未发布"
                     : "暂不下结论"}
               </p>
-              <h2>{data.conclusion.text}</h2>
+              <h2>{preparationPending ? "研究准备尚未完成，尚不能形成研究结论。" : data.conclusion.text}</h2>
               <p className="ros-conclusion-text">
-                {data.conclusion.state === "published"
+                {preparationPending
+                  ? "系统只会准备候选、协议和补证计划草案；未经过逐项确认，不会采纳、授权或开始正式补证。"
+                  : data.conclusion.state === "published"
                   ? "该版本只基于已审核资料；新运行只会追加待审证据，不会自动重写结论。"
                   : "尚未审核的候选、二手转述和无授权材料都不会自动进入当前判断。"}
               </p>
@@ -1829,20 +1836,24 @@ export function CaseConclusionPage() {
             <section className="ros-rail-section">
               <p className="ros-eyebrow">持续研究</p>
               <h2>
-                {data.lifecycle.activeRunId
+                {preparationPending
+                  ? "正式研究尚未授权"
+                  : data.lifecycle.activeRunId
                   ? "系统正在受控补证"
                   : data.lifecycle.status === "published"
                     ? "主研究已发布；后续补证独立记录"
                     : "尚未授权后台运行"}
               </h2>
               <p>
-                {data.lifecycle.activeRunId
+                {preparationPending
+                  ? "系统当前只在准备候选、协议和补证计划草案；逐项确认并明确授权后，才会创建正式研究运行。"
+                  : data.lifecycle.activeRunId
                   ? `范围版本 v${data.scope.version} · 仅允许来源内的材料可进入后续审核。`
                   : data.lifecycle.status === "published"
                     ? "发布的结论保持不变；后续单因素补证和定时任务会在“监测与运行”中独立显示。"
                     : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
               </p>
-              <Link to={preserveLocationSearch(`/events/${caseId}/monitor`, location.search)}>查看运行记录 →</Link>
+              <Link to={preserveLocationSearch(`/events/${caseId}/${preparationPending ? "preparation" : "monitor"}`, location.search)}>{preparationPending ? "查看研究准备 →" : "查看运行记录 →"}</Link>
             </section>
             <section className="ros-rail-section">
               <p className="ros-eyebrow">结论依据</p>
