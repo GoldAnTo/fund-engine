@@ -137,10 +137,35 @@ describe("ResearchPreparationPage", () => {
     );
 
     const task = await screen.findByLabelText("当前人工任务");
-    expect(within(task).getByText("候选陈述受来源展示许可限制，无法在此页显示。请在已授权材料中核对后重试。")).toBeVisible();
+    expect(within(task).getByText("候选陈述草案不完整，请重新加载后再确认。")).toBeVisible();
     expect(within(task).queryByText("原文摘录不能替代规范化陈述")).not.toBeInTheDocument();
     expect(within(task).getByRole("button", { name: "确认候选陈述" })).toBeDisabled();
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("disables protocol confirmation when the API withholds its display-restricted artifact", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_protocol" });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await originalPreparation(caseId);
+      return {
+        ...preparation,
+        artifacts: {
+          ...preparation.artifacts,
+          protocol: { ...preparation.artifacts.protocol!, payload: {}, displayWithheld: true },
+        },
+      };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).getByText("协议草案受来源展示许可限制，无法在此页确认。")).toBeVisible();
+    expect(within(task).getByRole("button", { name: "确认研究协议" })).toBeDisabled();
   });
 
   it("does not offer unsupported protocol notes or submit unexpected protocol edits", async () => {

@@ -3146,6 +3146,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
           contextFingerprint: typeof artifact.context_fingerprint === "string"
             ? artifact.context_fingerprint
             : null,
+          displayWithheld: artifact.display_withheld === true,
         };
     const initialMaterial = this.optionalPreparationContainer(payload.initial_material);
     const progress = this.optionalPreparationContainer(payload.progress);

@@ -5939,6 +5939,11 @@ export interface components {
             state: string;
             /** Context Fingerprint */
             context_fingerprint?: string | null;
+            /**
+             * Display Withheld
+             * @default false
+             */
+            display_withheld: boolean;
         };
         /** PreparationInitialMaterialDTO */
         PreparationInitialMaterialDTO: {

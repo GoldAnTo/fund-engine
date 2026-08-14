@@ -263,10 +263,7 @@ export function ResearchPreparationPage() {
   }, [caseId, isCurrentRequest, loadActivity, preparation?.status]);
 
   const candidates = useMemo(() => preparation ? candidatesFrom(preparation) : [], [preparation]);
-  const candidateDisplayWithheld = useMemo(() => {
-    const raw = preparation?.artifacts.candidateClaims?.payload.candidates;
-    return Array.isArray(raw) && raw.length > candidates.length;
-  }, [candidates.length, preparation]);
+  const candidateDisplayWithheld = preparation?.artifacts.candidateClaims?.displayWithheld === true;
   const claimsReady = candidates.length > 0 && candidates.every((candidate) => {
     const decision = claimDecisions[candidate.id];
     return decision?.outcome && decision.reason.trim() && (decision.outcome !== "modified" || decision.normalizedText.trim());
@@ -333,7 +330,7 @@ export function ResearchPreparationPage() {
   const summary = STATUS_COPY[preparation.status];
   const runStarted = preparation.status === "authorized" && preparation.researchRunId;
   const evidencePlanSequence = preparation.artifacts.evidencePlan?.sequence;
-  const canAuthorizeEvidencePlan = typeof evidencePlanSequence === "number" && Number.isInteger(evidencePlanSequence) && evidencePlanSequence > 0;
+  const canAuthorizeEvidencePlan = typeof evidencePlanSequence === "number" && Number.isInteger(evidencePlanSequence) && evidencePlanSequence > 0 && !preparation.artifacts.protocol?.displayWithheld && !preparation.artifacts.evidencePlan?.displayWithheld;
   const material = preparation.initialMaterial;
   const progress = preparation.progress;
   const queuedStep = preparation.status === "preparing" && progress?.currentStep === null ? nextQueuedStep(preparation) : null;
@@ -411,12 +408,14 @@ function ClaimTask({ candidates, displayWithheld, decisions, busy, ready, onChan
 
 function ProtocolTask({ preparation, busy, onConfirm }: { preparation: ResearchPreparation; busy: boolean; onConfirm: () => void }) {
   const draftSequence = preparation.artifacts.protocol?.sequence;
-  const canConfirm = typeof draftSequence === "number" && Number.isInteger(draftSequence) && draftSequence > 0;
-  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
+  const displayWithheld = preparation.artifacts.protocol?.displayWithheld === true;
+  const canConfirm = typeof draftSequence === "number" && Number.isInteger(draftSequence) && draftSequence > 0 && !displayWithheld;
+  return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{displayWithheld ? <p className="ros-error">协议草案受来源展示许可限制，无法在此页确认。</p> : !canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
 }
 
 function PlanTask({ preparation, busy, canAuthorize, onAuthorize }: { preparation: ResearchPreparation; busy: boolean; canAuthorize: boolean; onAuthorize: () => void }) {
-  return <section className="ros-preparation-form"><h3>待授权补证计划</h3><pre>{planText(preparation)}</pre>{!canAuthorize && <p className="ros-error">补证计划草案缺失或版本无效，无法授权。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">只有点击下方按钮，系统才会创建一个正式 ResearchRun，并按这份冻结计划开始受控补证。</p><button className="ros-button ros-button--primary" type="button" disabled={busy || !canAuthorize} onClick={onAuthorize}>{busy ? "正在授权…" : "授权补证计划并启动正式研究"}</button></section>;
+  const displayWithheld = preparation.artifacts.protocol?.displayWithheld === true || preparation.artifacts.evidencePlan?.displayWithheld === true;
+  return <section className="ros-preparation-form"><h3>待授权补证计划</h3><pre>{planText(preparation)}</pre>{displayWithheld ? <p className="ros-error">协议或补证计划受来源展示许可限制，无法授权。</p> : !canAuthorize && <p className="ros-error">补证计划草案缺失或版本无效，无法授权。请重新读取准备状态。</p>}<p className="ros-preparation-boundary">只有点击下方按钮，系统才会创建一个正式 ResearchRun，并按这份冻结计划开始受控补证。</p><button className="ros-button ros-button--primary" type="button" disabled={busy || !canAuthorize} onClick={onAuthorize}>{busy ? "正在授权…" : "授权补证计划并启动正式研究"}</button></section>;
 }
 
 function RecoveryTask({ preparation, busy, onRetry }: { preparation: ResearchPreparation; busy: boolean; onRetry: () => void }) {
@@ -428,7 +427,7 @@ function RecoveryTask({ preparation, busy, onRetry }: { preparation: ResearchPre
 
 function ArtifactPreviews({ preparation, keys, readOnly = false }: { preparation: ResearchPreparation; keys: Array<keyof ResearchPreparation["artifacts"]>; readOnly?: boolean }) {
   const labels: Record<keyof ResearchPreparation["artifacts"], string> = { candidateClaims: "候选陈述草案", protocol: "研究协议草案", evidencePlan: "补证计划草案" };
-  return <div className="ros-preparation-artifacts">{keys.filter((key) => preparation.artifacts[key]).map((key) => <fieldset disabled={!readOnly} key={key}><legend>{labels[key]}</legend><textarea aria-label={`${labels[key]}预览`} value={artifactText(preparation, key)} readOnly /><small>{readOnly ? "保留的草案，仅供核对" : "等待上一步确认"}</small>{!readOnly && <button type="button" disabled>等待上一步确认</button>}</fieldset>)}</div>;
+  return <div className="ros-preparation-artifacts">{keys.filter((key) => preparation.artifacts[key]).map((key) => <fieldset disabled={!readOnly} key={key}><legend>{labels[key]}</legend><textarea aria-label={`${labels[key]}预览`} value={artifactText(preparation, key)} readOnly /><small>{preparation.artifacts[key]?.displayWithheld ? "受来源展示许可限制，内容未显示" : readOnly ? "保留的草案，仅供核对" : "等待上一步确认"}</small>{!readOnly && <button type="button" disabled>等待上一步确认</button>}</fieldset>)}</div>;
 }
 
 function FutureReviewPreview({ preparation }: { preparation: ResearchPreparation }) {

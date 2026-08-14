@@ -37,6 +37,7 @@ class PreparationArtifactDTO(V1Model):
     payload: dict[str, Any]
     state: str
     context_fingerprint: str | None = None
+    display_withheld: bool = False
 class PreparationInitialMaterialDTO(V1Model):
     document_version_id: uuid.UUID
     title: str | None = None

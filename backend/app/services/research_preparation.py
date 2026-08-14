@@ -38,6 +38,7 @@ from app.services.auto_research import AutoResearchService
 from app.services.event_research_scope_evidence import current_scope_thesis_ids, lock_event_research_lifecycle
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.services.research_protocol import ResearchProtocolService, MetricDefinitionInput, OutcomeBindingInput, VerificationRuleInput
+from app.services.preparation_display import preparation_artifact_allows_display
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,6 +604,7 @@ class ResearchPreparationService:
         artifact = self._repo.current_artifact(preparation.id, "atomic_claim_candidates")
         if artifact is None or self._candidate_ids(artifact) != candidate_ids:
             raise ConflictError("current claim candidates are missing")
+        self._require_human_display_access(case_id, artifact.payload)
         self._validate_claim_decisions(
             actor=actor, candidate_ids=candidate_ids, decisions=decisions
         )
@@ -665,6 +667,7 @@ class ResearchPreparationService:
         artifact = self._repo.current_artifact(preparation.id, "research_protocol_draft")
         if artifact is None or artifact.sequence != payload.draft_sequence:
             raise ConflictError("protocol draft revision is stale")
+        self._require_human_display_access(case_id, artifact.payload)
         if (
             artifact.context_fingerprint is None
             or artifact.context_fingerprint
@@ -798,6 +801,8 @@ class ResearchPreparationService:
         protocol = self._repo.current_artifact(preparation.id, "research_protocol_draft")
         if plan is None or plan.sequence != plan_sequence or protocol is None:
             raise ConflictError("evidence plan revision is stale")
+        self._require_human_display_access(case_id, protocol.payload)
+        self._require_human_display_access(case_id, plan.payload)
         if protocol.context_fingerprint != self.current_candidate_context_fingerprint(case_id):
             raise ConflictError("protocol draft candidate context changed")
         budget = self._validate_authorized_evidence_plan(case_id, plan.payload)
@@ -978,6 +983,12 @@ class ResearchPreparationService:
     def _require_revision(self, preparation: ResearchPreparation, revision: int) -> None:
         if preparation.version != revision:
             raise ConflictError("preparation revision is stale")
+
+    def _require_human_display_access(self, case_id: uuid.UUID, payload: object) -> None:
+        if not preparation_artifact_allows_display(self._session, case_id, payload):
+            raise ValidationError(
+                "source contract forbids displaying this preparation artifact for human review"
+            )
 
     def _require_eligible_step(
         self,

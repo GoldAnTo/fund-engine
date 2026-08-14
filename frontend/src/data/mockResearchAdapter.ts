@@ -3116,9 +3116,9 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     nextAttemptAt: null,
     lastErrorMessage: null,
     artifacts: {
-      candidateClaims: { sequence: 1, state: "current", payload: { candidates: [{ candidate_id: "8a23ef12-9b37-4f54-8f2d-b938605a1d8d", normalized_text: "订单增长可以转化为收入", quote: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1" },
-      protocol: { sequence: 2, state: "current", payload: { research_question: "事件是否改变关键因素？" }, contextFingerprint: "mock-source-v1" },
-      evidencePlan: { sequence: 3, state: "current", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1" },
+      candidateClaims: { sequence: 1, state: "current", payload: { candidates: [{ candidate_id: "8a23ef12-9b37-4f54-8f2d-b938605a1d8d", normalized_text: "订单增长可以转化为收入", quote: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1", displayWithheld: false },
+      protocol: { sequence: 2, state: "current", payload: { research_question: "事件是否改变关键因素？" }, contextFingerprint: "mock-source-v1", displayWithheld: false },
+      evidencePlan: { sequence: 3, state: "current", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1", displayWithheld: false },
     },
     authorizedEvidencePlan: null,
   };

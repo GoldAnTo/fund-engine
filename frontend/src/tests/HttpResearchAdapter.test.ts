@@ -28,7 +28,7 @@ describe("HttpResearchAdapter", () => {
         system: { claims: { state: "succeeded", artifact_sequence: 1 }, protocol: { state: "succeeded", artifact_sequence: 2 }, plan: { state: "succeeded", artifact_sequence: 3 } },
         review: { claims: { state: "confirmed" }, protocol: { state: "awaiting_review" }, plan: { state: "locked" } },
         next_attempt_at: null, last_error_message: null,
-        artifacts: { claims: { sequence: 1, state: "current", payload: { candidates: [] }, context_fingerprint: "a" }, protocol: null, plan: null },
+        artifacts: { claims: { sequence: 1, state: "current", payload: {}, context_fingerprint: "a", display_withheld: true }, protocol: null, plan: null },
         authorized_evidence_plan: null,
       });
     }));
@@ -43,7 +43,7 @@ describe("HttpResearchAdapter", () => {
       initialMaterial: { documentVersionId: "91c8e13c-f649-4f6b-9330-0c9ae7cb6641", title: "冻结公告", parseState: "success" },
       progress: { completedSteps: 1, totalSteps: 3, currentStep: "draft_protocol", failedStep: null },
       system: { candidateClaims: { state: "succeeded", artifactSequence: 1 } },
-      artifacts: { candidateClaims: { sequence: 1, contextFingerprint: "a" } },
+      artifacts: { candidateClaims: { sequence: 1, contextFingerprint: "a", displayWithheld: true } },
     });
     expect(events).toEqual({
       items: [{ seq: 8, type: "protocol_drafted", step: "draft_protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, createdAt: "2026-08-14T10:00:00Z" }],

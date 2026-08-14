@@ -19153,6 +19153,11 @@
               }
             ],
             "title": "Context Fingerprint"
+          },
+          "display_withheld": {
+            "type": "boolean",
+            "title": "Display Withheld",
+            "default": false
           }
         },
         "additionalProperties": false,

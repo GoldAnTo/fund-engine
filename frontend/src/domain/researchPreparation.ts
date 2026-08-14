@@ -66,6 +66,8 @@ export interface ResearchPreparationArtifact {
   state: ResearchPreparationArtifactState;
   payload: Record<string, unknown>;
   contextFingerprint: string | null;
+  /** Source-use policy prevents this artifact from being displayed or approved. */
+  displayWithheld: boolean;
 }
 
 export interface ResearchPreparation {

@@ -194,8 +194,171 @@ def test_preparation_summary_hides_candidate_text_when_source_contract_forbids_d
     assert response.status_code == 200, response.text
     assert quote not in response.text
     assert normalized not in response.text
-    candidate_payload = response.json()["artifacts"]["claims"]["payload"]["candidates"][0]
-    assert candidate_payload == {"candidate_id": str(candidate.id), "safe": "kept"}
+    artifact = response.json()["artifacts"]["claims"]
+    assert artifact["display_withheld"] is True
+    assert artifact["payload"] == {}
+
+
+def test_preparation_summary_withholds_each_artifact_payload_for_display_restricted_source(
+    cmd_client, cmd_session
+):
+    case, preparation, theses, context, _sequence = _protocol_draft_case(
+        cmd_session, cmd_client, allow_display=False
+    )
+    preparation.protocol_review_state = "confirmed"
+    plan = ResearchPreparationService(cmd_session).complete_system_step(
+        case.id,
+        "draft_evidence_plan",
+        {"items": [
+            {"factor": thesis.statement, "evidence_target": "primary source", "allowed_source_roles": ["primary_disclosure"], "priority": "normal", "stop_condition": "one reviewed source", "budget": 3}
+            for thesis in theses
+        ]},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=context,
+    )
+    artifacts = {
+        artifact.kind: artifact
+        for artifact in cmd_session.scalars(
+            select(ResearchPreparationArtifact).where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id,
+                ResearchPreparationArtifact.state == "current",
+            )
+        )
+    }
+    leaks = {
+        "claims": "licensed nested candidate original text",
+        "protocol": "licensed protocol baseline and rationale text",
+        "plan": "licensed evidence target text",
+    }
+    artifacts["atomic_claim_candidates"].payload = {
+        "candidates": [{"candidate_id": artifacts["atomic_claim_candidates"].payload["candidates"][0]["candidate_id"], "quote": leaks["claims"]}],
+        "nested": {"raw": leaks["claims"]},
+    }
+    artifacts["research_protocol_draft"].payload["baseline"]["original_text"] = leaks["protocol"]
+    artifacts["research_protocol_draft"].payload["rationale"] = {"nested": leaks["protocol"]}
+    artifacts["evidence_acquisition_plan"].payload["items"][0]["evidence_target"] = leaks["plan"]
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation")
+
+    assert response.status_code == 200, response.text
+    for leak in leaks.values():
+        assert leak not in response.text
+    for artifact in response.json()["artifacts"].values():
+        assert artifact["display_withheld"] is True
+        assert artifact["payload"] == {}
+
+
+def test_display_restricted_source_rejects_human_protocol_confirmation(cmd_client, cmd_session):
+    case, preparation, _theses, _context, sequence = _protocol_draft_case(
+        cmd_session, cmd_client, allow_display=False
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",
+        json={"revision": 1, "actor": "human", "draft_sequence": sequence, "edits": {}},
+    )
+
+    assert response.status_code == 422, response.text
+    cmd_session.expire_all()
+    assert cmd_session.get(type(preparation), preparation.id).protocol_review_state == "awaiting_review"
+    assert list(cmd_session.scalars(select(MetricDefinitionVersion))) == []
+
+
+def test_display_restricted_source_rejects_human_claim_confirmation(cmd_client, cmd_session):
+    case, preparation = _prepared_case(cmd_session)
+    now = datetime.now(timezone.utc)
+    document = cmd_session.scalar(
+        select(DocumentVersion).join(CaseDocumentVersion).where(
+            CaseDocumentVersion.research_case_id == case.id
+        )
+    )
+    assert document is not None
+    cmd_session.add(SourceContract(
+        document_version_id=document.id,
+        source_type="licensed_provider",
+        provider_or_tenant="licensed",
+        allow_ai_processing=True,
+        allow_display=False,
+        allow_export=False,
+        allow_api=False,
+        region="cn",
+        effective_from=None,
+        effective_until=None,
+        retention_policy="case_retained",
+        deletion_policy="manual",
+        downstream_restrictions=[],
+        contract_version="test",
+        intake_metadata={},
+        declared_by="human",
+        created_at=now,
+    ))
+    span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="licensed claim")
+    cmd_session.add(span)
+    cmd_session.flush()
+    candidate = AtomicClaimService(cmd_session).admit(
+        AtomicClaimDraft(
+            source_span_id=span.id, quote="licensed claim", quote_start=0,
+            quote_end=14, normalized_text="licensed claim", claim_type="forecast",
+            assertion_actor="company", subject="company", predicate="expects",
+            object_text=None, numeric_value=None, unit=None, observed_period=None, scope={},
+        ),
+        authority_level="primary_disclosure", run_ref="display-restricted",
+    )
+    ResearchPreparationService(cmd_session).complete_system_step(
+        case.id, "parse_claims", {"candidates": [{"candidate_id": str(candidate.id)}]},
+        expected_version=1, expected_fingerprint="a" * 64,
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case.id}/preparation/claims/confirm",
+        json={"revision": 1, "actor": "human", "decisions": [{"candidate_id": str(candidate.id), "outcome": "confirmed", "reason": "checked"}]},
+    )
+
+    assert response.status_code == 422, response.text
+    assert list(cmd_session.scalars(select(AtomicClaimReview))) == []
+    assert cmd_session.get(type(preparation), preparation.id).claim_review_state == "awaiting_review"
+
+
+def test_display_restricted_source_rejects_human_plan_authorization(cmd_client, cmd_session):
+    case, preparation, theses, context, _sequence = _protocol_draft_case(
+        cmd_session, cmd_client, allow_display=False
+    )
+    preparation.protocol_review_state = "confirmed"
+    ResearchPreparationService(cmd_session).complete_system_step(
+        case.id,
+        "draft_evidence_plan",
+        {"items": [
+            {"factor": thesis.statement, "evidence_target": "primary source", "allowed_source_roles": ["primary_disclosure"], "priority": "normal", "stop_condition": "one reviewed source", "budget": 3}
+            for thesis in theses
+        ]},
+        expected_version=preparation.version,
+        expected_fingerprint=preparation.input_fingerprint,
+        expected_context_fingerprint=context,
+    )
+    cmd_session.commit()
+    plan = cmd_session.scalar(
+        select(ResearchPreparationArtifact).where(
+            ResearchPreparationArtifact.research_preparation_id == preparation.id,
+            ResearchPreparationArtifact.kind == "evidence_acquisition_plan",
+            ResearchPreparationArtifact.state == "current",
+        )
+    )
+    assert plan is not None
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case.id}/preparation/authorize",
+        json={"revision": 1, "actor": "human", "plan_sequence": plan.sequence, "idempotency_key": "display-restricted"},
+    )
+
+    assert response.status_code == 422, response.text
+    cmd_session.expire_all()
+    refreshed = cmd_session.get(type(preparation), preparation.id)
+    assert refreshed.status == "awaiting_plan_authorization"
+    assert refreshed.research_run_id is None
+    assert list(cmd_session.scalars(select(ResearchRun))) == []
 
 
 def test_retry_requires_exact_revision_and_only_requeues_a_failed_step(cmd_client, cmd_session):
@@ -249,11 +412,10 @@ def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews
     assert cmd_session.get(type(preparation), preparation.id).claim_review_state == "awaiting_review"
 
 
-def _protocol_draft_case(session, client, mutate_protocol=None):
+def _protocol_draft_case(session, client, mutate_protocol=None, allow_display=True):
     case, preparation = _prepared_case(session)
     now = datetime.now(timezone.utc)
     document = session.scalar(select(DocumentVersion).join(CaseDocumentVersion).where(CaseDocumentVersion.research_case_id == case.id))
-    session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="team", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="human", created_at=now))
     theses=[]; candidates=[]
     for number in range(3):
         thesis=Thesis(research_case_id=case.id, statement=f"factor {number}", research_protocol_required=True, created_by="human", created_at=now); session.add(thesis); session.flush(); theses.append(thesis)
@@ -267,6 +429,8 @@ def _protocol_draft_case(session, client, mutate_protocol=None):
     source=MechanismNodeVersion(template_version_id=template.id,node_key="source",display_name="Source",role="driver",created_at=now); target=MechanismNodeVersion(template_version_id=template.id,node_key="target",display_name="Target",role="outcome",created_at=now); session.add_all([source,target]); session.flush()
     edge=MechanismEdgeVersion(template_version_id=template.id,edge_key="edge",source_node_id=source.id,target_node_id=target.id,created_at=now); session.add(edge); session.commit()
     claims=client.post(f"/api/v1/event-research/{case.id}/preparation/claims/confirm",json={"revision":1,"actor":"human","decisions":[{"candidate_id":str(c.id),"outcome":"confirmed","reason":"checked"} for c in candidates]}); assert claims.status_code==200, claims.text
+    session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="team", allow_ai_processing=True, allow_display=allow_display, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="human", created_at=now))
+    session.commit()
     service=ResearchPreparationService(session); session.refresh(preparation); context=service.current_candidate_context_fingerprint(case.id)
     baseline={"source_ref":f"document:{document.id}","value":"1","unit":"yuan","observed_period":"2025-12-31","available_at":document.available_at.replace(tzinfo=timezone.utc).isoformat()}
     outcomes=[]
