@@ -35,6 +35,7 @@ describe("ResearchPreparationPage", () => {
 
     expect(await screen.findByRole("heading", { name: "研究准备" })).toBeVisible();
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
+    expect(screen.getByText("正式研究和外部数据 Provider 尚未运行；准备阶段可能仅调用已配置的 LLM 生成待确认草案。")).toBeVisible();
     expect(screen.getByLabelText("系统准备活动")).toHaveTextContent("解析冻结原文");
     expect(screen.getByLabelText("系统准备活动")).toHaveTextContent("生成研究协议草案");
     expect(screen.getByLabelText("系统准备活动")).toHaveTextContent("生成补证计划草案");

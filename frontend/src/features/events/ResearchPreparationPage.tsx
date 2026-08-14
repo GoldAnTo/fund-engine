@@ -345,7 +345,7 @@ export function ResearchPreparationPage() {
         {preparation.caseTitle && <p className="ros-preparation-case-title">{preparation.caseTitle}</p>}
         {material && <p className="ros-preparation-material"><strong>{material.title || "冻结原文"}</strong><span>材料版本：{material.documentVersionId.slice(0, 8)}</span></p>}
         {progress && <p className="ros-preparation-progress">准备进度：{progress.completedSteps} / {progress.totalSteps}{progress.currentStep ? ` · 当前：${stepLabel(progress.currentStep)}` : queuedStep ? ` · 下一步：${stepLabel(queuedStep)}（已排队）` : ""}</p>}
-        <p>{runStarted ? "正式研究运行已建立，后续补证将按已授权计划受控执行。" : "系统只准备草案，研究员逐步确认；在授权前不会创建 ResearchRun 或运行任何外部 Provider。"}</p>
+        <p>{runStarted ? "正式研究运行已建立，后续补证将按已授权计划受控执行。" : "正式研究和外部数据 Provider 尚未运行；准备阶段可能仅调用已配置的 LLM 生成待确认草案。"}</p>
       </div>
       <p className={runStarted ? "ros-preparation-run is-started" : "ros-preparation-run"}>{runStarted ? "正式研究已启动" : "正式研究尚未启动"}</p>
     </header>
@@ -378,7 +378,7 @@ export function ResearchPreparationPage() {
         <p className="ros-eyebrow">你需要做</p>
         <h2>{summary.title}</h2>
         <p>{summary.detail}</p>
-        {preparation.status === "preparing" && <section className="ros-preparation-note"><strong>无需操作</strong><p>系统会每两秒更新此页。它只能生成草案，不会采纳陈述、批准协议或启动外部数据请求。</p></section>}
+        {preparation.status === "preparing" && <section className="ros-preparation-note"><strong>无需操作</strong><p>系统会每两秒更新此页。准备阶段可能仅调用已配置的 LLM 生成草案；不会采纳陈述、批准协议，也不会运行正式研究或外部数据 Provider。</p></section>}
         {preparation.status === "awaiting_claim_review" && <ClaimTask candidates={candidates} displayWithheld={candidateDisplayWithheld} decisions={claimDecisions} busy={busy} ready={claimsReady} onChange={(id, patch) => setClaimDecisions((current) => {
           const currentDecision = current[id] ?? { outcome: "" as const, reason: "", normalizedText: "" };
           return { ...current, [id]: { ...currentDecision, ...patch } };
