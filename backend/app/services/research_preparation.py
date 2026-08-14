@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import uuid
+from datetime import date
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -32,6 +33,10 @@ from app.models.research_preparation import (
 )
 from app.repositories.research_preparation import ResearchPreparationRepository
 from app.services.atomic_claims import AtomicClaimService
+from app.services.auto_research import AutoResearchService
+from app.services.event_research_scope_evidence import current_scope_thesis_ids, lock_event_research_lifecycle
+from app.repositories.event_research import EventResearchLifecycleRepository
+from app.services.research_protocol import ResearchProtocolService, MetricDefinitionInput, OutcomeBindingInput, VerificationRuleInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -767,6 +772,73 @@ class ResearchPreparationService:
             detail={"actor": actor},
         )
         return preparation
+
+    def authorize_evidence_plan(self, case_id: uuid.UUID, *, actor: str, revision: int, plan_sequence: int):
+        """Materialize a reviewed draft and queue exactly one formal research run.
+
+        This deliberately accepts no provider input: it is a ledger-only human
+        authorization boundary and remains entirely transactional.
+        """
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        if (preparation.status != "awaiting_plan_authorization" or preparation.plan_review_state != "awaiting_review" or preparation.claim_review_state != "confirmed" or preparation.protocol_review_state != "confirmed" or preparation.research_run_id is not None):
+            raise ConflictError("evidence plan is not ready for authorization")
+        plan = self._repo.current_artifact(preparation.id, "evidence_acquisition_plan")
+        protocol = self._repo.current_artifact(preparation.id, "research_protocol_draft")
+        if plan is None or plan.sequence != plan_sequence or protocol is None:
+            raise ConflictError("evidence plan revision is stale")
+        if protocol.context_fingerprint != self.current_candidate_context_fingerprint(case_id):
+            raise ConflictError("protocol draft candidate context changed")
+        budget = self._plan_budget(plan.payload)
+        self._materialize_protocol(case_id, protocol.payload, actor, protocol.sequence)
+        run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, commit=False, trigger="preparation_authorized")
+        # Set both fields before the next flush so the authorization constraint
+        # never observes a transient unauthorized run reference.
+        preparation.research_run_id = run.id
+        preparation.status = "authorized"
+        preparation.plan_review_state = "confirmed"
+        preparation.updated_at = _utcnow()
+        lifecycle = lock_event_research_lifecycle(self._session, case_id)
+        if lifecycle is not None:
+            EventResearchLifecycleRepository(self._session).update(lifecycle, status="researching", active_run_id=run.id, summary="研究计划已获授权，正在排队执行", current_gap=None, next_human_action=None)
+        self._repo.append_event(preparation, research_case_id=case_id, type="research_authorized", step="draft_evidence_plan", message="research authorized", detail={"plan_sequence": plan.sequence, "protocol_sequence": protocol.sequence, "run_id": str(run.id)})
+        return run
+
+    def _plan_budget(self, payload: object) -> int:
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list) or not payload["items"]:
+            raise ValidationError("evidence plan requires items")
+        values=[]
+        for item in payload["items"]:
+            if not isinstance(item, dict) or not isinstance(item.get("budget"), int) or isinstance(item["budget"], bool) or item["budget"] <= 0:
+                raise ValidationError("evidence plan item budget is invalid")
+            values.append(item["budget"])
+        total=sum(values)
+        if total > 10000: raise ValidationError("evidence plan budget exceeds limit")
+        return total
+
+    def _materialize_protocol(self, case_id: uuid.UUID, payload: object, actor: str, sequence: int) -> None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("outcomes"), list):
+            raise ValidationError("protocol draft requires outcomes")
+        scope=current_scope_thesis_ids(self._session, case_id)
+        if scope is None:
+            scope={x.id for x in self._session.scalars(select(__import__('app.models.ledger', fromlist=['Thesis']).Thesis).where(__import__('app.models.ledger', fromlist=['Thesis']).Thesis.research_case_id==case_id))}
+        seen=set(); service=ResearchProtocolService(self._session); reason=f"preparation artifact {sequence}"
+        for outcome in payload["outcomes"]:
+            if not isinstance(outcome,dict): raise ValidationError("protocol outcome is invalid")
+            try: thesis_id=uuid.UUID(str(outcome["thesis_id"])); metric=outcome["metric"]; binding=outcome["binding"]; template_id=uuid.UUID(str(outcome["template_version_id"]))
+            except (KeyError, ValueError, TypeError) as exc: raise ValidationError("protocol outcome is incomplete") from exc
+            if thesis_id in seen: raise ValidationError("protocol outcome duplicates thesis")
+            seen.add(thesis_id)
+            try:
+                m=service.add_metric_version(MetricDefinitionInput(**metric), approved_by=actor, reason=reason)
+                b=service.create_outcome_binding(thesis_id, OutcomeBindingInput(metric_definition_id=m.id, entity_scope=binding["entity_scope"], direction=binding["direction"], baseline=binding["baseline"], horizon_start=date.fromisoformat(binding["horizon_start"]), horizon_end=date.fromisoformat(binding["horizon_end"]), reviewer=actor, reason=reason))
+                service.approve_outcome_binding(b.id, reviewer=actor, reason=reason); service.select_template(case_id, template_id, reviewer=actor, reason=reason)
+                for rule in outcome.get("verification_rules",[]):
+                    edge=uuid.UUID(str(rule["mechanism_edge_id"])); raw={k:v for k,v in rule.items() if k!="mechanism_edge_id"}; raw["metric_definition_id"]=m.id
+                    for key in ("observed_period_start","observed_period_end","available_at_deadline"): raw[key]=date.fromisoformat(raw[key])
+                    service.add_verification_rule(case_id, edge, VerificationRuleInput(**raw, reviewer=actor, reason=reason))
+            except (KeyError, TypeError, ValueError) as exc: raise ValidationError("protocol outcome is invalid") from exc
+        if seen != scope: raise ValidationError("protocol outcomes must cover current scope exactly once")
 
     def _lock(
         self, case_id: uuid.UUID, *, case_locked: bool = False
