@@ -111,10 +111,10 @@ export function EventCreatePage() {
           sourceMetadata: frozenSourceMetadata,
           actor: "human:researcher",
         });
-        navigate(`/events/${created.caseId}/documents?document=${encodeURIComponent(uploaded.documentVersionId)}`);
+        navigate(`/events/${created.caseId}/preparation?document=${encodeURIComponent(uploaded.documentVersionId)}`);
         return;
       }
-      navigate(`/events/${created.caseId}`);
+      navigate(`/events/${created.caseId}/preparation`);
     } catch {
       setError("Case 尚未创建。请修正必填信息后重试。");
     } finally { setBusy(false); }

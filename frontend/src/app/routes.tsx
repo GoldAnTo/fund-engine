@@ -19,6 +19,7 @@ import {
 } from "../features/case/CasePages";
 import { EventCreatePage } from "../features/events/EventCreatePage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
+import { ResearchPreparationPage } from "../features/events/ResearchPreparationPage";
 import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
 import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import { LegacyAdmissionPage } from "../features/events/LegacyAdmissionPage";
@@ -33,6 +34,7 @@ export function ResearchOsRoutes() {
         <Route path="monitoring" element={<GlobalMonitoringPage />} />
         <Route path="governance/case-admissions" element={<LegacyAdmissionPage />} />
         <Route path="events/new" element={<EventCreatePage />} />
+        <Route path="events/:caseId/preparation" element={<ResearchPreparationPage />} />
         <Route path="events/:caseId" element={<CaseConclusionPage />} />
         <Route
           path="events/:caseId/history"

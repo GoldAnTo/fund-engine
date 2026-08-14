@@ -1973,7 +1973,7 @@ describe("Research OS event entry", () => {
       <MemoryRouter initialEntries={["/events/new"]}>
         <Routes>
           <Route path="/events/new" element={<EventCreatePage />} />
-          <Route path="/events/:caseId" element={<p>新 Case 已建立</p>} />
+          <Route path="/events/:caseId/preparation" element={<p>新 Case 已建立</p>} />
         </Routes>
       </MemoryRouter>,
     );
