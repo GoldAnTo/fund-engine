@@ -395,7 +395,8 @@ def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monk
         case_id, plan_sequence = case.id, plan.sequence
     finally:
         setup.close()
-    ready, entered, release = Barrier(2), Event(), Event()
+    both_read_ready, entered, release = Event(), Event(), Event()
+    ready = Barrier(2, action=both_read_ready.set)
     original = __import__("app.services.research_preparation", fromlist=["AutoResearchService"]).AutoResearchService.start
     def paused_start(self, *args, **kwargs):
         entered.set(); release.wait(3); return original(self, *args, **kwargs)
@@ -422,7 +423,7 @@ def test_public_authorize_two_sessions_materializes_exactly_one_run(engine, monk
                 from app.errors import ConflictError
                 assert isinstance(exc, ConflictError); outcomes.append((409, None))
         finally: db.close()
-    first=Thread(target=request,args=(keys[0],)); second=Thread(target=request,args=(keys[1],)); first.start(); assert entered.wait(3); second.start(); release.set(); first.join(5); second.join(5)
+    first=Thread(target=request,args=(keys[0],)); second=Thread(target=request,args=(keys[1],)); first.start(); second.start(); assert both_read_ready.wait(3); assert entered.wait(3); release.set(); first.join(5); second.join(5)
     statuses = sorted(status for status, _ in outcomes)
     if keys[0] != keys[1]:
         assert statuses == [201, 409]
