@@ -19,16 +19,16 @@ describe("HttpResearchAdapter", () => {
       urls.push(String(input));
       if (String(input).endsWith("/events?after_seq=7&limit=20")) {
         return jsonResponse({
-          items: [{ seq: 8, type: "protocol_drafted", step: "protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, created_at: "2026-08-14T10:00:00Z" }],
+          items: [{ seq: 8, type: "protocol_drafted", step: "draft_protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, created_at: "2026-08-14T10:00:00Z" }],
           next_after_seq: 8,
         });
       }
       return jsonResponse({
-        case_id: "event-1", revision: 3, status: "awaiting_protocol_review", research_run_id: null,
-        system: { parse: { state: "completed", artifact_sequence: 1 }, protocol: { state: "completed", artifact_sequence: 2 }, evidence_plan: { state: "completed", artifact_sequence: 3 } },
-        review: { claims: { state: "confirmed", review_state: "confirmed" }, protocol: { state: "pending", review_state: "pending" }, evidence_plan: { state: "pending", review_state: "pending" } },
+        case_id: "event-1", revision: 3, status: "awaiting_protocol_confirmation", research_run_id: null,
+        system: { claims: { state: "succeeded", artifact_sequence: 1 }, protocol: { state: "succeeded", artifact_sequence: 2 }, plan: { state: "succeeded", artifact_sequence: 3 } },
+        review: { claims: { state: "confirmed" }, protocol: { state: "awaiting_review" }, plan: { state: "locked" } },
         next_attempt_at: null, last_error_message: null,
-        artifacts: { candidate_claims: { sequence: 1, state: "draft", payload: { candidates: [] }, context_fingerprint: "a" }, protocol: null, evidence_plan: null },
+        artifacts: { claims: { sequence: 1, state: "current", payload: { candidates: [] }, context_fingerprint: "a" }, protocol: null, plan: null },
         authorized_evidence_plan: null,
       });
     }));
@@ -38,12 +38,12 @@ describe("HttpResearchAdapter", () => {
     const events = await adapter.listResearchPreparationEvents("event-1", { afterSeq: 7, limit: 20 });
 
     expect(preparation).toMatchObject({
-      caseId: "event-1", revision: 3, status: "awaiting_protocol_review",
-      system: { parse: { state: "completed", artifactSequence: 1 } },
+      caseId: "event-1", revision: 3, status: "awaiting_protocol_confirmation",
+      system: { candidateClaims: { state: "succeeded", artifactSequence: 1 } },
       artifacts: { candidateClaims: { sequence: 1, contextFingerprint: "a" } },
     });
     expect(events).toEqual({
-      items: [{ seq: 8, type: "protocol_drafted", step: "protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, createdAt: "2026-08-14T10:00:00Z" }],
+      items: [{ seq: 8, type: "protocol_drafted", step: "draft_protocol", message: "协议草案已就绪", detail: { secret: "never shown" }, createdAt: "2026-08-14T10:00:00Z" }],
       nextAfterSeq: 8,
     });
     expect(urls).toEqual([
@@ -60,7 +60,11 @@ describe("HttpResearchAdapter", () => {
       bodies.push(JSON.parse(String(init?.body)));
       return jsonResponse({
         case_id: "event-1", revision: 4, status: "authorized", research_run_id: "run-1",
-        system: {}, review: {}, next_attempt_at: null, last_error_message: null, artifacts: {}, authorized_evidence_plan: { sources: [] },
+        system: { claims: { state: "succeeded", artifact_sequence: 1 }, protocol: { state: "succeeded", artifact_sequence: 2 }, plan: { state: "succeeded", artifact_sequence: 3 } },
+        review: { claims: { state: "confirmed" }, protocol: { state: "confirmed" }, plan: { state: "confirmed" } },
+        next_attempt_at: null, last_error_message: null,
+        artifacts: { claims: { sequence: 1, state: "current", payload: {}, context_fingerprint: null }, protocol: { sequence: 2, state: "current", payload: {}, context_fingerprint: null }, plan: { sequence: 3, state: "current", payload: {}, context_fingerprint: null } },
+        authorized_evidence_plan: { sources: [] },
       }, true, String(input).endsWith("/authorize") ? 201 : 200);
     }));
 
@@ -107,6 +111,19 @@ describe("HttpResearchAdapter", () => {
     await expect(adapter.updateEventResearchScope({
       caseId: "event-1", factors: ["因素"], changedBy: "human:researcher", changeReason: "范围调整",
     })).rejects.toMatchObject({ kind: "stale", message: "scope changed" });
+  });
+
+  it("rejects an unknown preparation event step rather than leaking it into the domain", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      items: [{ seq: 1, type: "unknown", step: "draft_everything", message: null, detail: {}, created_at: "2026-08-15T00:00:00Z" }],
+      next_after_seq: 1,
+    })));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    await expect(adapter.listResearchPreparationEvents("event-1")).rejects.toMatchObject({
+      kind: "backend_unavailable",
+      message: "研究准备事件步骤状态无效，请刷新后重试。",
+    });
   });
   it("does not retain retired prototype screen methods on the live adapter", () => {
     const prototype = Object.getPrototypeOf(
@@ -1282,10 +1299,10 @@ describe("HttpResearchAdapter", () => {
         scope: { version: 4, factors: ["资本开支担忧", "盈利预期变化", "估值重定价"], unmapped_evidence_count: 2 },
         next_action: { kind: "edit_factors", label: "编辑并继续自动研究", count: null },
         preparation: {
-          status: "awaiting_protocol_review", revision: 5, research_run_id: null,
+          status: "awaiting_protocol_confirmation", revision: 5, research_run_id: null,
           next_attempt_at: null, last_error_message: null,
-          system: { parse: { state: "completed" } },
-          review: { claims: { state: "confirmed" }, protocol: { state: "pending" } },
+          system: { claims: { state: "succeeded" }, protocol: { state: "succeeded" }, plan: { state: "queued" } },
+          review: { claims: { state: "confirmed" }, protocol: { state: "awaiting_review" }, plan: { state: "locked" } },
         },
       })),
     );
@@ -1306,10 +1323,10 @@ describe("HttpResearchAdapter", () => {
     expect(view.conclusion.confidence).toBe("medium");
     expect(view.nextAction).toEqual({ kind: "edit_factors", label: "编辑并继续自动研究" });
     expect(view.preparation).toEqual({
-      status: "awaiting_protocol_review", revision: 5, researchRunId: null,
+      status: "awaiting_protocol_confirmation", revision: 5, researchRunId: null,
       nextAttemptAt: null, lastErrorMessage: null,
-      system: { parse: { state: "completed" } },
-      review: { claims: { state: "confirmed" }, protocol: { state: "pending" } },
+      system: { candidateClaims: { state: "succeeded" }, protocol: { state: "succeeded" }, evidencePlan: { state: "queued" } },
+      review: { candidateClaims: { state: "confirmed" }, protocol: { state: "awaiting_review" }, evidencePlan: { state: "locked" } },
     });
   });
 

@@ -1,3 +1,10 @@
+import type {
+  ResearchPreparationStatus,
+  ResearchPreparationStages,
+  ResearchPreparationSystemStep,
+  ResearchPreparationReviewStep,
+} from "./researchPreparation";
+
 export type EventLifecycleStatus =
   | "extracting"
   | "researching"
@@ -87,13 +94,13 @@ export interface WorkbenchProgress {
 
 /** Safe preparation projection carried by the existing event workbench read model. */
 export interface EventPreparationSummary {
-  status: string;
+  status: ResearchPreparationStatus;
   revision: number;
   researchRunId: string | null;
   nextAttemptAt: string | null;
   lastErrorMessage: string | null;
-  system: Record<string, { state: string }>;
-  review: Record<string, { state: string }>;
+  system: ResearchPreparationStages<Pick<ResearchPreparationSystemStep, "state">>;
+  review: ResearchPreparationStages<ResearchPreparationReviewStep>;
 }
 
 export interface EventResearchScope {

@@ -5,18 +5,18 @@ import { PageStateError } from "../domain/types";
 
 describe("MockResearchAdapter scenarios", () => {
   it.each([
-    ["preparing", "preparing", "pending"],
-    ["review_claims", "awaiting_claim_review", "pending"],
-    ["review_protocol", "awaiting_protocol_review", "confirmed"],
+    ["preparing", "preparing", "locked"],
+    ["review_claims", "awaiting_claim_review", "awaiting_review"],
+    ["review_protocol", "awaiting_protocol_confirmation", "confirmed"],
     ["review_plan", "awaiting_plan_authorization", "confirmed"],
-    ["recoverable_failure", "recoverable_failure", "pending"],
+    ["recoverable_failure", "recoverable_failure", "locked"],
     ["authorized", "authorized", "confirmed"],
   ] as const)("exposes the explicit preparation %s scenario", async (scenario, status, claimsReviewState) => {
     const adapter = new MockResearchAdapter({ preparationScenario: scenario });
     const preparation = await adapter.getResearchPreparation("event-preparation");
 
     expect(preparation.status).toBe(status);
-    expect(preparation.review.claims.state).toBe(claimsReviewState);
+    expect(preparation.review.candidateClaims.state).toBe(claimsReviewState);
     expect(preparation.researchRunId).toBe(scenario === "authorized" ? "run-preparation-authorized" : null);
   });
 
@@ -29,7 +29,7 @@ describe("MockResearchAdapter scenarios", () => {
     const protocol = await adapter.confirmResearchPreparationProtocol({ caseId: "event-preparation", revision: claims.revision, actor: "human:researcher", draftSequence: 2 });
     const authorized = await adapter.authorizeResearchPreparation({ caseId: "event-preparation", revision: protocol.revision, actor: "human:researcher", planSequence: 3, idempotencyKey: "preparation-e2e" });
 
-    expect(claims.status).toBe("awaiting_protocol_review");
+    expect(claims.status).toBe("awaiting_protocol_confirmation");
     expect(protocol.status).toBe("awaiting_plan_authorization");
     expect(authorized).toMatchObject({ status: "authorized", researchRunId: "run-preparation-authorized" });
   });

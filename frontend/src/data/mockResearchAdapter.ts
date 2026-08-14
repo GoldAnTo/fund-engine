@@ -47,6 +47,7 @@ import type {
   ConfirmResearchPreparationClaimsInput,
   ConfirmResearchPreparationProtocolInput,
   ResearchPreparation,
+  ResearchPreparationEvent,
   ResearchPreparationEventsPage,
   RetryResearchPreparationInput,
 } from "../domain/researchPreparation";
@@ -3093,9 +3094,9 @@ type EventTsmProjection = {
 
 function mockResearchPreparation(scenario: PreparationScenario): ResearchPreparation {
   const review = {
-    claims: { state: "pending", reviewState: "pending", artifactSequence: 1 },
-    protocol: { state: "pending", reviewState: "pending", artifactSequence: 2 },
-    evidencePlan: { state: "pending", reviewState: "pending", artifactSequence: 3 },
+    candidateClaims: { state: "awaiting_review" as const },
+    protocol: { state: "locked" as const },
+    evidencePlan: { state: "locked" as const },
   };
   const preparation: ResearchPreparation = {
     caseId: "event-preparation",
@@ -3103,45 +3104,52 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
     status: "awaiting_claim_review",
     researchRunId: null,
     system: {
-      parse: { state: "completed", reviewState: null, artifactSequence: 1 },
-      protocol: { state: "completed", reviewState: null, artifactSequence: 2 },
-      evidencePlan: { state: "completed", reviewState: null, artifactSequence: 3 },
+      candidateClaims: { state: "succeeded", artifactSequence: 1 },
+      protocol: { state: "succeeded", artifactSequence: 2 },
+      evidencePlan: { state: "succeeded", artifactSequence: 3 },
     },
     review,
     nextAttemptAt: null,
     lastErrorMessage: null,
     artifacts: {
-      candidateClaims: { sequence: 1, state: "draft", payload: { candidates: [{ id: "candidate-1", text: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1" },
-      protocol: { sequence: 2, state: "draft", payload: { research_question: "事件是否改变关键因素？" }, contextFingerprint: "mock-source-v1" },
-      evidencePlan: { sequence: 3, state: "draft", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1" },
+      candidateClaims: { sequence: 1, state: "current", payload: { candidates: [{ id: "candidate-1", text: "订单增长可以转化为收入" }] }, contextFingerprint: "mock-source-v1" },
+      protocol: { sequence: 2, state: "current", payload: { research_question: "事件是否改变关键因素？" }, contextFingerprint: "mock-source-v1" },
+      evidencePlan: { sequence: 3, state: "current", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1" },
     },
     authorizedEvidencePlan: null,
   };
   if (scenario === "preparing") {
     preparation.status = "preparing";
-    preparation.system.protocol = { state: "running", reviewState: null, artifactSequence: null };
+    preparation.system.candidateClaims = { state: "running", artifactSequence: null };
+    preparation.system.protocol = { state: "queued", artifactSequence: null };
+    preparation.system.evidencePlan = { state: "queued", artifactSequence: null };
+    preparation.review.candidateClaims = { state: "locked" };
   }
   if (scenario === "review_protocol") {
-    preparation.status = "awaiting_protocol_review";
-    preparation.review.claims = { state: "confirmed", reviewState: "confirmed", artifactSequence: 1 };
+    preparation.status = "awaiting_protocol_confirmation";
+    preparation.review.candidateClaims = { state: "confirmed" };
   }
   if (scenario === "review_plan") {
     preparation.status = "awaiting_plan_authorization";
-    preparation.review.claims = { state: "confirmed", reviewState: "confirmed", artifactSequence: 1 };
-    preparation.review.protocol = { state: "confirmed", reviewState: "confirmed", artifactSequence: 2 };
+    preparation.review.candidateClaims = { state: "confirmed" };
+    preparation.review.protocol = { state: "confirmed" };
+    preparation.review.evidencePlan = { state: "awaiting_review" };
   }
   if (scenario === "recoverable_failure") {
     preparation.status = "recoverable_failure";
-    preparation.system.evidencePlan = { state: "failed", reviewState: null, artifactSequence: null };
+    preparation.system.candidateClaims = { state: "failed", artifactSequence: null };
+    preparation.system.protocol = { state: "stale", artifactSequence: null };
+    preparation.system.evidencePlan = { state: "stale", artifactSequence: null };
+    preparation.review.candidateClaims = { state: "locked" };
     preparation.nextAttemptAt = "2026-08-15T10:05:00Z";
     preparation.lastErrorMessage = "准备任务暂时未完成，可由研究员重试。";
   }
   if (scenario === "authorized") {
     preparation.status = "authorized";
     preparation.researchRunId = "run-preparation-authorized";
-    preparation.review.claims = { state: "confirmed", reviewState: "confirmed", artifactSequence: 1 };
-    preparation.review.protocol = { state: "confirmed", reviewState: "confirmed", artifactSequence: 2 };
-    preparation.review.evidencePlan = { state: "confirmed", reviewState: "confirmed", artifactSequence: 3 };
+    preparation.review.candidateClaims = { state: "confirmed" };
+    preparation.review.protocol = { state: "confirmed" };
+    preparation.review.evidencePlan = { state: "confirmed" };
     preparation.authorizedEvidencePlan = { sources: ["公司公告"] };
   }
   return preparation;
@@ -4471,10 +4479,11 @@ export class MockResearchAdapter implements ResearchClient {
   ): Promise<ResearchPreparationEventsPage> {
     this.throwIfOffline();
     if (caseId !== this.preparation.caseId) throw new Error("event research case not found");
-    const events = [
-      { seq: 1, type: "preparation_queued", step: "parse", message: "系统开始准备研究材料", detail: null, createdAt: "2026-08-15T09:00:00Z" },
-      { seq: 2, type: "draft_ready", step: "protocol", message: "草案已生成，等待人工确认", detail: null, createdAt: "2026-08-15T09:01:00Z" },
-    ].filter((event) => event.seq > (cursor.afterSeq ?? 0));
+    const allEvents: ResearchPreparationEvent[] = [
+      { seq: 1, type: "preparation_queued", step: "parse_claims", message: "系统开始准备研究材料", detail: null, createdAt: "2026-08-15T09:00:00Z" },
+      { seq: 2, type: "draft_ready", step: "draft_protocol", message: "草案已生成，等待人工确认", detail: null, createdAt: "2026-08-15T09:01:00Z" },
+    ];
+    const events = allEvents.filter((event) => event.seq > (cursor.afterSeq ?? 0));
     const page = events.slice(0, cursor.limit ?? events.length);
     return simulateLatency({ items: page, nextAfterSeq: page.length > 0 ? page[page.length - 1].seq : null });
   }
@@ -4486,10 +4495,10 @@ export class MockResearchAdapter implements ResearchClient {
     this.preparation = {
       ...this.preparation,
       revision: this.preparation.revision + 1,
-      status: "awaiting_protocol_review",
+      status: "awaiting_protocol_confirmation",
       review: {
         ...this.preparation.review,
-        claims: { state: "confirmed", reviewState: "confirmed", artifactSequence: 1 },
+        candidateClaims: { state: "confirmed" },
       },
     };
     return simulateLatency(this.copyPreparation());
@@ -4498,14 +4507,14 @@ export class MockResearchAdapter implements ResearchClient {
   async confirmResearchPreparationProtocol(
     input: ConfirmResearchPreparationProtocolInput,
   ): Promise<ResearchPreparation> {
-    this.requirePreparation(input.caseId, input.revision, "awaiting_protocol_review");
+    this.requirePreparation(input.caseId, input.revision, "awaiting_protocol_confirmation");
     this.preparation = {
       ...this.preparation,
       revision: this.preparation.revision + 1,
       status: "awaiting_plan_authorization",
       review: {
         ...this.preparation.review,
-        protocol: { state: "confirmed", reviewState: "confirmed", artifactSequence: input.draftSequence },
+        protocol: { state: "confirmed" },
       },
     };
     return simulateLatency(this.copyPreparation());
@@ -4531,7 +4540,7 @@ export class MockResearchAdapter implements ResearchClient {
       researchRunId: "run-preparation-authorized",
       review: {
         ...this.preparation.review,
-        evidencePlan: { state: "confirmed", reviewState: "confirmed", artifactSequence: input.planSequence },
+        evidencePlan: { state: "confirmed" },
       },
       authorizedEvidencePlan: { ...(this.preparation.artifacts.evidencePlan?.payload ?? {}) },
     };
@@ -4549,9 +4558,21 @@ export class MockResearchAdapter implements ResearchClient {
   private copyPreparation(): ResearchPreparation {
     return {
       ...this.preparation,
-      system: Object.fromEntries(Object.entries(this.preparation.system).map(([key, step]) => [key, { ...step }])),
-      review: Object.fromEntries(Object.entries(this.preparation.review).map(([key, step]) => [key, { ...step }])),
-      artifacts: Object.fromEntries(Object.entries(this.preparation.artifacts).map(([key, artifact]) => [key, artifact ? { ...artifact, payload: { ...artifact.payload } } : null])),
+      system: {
+        candidateClaims: { ...this.preparation.system.candidateClaims },
+        protocol: { ...this.preparation.system.protocol },
+        evidencePlan: { ...this.preparation.system.evidencePlan },
+      },
+      review: {
+        candidateClaims: { ...this.preparation.review.candidateClaims },
+        protocol: { ...this.preparation.review.protocol },
+        evidencePlan: { ...this.preparation.review.evidencePlan },
+      },
+      artifacts: {
+        candidateClaims: this.preparation.artifacts.candidateClaims ? { ...this.preparation.artifacts.candidateClaims, payload: { ...this.preparation.artifacts.candidateClaims.payload } } : null,
+        protocol: this.preparation.artifacts.protocol ? { ...this.preparation.artifacts.protocol, payload: { ...this.preparation.artifacts.protocol.payload } } : null,
+        evidencePlan: this.preparation.artifacts.evidencePlan ? { ...this.preparation.artifacts.evidencePlan, payload: { ...this.preparation.artifacts.evidencePlan.payload } } : null,
+      },
       authorizedEvidencePlan: this.preparation.authorizedEvidencePlan ? { ...this.preparation.authorizedEvidencePlan } : null,
     };
   }
@@ -4660,8 +4681,16 @@ export class MockResearchAdapter implements ResearchClient {
         researchRunId: this.preparation.researchRunId,
         nextAttemptAt: this.preparation.nextAttemptAt,
         lastErrorMessage: this.preparation.lastErrorMessage,
-        system: Object.fromEntries(Object.entries(this.preparation.system).map(([key, step]) => [key, { state: step.state }])),
-        review: Object.fromEntries(Object.entries(this.preparation.review).map(([key, step]) => [key, { state: step.state }])),
+        system: {
+          candidateClaims: { state: this.preparation.system.candidateClaims.state },
+          protocol: { state: this.preparation.system.protocol.state },
+          evidencePlan: { state: this.preparation.system.evidencePlan.state },
+        },
+        review: {
+          candidateClaims: { state: this.preparation.review.candidateClaims.state },
+          protocol: { state: this.preparation.review.protocol.state },
+          evidencePlan: { state: this.preparation.review.evidencePlan.state },
+        },
       } : null,
     });
   }

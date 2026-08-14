@@ -4,15 +4,53 @@
  * command that can materialize its already-reviewed plan into a research run.
  */
 
-export interface ResearchPreparationStep {
-  state: string;
-  reviewState: string | null;
+export type ResearchPreparationStatus =
+  | "preparing"
+  | "awaiting_claim_review"
+  | "awaiting_protocol_confirmation"
+  | "awaiting_plan_authorization"
+  | "recoverable_failure"
+  | "authorized";
+
+export type ResearchPreparationSystemStepState =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "retrying"
+  | "failed"
+  | "stale";
+
+export type ResearchPreparationReviewStepState =
+  | "locked"
+  | "awaiting_review"
+  | "confirmed"
+  | "stale";
+
+export type ResearchPreparationArtifactState = "current" | "stale" | "superseded";
+
+export type ResearchPreparationEventStep =
+  | "parse_claims"
+  | "draft_protocol"
+  | "draft_evidence_plan";
+
+export interface ResearchPreparationSystemStep {
+  state: ResearchPreparationSystemStepState;
   artifactSequence: number | null;
+}
+
+export interface ResearchPreparationReviewStep {
+  state: ResearchPreparationReviewStepState;
+}
+
+export interface ResearchPreparationStages<T> {
+  candidateClaims: T;
+  protocol: T;
+  evidencePlan: T;
 }
 
 export interface ResearchPreparationArtifact {
   sequence: number;
-  state: string;
+  state: ResearchPreparationArtifactState;
   payload: Record<string, unknown>;
   contextFingerprint: string | null;
 }
@@ -20,20 +58,20 @@ export interface ResearchPreparationArtifact {
 export interface ResearchPreparation {
   caseId: string;
   revision: number;
-  status: string;
+  status: ResearchPreparationStatus;
   researchRunId: string | null;
-  system: Record<string, ResearchPreparationStep>;
-  review: Record<string, ResearchPreparationStep>;
+  system: ResearchPreparationStages<ResearchPreparationSystemStep>;
+  review: ResearchPreparationStages<ResearchPreparationReviewStep>;
   nextAttemptAt: string | null;
   lastErrorMessage: string | null;
-  artifacts: Record<string, ResearchPreparationArtifact | null>;
+  artifacts: ResearchPreparationStages<ResearchPreparationArtifact | null>;
   authorizedEvidencePlan: Record<string, unknown> | null;
 }
 
 export interface ResearchPreparationEvent {
   seq: number;
   type: string;
-  step: string | null;
+  step: ResearchPreparationEventStep | null;
   message: string | null;
   detail: Record<string, unknown> | null;
   createdAt: string;

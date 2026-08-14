@@ -46,7 +46,12 @@ import {
   type ConfirmResearchPreparationClaimsInput,
   type ConfirmResearchPreparationProtocolInput,
   type ResearchPreparation,
+  type ResearchPreparationArtifactState,
   type ResearchPreparationEventsPage,
+  type ResearchPreparationEventStep,
+  type ResearchPreparationReviewStepState,
+  type ResearchPreparationStatus,
+  type ResearchPreparationSystemStepState,
   type RetryResearchPreparationInput,
 } from "../domain/researchPreparation";
 import type { ActiveResearchClient } from "../domain/prototypeTypes";
@@ -200,6 +205,34 @@ const VALID_EVENT_SOURCE_STATUSES: readonly EventSourceStatus[] = [
   "pasted_unverified",
   "invalid",
 ];
+const RESEARCH_PREPARATION_STATUSES = [
+  "preparing",
+  "awaiting_claim_review",
+  "awaiting_protocol_confirmation",
+  "awaiting_plan_authorization",
+  "recoverable_failure",
+  "authorized",
+] as const;
+const RESEARCH_PREPARATION_SYSTEM_STEP_STATES = [
+  "queued",
+  "running",
+  "succeeded",
+  "retrying",
+  "failed",
+  "stale",
+] as const;
+const RESEARCH_PREPARATION_REVIEW_STEP_STATES = [
+  "locked",
+  "awaiting_review",
+  "confirmed",
+  "stale",
+] as const;
+const RESEARCH_PREPARATION_ARTIFACT_STATES = ["current", "stale", "superseded"] as const;
+const RESEARCH_PREPARATION_EVENT_STEPS = [
+  "parse_claims",
+  "draft_protocol",
+  "draft_evidence_plan",
+] as const;
 
 function isEventSourceStatus(value: string): value is EventSourceStatus {
   return VALID_EVENT_SOURCE_STATUSES.includes(value as EventSourceStatus);
@@ -344,6 +377,25 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   private authHeaders(): HeadersInit {
     const token = this.options.bearerToken?.trim();
     return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  private requirePreparationValue<T extends string>(
+    value: string,
+    valid: readonly T[],
+    field: string,
+  ): T {
+    if (valid.includes(value as T)) return value as T;
+    throw new PageStateError(
+      "backend_unavailable",
+      `研究准备${field}状态无效，请刷新后重试。`,
+    );
+  }
+
+  private requirePreparationStage<T>(source: Record<string, T>, key: "claims" | "protocol" | "plan"): T {
+    if (!(key in source)) {
+      throw new PageStateError("backend_unavailable", "研究准备数据不完整，请刷新后重试。");
+    }
+    return source[key];
   }
 
   private async responseError(
@@ -2734,18 +2786,8 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
       preparation: dto.preparation
-        ? {
-            status: dto.preparation.status,
-            revision: dto.preparation.revision,
-            researchRunId: dto.preparation.research_run_id,
-            nextAttemptAt: dto.preparation.next_attempt_at,
-            lastErrorMessage: dto.preparation.last_error_message,
-            system: Object.fromEntries(Object.entries(dto.preparation.system).map(([key, step]) => [key, { state: step.state }])),
-            review: Object.fromEntries(Object.entries(dto.preparation.review).map(([key, step]) => [key, { state: step.state }])),
-          }
-        : dto.preparation === null
-          ? null
-          : undefined,
+        ? this.mapEventPreparationSummary(dto.preparation)
+        : dto.preparation === null ? null : undefined,
     };
   }
 
@@ -2910,7 +2952,13 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       items: dto.items.map((item) => ({
         seq: item.seq,
         type: item.type,
-        step: item.step ?? null,
+        step: item.step === null || item.step === undefined
+          ? null
+          : this.requirePreparationValue(
+              item.step,
+              RESEARCH_PREPARATION_EVENT_STEPS,
+              "事件步骤",
+            ) as ResearchPreparationEventStep,
         message: item.message ?? null,
         detail: item.detail ?? null,
         createdAt: item.created_at,
@@ -2994,37 +3042,100 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   private mapResearchPreparation(
     dto: Schemas["ResearchPreparationDTO"],
   ): ResearchPreparation {
-    const mapStep = (step: Schemas["PreparationStepDTO"]) => ({
-      state: step.state,
-      reviewState: step.review_state ?? null,
+    const mapSystemStep = (step: Schemas["PreparationStepDTO"]) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
+        "系统步骤",
+      ) as ResearchPreparationSystemStepState,
       artifactSequence: step.artifact_sequence ?? null,
+    });
+    const mapReviewStep = (step: Schemas["PreparationStepDTO"]) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_REVIEW_STEP_STATES,
+        "审核步骤",
+      ) as ResearchPreparationReviewStepState,
     });
     const mapArtifact = (artifact: Schemas["PreparationArtifactDTO"] | null) => artifact === null
       ? null
       : {
           sequence: artifact.sequence,
-          state: artifact.state,
+          state: this.requirePreparationValue(
+            artifact.state,
+            RESEARCH_PREPARATION_ARTIFACT_STATES,
+            "产物",
+          ) as ResearchPreparationArtifactState,
           payload: artifact.payload,
           contextFingerprint: artifact.context_fingerprint ?? null,
         };
     return {
       caseId: dto.case_id,
       revision: dto.revision,
-      status: dto.status,
+      status: this.requirePreparationValue(
+        dto.status,
+        RESEARCH_PREPARATION_STATUSES,
+        "整体",
+      ) as ResearchPreparationStatus,
       researchRunId: dto.research_run_id ?? null,
-      system: Object.fromEntries(Object.entries(dto.system).map(([key, step]) => [key, mapStep(step)])),
-      review: Object.fromEntries(Object.entries(dto.review).map(([key, step]) => [key, mapStep(step)])),
+      system: {
+        candidateClaims: mapSystemStep(this.requirePreparationStage(dto.system, "claims")),
+        protocol: mapSystemStep(this.requirePreparationStage(dto.system, "protocol")),
+        evidencePlan: mapSystemStep(this.requirePreparationStage(dto.system, "plan")),
+      },
+      review: {
+        candidateClaims: mapReviewStep(this.requirePreparationStage(dto.review, "claims")),
+        protocol: mapReviewStep(this.requirePreparationStage(dto.review, "protocol")),
+        evidencePlan: mapReviewStep(this.requirePreparationStage(dto.review, "plan")),
+      },
       nextAttemptAt: dto.next_attempt_at ?? null,
       lastErrorMessage: dto.last_error_message ?? null,
-      artifacts: Object.fromEntries(Object.entries(dto.artifacts).map(([key, artifact]) => [
-        key === "candidate_claims"
-          ? "candidateClaims"
-          : key === "evidence_plan"
-            ? "evidencePlan"
-            : key,
-        mapArtifact(artifact),
-      ])),
+      artifacts: {
+        candidateClaims: mapArtifact(this.requirePreparationStage(dto.artifacts, "claims")),
+        protocol: mapArtifact(this.requirePreparationStage(dto.artifacts, "protocol")),
+        evidencePlan: mapArtifact(this.requirePreparationStage(dto.artifacts, "plan")),
+      },
       authorizedEvidencePlan: dto.authorized_evidence_plan ?? null,
+    };
+  }
+
+  private mapEventPreparationSummary(
+    dto: Schemas["EventPreparationSummaryDTO"],
+  ): import("../domain/eventResearch").EventPreparationSummary {
+    const mapSystemStep = (step: Schemas["EventPreparationStepDTO"]) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
+        "系统步骤",
+      ) as ResearchPreparationSystemStepState,
+    });
+    const mapReviewStep = (step: Schemas["EventPreparationStepDTO"]) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_REVIEW_STEP_STATES,
+        "审核步骤",
+      ) as ResearchPreparationReviewStepState,
+    });
+    return {
+      status: this.requirePreparationValue(
+        dto.status,
+        RESEARCH_PREPARATION_STATUSES,
+        "整体",
+      ) as ResearchPreparationStatus,
+      revision: dto.revision,
+      researchRunId: dto.research_run_id,
+      nextAttemptAt: dto.next_attempt_at,
+      lastErrorMessage: dto.last_error_message,
+      system: {
+        candidateClaims: mapSystemStep(this.requirePreparationStage(dto.system, "claims")),
+        protocol: mapSystemStep(this.requirePreparationStage(dto.system, "protocol")),
+        evidencePlan: mapSystemStep(this.requirePreparationStage(dto.system, "plan")),
+      },
+      review: {
+        candidateClaims: mapReviewStep(this.requirePreparationStage(dto.review, "claims")),
+        protocol: mapReviewStep(this.requirePreparationStage(dto.review, "protocol")),
+        evidencePlan: mapReviewStep(this.requirePreparationStage(dto.review, "plan")),
+      },
     };
   }
 
