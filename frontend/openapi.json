@@ -7281,12 +7281,22 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7350,12 +7360,22 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7419,12 +7439,22 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7488,12 +7518,22 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -12977,6 +13017,54 @@
           "gaps"
         ],
         "title": "DossierResponse"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorEnvelope"
       },
       "EvaluateForecastTargetRequest": {
         "properties": {
@@ -24195,54 +24283,6 @@
           "items"
         ],
         "title": "ReviewQueueResponse"
-      },
-      "ErrorEnvelope": {
-        "additionalProperties": false,
-        "properties": {
-          "schema_version": {
-            "const": "v1",
-            "default": "v1",
-            "title": "Schema Version",
-            "type": "string"
-          },
-          "error": {
-            "$ref": "#/components/schemas/ErrorBody"
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "title": "ErrorEnvelope",
-        "type": "object"
-      },
-      "ErrorBody": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "title": "Code",
-            "type": "string"
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "request_id": {
-            "title": "Request Id",
-            "type": "string"
-          },
-          "details": {
-            "additionalProperties": true,
-            "title": "Details",
-            "type": "object"
-          }
-        },
-        "required": [
-          "code",
-          "message",
-          "request_id"
-        ],
-        "title": "ErrorBody",
-        "type": "object"
       }
     }
   }

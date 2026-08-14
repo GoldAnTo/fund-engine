@@ -13,10 +13,15 @@ from app.errors import ValidationFailedError
 from app.errors import ConflictError
 from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact, ResearchPreparationEvent
 from app.schemas.v1.research_preparation import *
+from app.schemas.v1.common import ErrorEnvelope
 
 router = APIRouter(prefix="/event-research", tags=["research-preparation-v1"], dependencies=[Depends(require_research_tenant)])
 _SECRET = re.compile(r"(?i)(token|authorization|password|secret|bearer|sk-[\w-]+|[?&](?:token|key|auth)=)")
 _ERRORS = {"preparation_provider_unavailable": "准备服务暂时不可用", "preparation_internal_error": "准备任务暂时失败", "preparation_backfill_candidate_limit": "候选数量超出处理限制"}
+_WRITE_ERRORS = {
+    409: {"model": ErrorEnvelope, "description": "Conflict"},
+    422: {"model": ErrorEnvelope, "description": "Validation failed"},
+}
 def _case(db, case_id, tenant): CaseTenantAccess(db).require_case(case_id, tenant)
 def _safe(value):
     if isinstance(value, dict): return {str(k): _safe(v) for k,v in value.items() if not _SECRET.search(str(k))}
@@ -41,10 +46,10 @@ def preparation_events(case_id:uuid.UUID, after_seq:int=Query(0,ge=0), limit:int
 def _commit(db):
     try: db.commit()
     except ValidationError as exc: db.rollback(); raise ValidationFailedError("request is invalid") from exc
-@router.post("/{case_id}/preparation/claims/confirm", response_model=ResearchPreparationDTO)
+@router.post("/{case_id}/preparation/claims/confirm", response_model=ResearchPreparationDTO, responses=_WRITE_ERRORS)
 def confirm_claims(case_id:uuid.UUID,payload:ConfirmClaimsRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id); ResearchPreparationService(db).confirm_claims(case_id,actor=payload.actor,revision=payload.revision,decisions=[ClaimDecision(**x.model_dump()) for x in payload.decisions]); _commit(db); return _dto(db,case_id)
-@router.post("/{case_id}/preparation/protocol/confirm", response_model=ResearchPreparationDTO)
+@router.post("/{case_id}/preparation/protocol/confirm", response_model=ResearchPreparationDTO, responses=_WRITE_ERRORS)
 def confirm_protocol(case_id:uuid.UUID,payload:ConfirmProtocolRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id)
     try:
@@ -52,28 +57,28 @@ def confirm_protocol(case_id:uuid.UUID,payload:ConfirmProtocolRequest,db:Session
     except ValidationError as exc:
         db.rollback(); raise ValidationFailedError("protocol draft is invalid") from exc
     return _dto(db,case_id)
-@router.post("/{case_id}/preparation/retry", response_model=ResearchPreparationDTO)
+@router.post("/{case_id}/preparation/retry", response_model=ResearchPreparationDTO, responses=_WRITE_ERRORS)
 def retry(case_id:uuid.UUID,payload:RetryResearchPreparationRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id); ResearchPreparationService(db).retry_failed_step(case_id,actor=payload.actor,revision=payload.revision); _commit(db); return _dto(db,case_id)
-@router.post("/{case_id}/preparation/authorize", response_model=ResearchPreparationDTO, status_code=status.HTTP_201_CREATED)
+@router.post("/{case_id}/preparation/authorize", response_model=ResearchPreparationDTO, status_code=status.HTTP_201_CREATED, responses=_WRITE_ERRORS)
 def authorize(case_id:uuid.UUID,payload:AuthorizeEvidencePlanRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id)
-    # Existing operational idempotency rows are global; bind the key to this
-    # exact authorization command before creating any durable run.
     from app.repositories.operational import IdempotencyRepository
     import hashlib, json
-    fingerprint=hashlib.sha256(json.dumps({"case":str(case_id),"revision":payload.revision,"plan":payload.plan_sequence},sort_keys=True).encode()).hexdigest(); repo=IdempotencyRepository(db); existing=repo.get(payload.idempotency_key)
-    if existing is not None:
-        if existing.request_fingerprint != fingerprint: raise ConflictError("idempotency key conflicts with another authorization")
-        if existing.status == "completed": return _dto(db,case_id)
-        raise ConflictError("authorization is in progress")
-    row=repo.insert_in_progress(key=payload.idempotency_key,request_fingerprint=fingerprint)
+    fingerprint=hashlib.sha256(json.dumps({"case":str(case_id),"revision":payload.revision,"plan":payload.plan_sequence,"actor":payload.actor},sort_keys=True,separators=(",", ":")).encode()).hexdigest(); repo=IdempotencyRepository(db)
+    row, acquired = repo.acquire(key=payload.idempotency_key,request_fingerprint=fingerprint)
+    if not acquired:
+        if row.request_fingerprint != fingerprint: raise ConflictError("idempotency_key_conflict")
+        if row.status == "completed" and isinstance(row.response_payload, dict):
+            return ResearchPreparationDTO.model_validate(row.response_payload)
+        raise ConflictError("idempotency_conflict")
     try:
         ResearchPreparationService(db).authorize_evidence_plan(case_id,actor=payload.actor,revision=payload.revision,plan_sequence=payload.plan_sequence)
-        repo.complete(row,response_status=201,response_payload={"case_id":str(case_id)}); _commit(db)
+        response = _dto(db,case_id)
+        repo.complete(row,response_status=201,response_payload=response.model_dump(mode="json")); _commit(db)
     except ValidationError as exc:
         db.rollback()
         raise ValidationFailedError("authorization request is invalid") from exc
     except Exception:
         db.rollback(); raise
-    return _dto(db,case_id)
+    return response

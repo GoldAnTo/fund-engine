@@ -3785,6 +3785,29 @@ export interface components {
              */
             counter_research: components["schemas"]["CounterResearchTaskDTO"][];
         };
+        /** ErrorBody */
+        ErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Request Id */
+            request_id: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ErrorEnvelope */
+        ErrorEnvelope: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            error: components["schemas"]["ErrorBody"];
+        };
         /** EvaluateForecastTargetRequest */
         EvaluateForecastTargetRequest: {
             /**
@@ -7836,29 +7859,6 @@ export interface components {
              */
             has_more: boolean;
         };
-        /** ErrorEnvelope */
-        ErrorEnvelope: {
-            /**
-             * Schema Version
-             * @default v1
-             * @constant
-             */
-            schema_version: "v1";
-            error: components["schemas"]["ErrorBody"];
-        };
-        /** ErrorBody */
-        ErrorBody: {
-            /** Code */
-            code: string;
-            /** Message */
-            message: string;
-            /** Request Id */
-            request_id: string;
-            /** Details */
-            details?: {
-                [key: string]: unknown;
-            };
-        };
     };
     responses: never;
     parameters: never;
@@ -11710,13 +11710,22 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchPreparationDTO"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -11747,13 +11756,22 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchPreparationDTO"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -11784,13 +11802,22 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchPreparationDTO"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -11821,13 +11848,22 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchPreparationDTO"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

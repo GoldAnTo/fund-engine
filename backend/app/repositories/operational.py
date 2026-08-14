@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.operational import (
@@ -274,6 +275,42 @@ class IdempotencyRepository:
 
     def get(self, key: str) -> IdempotencyKey | None:
         return self._session.get(IdempotencyKey, key)
+
+    def acquire(
+        self, *, key: str, request_fingerprint: str, ttl_seconds: int = 3600
+    ) -> tuple[IdempotencyKey, bool]:
+        """Atomically acquire an idempotency command slot.
+
+        A savepoint contains a duplicate-key failure so callers retain their
+        outer transaction (and any Case/preparation locks) rather than
+        discarding unrelated pending work with ``Session.rollback()``.
+        """
+        from datetime import timedelta
+
+        row = IdempotencyKey(
+            key=key,
+            status="in_progress",
+            request_fingerprint=request_fingerprint,
+            created_at=_utcnow(),
+            expires_at=_utcnow() + timedelta(seconds=ttl_seconds),
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.scalar(
+                select(IdempotencyKey)
+                .where(IdempotencyKey.key == key)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if existing is None:
+                # The winning transaction rolled back after this insert had
+                # waited on it. The client can safely retry this command.
+                raise ConflictError("idempotency_conflict")
+            return existing, False
+        return row, True
 
     def insert_in_progress(
         self, *, key: str, request_fingerprint: str, ttl_seconds: int = 3600

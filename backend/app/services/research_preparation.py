@@ -31,6 +31,7 @@ from app.models.research_preparation import (
     ResearchPreparation,
     ResearchPreparationArtifact,
 )
+from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.repositories.research_preparation import ResearchPreparationRepository
 from app.services.atomic_claims import AtomicClaimService
 from app.services.auto_research import AutoResearchService
@@ -798,13 +799,10 @@ class ResearchPreparationService:
             raise ConflictError("evidence plan revision is stale")
         if protocol.context_fingerprint != self.current_candidate_context_fingerprint(case_id):
             raise ConflictError("protocol draft candidate context changed")
-        budget = self._plan_budget(plan.payload)
+        budget = self._validate_authorized_evidence_plan(case_id, plan.payload)
         # Protocol rows are created at human protocol confirmation, never at
         # authorization. Authorization only freezes and dispatches that review.
         thesis_ids = current_scope_thesis_ids(self._session, case_id)
-        if thesis_ids is None:
-            from app.models.ledger import Thesis
-            thesis_ids = {thesis.id for thesis in self._session.scalars(select(Thesis).where(Thesis.research_case_id == case_id))}
         if not thesis_ids:
             raise ValidationError("research authorization requires a nonempty scope")
         run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, thesis_ids=sorted(thesis_ids, key=str), commit=False, trigger="preparation_authorized")
@@ -821,17 +819,79 @@ class ResearchPreparationService:
         self._repo.append_event(preparation, research_case_id=case_id, type="research_authorized", step="draft_evidence_plan", message="research authorized", detail={"plan_sequence": plan.sequence, "protocol_sequence": protocol.sequence, "run_id": str(run.id)})
         return run
 
-    def _plan_budget(self, payload: object) -> int:
-        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list) or not payload["items"]:
-            raise ValidationError("evidence plan requires items")
-        values=[]
+    def _validate_authorized_evidence_plan(
+        self, case_id: uuid.UUID, payload: object
+    ) -> int:
+        """Validate the exact immutable plan shape at the authorization gate."""
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if scope is None:
+            raise ValidationError("research authorization requires an active scope")
+        factors = set(
+            self._session.scalars(
+                select(EventResearchScopeFactor.statement).where(
+                    EventResearchScopeFactor.scope_version_id == scope.id
+                )
+            )
+        )
+        if not factors:
+            raise ValidationError("research authorization requires a nonempty scope")
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"items"}
+            or not isinstance(payload["items"], list)
+        ):
+            raise ValidationError("evidence plan has invalid shape")
+
+        required = {
+            "factor",
+            "evidence_target",
+            "allowed_source_roles",
+            "priority",
+            "stop_condition",
+            "budget",
+        }
+        seen: set[str] = set()
+        budget = 0
         for item in payload["items"]:
-            if not isinstance(item, dict) or not isinstance(item.get("budget"), int) or isinstance(item["budget"], bool) or item["budget"] <= 0:
+            if not isinstance(item, dict) or set(item) != required:
+                raise ValidationError("evidence plan item has invalid shape")
+            factor = item["factor"]
+            if (
+                not isinstance(factor, str)
+                or not factor.strip()
+                or factor not in factors
+                or factor in seen
+            ):
+                raise ValidationError("evidence plan factor is invalid")
+            seen.add(factor)
+            if any(
+                not isinstance(item[field], str) or not item[field].strip()
+                for field in ("evidence_target", "stop_condition")
+            ):
+                raise ValidationError("evidence plan strings must be nonempty")
+            roles = item["allowed_source_roles"]
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) or not role.strip() for role in roles)
+            ):
+                raise ValidationError("evidence plan source roles are invalid")
+            if item["priority"] not in {"high", "normal", "low"}:
+                raise ValidationError("evidence plan priority is invalid")
+            item_budget = item["budget"]
+            if type(item_budget) is not int or item_budget <= 0:
                 raise ValidationError("evidence plan item budget is invalid")
-            values.append(item["budget"])
-        total=sum(values)
-        if total > 10000: raise ValidationError("evidence plan budget exceeds limit")
-        return total
+            budget += item_budget
+        if seen != factors:
+            raise ValidationError("evidence plan must cover current scope exactly once")
+        if budget > 10000:
+            raise ValidationError("evidence plan budget exceeds limit")
+        return budget
 
     def _materialize_protocol(self, case_id: uuid.UUID, payload: object, actor: str, sequence: int) -> None:
         if not isinstance(payload, dict) or not isinstance(payload.get("outcomes"), list):
