@@ -110,6 +110,38 @@ describe("ResearchPreparationPage", () => {
     }));
   });
 
+  it("does not adopt quote-only candidates or submit a non-normalized claim", async () => {
+    const candidateId = "58e12e87-8c38-4b5a-9c36-7e5069429289";
+    const adapter = new MockResearchAdapter();
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await originalPreparation(caseId);
+      return {
+        ...preparation,
+        artifacts: {
+          ...preparation.artifacts,
+          candidateClaims: {
+            ...preparation.artifacts.candidateClaims!,
+            payload: { candidates: [{ candidate_id: candidateId, quote: "原文摘录不能替代规范化陈述" }] },
+          },
+        },
+      };
+    });
+    const confirm = vi.spyOn(adapter, "confirmResearchPreparationClaims");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const task = await screen.findByLabelText("当前人工任务");
+    expect(within(task).getByText("候选陈述受来源展示许可限制，无法在此页显示。请在已授权材料中核对后重试。")).toBeVisible();
+    expect(within(task).queryByText("原文摘录不能替代规范化陈述")).not.toBeInTheDocument();
+    expect(within(task).getByRole("button", { name: "确认候选陈述" })).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("does not offer unsupported protocol notes or submit unexpected protocol edits", async () => {
     const user = userEvent.setup();
     const adapter = new MockResearchAdapter({ preparationScenario: "review_protocol" });

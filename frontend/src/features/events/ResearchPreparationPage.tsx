@@ -54,9 +54,8 @@ function candidatesFrom(preparation: ResearchPreparation): Candidate[] {
     const item = record(candidate);
     const id = stringValue(item?.candidate_id).trim();
     const normalizedText = stringValue(item?.normalized_text).trim();
-    const quote = stringValue(item?.quote).trim();
-    if (!UUID_PATTERN.test(id) || (!normalizedText && !quote)) return [];
-    return [{ id, text: normalizedText || quote }];
+    if (!UUID_PATTERN.test(id) || !normalizedText) return [];
+    return [{ id, text: normalizedText }];
   });
 }
 
