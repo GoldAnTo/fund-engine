@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.operational import EventResearchLifecycle
+from app.models.research_preparation import ResearchPreparation
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
@@ -42,6 +44,8 @@ from app.schemas.v1.event_research import (
     EventConclusionVersionDTO,
     EventKeyEvidenceDTO,
     EventNextActionDTO,
+    EventPreparationStepDTO,
+    EventPreparationSummaryDTO,
     EventResearchFactorDTO,
     EventResearchLifecycleDTO,
     EventResearchListItemDTO,
@@ -56,6 +60,20 @@ from app.schemas.v1.event_research import (
 from app.services.event_review_queue import EventReviewQueueService
 
 
+_PREPARATION_ERROR_MESSAGES = {
+    "preparation_provider_unavailable": "准备服务暂时不可用",
+    "preparation_internal_error": "准备任务暂时失败",
+    "preparation_backfill_candidate_limit": "候选数量超出处理限制",
+}
+
+
+@dataclass(frozen=True)
+class _PreparationDeskProjection:
+    action: EventNextActionDTO | None = None
+    status_summary: str | None = None
+    next_human_action: str | None = None
+
+
 class EventResearchQueries:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -64,7 +82,7 @@ class EventResearchQueries:
         self, *, status: str | None = None, tenant_id: str
     ) -> EventResearchListResponse:
         stmt = (
-            select(EventResearchBrief, EventResearchLifecycle)
+            select(EventResearchBrief, EventResearchLifecycle, ResearchPreparation)
             .join(
                 EventResearchLifecycle,
                 EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
@@ -74,13 +92,20 @@ class EventResearchQueries:
                 CaseTenantAdmission.research_case_id
                 == EventResearchBrief.research_case_id,
             )
+            .outerjoin(
+                ResearchPreparation,
+                ResearchPreparation.research_case_id == EventResearchBrief.research_case_id,
+            )
             .where(CaseTenantAdmission.tenant_id == tenant_id)
             .order_by(EventResearchLifecycle.updated_at.desc())
         )
         if status is not None:
             stmt = stmt.where(EventResearchLifecycle.status == status)
         return EventResearchListResponse(
-            items=[self._list_item(brief, lifecycle) for brief, lifecycle in self._session.execute(stmt)]
+            items=[
+                self._list_item(brief, lifecycle, preparation)
+                for brief, lifecycle, preparation in self._session.execute(stmt)
+            ]
         )
 
     def network(self, *, tenant_id: str) -> ResearchNetworkResponse:
@@ -213,7 +238,12 @@ class EventResearchQueries:
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if brief is None or lifecycle is None:
             raise NotFoundError("event research case not found")
-        event = self._list_item(brief, lifecycle)
+        preparation = self._session.scalar(
+            select(ResearchPreparation)
+            .where(ResearchPreparation.research_case_id == case_id)
+            .limit(1)
+        )
+        event = self._list_item(brief, lifecycle, preparation)
         scope = self._latest_scope(case_id)
         progress = self._progress(case_id, lifecycle)
         factors = self._factors(case_id, scope, self._pending_by_factor(case_id, scope))
@@ -228,7 +258,8 @@ class EventResearchQueries:
             evidence=evidence,
             progress=progress,
             scope=self._scope(scope, case_id),
-            next_action=self._next_action(lifecycle),
+            next_action=self._next_action(lifecycle, preparation),
+            preparation=self._preparation_summary(preparation),
         )
 
     def conclusion_history(self, case_id: uuid.UUID) -> EventConclusionHistoryResponse:
@@ -357,9 +388,12 @@ class EventResearchQueries:
 
     @staticmethod
     def _list_item(
-        brief: EventResearchBrief, lifecycle: EventResearchLifecycle
+        brief: EventResearchBrief,
+        lifecycle: EventResearchLifecycle,
+        preparation: ResearchPreparation | None = None,
     ) -> EventResearchListItemDTO:
-        next_action = EventResearchQueries._next_action(lifecycle)
+        next_action = EventResearchQueries._next_action(lifecycle, preparation)
+        preparation_copy = EventResearchQueries._preparation_copy(preparation)
         return EventResearchListItemDTO(
             case_id=str(brief.research_case_id),
             event_title=brief.event_title,
@@ -367,8 +401,12 @@ class EventResearchQueries:
             ticker=brief.ticker,
             event_at=brief.event_at,
             lifecycle_status=lifecycle.status,
-            status_summary=lifecycle.status_summary,
-            next_human_action=lifecycle.next_human_action,
+            status_summary=preparation_copy.status_summary or lifecycle.status_summary,
+            next_human_action=(
+                preparation_copy.next_human_action
+                if preparation_copy.action is not None
+                else lifecycle.next_human_action
+            ),
             next_action_kind=next_action.kind,
             updated_at=lifecycle.updated_at,
         )
@@ -728,7 +766,13 @@ class EventResearchQueries:
         )
 
     @staticmethod
-    def _next_action(lifecycle: EventResearchLifecycle) -> EventNextActionDTO:
+    def _next_action(
+        lifecycle: EventResearchLifecycle,
+        preparation: ResearchPreparation | None = None,
+    ) -> EventNextActionDTO:
+        preparation_copy = EventResearchQueries._preparation_copy(preparation)
+        if preparation_copy.action is not None:
+            return preparation_copy.action
         if lifecycle.status == "awaiting_key_review":
             if (
                 lifecycle.active_run_id is None
@@ -764,6 +808,70 @@ class EventResearchQueries:
                 kind="view_conclusion_change", label="查看结论变更"
             )
         return EventNextActionDTO(kind="wait", label="系统继续处理")
+
+    @staticmethod
+    def _preparation_summary(
+        preparation: ResearchPreparation | None,
+    ) -> EventPreparationSummaryDTO | None:
+        if preparation is None:
+            return None
+        return EventPreparationSummaryDTO(
+            status=preparation.status,
+            revision=preparation.version,
+            research_run_id=(
+                str(preparation.research_run_id)
+                if preparation.status == "authorized" and preparation.research_run_id is not None
+                else None
+            ),
+            next_attempt_at=preparation.next_attempt_at,
+            last_error_message=_PREPARATION_ERROR_MESSAGES.get(preparation.last_error_code),
+            system={
+                "claims": EventPreparationStepDTO(state=preparation.parse_claims_state),
+                "protocol": EventPreparationStepDTO(state=preparation.draft_protocol_state),
+                "plan": EventPreparationStepDTO(state=preparation.draft_evidence_plan_state),
+            },
+            review={
+                "claims": EventPreparationStepDTO(state=preparation.claim_review_state),
+                "protocol": EventPreparationStepDTO(state=preparation.protocol_review_state),
+                "plan": EventPreparationStepDTO(state=preparation.plan_review_state),
+            },
+        )
+
+    @staticmethod
+    def _preparation_copy(
+        preparation: ResearchPreparation | None,
+    ) -> "_PreparationDeskProjection":
+        if preparation is None or preparation.status == "authorized":
+            return _PreparationDeskProjection()
+        action_by_status = {
+            "preparing": EventNextActionDTO(kind="wait", label="系统正在准备研究材料"),
+            "awaiting_claim_review": EventNextActionDTO(
+                kind="review_preparation_claims", label="核验原文与候选陈述"
+            ),
+            "awaiting_protocol_confirmation": EventNextActionDTO(
+                kind="review_preparation_protocol", label="确认研究协议草案"
+            ),
+            "awaiting_plan_authorization": EventNextActionDTO(
+                kind="authorize_preparation_plan", label="审核补证计划并授权启动"
+            ),
+            "recoverable_failure": EventNextActionDTO(
+                kind="recover_preparation", label="恢复研究准备"
+            ),
+        }
+        action = action_by_status.get(preparation.status)
+        if action is None:
+            return _PreparationDeskProjection()
+        if preparation.status == "preparing":
+            return _PreparationDeskProjection(
+                action=action,
+                status_summary="系统正在准备研究材料",
+                next_human_action=None,
+            )
+        return _PreparationDeskProjection(
+            action=action,
+            status_summary=f"等待{action.label}",
+            next_human_action=action.label,
+        )
 
 
 def _leading_count(value: str | None) -> int | None:

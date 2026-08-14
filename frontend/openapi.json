@@ -13320,7 +13320,11 @@
               "review_conclusion",
               "edit_factors",
               "complete_research_protocol",
-              "view_conclusion_change"
+              "view_conclusion_change",
+              "review_preparation_claims",
+              "review_preparation_protocol",
+              "authorize_preparation_plan",
+              "recover_preparation"
             ],
             "title": "Kind"
           },
@@ -13347,6 +13351,93 @@
           "label"
         ],
         "title": "EventNextActionDTO"
+      },
+      "EventPreparationStepDTO": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "EventPreparationStepDTO"
+      },
+      "EventPreparationSummaryDTO": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "last_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Message"
+          },
+          "system": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventPreparationStepDTO"
+            },
+            "type": "object",
+            "title": "System"
+          },
+          "review": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventPreparationStepDTO"
+            },
+            "type": "object",
+            "title": "Review"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "revision",
+          "research_run_id",
+          "next_attempt_at",
+          "last_error_message",
+          "system",
+          "review"
+        ],
+        "title": "EventPreparationSummaryDTO",
+        "description": "Safe preparation progress shown alongside the existing event lifecycle."
       },
       "EventResearchFactorDTO": {
         "properties": {
@@ -13542,7 +13633,11 @@
               "review_conclusion",
               "edit_factors",
               "complete_research_protocol",
-              "view_conclusion_change"
+              "view_conclusion_change",
+              "review_preparation_claims",
+              "review_preparation_protocol",
+              "authorize_preparation_plan",
+              "recover_preparation"
             ],
             "title": "Next Action Kind"
           },
@@ -14038,6 +14133,16 @@
           },
           "next_action": {
             "$ref": "#/components/schemas/EventNextActionDTO"
+          },
+          "preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventPreparationSummaryDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

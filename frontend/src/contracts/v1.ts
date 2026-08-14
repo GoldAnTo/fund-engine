@@ -3901,11 +3901,40 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
+            kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change" | "review_preparation_claims" | "review_preparation_protocol" | "authorize_preparation_plan" | "recover_preparation";
             /** Label */
             label: string;
             /** Count */
             count?: number | null;
+        };
+        /** EventPreparationStepDTO */
+        EventPreparationStepDTO: {
+            /** State */
+            state: string;
+        };
+        /**
+         * EventPreparationSummaryDTO
+         * @description Safe preparation progress shown alongside the existing event lifecycle.
+         */
+        EventPreparationSummaryDTO: {
+            /** Status */
+            status: string;
+            /** Revision */
+            revision: number;
+            /** Research Run Id */
+            research_run_id: string | null;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+            /** Last Error Message */
+            last_error_message: string | null;
+            /** System */
+            system: {
+                [key: string]: components["schemas"]["EventPreparationStepDTO"];
+            };
+            /** Review */
+            review: {
+                [key: string]: components["schemas"]["EventPreparationStepDTO"];
+            };
         };
         /** EventResearchFactorDTO */
         EventResearchFactorDTO: {
@@ -3963,7 +3992,7 @@ export interface components {
              * Next Action Kind
              * @enum {string}
              */
-            next_action_kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
+            next_action_kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change" | "review_preparation_claims" | "review_preparation_protocol" | "authorize_preparation_plan" | "recover_preparation";
             /**
              * Updated At
              * Format: date-time
@@ -4113,6 +4142,7 @@ export interface components {
             progress: components["schemas"]["EventWorkbenchProgressDTO"];
             scope: components["schemas"]["EventResearchScopeDTO"];
             next_action: components["schemas"]["EventNextActionDTO"];
+            preparation?: components["schemas"]["EventPreparationSummaryDTO"] | null;
         };
         /** EventWorkbenchProgressDTO */
         EventWorkbenchProgressDTO: {

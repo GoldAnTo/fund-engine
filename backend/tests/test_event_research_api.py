@@ -142,6 +142,21 @@ def _evidence_proposal(
     return proposal
 
 
+def _mark_preparation_authorized(cmd_session, case_id: uuid.UUID) -> None:
+    """Fixture helper for assertions about the post-authorization lifecycle."""
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(research_case_id=case_id, created_at=now, updated_at=now)
+    cmd_session.add(run)
+    cmd_session.flush()
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.status = "authorized"
+    preparation.research_run_id = run.id
+    preparation.authorized_evidence_plan = {"items": []}
+
+
 def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
     cmd_client, monkeypatch
 ) -> None:
@@ -1266,6 +1281,7 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     )
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
+    _mark_preparation_authorized(cmd_session, case_id)
     lifecycle.status = "awaiting_key_review"
     lifecycle.current_gap = "缺少对资本开支解释的反证"
     lifecycle.next_human_action = "审核 1 条关键证据"
@@ -1453,6 +1469,7 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
+    _mark_preparation_authorized(cmd_session, case_id)
 
     for status, expected_kind in [
         ("awaiting_scope", "edit_factors"),
@@ -1468,6 +1485,79 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("preparation_status", "expected_kind", "expected_action"),
+    [
+        ("awaiting_claim_review", "review_preparation_claims", "核验原文与候选陈述"),
+        ("awaiting_protocol_confirmation", "review_preparation_protocol", "确认研究协议草案"),
+        ("awaiting_plan_authorization", "authorize_preparation_plan", "审核补证计划并授权启动"),
+        ("recoverable_failure", "recover_preparation", "恢复研究准备"),
+    ],
+)
+def test_event_desk_projects_the_current_preparation_human_action(
+    cmd_client, cmd_session, preparation_status, expected_kind, expected_action
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.status = preparation_status
+    cmd_session.commit()
+
+    listed = cmd_client.get("/api/v1/event-research").json()["items"]
+    item = next(row for row in listed if row["case_id"] == str(case_id))
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert item["next_action_kind"] == expected_kind
+    assert item["next_human_action"] == expected_action
+    assert workbench["next_action"] == {
+        "kind": expected_kind,
+        "label": expected_action,
+        "count": None,
+    }
+
+
+def test_event_desk_projects_preparing_as_system_work_and_exposes_summary(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.parse_claims_state = "running"
+    preparation.last_error_code = "preparation_provider_unavailable"
+    cmd_session.commit()
+
+    listed = cmd_client.get("/api/v1/event-research").json()["items"]
+    item = next(row for row in listed if row["case_id"] == str(case_id))
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert item["next_action_kind"] == "wait"
+    assert item["next_human_action"] is None
+    assert "系统正在准备" in item["status_summary"]
+    assert workbench["preparation"] == {
+        "status": "preparing",
+        "revision": 1,
+        "research_run_id": None,
+        "next_attempt_at": None,
+        "last_error_message": "准备服务暂时不可用",
+        "system": {
+            "claims": {"state": "running"},
+            "protocol": {"state": "queued"},
+            "plan": {"state": "queued"},
+        },
+        "review": {
+            "claims": {"state": "locked"},
+            "protocol": {"state": "locked"},
+            "plan": {"state": "locked"},
+        },
+    }
 
 
 def test_draft_workbench_exposes_only_current_reviewed_evidence_and_factor_pending_counts(

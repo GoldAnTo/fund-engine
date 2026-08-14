@@ -51,6 +51,25 @@ def test_preparation_summary_is_tenant_scoped_and_hides_secret_event_detail(cmd_
     assert "Bearer" not in response.text
 
 
+def test_preparation_summary_uses_fixed_error_message_and_no_run_before_authorization(
+    cmd_client, cmd_session
+):
+    case, preparation = _prepared_case(cmd_session)
+    preparation.status = "recoverable_failure"
+    preparation.parse_claims_state = "failed"
+    preparation.last_error_code = "preparation_internal_error"
+    cmd_session.commit()
+
+    response = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation")
+
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    assert summary["research_run_id"] is None
+    assert summary["last_error_message"] == "准备任务暂时失败"
+    assert summary["system"]["claims"]["state"] == "failed"
+    assert summary["review"]["plan"]["state"] == "locked"
+
+
 def test_preparation_events_enforce_tenant_cursor_and_recursive_secret_redaction(cmd_client, cmd_session):
     case, preparation = _prepared_case(cmd_session)
     repo = ResearchPreparationService(cmd_session)._repo
