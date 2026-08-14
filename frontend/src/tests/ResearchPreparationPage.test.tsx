@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -145,7 +145,7 @@ describe("ResearchPreparationPage", () => {
     await user.type(within(task).getByLabelText("修正后陈述"), "订单增长可能转化为收入。");
     await user.click(within(task).getByRole("button", { name: "确认候选陈述" }));
 
-    expect(await screen.findByText("候选陈述已修正，协议草案与补证计划已标记为过期，系统正在重新生成。"))
+    expect(await screen.findByText("协议草案和补证计划已因原文核验变更失效，系统将仅重新生成受影响步骤"))
       .toBeVisible();
   });
 
@@ -167,6 +167,59 @@ describe("ResearchPreparationPage", () => {
     );
 
     expect(await screen.findByText(/活动 55/)).toBeVisible();
+  });
+
+  it("polls from the latest event after an initially paginated activity load", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "preparing" });
+    const calls: Array<number | undefined> = [];
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation(async (_caseId, cursor = {}) => {
+      calls.push(cursor.afterSeq);
+      const start = cursor.afterSeq ?? 0;
+      const items = Array.from({ length: start === 0 ? 50 : start === 50 ? 5 : 0 }, (_, index) => {
+        const seq = start + index + 1;
+        return { seq, type: "draft_ready", step: "draft_protocol" as const, message: `活动 ${seq}`, detail: null, createdAt: "2026-08-15T09:00:00Z" };
+      });
+      return { items, nextAfterSeq: start === 0 ? 50 : start === 50 ? null : null };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/活动 55/);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    });
+
+    expect(calls).toContain(55);
+  });
+
+  it("polls from the final event when the initial activity page has fewer than 50 records", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "preparing" });
+    const calls: Array<number | undefined> = [];
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation(async (_caseId, cursor = {}) => {
+      calls.push(cursor.afterSeq);
+      const start = cursor.afterSeq ?? 0;
+      const items = start === 0
+        ? [1, 2, 3].map((seq) => ({ seq, type: "draft_ready", step: "draft_protocol" as const, message: `短页活动 ${seq}`, detail: null, createdAt: "2026-08-15T09:00:00Z" }))
+        : [];
+      return { items, nextAfterSeq: null };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/短页活动 3/);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    });
+
+    expect(calls).toContain(3);
   });
 
   it("cleans up the two-second preparation poll when the page unmounts", async () => {

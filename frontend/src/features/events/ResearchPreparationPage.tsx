@@ -126,11 +126,14 @@ export function ResearchPreparationPage() {
       const page = await researchClient.listResearchPreparationEvents(caseId, { afterSeq, limit: 50 });
       received.push(...page.items);
       if (page.nextAfterSeq === null || page.nextAfterSeq === afterSeq || page.items.length === 0) {
-        activityCursor.current = page.nextAfterSeq ?? afterSeq ?? null;
+        const latestSeq = Math.max(
+          options.afterSeq ?? 0,
+          ...received.map((event) => event.seq),
+        );
+        activityCursor.current = latestSeq || null;
         break;
       }
       afterSeq = page.nextAfterSeq;
-      activityCursor.current = afterSeq;
     }
     setEvents((current) => {
       const combined = options.replace ? received : [...current, ...received];
@@ -226,7 +229,7 @@ export function ResearchPreparationPage() {
     {error && <p className="ros-error" role="alert">{error}</p>}
     {commandError && <p className="ros-error" role="alert">{commandError}</p>}
     {commandNotice && <p className="ros-success" role="status">{commandNotice}</p>}
-    {regenerationNotice && <p className="ros-success" role="status">候选陈述已修正，协议草案与补证计划已标记为过期，系统正在重新生成。</p>}
+    {regenerationNotice && <p className="ros-success" role="status">协议草案和补证计划已因原文核验变更失效，系统将仅重新生成受影响步骤</p>}
 
     <div className="ros-preparation-layout">
       <section className="ros-preparation-activity" aria-label="系统准备活动">
