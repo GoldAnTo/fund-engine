@@ -214,9 +214,15 @@ export function ResearchPreparationPage() {
       try {
         const next = await researchClient.getResearchPreparation(caseId);
         if (!active || !isCurrentRequest(caseId, epoch)) return;
-        await loadActivity({ afterSeq: activityCursor.current ?? undefined });
-        if (!active || !isCurrentRequest(caseId, epoch)) return;
         setPreparation(next);
+        try {
+          await loadActivity({ afterSeq: activityCursor.current ?? undefined });
+          if (active && isCurrentRequest(caseId, epoch)) setActivityError(null);
+        } catch (activityLoadError) {
+          if (active && isCurrentRequest(caseId, epoch)) {
+            setActivityError(preparationErrorMessage(activityLoadError));
+          }
+        }
       } catch (pollError) {
         if (active && isCurrentRequest(caseId, epoch)) {
           setActivityError(preparationErrorMessage(pollError));
@@ -366,7 +372,7 @@ function ClaimTask({ candidates, decisions, busy, ready, onChange, onConfirm }: 
 
 function ProtocolTask({ preparation, edits, busy, onChange, onConfirm }: { preparation: ResearchPreparation; edits: string; busy: boolean; onChange: (value: string) => void; onConfirm: () => void }) {
   const draftSequence = preparation.artifacts.protocol?.sequence;
-  const canConfirm = typeof draftSequence === "number" && draftSequence > 0;
+  const canConfirm = typeof draftSequence === "number" && Number.isInteger(draftSequence) && draftSequence > 0;
   return <form className="ros-preparation-form" onSubmit={(event) => { event.preventDefault(); if (canConfirm) onConfirm(); }}><label>协议草案<pre>{protocolText(preparation)}</pre></label>{!canConfirm && <p className="ros-error">协议草案缺失，无法提交确认。请重新读取准备状态。</p>}<label>研究员备注（可选）<textarea value={edits} onChange={(event) => onChange(event.target.value)} placeholder="只记录本次审阅的必要修订说明" /></label><p className="ros-preparation-boundary">确认协议不会启动正式研究，也不会执行补证计划。</p><button className="ros-button ros-button--primary" type="submit" disabled={busy || !canConfirm}>{busy ? "正在确认协议…" : "确认研究协议"}</button></form>;
 }
 

@@ -72,6 +72,34 @@ describe("ResearchPreparationPage", () => {
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
   });
 
+  it("keeps a newly polled claim-review status visible when polling activity records fails", async () => {
+    const adapter = new MockResearchAdapter();
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    const originalEvents = adapter.listResearchPreparationEvents.bind(adapter);
+    let preparationCalls = 0;
+    let eventCalls = 0;
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await originalPreparation(caseId);
+      return preparationCalls++ === 0 ? { ...preparation, status: "preparing" } : preparation;
+    });
+    vi.spyOn(adapter, "listResearchPreparationEvents").mockImplementation((caseId, cursor) => {
+      if (eventCalls++ === 0) return originalEvents(caseId, cursor);
+      return Promise.reject(new Error("活动记录暂不可用"));
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "系统正在准备" });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 2100)); });
+
+    expect(await screen.findByRole("heading", { name: "核对候选陈述" })).toBeVisible();
+    expect(screen.getByText("无法读取活动记录，不影响准备状态。")).toBeVisible();
+  });
+
   it("makes downstream drafts visibly stale before a researcher submits a claim correction", async () => {
     const user = userEvent.setup();
     renderPreparation();
@@ -286,6 +314,26 @@ describe("ResearchPreparationPage", () => {
 
     expect(await screen.findByText("协议草案缺失，无法提交确认。请重新读取准备状态。"))
       .toBeVisible();
+    expect(screen.getByRole("button", { name: "确认研究协议" })).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("does not submit a protocol confirmation with a fractional artifact sequence", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_protocol" });
+    const original = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await original(caseId);
+      return { ...preparation, artifacts: { ...preparation.artifacts, protocol: { ...preparation.artifacts.protocol!, sequence: 1.5 } } };
+    });
+    const confirm = vi.spyOn(adapter, "confirmResearchPreparationProtocol");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("协议草案缺失，无法提交确认。请重新读取准备状态。")).toBeVisible();
     expect(screen.getByRole("button", { name: "确认研究协议" })).toBeDisabled();
     expect(confirm).not.toHaveBeenCalled();
   });
