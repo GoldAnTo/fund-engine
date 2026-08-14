@@ -6486,6 +6486,11 @@ export interface components {
             authorized_evidence_plan?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Authorized Evidence Plan Display Withheld
+             * @default false
+             */
+            authorized_evidence_plan_display_withheld: boolean;
         };
         /** ResearchPreparationEventDTO */
         ResearchPreparationEventDTO: {

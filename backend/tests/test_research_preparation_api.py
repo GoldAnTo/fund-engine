@@ -6,7 +6,7 @@ import copy
 import pytest
 from threading import Barrier, Event, Thread
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
 from app.services.research_preparation import ResearchPreparationService
@@ -250,6 +250,46 @@ def test_preparation_summary_withholds_each_artifact_payload_for_display_restric
         assert artifact["payload"] == {}
 
 
+def test_expired_display_policy_withholds_authorized_plan_and_idempotency_replay(
+    cmd_client, cmd_session, monkeypatch
+):
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+    case, preparation, plan, _theses = _ready_authorization_case(
+        cmd_session, cmd_client, contract_effective_until=expires_at
+    )
+    licensed_plan_text = "licensed authorized evidence target must not be displayed"
+    plan.payload = copy.deepcopy(plan.payload)
+    plan.payload["items"][0]["evidence_target"] = licensed_plan_text
+    cmd_session.commit()
+    body = {
+        "revision": 1,
+        "actor": "human",
+        "plan_sequence": plan.sequence,
+        "idempotency_key": "expired-display-policy",
+    }
+
+    first = cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json=body)
+
+    assert first.status_code == 201, first.text
+    assert licensed_plan_text in first.text
+
+    class AfterExpiry:
+        @classmethod
+        def now(cls, tz=None):
+            return (expires_at + timedelta(seconds=1)).astimezone(tz)
+
+    monkeypatch.setattr("app.services.source_admission.datetime", AfterExpiry)
+    summary = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation")
+    replay = cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json=body)
+
+    for response, expected_status in ((summary, 200), (replay, 201)):
+        assert response.status_code == expected_status, response.text
+        assert licensed_plan_text not in response.text
+        assert response.json()["authorized_evidence_plan"] is None
+        assert response.json()["authorized_evidence_plan_display_withheld"] is True
+    assert len(list(cmd_session.scalars(select(ResearchRun)))) == 1
+
+
 def test_display_restricted_source_rejects_human_protocol_confirmation(cmd_client, cmd_session):
     case, preparation, _theses, _context, sequence = _protocol_draft_case(
         cmd_session, cmd_client, allow_display=False
@@ -412,7 +452,7 @@ def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews
     assert cmd_session.get(type(preparation), preparation.id).claim_review_state == "awaiting_review"
 
 
-def _protocol_draft_case(session, client, mutate_protocol=None, allow_display=True):
+def _protocol_draft_case(session, client, mutate_protocol=None, allow_display=True, contract_effective_until=None):
     case, preparation = _prepared_case(session)
     now = datetime.now(timezone.utc)
     document = session.scalar(select(DocumentVersion).join(CaseDocumentVersion).where(CaseDocumentVersion.research_case_id == case.id))
@@ -429,7 +469,7 @@ def _protocol_draft_case(session, client, mutate_protocol=None, allow_display=Tr
     source=MechanismNodeVersion(template_version_id=template.id,node_key="source",display_name="Source",role="driver",created_at=now); target=MechanismNodeVersion(template_version_id=template.id,node_key="target",display_name="Target",role="outcome",created_at=now); session.add_all([source,target]); session.flush()
     edge=MechanismEdgeVersion(template_version_id=template.id,edge_key="edge",source_node_id=source.id,target_node_id=target.id,created_at=now); session.add(edge); session.commit()
     claims=client.post(f"/api/v1/event-research/{case.id}/preparation/claims/confirm",json={"revision":1,"actor":"human","decisions":[{"candidate_id":str(c.id),"outcome":"confirmed","reason":"checked"} for c in candidates]}); assert claims.status_code==200, claims.text
-    session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="team", allow_ai_processing=True, allow_display=allow_display, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="human", created_at=now))
+    session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="team", allow_ai_processing=True, allow_display=allow_display, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=contract_effective_until, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="human", created_at=now))
     session.commit()
     service=ResearchPreparationService(session); session.refresh(preparation); context=service.current_candidate_context_fingerprint(case.id)
     baseline={"source_ref":f"document:{document.id}","value":"1","unit":"yuan","observed_period":"2025-12-31","available_at":document.available_at.replace(tzinfo=timezone.utc).isoformat()}
@@ -444,8 +484,8 @@ def _protocol_draft_case(session, client, mutate_protocol=None, allow_display=Tr
     return case, preparation, theses, context, sequence
 
 
-def _ready_authorization_case(session, client):
-    case, preparation, theses, context, sequence = _protocol_draft_case(session, client)
+def _ready_authorization_case(session, client, **kwargs):
+    case, preparation, theses, context, sequence = _protocol_draft_case(session, client, **kwargs)
     service = ResearchPreparationService(session)
     confirmed=client.post(f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",json={"revision":1,"actor":"human","draft_sequence":sequence,"edits":{}}); assert confirmed.status_code==200,confirmed.text
     session.refresh(preparation); service.complete_system_step(case.id,"draft_evidence_plan",{"items":[{"factor": thesis.statement, "evidence_target": "primary source", "allowed_source_roles": ["primary_disclosure"], "priority": "normal", "stop_condition": "one reviewed source", "budget": 3} for thesis in theses]},expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()

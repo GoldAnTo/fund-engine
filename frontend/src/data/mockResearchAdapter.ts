@@ -3121,6 +3121,7 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
       evidencePlan: { sequence: 3, state: "current", payload: { sources: ["公司公告"] }, contextFingerprint: "mock-source-v1", displayWithheld: false },
     },
     authorizedEvidencePlan: null,
+    authorizedEvidencePlanDisplayWithheld: false,
   };
   if (scenario === "preparing") {
     preparation.status = "preparing";

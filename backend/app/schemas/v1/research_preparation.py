@@ -61,6 +61,7 @@ class ResearchPreparationDTO(V1Model):
     last_error_message: str | None = None
     artifacts: dict[str, PreparationArtifactDTO | None]
     authorized_evidence_plan: dict[str, Any] | None = None
+    authorized_evidence_plan_display_withheld: bool = False
 class ResearchPreparationEventDTO(V1Model):
     seq: int
     type: str

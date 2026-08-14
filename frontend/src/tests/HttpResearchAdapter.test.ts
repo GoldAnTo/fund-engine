@@ -67,7 +67,8 @@ describe("HttpResearchAdapter", () => {
         review: { claims: { state: "confirmed" }, protocol: { state: "confirmed" }, plan: { state: "confirmed" } },
         next_attempt_at: null, last_error_message: null,
         artifacts: { claims: { sequence: 1, state: "current", payload: {}, context_fingerprint: null }, protocol: { sequence: 2, state: "current", payload: {}, context_fingerprint: null }, plan: { sequence: 3, state: "current", payload: {}, context_fingerprint: null } },
-        authorized_evidence_plan: { sources: [] },
+        authorized_evidence_plan: null,
+        authorized_evidence_plan_display_withheld: true,
       }, true, String(input).endsWith("/authorize") ? 201 : 200);
     }));
 
@@ -92,7 +93,7 @@ describe("HttpResearchAdapter", () => {
       { revision: 3, actor: "human:researcher" },
       { revision: 4, actor: "human:researcher", plan_sequence: 3, idempotency_key: "authorize-event-1-v4" },
     ]);
-    expect(result).toMatchObject({ status: "authorized", researchRunId: "run-1" });
+    expect(result).toMatchObject({ status: "authorized", researchRunId: "run-1", authorizedEvidencePlan: null, authorizedEvidencePlanDisplayWithheld: true });
   });
 
   it("exposes conflicts and never shows a raw service-unavailable response", async () => {

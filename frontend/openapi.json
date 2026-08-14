@@ -20507,6 +20507,11 @@
               }
             ],
             "title": "Authorized Evidence Plan"
+          },
+          "authorized_evidence_plan_display_withheld": {
+            "type": "boolean",
+            "title": "Authorized Evidence Plan Display Withheld",
+            "default": false
           }
         },
         "additionalProperties": false,

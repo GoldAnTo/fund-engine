@@ -386,7 +386,7 @@ export function ResearchPreparationPage() {
           void execute(() => researchClient.authorizeResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR, planSequence: evidencePlanSequence, idempotencyKey: authorizationKeyFor(preparation) }));
         }} />}
         {preparation.status === "recoverable_failure" && <RecoveryTask preparation={preparation} busy={busy} onRetry={() => void execute(() => researchClient.retryResearchPreparation({ caseId, revision: preparation.revision, actor: ACTOR }))} />}
-        {preparation.status === "authorized" && <section className="ros-preparation-note"><strong>研究运行已建立</strong><p>已授权计划被冻结在本次研究运行中。后续变更需要回到研究范围与运行记录处理。</p>{preparation.researchRunId && <Link to={`/events/${caseId}/monitor`} className="ros-button ros-button--secondary">查看研究运行</Link>}</section>}
+        {preparation.status === "authorized" && <section className="ros-preparation-note"><strong>研究运行已建立</strong><p>已授权计划被冻结在本次研究运行中。后续变更需要回到研究范围与运行记录处理。</p>{preparation.authorizedEvidencePlanDisplayWithheld && <p>已授权计划受来源展示许可限制，内容未显示。</p>}{preparation.researchRunId && <Link to={`/events/${caseId}/monitor`} className="ros-button ros-button--secondary">查看研究运行</Link>}</section>}
         <FutureReviewPreview preparation={preparation} />
       </aside>
     </div>

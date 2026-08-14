@@ -348,6 +348,24 @@ describe("ResearchPreparationPage", () => {
     expect(screen.getByText("正式研究尚未启动")).toBeVisible();
   });
 
+  it("explains when an authorized plan is withheld by its current display policy", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "authorized" });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => ({
+      ...await originalPreparation(caseId),
+      authorizedEvidencePlan: null,
+      authorizedEvidencePlanDisplayWithheld: true,
+    }));
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("已授权计划受来源展示许可限制，内容未显示。")).toBeVisible();
+  });
+
   it("automatically reloads preparation and activity after a command conflict", async () => {
     const user = userEvent.setup();
     const adapter = new MockResearchAdapter();

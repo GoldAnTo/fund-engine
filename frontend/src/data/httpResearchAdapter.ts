@@ -3197,6 +3197,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
         evidencePlan: mapArtifact(this.requirePreparationStage(payload.artifacts, "plan", true)),
       },
       authorizedEvidencePlan: this.optionalPreparationContainer(payload.authorized_evidence_plan),
+      authorizedEvidencePlanDisplayWithheld: payload.authorized_evidence_plan_display_withheld === true,
     };
   }
 

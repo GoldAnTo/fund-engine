@@ -72,7 +72,13 @@ def _dto(db, case_id):
         display_withheld = not preparation_artifact_allows_display(db, case_id, a.payload)
         payload = {} if display_withheld else _safe(a.payload)
         return PreparationArtifactDTO(sequence=a.sequence,payload=payload,state=a.state,context_fingerprint=a.context_fingerprint,display_withheld=display_withheld)
-    return ResearchPreparationDTO(case_id=case_id,case_title=case.title if case is not None else "研究 Case",initial_material=PreparationInitialMaterialDTO(document_version_id=material.id,title=material.title,parse_state=material.parse_state) if material is not None else None,progress=_progress(prep),revision=prep.version,status=prep.status,research_run_id=prep.research_run_id,next_attempt_at=prep.next_attempt_at.isoformat() if prep.next_attempt_at else None,last_error_message=_ERRORS.get(prep.last_error_code),system={"claims":PreparationStepDTO(state=prep.parse_claims_state,artifact_sequence=arts.get("atomic_claim_candidates").sequence if arts.get("atomic_claim_candidates") else None),"protocol":PreparationStepDTO(state=prep.draft_protocol_state,artifact_sequence=arts.get("research_protocol_draft").sequence if arts.get("research_protocol_draft") else None),"plan":PreparationStepDTO(state=prep.draft_evidence_plan_state,artifact_sequence=arts.get("evidence_acquisition_plan").sequence if arts.get("evidence_acquisition_plan") else None)},review={"claims":PreparationStepDTO(state=prep.claim_review_state),"protocol":PreparationStepDTO(state=prep.protocol_review_state),"plan":PreparationStepDTO(state=prep.plan_review_state)},artifacts={"claims":art("atomic_claim_candidates"),"protocol":art("research_protocol_draft"),"plan":art("evidence_acquisition_plan")}, authorized_evidence_plan=_safe(prep.authorized_evidence_plan) if prep.status == "authorized" else None)
+    authorized_plan_withheld = (
+        prep.status == "authorized"
+        and not preparation_artifact_allows_display(
+            db, case_id, prep.authorized_evidence_plan
+        )
+    )
+    return ResearchPreparationDTO(case_id=case_id,case_title=case.title if case is not None else "研究 Case",initial_material=PreparationInitialMaterialDTO(document_version_id=material.id,title=material.title,parse_state=material.parse_state) if material is not None else None,progress=_progress(prep),revision=prep.version,status=prep.status,research_run_id=prep.research_run_id,next_attempt_at=prep.next_attempt_at.isoformat() if prep.next_attempt_at else None,last_error_message=_ERRORS.get(prep.last_error_code),system={"claims":PreparationStepDTO(state=prep.parse_claims_state,artifact_sequence=arts.get("atomic_claim_candidates").sequence if arts.get("atomic_claim_candidates") else None),"protocol":PreparationStepDTO(state=prep.draft_protocol_state,artifact_sequence=arts.get("research_protocol_draft").sequence if arts.get("research_protocol_draft") else None),"plan":PreparationStepDTO(state=prep.draft_evidence_plan_state,artifact_sequence=arts.get("evidence_acquisition_plan").sequence if arts.get("evidence_acquisition_plan") else None)},review={"claims":PreparationStepDTO(state=prep.claim_review_state),"protocol":PreparationStepDTO(state=prep.protocol_review_state),"plan":PreparationStepDTO(state=prep.plan_review_state)},artifacts={"claims":art("atomic_claim_candidates"),"protocol":art("research_protocol_draft"),"plan":art("evidence_acquisition_plan")}, authorized_evidence_plan=None if authorized_plan_withheld else _safe(prep.authorized_evidence_plan) if prep.status == "authorized" else None, authorized_evidence_plan_display_withheld=authorized_plan_withheld)
 @router.get("/{case_id}/preparation", response_model=ResearchPreparationDTO)
 def get_preparation(case_id: uuid.UUID, db:Session=Depends(get_db), tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id); return _dto(db,case_id)
@@ -116,7 +122,7 @@ def authorize(case_id:uuid.UUID,payload:AuthorizeEvidencePlanRequest,db:Session=
     if not acquired:
         if row.request_fingerprint != fingerprint: raise ConflictError("idempotency_key_conflict")
         if row.status == "completed" and isinstance(row.response_payload, dict):
-            return ResearchPreparationDTO.model_validate(row.response_payload)
+            return _dto(db, case_id)
         raise ConflictError("idempotency_conflict")
     try:
         ResearchPreparationService(db).authorize_evidence_plan(case_id,actor=payload.actor,revision=payload.revision,plan_sequence=payload.plan_sequence)

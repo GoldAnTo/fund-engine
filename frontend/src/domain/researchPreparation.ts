@@ -84,6 +84,7 @@ export interface ResearchPreparation {
   lastErrorMessage: string | null;
   artifacts: ResearchPreparationStages<ResearchPreparationArtifact | null>;
   authorizedEvidencePlan: Record<string, unknown> | null;
+  authorizedEvidencePlanDisplayWithheld: boolean;
 }
 
 export interface ResearchPreparationEvent {
