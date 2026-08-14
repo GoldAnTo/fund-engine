@@ -46,7 +46,12 @@ def confirm_claims(case_id:uuid.UUID,payload:ConfirmClaimsRequest,db:Session=Dep
     _case(db,case_id,tenant_id); ResearchPreparationService(db).confirm_claims(case_id,actor=payload.actor,revision=payload.revision,decisions=[ClaimDecision(**x.model_dump()) for x in payload.decisions]); _commit(db); return _dto(db,case_id)
 @router.post("/{case_id}/preparation/protocol/confirm", response_model=ResearchPreparationDTO)
 def confirm_protocol(case_id:uuid.UUID,payload:ConfirmProtocolRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
-    _case(db,case_id,tenant_id); ResearchPreparationService(db).confirm_protocol(case_id,actor=payload.actor,revision=payload.revision,payload=ProtocolConfirmation(payload.draft_sequence,payload.edits)); _commit(db); return _dto(db,case_id)
+    _case(db,case_id,tenant_id)
+    try:
+        ResearchPreparationService(db).confirm_protocol(case_id,actor=payload.actor,revision=payload.revision,payload=ProtocolConfirmation(payload.draft_sequence,payload.edits)); _commit(db)
+    except ValidationError as exc:
+        db.rollback(); raise ValidationFailedError("protocol draft is invalid") from exc
+    return _dto(db,case_id)
 @router.post("/{case_id}/preparation/retry", response_model=ResearchPreparationDTO)
 def retry(case_id:uuid.UUID,payload:RetryResearchPreparationRequest,db:Session=Depends(get_db),tenant_id:str=Depends(require_research_tenant)):
     _case(db,case_id,tenant_id); ResearchPreparationService(db).retry_failed_step(case_id,actor=payload.actor,revision=payload.revision); _commit(db); return _dto(db,case_id)

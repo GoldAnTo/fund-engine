@@ -683,6 +683,12 @@ class ResearchPreparationService:
                 context_fingerprint=artifact.context_fingerprint,
             )
             confirmed_draft_sequence = successor.sequence
+            artifact = successor
+        # A protocol cannot be merely acknowledged as an opaque LLM payload.
+        # Materialize the exact reviewed successor before advancing the human
+        # gate; any strict validation failure leaves this preparation awaiting
+        # review in the caller's transaction.
+        self._materialize_protocol(case_id, artifact.payload, actor, artifact.sequence)
         preparation.protocol_review_state = "confirmed"
         self._set_aggregate_status(preparation)
         preparation.updated_at = _utcnow()
@@ -790,7 +796,8 @@ class ResearchPreparationService:
         if protocol.context_fingerprint != self.current_candidate_context_fingerprint(case_id):
             raise ConflictError("protocol draft candidate context changed")
         budget = self._plan_budget(plan.payload)
-        self._materialize_protocol(case_id, protocol.payload, actor, protocol.sequence)
+        # Protocol rows are created at human protocol confirmation, never at
+        # authorization. Authorization only freezes and dispatches that review.
         run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, commit=False, trigger="preparation_authorized")
         # Set both fields before the next flush so the authorization constraint
         # never observes a transient unauthorized run reference.
