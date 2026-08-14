@@ -125,6 +125,29 @@ describe("HttpResearchAdapter", () => {
       message: "研究准备事件步骤状态无效，请刷新后重试。",
     });
   });
+
+  it.each([
+    ["full preparation", async (adapter: HttpResearchAdapter) => adapter.getResearchPreparation("event-1")],
+    ["workbench preparation summary", async (adapter: HttpResearchAdapter) => adapter.getEventWorkbench("event-1")],
+  ])("rejects a malformed %s 200 response as a safe page error", async (_label, request) => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      case_id: "event-1", revision: 1, status: "preparing", research_run_id: null,
+      system: null,
+      review: { claims: { state: "locked" }, protocol: { state: "locked" }, plan: { state: "locked" } },
+      artifacts: { claims: null, protocol: null, plan: null },
+      next_attempt_at: null, last_error_message: null,
+      event: { case_id: "event-1", event_title: "Event", company_name: null, ticker: null, event_at: null, lifecycle_status: "researching", status_summary: "处理中", next_human_action: null, updated_at: "2026-08-15T00:00:00Z" },
+      lifecycle: { status: "researching", active_run_id: null, current_round: 0, status_summary: "处理中", current_gap: null, next_human_action: null },
+      conclusion: { state: "cannot_conclude", text: "", citations: [] }, factors: [], evidence: [], progress: { verified: 0, pending: 0, invalid_source: 0, current_gap: null }, scope: { version: 1, factors: [], unmapped_evidence_count: 0 }, next_action: { kind: "wait", label: "处理中" },
+      preparation: { status: "preparing", revision: 1, research_run_id: null, next_attempt_at: null, last_error_message: null, system: null, review: { claims: { state: "locked" }, protocol: { state: "locked" }, plan: { state: "locked" } } },
+    })));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    await expect(request(adapter)).rejects.toMatchObject({
+      kind: "backend_unavailable",
+      message: "研究准备数据不完整，请刷新后重试。",
+    });
+  });
   it("does not retain retired prototype screen methods on the live adapter", () => {
     const prototype = Object.getPrototypeOf(
       new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }),

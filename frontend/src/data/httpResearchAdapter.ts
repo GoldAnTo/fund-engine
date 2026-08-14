@@ -379,23 +379,50 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  private preparationDataError(): PageStateError {
+    return new PageStateError("backend_unavailable", "研究准备数据不完整，请刷新后重试。");
+  }
+
   private requirePreparationValue<T extends string>(
-    value: string,
+    value: unknown,
     valid: readonly T[],
     field: string,
   ): T {
-    if (valid.includes(value as T)) return value as T;
+    if (typeof value === "string" && valid.includes(value as T)) return value as T;
     throw new PageStateError(
       "backend_unavailable",
       `研究准备${field}状态无效，请刷新后重试。`,
     );
   }
 
-  private requirePreparationStage<T>(source: Record<string, T>, key: "claims" | "protocol" | "plan"): T {
-    if (!(key in source)) {
-      throw new PageStateError("backend_unavailable", "研究准备数据不完整，请刷新后重试。");
+  private requirePreparationContainer(value: unknown): Record<string, unknown> {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw this.preparationDataError();
     }
-    return source[key];
+    return value as Record<string, unknown>;
+  }
+
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+  ): Record<string, unknown>;
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+    allowNull: true,
+  ): Record<string, unknown> | null;
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+    allowNull = false,
+  ): Record<string, unknown> | null {
+    const container = this.requirePreparationContainer(source);
+    if (!Object.prototype.hasOwnProperty.call(container, key) || container[key] === undefined) {
+      throw this.preparationDataError();
+    }
+    const stage = container[key];
+    if (stage === null && allowNull) return null;
+    return this.requirePreparationContainer(stage);
   }
 
   private async responseError(
@@ -3042,32 +3069,36 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   private mapResearchPreparation(
     dto: Schemas["ResearchPreparationDTO"],
   ): ResearchPreparation {
-    const mapSystemStep = (step: Schemas["PreparationStepDTO"]) => ({
+    const mapSystemStep = (step: Record<string, unknown>) => ({
       state: this.requirePreparationValue(
         step.state,
         RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
         "系统步骤",
       ) as ResearchPreparationSystemStepState,
-      artifactSequence: step.artifact_sequence ?? null,
+      artifactSequence: typeof step.artifact_sequence === "number" ? step.artifact_sequence : null,
     });
-    const mapReviewStep = (step: Schemas["PreparationStepDTO"]) => ({
+    const mapReviewStep = (step: Record<string, unknown>) => ({
       state: this.requirePreparationValue(
         step.state,
         RESEARCH_PREPARATION_REVIEW_STEP_STATES,
         "审核步骤",
       ) as ResearchPreparationReviewStepState,
     });
-    const mapArtifact = (artifact: Schemas["PreparationArtifactDTO"] | null) => artifact === null
+    const mapArtifact = (artifact: Record<string, unknown> | null) => artifact === null
       ? null
       : {
-          sequence: artifact.sequence,
+          sequence: typeof artifact.sequence === "number"
+            ? artifact.sequence
+            : (() => { throw this.preparationDataError(); })(),
           state: this.requirePreparationValue(
             artifact.state,
             RESEARCH_PREPARATION_ARTIFACT_STATES,
             "产物",
           ) as ResearchPreparationArtifactState,
-          payload: artifact.payload,
-          contextFingerprint: artifact.context_fingerprint ?? null,
+          payload: this.requirePreparationContainer(artifact.payload),
+          contextFingerprint: typeof artifact.context_fingerprint === "string"
+            ? artifact.context_fingerprint
+            : null,
         };
     return {
       caseId: dto.case_id,
@@ -3091,9 +3122,9 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       nextAttemptAt: dto.next_attempt_at ?? null,
       lastErrorMessage: dto.last_error_message ?? null,
       artifacts: {
-        candidateClaims: mapArtifact(this.requirePreparationStage(dto.artifacts, "claims")),
-        protocol: mapArtifact(this.requirePreparationStage(dto.artifacts, "protocol")),
-        evidencePlan: mapArtifact(this.requirePreparationStage(dto.artifacts, "plan")),
+        candidateClaims: mapArtifact(this.requirePreparationStage(dto.artifacts, "claims", true)),
+        protocol: mapArtifact(this.requirePreparationStage(dto.artifacts, "protocol", true)),
+        evidencePlan: mapArtifact(this.requirePreparationStage(dto.artifacts, "plan", true)),
       },
       authorizedEvidencePlan: dto.authorized_evidence_plan ?? null,
     };
@@ -3102,14 +3133,14 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   private mapEventPreparationSummary(
     dto: Schemas["EventPreparationSummaryDTO"],
   ): import("../domain/eventResearch").EventPreparationSummary {
-    const mapSystemStep = (step: Schemas["EventPreparationStepDTO"]) => ({
+    const mapSystemStep = (step: Record<string, unknown>) => ({
       state: this.requirePreparationValue(
         step.state,
         RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
         "系统步骤",
       ) as ResearchPreparationSystemStepState,
     });
-    const mapReviewStep = (step: Schemas["EventPreparationStepDTO"]) => ({
+    const mapReviewStep = (step: Record<string, unknown>) => ({
       state: this.requirePreparationValue(
         step.state,
         RESEARCH_PREPARATION_REVIEW_STEP_STATES,
