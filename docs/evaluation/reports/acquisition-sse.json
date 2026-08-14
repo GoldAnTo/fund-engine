@@ -1,31 +1,40 @@
 {
   "counts": {
     "accepted": 25,
-    "fetched": 0,
+    "fetched": 3,
     "rejected": 0,
     "returned": 25
   },
-  "errors": [
+  "errors": [],
+  "fetch_limit": 3,
+  "fetches": [
     {
-      "category": "provider_protocol",
-      "retryable": false,
-      "stage": "fetch"
+      "byte_sha256": "c1ad7f2afb41c357168efb5d053f3a2fa92637ee9965ca67413fc0e04aa92ce9",
+      "byte_size": 481499,
+      "final_url_sha256": "39d8e17f05f41475283d7895f368199afc8365e9cf177a63d22c7d02cc61a27a",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "sse:0082d0f8faf7110a28555998"
     },
     {
-      "category": "provider_protocol",
-      "retryable": false,
-      "stage": "fetch"
+      "byte_sha256": "87f63aad82dc43fd0613de60bb72e3c88fcacffb9e074767c947d4bd76cb4d7b",
+      "byte_size": 1505155,
+      "final_url_sha256": "d488e992b506998882d6209d8d906e6b2fa0a1611cd265ea017da0ed7109654d",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "sse:01af0a47e9761563d9c73e24"
     },
     {
-      "category": "provider_protocol",
-      "retryable": false,
-      "stage": "fetch"
+      "byte_sha256": "b9e1af5514b4e8b6d6a62ffaa8f94474a6c15bae940e508af29b57d680c61b16",
+      "byte_size": 149346,
+      "final_url_sha256": "40cbadc5bc323d22be63bcd4107dc2951ecde8c43c55e6013de719cc3f125ed2",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "sse:0f4aacf12c492df3ad61eaba"
     }
   ],
-  "fetch_limit": 3,
-  "fetches": [],
-  "git_commit": "bb5230b32ae65574bcc29ddc6159e980fd833b10",
-  "live_success": false,
+  "git_commit": "1edfc1dae490ce9f4afb5f8e1d0152ce5a69bd28",
+  "live_success": true,
   "not_fetched_count": 22,
   "query": {
     "sha256": "9e5f57a69950a285c9a35f7e6fb2519c2a75a41bf88c0be9ffe7fc4951fb8ce9",
@@ -179,6 +188,6 @@
       "provider_identity": "Shanghai Stock Exchange"
     }
   },
-  "status": "failed",
-  "timestamp_utc": "2026-08-13T09:39:03.894029Z"
+  "status": "succeeded",
+  "timestamp_utc": "2026-08-14T15:12:41.125950Z"
 }

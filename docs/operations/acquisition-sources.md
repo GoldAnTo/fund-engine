@@ -19,14 +19,17 @@ live 结果。
 
 当前启用的来源策略为 `b-scope-v2`。SSE 搜索结果中的主站 canonical URL
 保持不变并始终先尝试；只有该请求返回结构化的 `response_type` 失败时，SSE
-adapter 才会尝试官方繁体中文镜像 `big5.sse.com.cn`。镜像 URL 只能由已验证的
+或 `content_encoding` 失败时，adapter 才会尝试官方繁体中文镜像
+`big5.sse.com.cn`。若主站响应因不支持的内容编码被拒绝，其编码 bytes 绝不被
+读取、解压或冻结。镜像 URL 只能由已验证的
 主站 URL 机械转换为
 `https://big5.sse.com.cn/site/cht/www.sse.com.cn/<相同 path>`，不得采用来源返回
-的替代 URL，也不得因超时、状态码、重定向或其他失败启用镜像。报告保留
-canonical URL 的 SHA-256，并记录实际 `final_url` 的 SHA-256，不记录 URL 明文。
-无论主站还是镜像，PDF MIME、`%PDF-` header、响应字节与大小限制、重定向边界
-以及 canonical/final URL 的精确身份检查均保持严格，不因 fallback 放宽。此契约
-的策略版本、精确 host、机械 path 映射与验证规则核验日期为 2026-08-13；live
+的替代 URL。每次主站或镜像响应都必须在处理响应前先约束并验证最终 URL；网络、
+状态码、重定向、长度、大小或空响应失败均不得启用镜像。报告保留 canonical URL
+的 SHA-256，并记录实际 `final_url` 的 SHA-256，不记录 URL 明文。无论主站还是
+镜像，PDF MIME、`%PDF-` header、响应字节与大小限制、重定向边界以及
+canonical/final URL 的精确身份检查均保持严格，不因 fallback 放宽。此契约的
+策略版本、精确 host、机械 path 映射与验证规则核验日期为 2026-08-14；live
 acceptance 状态以对应报告为准，不得把单独镜像探测当作 smoke 成功。
 
 Gildata token 应由运行环境秘密管理器注入。运行前只检查变量是否存在，不要
