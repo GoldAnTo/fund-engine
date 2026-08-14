@@ -3,8 +3,9 @@
 Reads the evidence ledger (SourceSpans for a DocumentVersion). Table-like
 spans first go through the deterministic ``FinancialTableExtractor``; only
 spans the rules could not handle are sent to the LLM. Both paths create only
-``AtomicClaimCandidate`` records with continuous source quotes. A human review
-is the sole path that may publish a formal ``SourceStatement``.
+``AtomicClaimCandidate`` records with continuous source quotes. Formal
+publication requires either a human review or an immutable automatic-admission
+decision.
 
 Every extraction operation writes exactly one ``AIRun`` audit record
 (``kind=extract``) capturing the model/prompt versions, span IDs processed,
@@ -31,7 +32,7 @@ from app.services.table_extraction import FinancialTableExtractor
 
 
 class StatementExtractor:
-    """Extracts atomic candidates; formal statements require human review."""
+    """Extract candidates for human review or immutable automatic admission."""
 
     def __init__(self, client: LLMClient) -> None:
         self._client = client
@@ -43,10 +44,12 @@ class StatementExtractor:
         session: Session,
         *,
         before_persist: Callable[[], bool] | None = None,
+        pre_commit_guard: Callable[[Session], None] | None = None,
     ) -> list[AtomicClaimCandidate] | None:
         started_at = datetime.now(timezone.utc)
         claims = AtomicClaimService(session)
-        run_ref = f"extract:{uuid.uuid4()}"
+        run_id = uuid.uuid4()
+        run_ref = f"extract:{run_id}"
         document = session.get(DocumentVersion, document_version_id)
         authority_level = document.source_authority if document is not None else "unknown"
 
@@ -65,6 +68,8 @@ class StatementExtractor:
         }
 
         if not spans:
+            if pre_commit_guard is not None:
+                pre_commit_guard(session)
             if before_persist is not None and not before_persist():
                 return None
             record_run(
@@ -76,7 +81,11 @@ class StatementExtractor:
                 output_summary="skipped: no source spans attached to this version",
                 status="success",
                 started_at=started_at,
+                run_id=run_id,
             )
+            if pre_commit_guard is not None:
+                pre_commit_guard(session)
+                session.commit()
             return []
 
         try:
@@ -134,6 +143,8 @@ class StatementExtractor:
                 # End the read transaction before waiting on the provider;
                 # no candidate may become durable before the whole extraction
                 # operation succeeds.
+                if pre_commit_guard is not None:
+                    pre_commit_guard(session)
                 session.commit()
                 result = self._client.chat_json(messages, schema_hint="extract")
                 statements_data = result.get("statements", [])
@@ -146,6 +157,8 @@ class StatementExtractor:
 
             created: list[AtomicClaimCandidate] = []
             for draft in rule_drafts:
+                if pre_commit_guard is not None:
+                    pre_commit_guard(session)
                 created.append(
                     claims.admit(
                         draft,
@@ -165,6 +178,8 @@ class StatementExtractor:
                 if not isinstance(quote, str) or not isinstance(quote_start, int) or not isinstance(quote_end, int):
                     continue
                 try:
+                    if pre_commit_guard is not None:
+                        pre_commit_guard(session)
                     candidate = claims.admit(
                         AtomicClaimDraft(
                             source_span_id=source_span_id,
@@ -195,6 +210,8 @@ class StatementExtractor:
                     continue
                 created.append(candidate)
 
+            if pre_commit_guard is not None:
+                pre_commit_guard(session)
             record_run(
                 session,
                 kind="extract",
@@ -215,7 +232,11 @@ class StatementExtractor:
                 ),
                 status="success",
                 started_at=started_at,
+                run_id=run_id,
             )
+            if pre_commit_guard is not None:
+                pre_commit_guard(session)
+                session.commit()
             return created
 
         except Exception:
@@ -223,17 +244,28 @@ class StatementExtractor:
             # then create the failed audit in a clean transaction for the
             # caller to commit with its own terminal state.
             session.rollback()
-            record_run(
-                session,
-                kind="extract",
-                model_version=self._client.model_version,
-                prompt_version=EXTRACT_PROMPT_VERSION,
-                input_ref=input_ref,
-                output_summary="",
-                status="failed",
-                error=AI_OPERATION_ERROR_MESSAGE,
-                started_at=started_at,
-            )
+            try:
+                if pre_commit_guard is not None:
+                    pre_commit_guard(session)
+                record_run(
+                    session,
+                    kind="extract",
+                    model_version=self._client.model_version,
+                    prompt_version=EXTRACT_PROMPT_VERSION,
+                    input_ref=input_ref,
+                    output_summary="",
+                    status="failed",
+                    error=AI_OPERATION_ERROR_MESSAGE,
+                    started_at=started_at,
+                    run_id=run_id,
+                )
+                if pre_commit_guard is not None:
+                    pre_commit_guard(session)
+                    session.commit()
+            except Exception:
+                if pre_commit_guard is not None:
+                    session.rollback()
+                raise
             raise
 
 

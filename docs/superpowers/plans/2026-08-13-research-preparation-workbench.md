@@ -15,7 +15,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `backend/app/models/research_preparation.py` | Preparation、版本化产物和追加式活动事件 ORM 模型及 DB 约束。 |
-| `backend/alembic/versions/0052_research_preparation_workbench.py` | 三张新表、索引、唯一约束和回填标记的迁移。 |
+| `backend/alembic/versions/0055_research_preparation_workbench.py` | 三张新表、索引、唯一约束和回填标记的迁移。 |
 | `backend/app/repositories/research_preparation.py` | 行锁、事件序号、当前产物、幂等排队和回填查询。 |
 | `backend/app/domain/research_preparation.py` | 固定步骤、状态、产物类型、输入指纹与安全错误的纯函数。 |
 | `backend/app/services/research_preparation.py` | 创建、编排、失效、重试、人工确认与授权状态机。 |
@@ -67,7 +67,7 @@ ArtifactKind = Literal["atomic_claim_candidates", "research_protocol_draft", "ev
 
 - Create: `backend/app/models/research_preparation.py`
 - Create: `backend/app/domain/research_preparation.py`
-- Create: `backend/alembic/versions/0052_research_preparation_workbench.py`
+- Create: `backend/alembic/versions/0055_research_preparation_workbench.py`
 - Modify: `backend/app/models/__init__.py`
 - Modify: `backend/app/models/operational.py`
 - Test: `backend/tests/test_research_preparation_models.py`
@@ -127,9 +127,9 @@ class ResearchPreparationEvent(Base):
 
 `JobKind` 增加 `"prepare_research"`，但 `ResearchRun` 不增加任何“准备中”状态。
 
-- [ ] **Step 4: 编写 0052 迁移。**
+- [ ] **Step 4: 编写 0055 迁移。**
 
-迁移以 `0051` 为 `down_revision`，在 SQLite/PostgreSQL 上创建三张表、Case 唯一索引、事件 `(research_preparation_id, seq)` 索引、当前产物 `(research_preparation_id, kind, state)` 索引，并创建 `research_run_id → research_runs.id` 外键。迁移不得访问网络、不得创建 Job、不得回填数据。
+迁移以 `0054` 为 `down_revision`，在 SQLite/PostgreSQL 上创建三张表、Case 唯一索引、事件 `(research_preparation_id, seq)` 索引、当前产物 `(research_preparation_id, kind, state)` 索引，并创建 `research_run_id → research_runs.id` 外键。迁移不得访问网络、不得创建 Job、不得回填数据。
 
 - [ ] **Step 5: 通过模型与迁移测试。**
 
@@ -140,7 +140,7 @@ Expected: PASS；SQLite 从旧版本升级到 head 后可插入合法 Preparatio
 - [ ] **Step 6: 提交。**
 
 ```bash
-git add backend/app/models/research_preparation.py backend/app/domain/research_preparation.py backend/app/models/__init__.py backend/app/models/operational.py backend/alembic/versions/0052_research_preparation_workbench.py backend/tests/test_research_preparation_models.py backend/tests/test_sqlite_migration_bootstrap.py
+git add backend/app/models/research_preparation.py backend/app/domain/research_preparation.py backend/app/models/__init__.py backend/app/models/operational.py backend/alembic/versions/0055_research_preparation_workbench.py backend/tests/test_research_preparation_models.py backend/tests/test_sqlite_migration_bootstrap.py
 git commit -m "feat: add research preparation persistence"
 ```
 
@@ -837,7 +837,7 @@ Use a localhost OpenAI-compatible fake that asserts Authorization/model/JSON mod
 - [ ] **Step 4: Add migration and crash-recovery coverage.**
 
 ```python
-def test_0051_database_upgrades_to_preparation_schema_and_backfill_is_explicit(session): assert _upgrade_and_explicit_backfill(session)
+def test_0054_database_upgrades_to_preparation_schema_and_backfill_is_explicit(session): assert _upgrade_and_explicit_backfill(session)
 def test_crashed_worker_job_is_reclaimed_without_duplicate_current_artifact(session): assert _reclaim_writes_one_current_artifact(session)
 def test_two_sessions_authorize_same_plan_and_observe_one_research_run(pg_session_factory): assert _concurrent_authorization_writes_one_run(pg_session_factory)
 ```

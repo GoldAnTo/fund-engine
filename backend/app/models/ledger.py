@@ -32,6 +32,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    text,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -43,7 +44,9 @@ SourceStatementKind = Literal[
     "disclosed_fact", "management_attribution", "forecast", "research_opinion"
 ]
 ReviewOutcome = Literal["confirmed", "modified", "rejected"]
-ReviewState = Literal["machine_generated", "reviewed", "rejected"]
+ReviewState = Literal[
+    "machine_generated", "automatically_admitted", "reviewed", "rejected"
+]
 # Link-level review (prototype 审核工作区): the human decision on one
 # AI-proposed EvidenceLink.  ``relation`` is the 关系选择 dimension; the
 # action itself is ``outcome``.
@@ -103,6 +106,13 @@ IMMUTABLE_TABLES = frozenset(
         "causal_edges",
         "source_statements",
         "evidence_links",
+        "acquisition_job_events",
+        "acquisition_attempts",
+        "source_references",
+        "retrieval_artifacts",
+        "retrieval_artifact_documents",
+        "automatic_admission_decisions",
+        "acquisition_exceptions",
         "evidence_snapshots",
         "ai_assessments",
         "review_decisions",
@@ -433,6 +443,12 @@ class CausalEdge(Base):
 
 class SourceStatement(Base):
     __tablename__ = "source_statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "automatic_admission_decision_id",
+            name="uq_source_statements_automatic_admission_decision",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     source_span_id: Mapped[uuid.UUID] = mapped_column(
@@ -443,6 +459,14 @@ class SourceStatement(Base):
     observed_period: Mapped[date | None] = mapped_column(Date, nullable=True)
     atomic_claim_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=True, index=True
+    )
+    automatic_admission_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "automatic_admission_decisions.id",
+            name="fk_source_statements_automatic_admission_decision_id",
+        ),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -490,6 +514,22 @@ class AtomicClaimReview(Base):
 
 class EvidenceLink(Base):
     __tablename__ = "evidence_links"
+    __table_args__ = (
+        CheckConstraint(
+            "(review_state = 'automatically_admitted' AND "
+            "automatic_admission_decision_id IS NOT NULL) OR "
+            "(review_state <> 'automatically_admitted' AND "
+            "automatic_admission_decision_id IS NULL)",
+            name="ck_evidence_links_automatic_admission_provenance",
+        ),
+        Index(
+            "uq_evidence_links_automatic_admission_decision",
+            "automatic_admission_decision_id",
+            unique=True,
+            sqlite_where=text("automatic_admission_decision_id IS NOT NULL"),
+            postgresql_where=text("automatic_admission_decision_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     thesis_id: Mapped[uuid.UUID] = mapped_column(
@@ -509,6 +549,14 @@ class EvidenceLink(Base):
         String(32), nullable=False, default="machine_generated"
     )
     model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    automatic_admission_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "automatic_admission_decisions.id",
+            name="fk_evidence_links_automatic_admission_decision_id",
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

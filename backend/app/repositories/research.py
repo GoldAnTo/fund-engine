@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select, tuple_
@@ -317,6 +318,8 @@ class ResearchRepository:
         creator_type: str = "ai",
         review_state: str = "machine_generated",
         model_version: str | None = None,
+        automatic_admission_decision_id: uuid.UUID | None = None,
+        before_flush: Callable[[], None] | None = None,
     ) -> EvidenceLink:
         link = EvidenceLink(
             thesis_id=thesis_id,
@@ -328,11 +331,29 @@ class ResearchRepository:
             creator_type=creator_type,
             review_state=review_state,
             model_version=model_version,
+            automatic_admission_decision_id=automatic_admission_decision_id,
             created_at=_utcnow(),
         )
         self._session.add(link)
+        if before_flush is not None:
+            with self._session.no_autoflush:
+                before_flush()
         self._session.flush()
         return link
+
+    def get_automatic_evidence_link(
+        self, automatic_admission_decision_id: uuid.UUID
+    ) -> EvidenceLink | None:
+        """Return the link already published for one immutable machine decision."""
+        return self._session.scalar(
+            select(EvidenceLink)
+            .where(
+                EvidenceLink.automatic_admission_decision_id
+                == automatic_admission_decision_id
+            )
+            .order_by(EvidenceLink.created_at, EvidenceLink.id)
+            .limit(1)
+        )
 
     def get_statement(self, statement_id: uuid.UUID) -> SourceStatement | None:
         return self._session.scalar(

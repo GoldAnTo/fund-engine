@@ -1,0 +1,372 @@
+{
+  "counts": {
+    "accepted": 60,
+    "fetched": 3,
+    "rejected": 0,
+    "returned": 60
+  },
+  "errors": [],
+  "execution": {
+    "generator": "app.scripts.smoke_acquisition_sources",
+    "mode": "cli_live",
+    "network": "live",
+    "worktree_clean_at_start": true
+  },
+  "fetch_limit": 3,
+  "fetches": [
+    {
+      "byte_sha256": "fdda11067f3d5a63291ac720e17bed09caba97fdfa2b7f1548adea85d1e45888",
+      "byte_size": 154253,
+      "final_url_sha256": "e5fee18c26977f350da6a49258963bfb9d98ef99462afd58784be1a41df4190c",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:10340ead-4fd3-4ef7-af43-35726c41611c"
+    },
+    {
+      "byte_sha256": "239b0020939af870877a59b31e1ab5e3e6868613f7c769104bd3fb644bcd4a67",
+      "byte_size": 190593,
+      "final_url_sha256": "021892be66f7f3521f3e809a823c94d49318ca85db78c6e2bfc8c3f21590bb04",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:1382c270-242c-4662-ac0d-56336466b27d"
+    },
+    {
+      "byte_sha256": "f061a044f3195513a425a0bc8201c10af2079309d7c035035815780eec92c29d",
+      "byte_size": 148354,
+      "final_url_sha256": "1b9ad6281080327920c797bd47daa9a3bd580ca50477deb073e2d6f0b03f039f",
+      "mime_type": "application/pdf",
+      "provider_request_id": null,
+      "stable_id": "szse:1cb69efa-60de-4463-97f4-d21921a4468d"
+    }
+  ],
+  "git_commit": "03bd95cc9c7223b085cc63a9bbc8c234b9d6df87",
+  "live_success": true,
+  "not_fetched_count": 57,
+  "query": {
+    "sha256": "12ad984e61e95cc004ef13e923912af1fc7c7d8550e194751c143aa5d07fca6e",
+    "window_end": "2026-08-14",
+    "window_start": "2025-08-14"
+  },
+  "references": [
+    {
+      "canonical_url_sha256": "e5fee18c26977f350da6a49258963bfb9d98ef99462afd58784be1a41df4190c",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:10340ead-4fd3-4ef7-af43-35726c41611c"
+    },
+    {
+      "canonical_url_sha256": "021892be66f7f3521f3e809a823c94d49318ca85db78c6e2bfc8c3f21590bb04",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:1382c270-242c-4662-ac0d-56336466b27d"
+    },
+    {
+      "canonical_url_sha256": "1b9ad6281080327920c797bd47daa9a3bd580ca50477deb073e2d6f0b03f039f",
+      "external_version": "sha256:2a60e01c8ed94e48c0c70eaf15f4b730becfa826852dfcc231d87a282406fc36",
+      "stable_id": "szse:1cb69efa-60de-4463-97f4-d21921a4468d"
+    },
+    {
+      "canonical_url_sha256": "39794a3e3fe166561b27661eee61146809683c6645efc242153b69aac8279e94",
+      "external_version": "sha256:2ca5ce600b6f0480fcd24898316db5ffbed9bfa936a05035e5e181e61106e155",
+      "stable_id": "szse:1d2492e5-33cf-41e9-8fb8-5da4d4a26d96"
+    },
+    {
+      "canonical_url_sha256": "231a61c527b62b3c8347dd684941d7cd39da217ea35a64f4cc6a9f640ed6144a",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:1d5d23ed-1ce1-44df-b8fc-2986cc6617a7"
+    },
+    {
+      "canonical_url_sha256": "348492549d315672cf17fdc660ab0ec0249def58bf4ba3f8f9702d6537a2cf7a",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:1e7fcf5f-3fa1-49f3-81b7-38944732cc63"
+    },
+    {
+      "canonical_url_sha256": "e45558a9b757aa8e3607006c30fdda382e3de5c224d6740931682e067f279169",
+      "external_version": "sha256:6c5306e2e15616bbcee05f63f9a128671db2c4be0bb12f764a3acb84e55e059f",
+      "stable_id": "szse:211f12c3-ba65-4591-bed0-f2c0bcb9b4eb"
+    },
+    {
+      "canonical_url_sha256": "cabe3d4b4fd5524c796588738add1a57199887c92671ca47a32765b498a9e7dc",
+      "external_version": "sha256:04c6bf8363adaf26a08ca4ad552a085cfd40df63477cb5f47a40e873cefdce63",
+      "stable_id": "szse:2a7c043e-c3cc-41da-a11a-ab824fd03cda"
+    },
+    {
+      "canonical_url_sha256": "28d06efa1833a23d119b23446dc67408dbebf03b0ee04e1817e6bebd64c5116d",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:2d83b276-30ce-46d1-9f18-ca75cc7cb9e0"
+    },
+    {
+      "canonical_url_sha256": "0f0a4a29050f2cbbbe1f29291b6e3343a9cefc5f2a925ba2814287944a071617",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:2efb0425-88ca-48b4-8dbf-40a71d6686ed"
+    },
+    {
+      "canonical_url_sha256": "6b127099b0e7308140cce13b703a6154a535382ee06b556e92ac12c110c30231",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:308b5f27-2979-4426-a1f6-96af07c1b3f5"
+    },
+    {
+      "canonical_url_sha256": "0b80e2d59170a7d14f0d35a0bb9023973b352eff024352d369f17c021763015e",
+      "external_version": "sha256:2ca5ce600b6f0480fcd24898316db5ffbed9bfa936a05035e5e181e61106e155",
+      "stable_id": "szse:30f294db-e3bd-41ec-912f-b0d42de0d4be"
+    },
+    {
+      "canonical_url_sha256": "89b2f34f464cbfcdce5a32896ba3195bf7647b304a49e900c5ac645ebe9bb5a9",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:31cc2b6b-dd23-4cb5-b22b-8a0a0a495e51"
+    },
+    {
+      "canonical_url_sha256": "d7fce5612f9da065251d28ee581f655a1c74db06be5e3fbb37252efcb5b56641",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:3574a835-bc08-4814-9931-b8803874ef31"
+    },
+    {
+      "canonical_url_sha256": "62f4cee56878e8eecfba5f75293b47b984c886cd8c88fd4b0ca01d91361f6cb8",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:3e10e770-6ad9-404b-910a-1de5b35381d2"
+    },
+    {
+      "canonical_url_sha256": "d0b4edd122a751e9f6bb2a26960a15ce767b9ce5460e83e115966305e8ebb37a",
+      "external_version": "sha256:71339bad00dd8432902224e5335fcbb5efbcc73fe1a65bf368d03b95d9f52b5e",
+      "stable_id": "szse:40674b33-6505-4355-9ccc-f37d20b531b4"
+    },
+    {
+      "canonical_url_sha256": "cbf4663eb6409296a413d66ba5adb5a8a515fb061528ede558d12cdd1b8cdda9",
+      "external_version": "sha256:8ab538b83569a8d5add7bc300093a472d208fadde48391d29c7cf67142a38f3d",
+      "stable_id": "szse:45d6d033-4df9-443a-896c-5c84d5b70fd6"
+    },
+    {
+      "canonical_url_sha256": "658e383cc1e2ad3a8458c051ad729bc8ef8cf9538614fd84871b760d4e42990f",
+      "external_version": "sha256:2a60e01c8ed94e48c0c70eaf15f4b730becfa826852dfcc231d87a282406fc36",
+      "stable_id": "szse:46bb7412-c331-4eda-aa25-8d113e89a302"
+    },
+    {
+      "canonical_url_sha256": "a3c024f745ee14368eef72b48b2fe54487ef6736634d8ca895c89195f737559f",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:4dff4e6f-4249-4b14-b52d-b513cdd06d71"
+    },
+    {
+      "canonical_url_sha256": "1efaa4fe1317069cd230781a342525670985965046ae6c02a0b017e626730815",
+      "external_version": "sha256:a4e4928edcfbf7fe0db4a421c763c2f85d6d95c67ba10de3ce6d9b4945524601",
+      "stable_id": "szse:5762acde-1f1b-4a02-9d59-3e4927c0f596"
+    },
+    {
+      "canonical_url_sha256": "b8c6dc18e757b1312bb75c24339ec1b4e5f62f8f52d677468120e02c880e7422",
+      "external_version": "sha256:1eef29857d9a896ec04652d6a64d4a9b95c47b30c568550b39f7cac2cb54288d",
+      "stable_id": "szse:5d7913f0-6489-4d0d-944e-5b0e76c242af"
+    },
+    {
+      "canonical_url_sha256": "51f535574a3d8cd75c878814d82f0c661b455c579439012dab185705dfbf209d",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:5d812171-9477-4dd5-bae2-6dc7e10560e6"
+    },
+    {
+      "canonical_url_sha256": "82b0ac5e8737f0f22fb53f1a54598f02ea471c888773607a88919ea010829fb0",
+      "external_version": "sha256:53f87845a23d128eac68825bb02c1c0191f8f65866380e046183e5a17a5253d1",
+      "stable_id": "szse:5f089fe9-7a8c-404d-9db1-a36dfc51c0fe"
+    },
+    {
+      "canonical_url_sha256": "fe892b11efd4596c90c1f47c02ebfece83ce3e34d2a59cc2be7f60bd7ce3c2a2",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:60f20685-b8a6-4273-b23d-6a4d84fc42f5"
+    },
+    {
+      "canonical_url_sha256": "aff72d6c3969335fd196c7b68074063f5e84cca68b2ba754e275733424c3abaa",
+      "external_version": "sha256:180944ddce7f495f060bbd29704060c4114f01a504a5ec1f6b4ede3c07a0117d",
+      "stable_id": "szse:661f20c5-6395-487e-b9f0-80c25124b397"
+    },
+    {
+      "canonical_url_sha256": "4503e043076bd9b80ee887362f9204fb956e568e039b7597be9efa51843889ac",
+      "external_version": "sha256:1eef29857d9a896ec04652d6a64d4a9b95c47b30c568550b39f7cac2cb54288d",
+      "stable_id": "szse:670e1cc9-d4a7-4fff-90eb-472355245951"
+    },
+    {
+      "canonical_url_sha256": "3c830d909a7bc1455700c5c25d68900a97d5f943e21a99b535f7c6b36615f11f",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:67aca9f6-3ca8-4e17-862c-36aedccb5e68"
+    },
+    {
+      "canonical_url_sha256": "6ed48a782fc25b4c8191536c7a9ad7584daf19fc8e472f9ace44ba7791583b18",
+      "external_version": "sha256:0252f03f1d0304b706d2f4cf29f0840be1cbc8aa39aebf9a072e01a89f1af328",
+      "stable_id": "szse:70d0f298-063e-4e8b-831f-816ba7391c04"
+    },
+    {
+      "canonical_url_sha256": "8093ac052c373069b5b16f4a45d50eae2cc6b0c7511f698937e87155a60d785e",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:7494981e-c896-46c1-8442-2d01d115ccfb"
+    },
+    {
+      "canonical_url_sha256": "7c6d200edad017683b1542f1839538ea712da1fafb08ef0fbea478438a483556",
+      "external_version": "sha256:4087d1cd9b01be1ab931d2f656110d0de8c87823a2c72c78a5ee9676c5936dfa",
+      "stable_id": "szse:77c7ff99-db63-4a55-ad3f-b8f98c059eab"
+    },
+    {
+      "canonical_url_sha256": "4d48151a794e8ecb5b757f3b446242852bd4efdcdb1783c240dff707290a4eb0",
+      "external_version": "sha256:079bcdccacc10b7cc56ebadc7efe2d9a282df41c768243ffe928043cda15807a",
+      "stable_id": "szse:7fdd7dbb-219b-4fce-aa48-d8a3de4058f0"
+    },
+    {
+      "canonical_url_sha256": "6586fd52c74b2a31090cffded44c4089be14929da017a5886dd044f9aaf0d2f8",
+      "external_version": "sha256:a998cab76e0225a233e75951072c9df38faf8cbdbee9fd77f953b90e14b4cee4",
+      "stable_id": "szse:8239f39c-23ac-4237-9131-89dbd2ed594d"
+    },
+    {
+      "canonical_url_sha256": "89e0f96d22d198fff19255c808298146f6f3fa1230597863502e01814fa3ba0b",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:8342f550-b983-432d-8c87-dc7e6b581662"
+    },
+    {
+      "canonical_url_sha256": "9cc67ff85b782fe4436820c4c498cab2d60d021b3dca6614cab497a2e7282a79",
+      "external_version": "sha256:3c3abda664170ed65e5780324cd4b63eb232d3f8b9fbeb6d70508344de1772f7",
+      "stable_id": "szse:8401fe0f-2ab6-4ae6-95fa-a5e618097890"
+    },
+    {
+      "canonical_url_sha256": "47c5ac9c37e9c5daa5e5ffc9e87e850d4d418d5bea389eb988bdb982dce93126",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:854182b4-10d4-4a91-83c1-a14b9bd9870a"
+    },
+    {
+      "canonical_url_sha256": "6b4439ded579df2716d7f14c2da672492172fe68294a4be20df967b7b14538c5",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:8de07b5e-f575-4f2b-b4b2-8fa082638585"
+    },
+    {
+      "canonical_url_sha256": "dc7e1ab23e031aae0b2c472c4a4b7fcb02f1ecf08b8b2eb00bbfd82e4ef4c4bf",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:9b4d713a-aff3-496e-8528-c664172bee86"
+    },
+    {
+      "canonical_url_sha256": "a894740894fec9188ab0d11049ee74cbaefefdf8d4b226c9dda267c0ea68cce0",
+      "external_version": "sha256:a0d4fac2681a353dda8a0752b24ee2ede8c20398448f0a99c16213d0314016bf",
+      "stable_id": "szse:9cbbccbc-812a-4855-b798-96724be1742a"
+    },
+    {
+      "canonical_url_sha256": "f92dc0b408861014d00fc91ed4d662b3f4bb014d1f24f676ce8bbf78f50bd65f",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:9e4ce5ff-d8ce-40dc-94a3-d5bd7ea339b9"
+    },
+    {
+      "canonical_url_sha256": "12b46d7bb3ba5e4d1e1d6da9350cfdbd439a84f0cef982e79394657bc94a52aa",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:9ff9adca-7de1-47b6-92aa-f588ed16103d"
+    },
+    {
+      "canonical_url_sha256": "ef889590316829d286b3de3ebe6f094ec4da28b7af236aaa54bd8e6a96688c15",
+      "external_version": "sha256:7da69dd455e1878d1bd7552fd18d8bf548a80c973a26d809ba04b68d5c47704a",
+      "stable_id": "szse:aa5eb3b6-2350-45e6-814c-9b58ccd5e43c"
+    },
+    {
+      "canonical_url_sha256": "5e32a7234c1857eaa8447240c9867d078b61d7c9aab67845e72a42c8ccb5f1f7",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:b09d1f01-840f-4e4a-a445-f8de37c486f4"
+    },
+    {
+      "canonical_url_sha256": "49884c7e467226c4ccccaf85bf25d70d35cbed6c9396485564a7df64e01f1463",
+      "external_version": "sha256:3c3abda664170ed65e5780324cd4b63eb232d3f8b9fbeb6d70508344de1772f7",
+      "stable_id": "szse:b6eb4ebd-9b99-4982-bb4b-13cf00e8a521"
+    },
+    {
+      "canonical_url_sha256": "bc810b37b077d9a8134c5b03bf8a9da53a95e33c7cc7f85b74d7868c8628df7f",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:bf1de534-258b-4e70-838a-df0e60b339b1"
+    },
+    {
+      "canonical_url_sha256": "9e5452a3b99094362083fdb37c5eca57fca5a87f2dc745b07137a6fdd91ed995",
+      "external_version": "sha256:7da69dd455e1878d1bd7552fd18d8bf548a80c973a26d809ba04b68d5c47704a",
+      "stable_id": "szse:bfd4cfe1-355a-4d90-9436-d9d59464c086"
+    },
+    {
+      "canonical_url_sha256": "311b9dbe30617f805e2a72907fdeee9d3a286e505c49724caa3038f7fcfc103d",
+      "external_version": "sha256:cd7a25b52b350c57db601347bc606acca356f0bb5ddd3087698c4b8c48187c23",
+      "stable_id": "szse:c1ec7157-ada0-4868-863b-5f5639d5182e"
+    },
+    {
+      "canonical_url_sha256": "52debb7a275ba1c75dfcc14e48f8aff82577583f3063b16c4c853144edf6b97d",
+      "external_version": "sha256:7da69dd455e1878d1bd7552fd18d8bf548a80c973a26d809ba04b68d5c47704a",
+      "stable_id": "szse:c21b4fa2-38b3-4fba-96c7-97b003fb324a"
+    },
+    {
+      "canonical_url_sha256": "d6a790c2860ced1cddfc4fd33a382945a55077ed3e737249f3e2d656b55c902e",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:c21e47d5-3156-4c36-b799-9a8e678bde30"
+    },
+    {
+      "canonical_url_sha256": "b16b26c8210e7bd01a307269af9974ae5a717cd4a685d51c957cd9233632e06e",
+      "external_version": "sha256:e3f22812b2302ce3487e2b7c6b8872e8d644d630450104b0312e052656c8e89a",
+      "stable_id": "szse:c4892714-d95d-4b1d-9013-aa688307dae5"
+    },
+    {
+      "canonical_url_sha256": "5d188aa735b9e40a973fcf922ffe453f610ba51660228394c4ac0cc4f2e00409",
+      "external_version": "sha256:3c3abda664170ed65e5780324cd4b63eb232d3f8b9fbeb6d70508344de1772f7",
+      "stable_id": "szse:c8e8523d-055a-4d99-ad62-d9f88eb0b40f"
+    },
+    {
+      "canonical_url_sha256": "c9402a8c32ca17f796d5f58ed3db4c3c95c57a5c69df25fb283f11782bb6d577",
+      "external_version": "sha256:94aae1caf17d55414e347a010f7199a3a5f3a3660ff34c2b8812e27c8c344cb1",
+      "stable_id": "szse:ccc27a3b-1037-4e0c-b170-fbc0065fac44"
+    },
+    {
+      "canonical_url_sha256": "ed3d5623ec0915321c82fe8279b5ebc7d307aac384b22e20d297976e6b36b38c",
+      "external_version": "sha256:3c3abda664170ed65e5780324cd4b63eb232d3f8b9fbeb6d70508344de1772f7",
+      "stable_id": "szse:d049244d-f7d0-4c6e-b139-632af68fc2ae"
+    },
+    {
+      "canonical_url_sha256": "a8f5510b8fbfe2c4232d8f6baf8857fac6a01809c6af0460f04984f3db318009",
+      "external_version": "sha256:3d52d3a64c6dbc69bb4d785820b6baef02f2c1bf8aa649e6d9e4c9e4b17624e5",
+      "stable_id": "szse:d25d30f6-5598-469b-b68a-3a79c09adf0f"
+    },
+    {
+      "canonical_url_sha256": "8ee07ea83beba3c5300c0bc5b4c8898e0289729eeca2ea5ef11f4c0fb8c12ac9",
+      "external_version": "sha256:079bcdccacc10b7cc56ebadc7efe2d9a282df41c768243ffe928043cda15807a",
+      "stable_id": "szse:d5cf918d-f4a9-4320-be94-629756d4e6d0"
+    },
+    {
+      "canonical_url_sha256": "7b7f0ebc94cbbadffeaa3be7f217d11dc33529854971b19c4c604eda70093f9f",
+      "external_version": "sha256:3209c30aeda93df0f1d403971ec12022e969fd916b0f2e88afb8469bcfbc863c",
+      "stable_id": "szse:d6c94f9a-0765-4103-a792-76adbca86baa"
+    },
+    {
+      "canonical_url_sha256": "5643e2db6c69eb16b330f2c6a973caed9a9b7255951fa4913ca1478c8a882fee",
+      "external_version": "sha256:274701240efd60daddac69838feba9b738100651c30583f4936a652a12b0dd33",
+      "stable_id": "szse:d6d1bbd3-113f-458e-a289-9eb5750bc1c3"
+    },
+    {
+      "canonical_url_sha256": "063816d040f26e00b3f2bfe8f493b92e69a5688dedc350c17409b35d40f386b0",
+      "external_version": "sha256:97a4b4e7da82bf2b5a887d218acd21bbf66ce2f374b1630e743fc069bd5eaa12",
+      "stable_id": "szse:e0169ec3-2144-48ae-a707-d76d01072101"
+    },
+    {
+      "canonical_url_sha256": "c646cd0004952e54d01e378f90b848de973a479b7b72bdd601914dff188ea890",
+      "external_version": "sha256:6c5306e2e15616bbcee05f63f9a128671db2c4be0bb12f764a3acb84e55e059f",
+      "stable_id": "szse:e4cbcc81-e3f2-4004-8c71-0e7e909257d5"
+    },
+    {
+      "canonical_url_sha256": "0a9c7bacfe6a4ae51389780aba7b47109fd32a3d7fb901c5abae9edccfd41eb4",
+      "external_version": "sha256:6c5306e2e15616bbcee05f63f9a128671db2c4be0bb12f764a3acb84e55e059f",
+      "stable_id": "szse:eec9eb64-6aff-44b9-8aca-6514888a20cf"
+    },
+    {
+      "canonical_url_sha256": "a090d80fd22b1e544b478d4200271012764d6183695c263cdaa0f5ffc9b057cd",
+      "external_version": "sha256:2a60e01c8ed94e48c0c70eaf15f4b730becfa826852dfcc231d87a282406fc36",
+      "stable_id": "szse:f7ab0782-32a9-491d-9616-4b8836fbd96e"
+    }
+  ],
+  "schema_version": "acquisition-source-smoke/v3",
+  "source": {
+    "adapter_key": "szse",
+    "adapter_version": "szse-announcement-source/v1",
+    "descriptor": {
+      "allowed_hosts": [
+        "disc.static.szse.cn",
+        "www.szse.cn"
+      ],
+      "allowed_schemes": [
+        "https"
+      ],
+      "allowed_source_roles": [
+        "company_disclosure"
+      ],
+      "provider_identity": "Shenzhen Stock Exchange"
+    }
+  },
+  "status": "succeeded",
+  "timestamp_utc": "2026-08-14T15:55:42.453085Z"
+}

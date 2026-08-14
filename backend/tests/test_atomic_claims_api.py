@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
+
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.models.ledger import (
     CaseDocumentVersion,
@@ -12,12 +14,16 @@ from app.models.ledger import (
     SourceSpan,
     Thesis,
 )
-from app.models.operational import ResearchRun, ResearchTask
+from app.models.operational import ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import ResearchRunEvent
 from app.models.source_governance import SourceContract
 from app.services.atomic_claims import AtomicClaimService
 from app.services.auto_research import AutoResearchService
-from app.services.case_monitor import ResearchRunEventRepository
+from app.services.case_monitor import (
+    CaseMonitorConfig,
+    CaseMonitorService,
+    ResearchRunEventRepository,
+)
 
 
 def _candidate_for_case(session):
@@ -180,6 +186,215 @@ def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_se
     resumed_job = service.repo.job_for_run(run.id)
     assert resumed_job is not None
     assert resumed_job.status == "queued"
+
+
+def test_scoped_atomic_claim_review_only_gates_and_resumes_its_frozen_run(
+    cmd_client, cmd_session
+) -> None:
+    """A frozen company-disclosure run ignores pending pasted candidates."""
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="冻结来源范围的原子陈述审核",
+        industry_topic="ai",
+        created_by="human:owner",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="订单增长将改善收入",
+        created_by="human:owner",
+        created_at=now,
+    )
+    company_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="https://issuer.example.org/disclosure",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+    )
+    pasted_document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        source_url="event://pasted-summary",
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+    )
+    cmd_session.add_all([thesis, company_document, pasted_document])
+    cmd_session.flush()
+    company_text = "公司公告：2026年第一季度订单同比增长20%。"
+    pasted_text = "研究员粘贴：订单增长的背景摘要。"
+    company_span = SourceSpan(
+        document_version_id=company_document.id,
+        locator={"page": 2},
+        verbatim_text=company_text,
+    )
+    pasted_span = SourceSpan(
+        document_version_id=pasted_document.id,
+        locator={"paragraph": 1},
+        verbatim_text=pasted_text,
+    )
+    cmd_session.add_all(
+        [
+            company_span,
+            pasted_span,
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=company_document.id,
+                linked_at=now,
+            ),
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=pasted_document.id,
+                linked_at=now,
+            ),
+            CaseTenantAdmission(
+                research_case_id=case.id,
+                tenant_id="test-team",
+                initial_document_version_id=company_document.id,
+                admitted_by="test-fixture",
+                admitted_at=now,
+            ),
+            SourceContract(
+                document_version_id=company_document.id,
+                source_type="company_disclosure",
+                provider_or_tenant="issuer",
+                allow_ai_processing=True,
+                allow_display=True,
+                allow_export=False,
+                allow_api=False,
+                region="CN",
+                effective_from=None,
+                effective_until=None,
+                retention_policy="case_retained",
+                deletion_policy="not_recorded",
+                downstream_restrictions=[],
+                contract_version="v1",
+                intake_metadata={},
+                declared_by="human",
+                created_at=now,
+            ),
+            SourceContract(
+                document_version_id=pasted_document.id,
+                source_type="pasted_snapshot",
+                provider_or_tenant="researcher",
+                allow_ai_processing=True,
+                allow_display=True,
+                allow_export=False,
+                allow_api=False,
+                region="CN",
+                effective_from=None,
+                effective_until=None,
+                retention_policy="case_retained",
+                deletion_policy="not_recorded",
+                downstream_restrictions=[],
+                contract_version="v1",
+                intake_metadata={},
+                declared_by="human",
+                created_at=now,
+            ),
+        ]
+    )
+    cmd_session.flush()
+    company_candidate = AtomicClaimService(cmd_session).admit(
+        AtomicClaimDraft(
+            source_span_id=company_span.id,
+            quote="订单同比增长20%",
+            quote_start=company_text.index("订单同比增长20%"),
+            quote_end=company_text.index("订单同比增长20%") + len("订单同比增长20%"),
+            normalized_text="公司披露订单同比增长 20%",
+            claim_type="disclosed_fact",
+            assertion_actor="公司",
+            subject="订单",
+            predicate="同比增长",
+            object_text="20%",
+            numeric_value="20",
+            unit="%",
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="primary_disclosure",
+        run_ref="extract:company",
+    )
+    pasted_candidate = AtomicClaimService(cmd_session).admit(
+        AtomicClaimDraft(
+            source_span_id=pasted_span.id,
+            quote="背景摘要",
+            quote_start=pasted_text.index("背景摘要"),
+            quote_end=pasted_text.index("背景摘要") + len("背景摘要"),
+            normalized_text="研究员粘贴的订单增长背景摘要",
+            claim_type="reported_claim",
+            assertion_actor="研究员",
+            subject="订单",
+            predicate="背景",
+            object_text="摘要",
+            numeric_value=None,
+            unit=None,
+            observed_period=None,
+            scope={},
+        ),
+        authority_level="user_supplied",
+        run_ref="extract:pasted",
+    )
+    CaseMonitorService(cmd_session).save(
+        case.id,
+        actor="human:owner",
+        config=CaseMonitorConfig(
+            frequency="daily_20_00",
+            factor_ids=[thesis.id],
+            allowed_source_types=["company_disclosure"],
+            next_verification_event="下一次财报",
+            budget=20,
+            change_reason="只核验公司披露",
+        ),
+    )
+    service = AutoResearchService(cmd_session)
+    run = service.start(case.id, allowed_source_types=["company_disclosure"])
+    service._pause_for_atomic_claim_review(run, [company_candidate], used=0)
+    service._handoff_for_review(run)
+    job = service.repo.job_for_run(run.id)
+    assert job is not None
+    job.status = "waiting_for_review"
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/atomic-claims/{company_candidate.id}/reviews",
+        json={
+            "outcome": "rejected",
+            "reviewer": "human:reviewer",
+            "reason": "已核对公司公告原文",
+            "idempotency_key": "scoped-atomic-review-requeue-1",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    cmd_session.expire_all()
+    resumed = service.repo.get_run(run.id)
+    assert resumed is not None
+    assert resumed.status == "queued"
+    assert resumed.stage == "resume_after_claim_review"
+    assert resumed.stop_reason is None
+    review_candidate_ids = {
+        task.ref_id
+        for task in cmd_session.scalars(
+            select(TaskItem)
+            .where(TaskItem.research_case_id == case.id)
+            .where(TaskItem.task_type == "review_atomic_claim")
+        )
+    }
+    assert review_candidate_ids == {company_candidate.id}
+    assert pasted_candidate.id not in review_candidate_ids
+    scope_events = list(
+        cmd_session.scalars(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run.id)
+            .where(ResearchRunEvent.stage == "scope")
+        )
+    )
+    assert len(scope_events) == 1
+    assert scope_events[0].run_id == run.id
+    assert scope_events[0].payload_json["allowed_source_types"] == ["company_disclosure"]
 
 
 def test_atomic_claim_review_resumes_only_runs_referencing_that_claim(

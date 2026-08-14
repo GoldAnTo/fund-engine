@@ -387,6 +387,22 @@ def test_supplement_text_creates_a_separate_case_document_with_intersected_permi
     assert retried.json()["document_version_id"] == str(supplement.id)
     assert len(DocumentRepository(cmd_seeded).spans_for_version(supplement.id)) == 1
 
+    rejected = cmd_client.post(
+        f"/api/v1/documents/{original.id}/supplements",
+        json={
+            "case_id": str(case.id),
+            "raw_text": "用户补充的报告正文，声称来自第 3 页。",
+            "claimed_page_reference": "第 3 页",
+            "created_by": "human:researcher",
+            "source_metadata": {"research_source_type": "company_disclosure"},
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert "company_disclosure requires an HTTP(S) source_url" in rejected.json()[
+        "error"
+    ]["message"]
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/theses/{thesis_id}/propose

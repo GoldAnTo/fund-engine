@@ -19,6 +19,7 @@ which parser produced a span.  See spec
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import io
 import re
 import uuid
@@ -40,7 +41,11 @@ from app.documents.locators import (
 # Constants
 # ---------------------------------------------------------------------------
 
-PARSER_VERSION_PYPDF = "pypdf-v1"
+PYPDF_PACKAGE_VERSION = importlib.metadata.version("pypdf")
+PYPDF_CONFIG_VERSION = "text-layer-paragraph-v1"
+PARSER_VERSION_PYPDF = (
+    f"pypdf-{PYPDF_PACKAGE_VERSION}+{PYPDF_CONFIG_VERSION}"
+)
 PARSER_VERSION_DOCLING = "docling-v2.115.0"
 # Backwards-compat alias — some earlier call sites imported the STUB
 # constant when DoclingAdapter was a stub.  The value now points at the

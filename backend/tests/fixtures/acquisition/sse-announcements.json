@@ -1,0 +1,22 @@
+{
+  "pageHelp": {
+    "pageNo": 1,
+    "pageSize": 2,
+    "pageCount": 2,
+    "total": 3
+  },
+  "result": [
+    {
+      "SECURITY_CODE": "688256",
+      "TITLE": "2024年年度报告",
+      "SSEDATE": "2025-04-19",
+      "URL": "/disclosure/listedinfo/announcement/c/new/2025-04-19/688256_20250419_11FJ.pdf"
+    },
+    {
+      "SECURITY_CODE": "688256",
+      "TITLE": "2025年第一季度报告",
+      "SSEDATE": "2025-04-19",
+      "URL": "/disclosure/listedinfo/announcement/c/new/2025-04-19/688256_20250419_D1GC.pdf"
+    }
+  ]
+}

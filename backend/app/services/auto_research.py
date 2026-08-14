@@ -665,7 +665,12 @@ class AutoResearchService:
             run.research_case_id
         )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
-        pending_claim_count = len(self._pending_atomic_claims(run.research_case_id))
+        pending_claim_count = len(
+            self._pending_atomic_claims(
+                run.research_case_id,
+                allowed_source_types=self._run_allowed_source_types(run),
+            )
+        )
         if pending_claim_count:
             lifecycle_repo.update(
                 lifecycle,
@@ -936,7 +941,10 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
-        for candidate in self._pending_atomic_claims(run.research_case_id):
+        for candidate in self._pending_atomic_claims(
+            run.research_case_id,
+            allowed_source_types=self._run_allowed_source_types(run),
+        ):
             if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
                 continue
             self.task_repo.add_task(
@@ -1098,7 +1106,7 @@ class AutoResearchService:
         return bool(self._pending_atomic_claims_for_run(run))
 
     def _run_allowed_source_types(self, run) -> set[str]:
-        """Read the immutable source-type boundary from this run's scope event."""
+        """Read the immutable research-source-category boundary from run scope."""
         scope = self.session.scalar(
             select(ResearchRunEvent)
             .where(ResearchRunEvent.run_id == run.id)
@@ -1133,7 +1141,7 @@ class AutoResearchService:
             contract = contracts.get(document.id)
             if contract is None:
                 reason = "missing_source_contract"
-            elif contract.source_type not in allowed_source_types:
+            elif contract.research_source_type not in allowed_source_types:
                 reason = "source_type_not_in_frozen_scope"
             elif not contract.allow_ai_processing or not source_contract_is_active(contract):
                 reason = "source_contract_not_usable"
@@ -1197,7 +1205,7 @@ class AutoResearchService:
             candidate
             for candidate in candidates
             if (contract := contracts.get(document_ids.get(candidate.source_span_id))) is not None
-            and contract.source_type in allowed_source_types
+            and contract.research_source_type in allowed_source_types
             and contract.allow_ai_processing
             and source_contract_is_active(contract)
         ]

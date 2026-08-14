@@ -7,9 +7,10 @@ numbers, noisy dimensions, cumulative figures).
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import select
 
 from app.ai.client import LLMClient
@@ -247,3 +248,31 @@ def test_extractor_llm_still_handles_narrative_spans(
     assert candidates[0].claim_type in {
         "management_attribution", "forecast",
     }
+
+
+def test_extractor_persists_fixed_safe_error_instead_of_provider_exception(
+    session, document_service, document
+):
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="管理层表示订单能见度良好",
+    )
+
+    class CredentialBearingFailureClient:
+        model_version = "safe-error-test-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            raise RuntimeError(
+                "Bearer credential-value "
+                "https://provider.example/run?access_token=credential-value"
+            )
+
+    with pytest.raises(RuntimeError):
+        StatementExtractor(CredentialBearingFailureClient()).extract(
+            document.id, session
+        )
+
+    run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
+    assert run.error == "AI operation failed"
+    assert "credential-value" not in run.error

@@ -2011,6 +2011,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-cases/{case_id}/theses/{thesis_id}/acquisition-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Acquisition Job */
+        post: operations["create_acquisition_job_api_v1_research_cases__case_id__theses__thesis_id__acquisition_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/acquisition-jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Acquisition Job Detail */
+        get: operations["acquisition_job_detail_api_v1_acquisition_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/acquisition-jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Acquisition Job Events */
+        get: operations["acquisition_job_events_api_v1_acquisition_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/acquisition-jobs/{job_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Acquisition Job Evidence */
+        get: operations["acquisition_job_evidence_api_v1_acquisition_jobs__job_id__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/acquisition-jobs/{job_id}/exceptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Acquisition Job Exceptions */
+        get: operations["acquisition_job_exceptions_api_v1_acquisition_jobs__job_id__exceptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -2032,6 +2117,190 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcquisitionCountersDTO */
+        AcquisitionCountersDTO: {
+            /** References */
+            references: number;
+            /** Fetched */
+            fetched: number;
+            /** Frozen */
+            frozen: number;
+            /** Admitted */
+            admitted: number;
+            /** Exceptions */
+            exceptions: number;
+        };
+        /** AcquisitionErrorSummaryDTO */
+        AcquisitionErrorSummaryDTO: {
+            /** Code */
+            code: string;
+            /** Summary */
+            summary: string;
+        };
+        /** AcquisitionEvidenceDTO */
+        AcquisitionEvidenceDTO: {
+            /**
+             * Evidence Link Id
+             * Format: uuid
+             */
+            evidence_link_id: string;
+            /**
+             * Source Statement Id
+             * Format: uuid
+             */
+            source_statement_id: string;
+            /**
+             * Document Version Id
+             * Format: uuid
+             */
+            document_version_id: string;
+            /** Source Title */
+            source_title: string;
+            /** Source Url */
+            source_url: string | null;
+            /** Gate Results */
+            gate_results: {
+                [key: string]: components["schemas"]["AcquisitionGateResultDTO"];
+            };
+            /**
+             * Review State
+             * @constant
+             */
+            review_state: "automatically_admitted";
+        };
+        /** AcquisitionExceptionDTO */
+        AcquisitionExceptionDTO: {
+            /** Reason */
+            reason: string;
+            detail: components["schemas"]["AcquisitionExceptionDetailDTO"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** AcquisitionExceptionDetailDTO */
+        AcquisitionExceptionDetailDTO: {
+            /** Adapter Key */
+            adapter_key?: string | null;
+            /** Attempt Id */
+            attempt_id?: string | null;
+            /** Candidate Id */
+            candidate_id?: string | null;
+            /** Document Version Id */
+            document_version_id?: string | null;
+            /** External Record Id */
+            external_record_id?: string | null;
+            /** Provider Status */
+            provider_status?: number | string | null;
+            /** Retrieval Artifact Id */
+            retrieval_artifact_id?: string | null;
+            /** Source Reference Id */
+            source_reference_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Outcome */
+            outcome?: string | null;
+            /** Failed Gates */
+            failed_gates?: ("source" | "temporal" | "locator" | "semantic")[] | null;
+            /** Reason Codes */
+            reason_codes?: {
+                [key: string]: string;
+            } | null;
+            /** Gate Version */
+            gate_version?: string | null;
+            /** Policy Version */
+            policy_version?: string | null;
+        };
+        /** AcquisitionGateResultDTO */
+        AcquisitionGateResultDTO: {
+            /** Passed */
+            passed: boolean;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /** AcquisitionJobAcceptedDTO */
+        AcquisitionJobAcceptedDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "retry_wait" | "succeeded" | "partial" | "failed" | "cancelled";
+        };
+        /**
+         * AcquisitionJobCreateRequest
+         * @description The caller chooses research intent, never identity or source policy.
+         */
+        AcquisitionJobCreateRequest: {
+            objective: components["schemas"]["EvidenceObjective"];
+        };
+        /** AcquisitionJobDetailDTO */
+        AcquisitionJobDetailDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "retry_wait" | "succeeded" | "partial" | "failed" | "cancelled";
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "queued" | "searching" | "fetching" | "freezing" | "extracting" | "admitting" | "succeeded" | "partial" | "failed" | "cancelled";
+            /** Attempt */
+            attempt: number;
+            counters: components["schemas"]["AcquisitionCountersDTO"];
+            /** Retry At */
+            retry_at: string | null;
+            error: components["schemas"]["AcquisitionErrorSummaryDTO"] | null;
+        };
+        /** AcquisitionJobEventDTO */
+        AcquisitionJobEventDTO: {
+            /** Seq */
+            seq: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "retry_wait" | "succeeded" | "partial" | "failed" | "cancelled";
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "queued" | "searching" | "fetching" | "freezing" | "extracting" | "admitting" | "succeeded" | "partial" | "failed" | "cancelled";
+            /** Message */
+            message: string;
+            payload: components["schemas"]["AcquisitionJobEventPayloadDTO"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** AcquisitionJobEventPayloadDTO */
+        AcquisitionJobEventPayloadDTO: {
+            /** Attempt */
+            attempt?: number | null;
+            /** Adapter Key */
+            adapter_key?: string | null;
+            /** Operation */
+            operation?: string | null;
+            /** Outcome */
+            outcome?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Retryable */
+            retryable?: boolean | null;
+        };
         /** ActiveFundDisclosureSyncRunDTO */
         ActiveFundDisclosureSyncRunDTO: {
             /** Run Id */
@@ -3950,6 +4219,11 @@ export interface components {
             /** Current Gap */
             current_gap: string | null;
         };
+        /**
+         * EvidenceObjective
+         * @enum {string}
+         */
+        EvidenceObjective: "support" | "contradict" | "alternative_explanation" | "verify_rule";
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
             /** Link Id */
@@ -4936,7 +5210,7 @@ export interface components {
             /** Source Label */
             source_label: string;
             /** Review State */
-            review_state: ("machine_generated" | "reviewed" | "rejected") | null;
+            review_state: ("machine_generated" | "automatically_admitted" | "reviewed" | "rejected") | null;
         };
         /** KeyFactorCandidateDTO */
         KeyFactorCandidateDTO: {
@@ -6610,6 +6884,8 @@ export interface components {
         SourceContractDTO: {
             /** Source Type */
             source_type: string;
+            /** Research Source Type */
+            research_source_type: string;
             /** Provider Or Tenant */
             provider_or_tenant: string;
             /** Permissions */
@@ -11841,6 +12117,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ForecastVerdictDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_acquisition_job_api_v1_research_cases__case_id__theses__thesis_id__acquisition_jobs_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+                thesis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcquisitionJobCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionJobAcceptedDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acquisition_job_detail_api_v1_acquisition_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionJobDetailDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acquisition_job_events_api_v1_acquisition_jobs__job_id__events_get: {
+        parameters: {
+            query?: {
+                after_seq?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionJobEventDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acquisition_job_evidence_api_v1_acquisition_jobs__job_id__evidence_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionEvidenceDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acquisition_job_exceptions_api_v1_acquisition_jobs__job_id__exceptions_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionExceptionDTO"][];
                 };
             };
             /** @description Validation Error */
