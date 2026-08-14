@@ -1,17 +1,11 @@
 {
   "counts": {
-    "accepted": 1,
+    "accepted": 0,
     "fetched": 0,
     "rejected": 0,
-    "returned": 1
+    "returned": 0
   },
-  "errors": [
-    {
-      "category": "provider_unavailable",
-      "retryable": true,
-      "stage": "fetch"
-    }
-  ],
+  "errors": [],
   "execution": {
     "generator": "app.scripts.smoke_acquisition_sources",
     "mode": "cli_live",
@@ -20,21 +14,15 @@
   },
   "fetch_limit": 3,
   "fetches": [],
-  "git_commit": "0919d8e6129516f70a6a89f961805e33fdf8d570",
-  "live_success": false,
+  "git_commit": "4dbd30a3fdf7c86d1c5c6269f67f5761b3189f66",
+  "live_success": true,
   "not_fetched_count": 0,
   "query": {
-    "sha256": "54c2200f8867a2797be8155be6d0a83f2512581dacb48b31b7a063f4d2401554",
-    "window_end": "2026-08-14",
-    "window_start": "2026-08-13"
+    "sha256": "878d332ca0fcbf3a4055d5489925b1e6c0aa83a4d15f3411b56ff1a37aae0548",
+    "window_end": "2025-04-20",
+    "window_start": "2025-04-19"
   },
-  "references": [
-    {
-      "canonical_url_sha256": "5865b0368772579cfa3766ecfc8ae927d04ff30d6e8ce6babf202a085c0782b5",
-      "external_version": "published:2026-08-13",
-      "stable_id": "sse:ac473d4a75cc04ea11a8bd64"
-    }
-  ],
+  "references": [],
   "schema_version": "acquisition-source-smoke/v3",
   "source": {
     "adapter_key": "sse",
@@ -55,6 +43,6 @@
       "provider_identity": "Shanghai Stock Exchange"
     }
   },
-  "status": "failed",
-  "timestamp_utc": "2026-08-14T15:53:49.663335Z"
+  "status": "succeeded",
+  "timestamp_utc": "2026-08-14T15:54:43.199298Z"
 }
