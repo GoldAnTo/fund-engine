@@ -495,8 +495,8 @@ async function main() {
     await page.getByRole("button", { name: "识别事件与研究问题" }).click();
     await page.getByLabel("研究问题").waitFor();
     await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
-    await page.waitForURL(/\/events\/[0-9a-f-]{36}$/u);
-    const caseId = new URL(page.url()).pathname.split("/").at(-1);
+    await page.waitForURL(/\/events\/[0-9a-f-]{36}\/preparation$/u);
+    const caseId = new URL(page.url()).pathname.split("/").at(-2);
     if (!caseId) throw new Error("created Case URL did not contain an id");
 
     const caseReadChecks = [

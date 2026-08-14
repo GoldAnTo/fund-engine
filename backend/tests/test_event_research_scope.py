@@ -994,7 +994,7 @@ def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session
     item = listed.json()["items"][0]
     assert item["case_id"] == str(case_id)
     assert item["lifecycle_status"] == "awaiting_key_review"
-    assert item["status_summary"] == "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
+    assert item["status_summary"] == "系统正在准备研究材料"
     assert item["next_human_action"] is None
 
 

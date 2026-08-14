@@ -20,9 +20,17 @@ from app.models.ledger import (
     ResearchCase,
     SourceSpan,
     SourceStatement,
+    Thesis,
     ValidationError,
 )
+from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.models.operational import Job, ResearchRun
+from app.models.research_protocol import (
+    MechanismEdgeVersion,
+    MechanismNodeVersion,
+    MechanismTemplateVersion,
+)
+from app.models.source_governance import SourceContract
 from app.models.research_preparation import (
     ResearchPreparation,
     ResearchPreparationArtifact,
@@ -139,6 +147,41 @@ def _confirm_claims(service, case_id, revision, candidates, *, modified: bool = 
         for index, candidate in enumerate(candidates)
     ]
     service.confirm_claims(case_id, actor="reviewer", revision=revision, decisions=decisions)
+
+
+def _materializable_protocol(session, case: ResearchCase, candidate) -> dict[str, object]:
+    """Build the narrowest full protocol accepted by the formal review gate."""
+    now = datetime.now(UTC)
+    span = session.get(SourceSpan, candidate.source_span_id)
+    assert span is not None
+    document = session.get(DocumentVersion, span.document_version_id)
+    assert document is not None
+    if session.scalar(select(CaseTenantAdmission).where(CaseTenantAdmission.research_case_id == case.id)) is None:
+        session.add(CaseTenantAdmission(research_case_id=case.id, tenant_id="test-team", initial_document_version_id=document.id, admitted_by="test", admitted_at=now))
+    if session.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) is None:
+        session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="test", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="test", created_at=now))
+    thesis = Thesis(research_case_id=case.id, statement=f"Outcome {candidate.id}", research_protocol_required=True, created_by="test", created_at=now)
+    session.add(thesis)
+    session.flush()
+    scope = EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by="test", change_summary="protocol fixture", created_at=now)
+    session.add(scope)
+    session.flush()
+    session.add(EventResearchScopeFactor(scope_version_id=scope.id, statement=thesis.statement, description=None, position=1))
+    template = MechanismTemplateVersion(template_key=f"protocol-{case.id}-{candidate.id}", version=1, display_name="Protocol fixture", industry_scope="test", supersedes_id=None, approved_by="test", reason="fixture", created_at=now)
+    session.add(template)
+    session.flush()
+    source = MechanismNodeVersion(template_version_id=template.id, node_key="source", display_name="Source", role="driver", created_at=now)
+    target = MechanismNodeVersion(template_version_id=template.id, node_key="target", display_name="Target", role="outcome", created_at=now)
+    session.add_all((source, target))
+    session.flush()
+    edge = MechanismEdgeVersion(template_version_id=template.id, edge_key="source_to_target", source_node_id=source.id, target_node_id=target.id, created_at=now)
+    session.add(edge)
+    session.flush()
+    baseline = {"source_ref": f"document:{document.id}", "value": "1", "unit": "yuan", "observed_period": "2025-12-31", "available_at": document.available_at.replace(tzinfo=UTC).isoformat()}
+    return {
+        "outcomes": [{"thesis_id": str(thesis.id), "metric": {"metric_id": f"metric-{candidate.id}", "display_name": "Revenue", "canonical_definition": "Quarterly revenue", "entity_scope": "company", "unit": "yuan", "frequency": "quarterly", "period_semantics": "period_end", "allowed_source_roles": ["primary_disclosure"], "role_eligibility": ["outcome"]}, "binding": {"entity_scope": {"company_id": "company", "company": "Company"}, "direction": "increase", "baseline": baseline, "horizon_start": "2026-01-01", "horizon_end": "2026-12-31"}, "template_version_id": str(template.id), "verification_rules": [{"mechanism_edge_id": str(edge.id), "expected_direction": "increase", "support_predicate": "supports", "contradiction_predicate": "contradicts", "allowed_source_roles": ["primary_disclosure"], "observed_period_start": "2026-01-01", "observed_period_end": "2026-12-31", "available_at_deadline": "2027-01-01", "next_verification_event": "earnings"}]}],
+        "baseline": {"document_id": str(document.id), "review_note": "original"}, "horizon": {"start": "2026-01-01", "end": "2026-12-31"}, "mechanisms": [{"template_version_id": str(template.id)}], "verification_rules": [{"rule": "outcome rule"}],
+    }
 
 
 def _events(session, preparation_id):
@@ -502,7 +545,7 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"rationale": "protocol"},
+        _materializable_protocol(session, case, candidate),
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=_candidate_context(service, case.id),
@@ -511,7 +554,7 @@ def test_non_modifying_claim_confirmation_then_protocol_confirmation_queues_plan
         case.id,
         actor="reviewer",
         revision=preparation.version,
-        payload=ProtocolConfirmation(draft_sequence=2, edits={"rationale": "confirmed"}),
+        payload=ProtocolConfirmation(draft_sequence=2, edits={}),
     )
 
     assert protocol.protocol_review_state == "confirmed"
@@ -583,11 +626,7 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {
-            "outcomes": {"primary": {"rationale": "original", "baseline": "base"}},
-            "verification_rules": ["old"],
-            "rationale": "Original protocol",
-        },
+        _materializable_protocol(session, case, candidate),
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=_candidate_context(service, case.id),
@@ -600,6 +639,7 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         )
     )
     assert source is not None
+    source_sequence = source.sequence
     stale_snapshot = _snapshot(session, preparation)
 
     with pytest.raises(ConflictError):
@@ -607,7 +647,7 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
             case.id,
             actor="reviewer",
             revision=preparation.version,
-            payload=ProtocolConfirmation(source.sequence + 1, {"title": "stale"}),
+            payload=ProtocolConfirmation(source_sequence + 1, {"title": "stale"}),
         )
     assert _snapshot(session, preparation) == stale_snapshot
 
@@ -617,7 +657,7 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
             actor="reviewer",
             revision=preparation.version,
             payload=ProtocolConfirmation(
-                source.sequence,
+                source_sequence,
                 {"Bearer sk-secret-123": "sentinel-secret-value"},
             ),
         )
@@ -628,10 +668,9 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         actor="reviewer",
         revision=preparation.version,
         payload=ProtocolConfirmation(
-            source.sequence,
+            source_sequence,
             {
-                "outcomes": {"primary": {"rationale": "sentinel-secret-value"}},
-                "verification_rules": ["new"],
+                "baseline": {"review_note": "sentinel-secret-value"},
             },
         ),
     )
@@ -647,19 +686,15 @@ def test_protocol_confirmation_preserves_edits_in_successor_and_rejects_stale_se
         )
     )
     assert [(artifact.sequence, artifact.state) for artifact in artifacts] == [
-        (source.sequence, "superseded"),
-        (source.sequence + 1, "current"),
+        (source_sequence, "superseded"),
+        (source_sequence + 1, "current"),
     ]
-    assert artifacts[-1].payload == {
-        "outcomes": {"primary": {"rationale": "sentinel-secret-value", "baseline": "base"}},
-        "verification_rules": ["new"],
-        "rationale": "Original protocol",
-    }
+    assert artifacts[-1].payload["baseline"]["review_note"] == "sentinel-secret-value"
     event = _events(session, preparation.id)[-1]
     assert event.detail == {
-        "source_draft_sequence": source.sequence,
-        "confirmed_draft_sequence": source.sequence + 1,
-        "edit_count": 2,
+        "source_draft_sequence": source_sequence,
+        "confirmed_draft_sequence": source_sequence + 1,
+        "edit_count": 1,
     }
     assert "sentinel-secret-value" not in str(event.detail)
     assert "verification_rules" not in str(event.detail)
@@ -674,10 +709,11 @@ def test_confirm_protocol_rejects_candidate_context_changed_after_draft(session)
     _parse(service, preparation, [candidate])
     _confirm_claims(service, case.id, preparation.version, [candidate])
     original_context = _candidate_context(service, case.id)
+    strict_payload = _materializable_protocol(session, case, candidate)
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"rationale": "draft before correction"},
+        strict_payload,
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=original_context,
@@ -719,7 +755,7 @@ def test_confirm_protocol_rejects_candidate_context_changed_after_draft(session)
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"rationale": "refreshed draft"},
+        strict_payload,
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=refreshed_context,
@@ -1308,6 +1344,7 @@ def test_new_input_clears_authorized_run_before_resetting_preparation(session) -
     session.add(run)
     session.flush()
     preparation.research_run_id = run.id
+    preparation.authorized_evidence_plan = {"items": [{"factor": "frozen", "evidence_target": "primary", "allowed_source_roles": ["primary_disclosure"], "priority": "normal", "stop_condition": "one", "budget": 1}]}
     preparation.status = "authorized"
     session.flush()
 
@@ -1338,7 +1375,7 @@ def test_failed_plan_preserves_prior_artifacts_and_manual_retry_only_queues_plan
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"draft": "protocol"},
+        _materializable_protocol(session, case, candidate),
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=_candidate_context(service, case.id),

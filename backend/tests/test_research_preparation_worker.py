@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.domain.research_preparation import preparation_input_fingerprint
-from app.models.event_research import EventResearchScopeVersion
+from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
 from app.models.ledger import (
     Base,
     CaseDocumentVersion,
@@ -18,10 +18,16 @@ from app.models.ledger import (
     DocumentVersion,
     ResearchCase,
     SourceSpan,
+    Thesis,
 )
 from app.models.operational import Job, ResearchRun
 from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact
 from app.models.research_preparation import ResearchPreparationEvent
+from app.models.research_protocol import (
+    MechanismEdgeVersion,
+    MechanismNodeVersion,
+    MechanismTemplateVersion,
+)
 from app.models.source_governance import SourceContract
 from app.services.research_preparation import ResearchPreparationService
 from app.services.research_preparation import ClaimDecision, ProtocolConfirmation
@@ -54,6 +60,20 @@ def _preparation(session, *, contract_effective_until=None):
         SourceContract(document_version_id=document.id, source_type="company_disclosure", provider_or_tenant="issuer", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="CN", effective_from=None, effective_until=contract_effective_until, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="test", created_at=now),
         EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by="test", change_summary="test", created_at=now),
     ))
+    scope = session.scalar(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case.id))
+    assert scope is not None
+    thesis = Thesis(research_case_id=case.id, statement="Revenue outcome", research_protocol_required=True, created_by="test", created_at=now)
+    session.add(thesis)
+    session.flush()
+    session.add(EventResearchScopeFactor(scope_version_id=scope.id, statement=thesis.statement, description=None, position=1))
+    template = MechanismTemplateVersion(template_key=f"worker-template-{case.id}", version=1, display_name="Worker template", industry_scope="test", supersedes_id=None, approved_by="test", reason="fixture", created_at=now)
+    session.add(template)
+    session.flush()
+    source = MechanismNodeVersion(template_version_id=template.id, node_key="source", display_name="Source", role="driver", created_at=now)
+    target = MechanismNodeVersion(template_version_id=template.id, node_key="target", display_name="Target", role="outcome", created_at=now)
+    session.add_all((source, target))
+    session.flush()
+    session.add(MechanismEdgeVersion(template_version_id=template.id, edge_key="source_to_target", source_node_id=source.id, target_node_id=target.id, created_at=now))
     span = SourceSpan(document_version_id=document.id, locator={"page": 1}, verbatim_text="Revenue grew ten percent.")
     session.add(span)
     session.flush()
@@ -95,7 +115,12 @@ class _ProviderFailureGenerator:
 
 
 class _ProtocolGenerator:
+    def __init__(self, payload=None):
+        self.payload = payload
+
     def draft_protocol(self, _input):
+        if self.payload is not None:
+            return self.payload
         return {
             "outcomes": [{"metric": "revenue"}],
             "baseline": {"metric": "revenue"},
@@ -108,6 +133,16 @@ class _ProtocolGenerator:
 class _PlanGenerator:
     def draft_evidence_plan(self, _input):
         return {"items": []}
+
+
+def _materializable_protocol(session, case_id):
+    document = session.scalar(select(DocumentVersion).join(CaseDocumentVersion).where(CaseDocumentVersion.research_case_id == case_id))
+    thesis = session.scalar(select(Thesis).where(Thesis.research_case_id == case_id))
+    template = session.scalar(select(MechanismTemplateVersion).where(MechanismTemplateVersion.template_key == f"worker-template-{case_id}"))
+    edge = session.scalar(select(MechanismEdgeVersion).where(MechanismEdgeVersion.template_version_id == template.id))
+    assert document is not None and thesis is not None and template is not None and edge is not None
+    baseline = {"source_ref": f"document:{document.id}", "value": "1", "unit": "yuan", "observed_period": "2025-12-31", "available_at": document.available_at.replace(tzinfo=UTC).isoformat()}
+    return {"outcomes": [{"thesis_id": str(thesis.id), "metric": {"metric_id": f"worker-metric-{thesis.id}", "display_name": "Revenue", "canonical_definition": "Quarterly revenue", "entity_scope": "company", "unit": "yuan", "frequency": "quarterly", "period_semantics": "period_end", "allowed_source_roles": ["primary_disclosure"], "role_eligibility": ["outcome"]}, "binding": {"entity_scope": {"company_id": "company", "company": "Company"}, "direction": "increase", "baseline": baseline, "horizon_start": "2026-01-01", "horizon_end": "2026-12-31"}, "template_version_id": str(template.id), "verification_rules": [{"mechanism_edge_id": str(edge.id), "expected_direction": "increase", "support_predicate": "supports", "contradiction_predicate": "contradicts", "allowed_source_roles": ["primary_disclosure"], "observed_period_start": "2026-01-01", "observed_period_end": "2026-12-31", "available_at_deadline": "2027-01-01", "next_verification_event": "earnings"}]}], "baseline": {"document_id": str(document.id)}, "horizon": {"start": "2026-01-01", "end": "2026-12-31"}, "mechanisms": [{"template_version_id": str(template.id)}], "verification_rules": [{"rule": "outcome rule"}]}
 
 
 def test_postgresql_preparation_claim_locks_only_jobs() -> None:
@@ -314,6 +349,7 @@ def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path) ->
     with sessions() as setup:
         case, preparation, _ = _preparation(setup)
         case_id, preparation_id = case.id, preparation.id
+        strict_protocol = _materializable_protocol(setup, case_id)
         setup.commit()
     assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
     with sessions() as review:
@@ -332,7 +368,7 @@ def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path) ->
             decisions=[ClaimDecision(candidate_id=uuid.UUID(candidate_id), outcome="confirmed", reason="reviewed")],
         )
         review.commit()
-    assert worker.run_once(session_factory=sessions, generator_factory=_ProtocolGenerator)
+    assert worker.run_once(session_factory=sessions, generator_factory=lambda: _ProtocolGenerator(strict_protocol))
     with sessions() as review:
         preparation = review.get(ResearchPreparation, preparation_id)
         protocol = review.scalar(select(ResearchPreparationArtifact).where(
@@ -366,6 +402,7 @@ def test_changed_candidate_context_discards_protocol_or_plan_output(tmp_path, st
     with sessions() as setup:
         case, preparation, _ = _preparation(setup)
         case_id, preparation_id = case.id, preparation.id
+        strict_protocol = _materializable_protocol(setup, case_id)
         setup.commit()
     assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
     with sessions() as review:
@@ -383,7 +420,7 @@ def test_changed_candidate_context_discards_protocol_or_plan_output(tmp_path, st
         )
         review.commit()
     if step == "draft_evidence_plan":
-        assert worker.run_once(session_factory=sessions, generator_factory=_ProtocolGenerator)
+        assert worker.run_once(session_factory=sessions, generator_factory=lambda: _ProtocolGenerator(strict_protocol))
         with sessions() as review:
             preparation = review.get(ResearchPreparation, preparation_id)
             protocol = review.scalar(select(ResearchPreparationArtifact).where(
@@ -409,7 +446,7 @@ def test_changed_candidate_context_discards_protocol_or_plan_output(tmp_path, st
 
         def draft_protocol(self, _input):
             self._change_context()
-            return _ProtocolGenerator().draft_protocol(_input)
+            return _ProtocolGenerator(strict_protocol).draft_protocol(_input)
 
         def draft_evidence_plan(self, _input):
             self._change_context()

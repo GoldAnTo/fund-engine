@@ -673,7 +673,8 @@ class ResearchPreparationService:
             self._invalidate_protocol_context(preparation, artifact, case_id)
             raise ConflictError("protocol draft candidate context changed; refresh required")
         self._validate_protocol_edits(artifact.payload, payload.edits)
-        confirmed_draft_sequence = artifact.sequence
+        source_draft_sequence = artifact.sequence
+        confirmed_draft_sequence = source_draft_sequence
         if payload.edits:
             merged_payload = self._merge_protocol_edits(
                 artifact.payload, payload.edits
@@ -706,7 +707,7 @@ class ResearchPreparationService:
             step="draft_protocol",
             message="protocol review confirmed",
             detail={
-                "source_draft_sequence": artifact.sequence,
+                "source_draft_sequence": source_draft_sequence,
                 "confirmed_draft_sequence": confirmed_draft_sequence,
                 "edit_count": len(payload.edits),
             },
