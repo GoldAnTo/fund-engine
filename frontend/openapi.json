@@ -20125,6 +20125,18 @@
             },
             "type": "object",
             "title": "Artifacts"
+          },
+          "authorized_evidence_plan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized Evidence Plan"
           }
         },
         "additionalProperties": false,

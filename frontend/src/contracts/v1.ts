@@ -6366,6 +6366,10 @@ export interface components {
             artifacts: {
                 [key: string]: components["schemas"]["PreparationArtifactDTO"] | null;
             };
+            /** Authorized Evidence Plan */
+            authorized_evidence_plan?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ResearchPreparationEventDTO */
         ResearchPreparationEventDTO: {
