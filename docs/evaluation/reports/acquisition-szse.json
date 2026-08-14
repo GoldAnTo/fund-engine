@@ -6,6 +6,12 @@
     "returned": 3
   },
   "errors": [],
+  "execution": {
+    "generator": "app.scripts.smoke_acquisition_sources",
+    "mode": "cli_live",
+    "network": "live",
+    "worktree_clean_at_start": true
+  },
   "fetch_limit": 3,
   "fetches": [
     {
@@ -33,7 +39,7 @@
       "stable_id": "szse:9b0752d2-6a4e-46a4-ab28-b7f05f67425c"
     }
   ],
-  "git_commit": "1edfc1dae490ce9f4afb5f8e1d0152ce5a69bd28",
+  "git_commit": "5e53776a1a4e481058bc01b8c40c241c84eec78a",
   "live_success": true,
   "not_fetched_count": 0,
   "query": {
@@ -58,7 +64,7 @@
       "stable_id": "szse:9b0752d2-6a4e-46a4-ab28-b7f05f67425c"
     }
   ],
-  "schema_version": "acquisition-source-smoke/v1",
+  "schema_version": "acquisition-source-smoke/v2",
   "source": {
     "adapter_key": "szse",
     "adapter_version": "szse-announcement-source/v1",
@@ -77,5 +83,5 @@
     }
   },
   "status": "succeeded",
-  "timestamp_utc": "2026-08-14T15:07:33.537540Z"
+  "timestamp_utc": "2026-08-14T15:29:51.670337Z"
 }
