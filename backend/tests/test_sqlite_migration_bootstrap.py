@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import sqlalchemy as sa
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 
 def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
@@ -175,7 +176,7 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
             "FROM research_preparations WHERE id = '00000000000000000000000000000021'"
         )).one()
         stale = connection.execute(sa.text(
-            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code, draft_evidence_plan_state, plan_review_state "
             "FROM research_preparations WHERE id = '00000000000000000000000000000022'"
         )).one()
         missing = connection.execute(sa.text(
@@ -191,7 +192,8 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
         assert connection.execute(sa.text(
             "SELECT status FROM research_runs WHERE id = '00000000000000000000000000000011'"
         )).scalar_one() == "queued"
-        assert stale == missing == extra == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
+        assert stale == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required", "failed", "locked")
+        assert missing == extra == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
         cancelled_run = connection.execute(sa.text(
             "SELECT status, stage, stop_reason FROM research_runs WHERE id = '00000000000000000000000000000012'"
         )).one()
@@ -209,6 +211,35 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
         assert cancelled_job.finished_at is not None
         assert cancelled_task == ("cancelled", "stopped")
         assert migration_event.status == "cancelled" and __import__("json").loads(migration_event.payload_json) == {"stop_reason": "preparation_authorized_plan_migration_required"}
+
+    from app.models.operational import Job, ResearchRun
+    from app.models.research_preparation import ResearchPreparation
+    from app.services.research_preparation import ResearchPreparationService
+
+    with sessionmaker(bind=engine, future=True)() as session:
+        case_id = __import__("uuid").UUID("00000000000000000000000000000002")
+        preparation = session.get(ResearchPreparation, __import__("uuid").UUID("00000000000000000000000000000022"))
+        assert preparation is not None
+
+        ResearchPreparationService(session).retry_failed_step(
+            case_id, actor="reviewer", revision=preparation.version
+        )
+        session.commit()
+
+        assert preparation.draft_evidence_plan_state == "queued"
+        assert preparation.status == "preparing"
+        assert preparation.research_run_id is None
+        assert preparation.authorized_evidence_plan is None
+        retry_jobs = list(session.scalars(sa.select(Job).where(
+            Job.kind == "prepare_research",
+            Job.target_type == "research_preparation",
+            Job.target_id == preparation.id,
+            Job.status == "queued",
+        )))
+        assert len(retry_jobs) == 1
+        assert retry_jobs[0].correlation_id == f"{preparation.id}:{preparation.version}:draft_evidence_plan"
+        runs = list(session.scalars(sa.select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
+        assert len(runs) == 1 and runs[0].status == "cancelled"
 
     downgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "0054"],

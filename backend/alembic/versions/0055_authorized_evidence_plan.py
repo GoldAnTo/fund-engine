@@ -84,7 +84,11 @@ def upgrade() -> None:
         sa.column("status", sa.String()),
         sa.column("research_run_id", sa.Uuid()),
         sa.column("authorized_evidence_plan", sa.JSON(none_as_null=True)),
+        sa.column("draft_evidence_plan_state", sa.String()),
+        sa.column("plan_review_state", sa.String()),
+        sa.column("next_attempt_at", sa.DateTime(timezone=True)),
         sa.column("last_error_code", sa.String()),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
     )
     artifacts = sa.table(
         "research_preparation_artifacts",
@@ -246,7 +250,11 @@ def upgrade() -> None:
                     status="recoverable_failure",
                     research_run_id=None,
                     authorized_evidence_plan=None,
+                    draft_evidence_plan_state="failed",
+                    plan_review_state="locked",
+                    next_attempt_at=None,
                     last_error_code=_MIGRATION_REASON,
+                    updated_at=now,
                 )
             )
     with op.batch_alter_table("research_preparations") as batch:
