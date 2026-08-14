@@ -4,7 +4,7 @@
 
 **Goal:** Complete live SSE announcement acquisition by falling back from an invalid main-site response to the same PDF path on SSE's exact official Traditional Chinese mirror, without weakening source or PDF validation.
 
-**Architecture:** The canonical `www.sse.com.cn` reference remains immutable and is always attempted first. The SSE adapter alone recognizes the transport's structured response-type failure, derives one exact `big5.sse.com.cn/site/cht/www.sse.com.cn/...` URL, and sends it through the existing bounded transport. Expanding the exact host boundary upgrades the frozen source policy to `b-scope-v2`.
+**Architecture:** The canonical `www.sse.com.cn` reference remains immutable and is always attempted first. The SSE adapter alone recognizes the transport's structured response-type or unsupported-content-encoding rejection, derives one exact `big5.sse.com.cn/site/cht/www.sse.com.cn/...` URL, and sends it through the existing bounded transport. Encoded main-site bytes are never read or decompressed. Expanding the exact host boundary upgrades the frozen source policy to `b-scope-v2`.
 
 **Tech Stack:** Python 3.11, httpx, pytest, existing governed acquisition adapters and smoke CLI.
 
@@ -124,7 +124,8 @@ raise SourceProtocolError(
 ```
 
 Do not classify status, redirect, encoding, size, empty-body, or JSON-schema
-failures as `response_type`.
+failures as `response_type`; the acceptance amendment later gives unsupported
+content encoding its own `content_encoding` classification.
 
 - [ ] **Step 4: Run HTTP transport tests and verify GREEN**
 
@@ -166,7 +167,7 @@ def test_fetch_falls_back_to_exact_official_mirror_after_invalid_main_response()
 def test_fetch_does_not_use_mirror_when_canonical_pdf_is_valid():
     # assert exactly one PDF request to the canonical URL
 
-@pytest.mark.parametrize("failure", ["timeout", "status", "redirect", "encoding", "size"])
+@pytest.mark.parametrize("failure", ["timeout", "status", "redirect", "size"])
 def test_fetch_does_not_use_mirror_for_non_response_type_failures(failure: str):
     # construct each transport failure and assert no request reaches big5.sse.com.cn
 ```
@@ -197,10 +198,12 @@ def _official_mirror_url(canonical_url: str) -> str:
 
 In `fetch`, attempt the canonical request first. Catch only
 `SourceProtocolError` where
-`exc.diagnostics.get("error_type") == "response_type"`, then request the derived
-mirror once. Accept the mirror response only when `response.final_url` equals the
-derived URL exactly. Keep the existing accepted canonical/static final-URL check
-for a successful primary request.
+`exc.diagnostics.get("error_type")` is one of the approved trigger values
+`response_type` or `content_encoding`, then request the derived mirror once.
+Accept the mirror response only when `response.final_url` equals the derived URL
+exactly. Keep the existing accepted canonical/static final-URL check for a
+successful primary request. A mirror-side encoding failure propagates and cannot
+trigger another fallback.
 
 - [ ] **Step 4: Run SSE adapter tests and verify GREEN**
 
@@ -238,11 +241,23 @@ git commit -m "fix: fetch SSE PDFs from official mirror"
 - Modify: `docs/evaluation/reports/acquisition-sse.json`
 - Modify if regenerated: `docs/evaluation/reports/acquisition-szse.json`
 
+- [ ] **Step 0: Classify and handle the observed encoded denial response**
+
+Write failing transport and SSE tests proving that an unsupported main-site
+content encoding exposes only `{"error_type": "content_encoding"}` and invokes
+the exact mirror once without consuming or decompressing the body. Prove that the
+same error from the mirror propagates without another request, while timeout,
+network, status, redirect, size, and empty-body failures still do not invoke the
+mirror. Implement the minimal structured classification and add
+`content_encoding` to the SSE adapter's two-value fallback trigger set. Run the
+exchange/SSE suites before the live commands below.
+
 - [ ] **Step 1: Document the exact fallback contract**
 
 State that SSE retains the main-site canonical URL, uses the exact official
-Traditional Chinese mirror only after a structured response-type failure, records
-the actual final URL hash, and never relaxes PDF validation. Record policy
+Traditional Chinese mirror only after a structured response-type or unsupported
+content-encoding rejection, records the actual final URL hash, never decompresses
+the rejected response, and never relaxes PDF validation. Record policy
 `b-scope-v2` and the validation date.
 
 - [ ] **Step 2: Run the real SSE smoke**

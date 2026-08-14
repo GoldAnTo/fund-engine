@@ -19,7 +19,8 @@ or source-boundary checks.
 
 Keep the search result's `www.sse.com.cn` URL as the canonical source reference.
 Fetch it first. Only when that attempt raises a non-retryable response-type
-protocol error may the SSE adapter request the corresponding official mirror URL.
+protocol error, or rejects an unsupported content encoding before MIME inspection,
+may the SSE adapter request the corresponding official mirror URL.
 
 The mirror URL is derived mechanically:
 
@@ -46,10 +47,11 @@ planned or replayed under v2.
 1. Validate that the reference was produced or restored by the SSE adapter.
 2. Request its canonical `www.sse.com.cn` URL through the bounded transport.
 3. If a valid PDF is returned, freeze it normally and do not call the mirror.
-4. If the canonical request fails with the exact sanitized protocol error
-   `unsupported exchange response type`, derive and request the mirror URL once.
-5. Propagate all network, rate-limit, status, redirect, size, encoding, and other
-   protocol failures unchanged; they do not activate this fallback.
+4. If the canonical request fails with the structured error type `response_type`
+   or `content_encoding`, derive and request the mirror URL once. The latter is a
+   rejection signal only: the adapter never decompresses or accepts those bytes.
+5. Propagate all network, rate-limit, status, redirect, size, empty-body, and
+   other protocol failures unchanged; they do not activate this fallback.
 6. Record the actual mirror URL as `RetrievedEnvelope.final_url`; retain the
    canonical URL on the source reference so provenance contains both locations.
 7. Cache and fetch-fence the successful bytes exactly as before.
@@ -60,6 +62,8 @@ planned or replayed under v2.
 - A timeout or retryable provider outage does not trigger a second endpoint.
 - A 4xx/5xx response does not trigger the mirror.
 - Redirect problems and unexpected final URLs fail closed.
+- Unsupported content encoding on the mirror fails normally and cannot trigger a
+  second fallback. Encoded main-site bytes are never read, decompressed, or frozen.
 - The mirror can only receive the same path already validated for the canonical
   SSE PDF; queries and fragments remain forbidden.
 - If both official locations fail, the original acquisition job remains failed
@@ -71,13 +75,25 @@ Tests are written before production changes and must prove:
 
 - policy v2 allows exactly the new official mirror and rejects lookalike hosts;
 - normal canonical PDF retrieval never invokes the mirror;
-- the exact HTML/content-type failure invokes the mechanically derived mirror;
+- the exact HTML/content-type failure and unsupported main-site content encoding
+  invoke the mechanically derived mirror;
 - the returned envelope records the mirror final URL and valid PDF bytes;
-- timeout, HTTP status, redirect, oversized body, and unrelated protocol errors do
-  not invoke the mirror;
+- timeout, HTTP status, redirect, oversized body, empty body, and unrelated
+  protocol errors do not invoke the mirror;
 - restored references follow the same bounded behavior;
 - the existing SSE, acquisition, and policy suites remain green;
 - the live smoke searches SSE, fetches at least one real PDF, freezes its hash, and
   reports success without fixtures or credentials.
 
 The generated live report remains committed as acceptance evidence.
+
+## 2026-08-14 Acceptance Amendment
+
+Live SSE verification showed that the official static CDN ignores
+`Accept-Encoding: identity` for its bot-denial page and responds with
+`Content-Encoding: gzip`. The bounded transport rejects this before MIME
+inspection, so the original `response_type`-only trigger cannot reach the already
+verified official mirror. The amendment above adds only the structured
+`content_encoding` rejection as a trigger. It does not permit decompression,
+broaden accepted response types, or turn network/status/redirect failures into
+fallbacks.
