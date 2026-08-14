@@ -97,10 +97,10 @@ def test_authorization_requires_a_confirmed_materialized_protocol(cmd_client, cm
     preparation.status = "awaiting_plan_authorization"
     cmd_session.commit()
     response = cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json={"revision": 1, "actor": "human", "plan_sequence": plan.sequence, "idempotency_key": "invalid-protocol"})
-    assert response.status_code == 201, response.text
+    assert response.status_code == 422, response.text
     cmd_session.expire_all()
-    assert cmd_session.get(type(preparation), preparation.id).status == "authorized"
-    assert len(list(cmd_session.scalars(select(ResearchRun)))) == 1
+    assert cmd_session.get(type(preparation), preparation.id).status == "awaiting_plan_authorization"
+    assert list(cmd_session.scalars(select(ResearchRun))) == []
 
 
 def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews(cmd_client, cmd_session):
