@@ -402,6 +402,28 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return value as Record<string, unknown>;
   }
 
+  private requirePreparationString(value: unknown): string {
+    if (typeof value !== "string") throw this.preparationDataError();
+    return value;
+  }
+
+  private requirePreparationNumber(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw this.preparationDataError();
+    }
+    return value;
+  }
+
+  private optionalPreparationString(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    return this.requirePreparationString(value);
+  }
+
+  private optionalPreparationContainer(value: unknown): Record<string, unknown> | null {
+    if (value === undefined || value === null) return null;
+    return this.requirePreparationContainer(value);
+  }
+
   private requirePreparationStage(
     source: unknown,
     key: "claims" | "protocol" | "plan",
@@ -3066,9 +3088,8 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return this.mapResearchPreparation(dto);
   }
 
-  private mapResearchPreparation(
-    dto: Schemas["ResearchPreparationDTO"],
-  ): ResearchPreparation {
+  private mapResearchPreparation(dto: unknown): ResearchPreparation {
+    const payload = this.requirePreparationContainer(dto);
     const mapSystemStep = (step: Record<string, unknown>) => ({
       state: this.requirePreparationValue(
         step.state,
@@ -3101,32 +3122,32 @@ export class HttpResearchAdapter implements ActiveResearchClient {
             : null,
         };
     return {
-      caseId: dto.case_id,
-      revision: dto.revision,
+      caseId: this.requirePreparationString(payload.case_id),
+      revision: this.requirePreparationNumber(payload.revision),
       status: this.requirePreparationValue(
-        dto.status,
+        this.requirePreparationString(payload.status),
         RESEARCH_PREPARATION_STATUSES,
         "整体",
       ) as ResearchPreparationStatus,
-      researchRunId: dto.research_run_id ?? null,
+      researchRunId: this.optionalPreparationString(payload.research_run_id),
       system: {
-        candidateClaims: mapSystemStep(this.requirePreparationStage(dto.system, "claims")),
-        protocol: mapSystemStep(this.requirePreparationStage(dto.system, "protocol")),
-        evidencePlan: mapSystemStep(this.requirePreparationStage(dto.system, "plan")),
+        candidateClaims: mapSystemStep(this.requirePreparationStage(payload.system, "claims")),
+        protocol: mapSystemStep(this.requirePreparationStage(payload.system, "protocol")),
+        evidencePlan: mapSystemStep(this.requirePreparationStage(payload.system, "plan")),
       },
       review: {
-        candidateClaims: mapReviewStep(this.requirePreparationStage(dto.review, "claims")),
-        protocol: mapReviewStep(this.requirePreparationStage(dto.review, "protocol")),
-        evidencePlan: mapReviewStep(this.requirePreparationStage(dto.review, "plan")),
+        candidateClaims: mapReviewStep(this.requirePreparationStage(payload.review, "claims")),
+        protocol: mapReviewStep(this.requirePreparationStage(payload.review, "protocol")),
+        evidencePlan: mapReviewStep(this.requirePreparationStage(payload.review, "plan")),
       },
-      nextAttemptAt: dto.next_attempt_at ?? null,
-      lastErrorMessage: dto.last_error_message ?? null,
+      nextAttemptAt: this.optionalPreparationString(payload.next_attempt_at),
+      lastErrorMessage: this.optionalPreparationString(payload.last_error_message),
       artifacts: {
-        candidateClaims: mapArtifact(this.requirePreparationStage(dto.artifacts, "claims", true)),
-        protocol: mapArtifact(this.requirePreparationStage(dto.artifacts, "protocol", true)),
-        evidencePlan: mapArtifact(this.requirePreparationStage(dto.artifacts, "plan", true)),
+        candidateClaims: mapArtifact(this.requirePreparationStage(payload.artifacts, "claims", true)),
+        protocol: mapArtifact(this.requirePreparationStage(payload.artifacts, "protocol", true)),
+        evidencePlan: mapArtifact(this.requirePreparationStage(payload.artifacts, "plan", true)),
       },
-      authorizedEvidencePlan: dto.authorized_evidence_plan ?? null,
+      authorizedEvidencePlan: this.optionalPreparationContainer(payload.authorized_evidence_plan),
     };
   }
 

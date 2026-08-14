@@ -148,6 +148,16 @@ describe("HttpResearchAdapter", () => {
       message: "研究准备数据不完整，请刷新后重试。",
     });
   });
+
+  it("rejects a null full preparation body as a safe page error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(null)));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    await expect(adapter.getResearchPreparation("event-1")).rejects.toMatchObject({
+      kind: "backend_unavailable",
+      message: "研究准备数据不完整，请刷新后重试。",
+    });
+  });
   it("does not retain retired prototype screen methods on the live adapter", () => {
     const prototype = Object.getPrototypeOf(
       new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" }),
