@@ -32,8 +32,9 @@ from app.datasources.gildata.research_source import GildataResearchSource
 
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
-_SCHEMA_VERSION = "acquisition-source-smoke/v2"
+_SCHEMA_VERSION = "acquisition-source-smoke/v3"
 _GENERATOR = "app.scripts.smoke_acquisition_sources"
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _FETCH_LIMIT = 3
 _FETCH_INTERVAL_SECONDS = 0.5
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
@@ -91,7 +92,7 @@ def _window(args: argparse.Namespace, *, today: date) -> tuple[date, date]:
 def _git_commit() -> str:
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "-C", str(_REPOSITORY_ROOT), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
@@ -110,7 +111,7 @@ def _git_commit() -> str:
 def _git_worktree_clean() -> bool | None:
     try:
         completed = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "-C", str(_REPOSITORY_ROOT), "status", "--porcelain"],
             capture_output=True,
             text=True,
             check=True,
@@ -401,9 +402,10 @@ def _run_live(
     return 0
 
 
-def run(
+def _run(
     argv: Sequence[str] | None = None,
     *,
+    cli_entrypoint: bool,
     adapter_factory: AdapterFactory | None = None,
     clock: Clock = lambda: datetime.now(UTC),
     commit_resolver: CommitResolver = _git_commit,
@@ -424,7 +426,7 @@ def run(
         window = _window(args, today=now.astimezone(_SHANGHAI).date())
     except ValueError:
         window = None
-    if adapter_factory is not None:
+    if not cli_entrypoint:
         mode = "in_process_injected"
         network = "injected"
     elif args.dry_run:
@@ -518,6 +520,27 @@ def run(
     return exit_code
 
 
+def run(
+    argv: Sequence[str] | None = None,
+    *,
+    adapter_factory: AdapterFactory | None = None,
+    clock: Clock = lambda: datetime.now(UTC),
+    commit_resolver: CommitResolver = _git_commit,
+    worktree_state_resolver: WorktreeStateResolver = _git_worktree_clean,
+    sleeper: Sleeper = time.sleep,
+) -> int:
+    """Run in-process; injected execution can never attest to CLI provenance."""
+    return _run(
+        argv,
+        cli_entrypoint=False,
+        adapter_factory=adapter_factory,
+        clock=clock,
+        commit_resolver=commit_resolver,
+        worktree_state_resolver=worktree_state_resolver,
+        sleeper=sleeper,
+    )
+
+
 def _atomic_write_path_check(path: Path) -> None:
     if (
         not path.parent.is_dir()
@@ -529,7 +552,7 @@ def _atomic_write_path_check(path: Path) -> None:
 
 
 def main() -> None:
-    raise SystemExit(run())
+    raise SystemExit(_run(cli_entrypoint=True))
 
 
 if __name__ == "__main__":

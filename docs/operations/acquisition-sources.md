@@ -91,11 +91,12 @@ smoke。adapter 自身限制搜索页数和响应字节数；smoke 最多 fetch 
 
 报告可记录：
 
-- schema `acquisition-source-smoke/v2`，以及 `execution` 对象中的固定 generator、
-  `mode`、`network` 和 `worktree_clean_at_start`；仅默认真实 adapter 的非 dry-run
-  CLI 可记录 `mode=cli_live`、`network=live`，默认 dry-run 记录
-  `cli_dry_run`/`none`，注入 `adapter_factory` 的进程内运行记录
-  `in_process_injected`/`injected`；worktree 状态只能是 boolean，解析失败为 `null`；
+- schema `acquisition-source-smoke/v3`，以及 `execution` 对象中的固定 generator、
+  `mode`、`network` 和 `worktree_clean_at_start`；只有模块的 CLI 入口可记录
+  `cli_live`/`live` 或 `cli_dry_run`/`none`，所有对公共 `run()` 的进程内调用均记录
+  `in_process_injected`/`injected`，无论注入的是 adapter、时钟、Git resolver 还是
+  sleeper；Git commit 与 worktree 状态固定从脚本源码所属仓库解析，状态只能是
+  boolean，解析失败为 `null`；
 - UTC timestamp、Git commit、adapter key/version 和完整 descriptor；
 - query SHA-256 与日期窗口，不记录 name 或完整 query；
 - 返回/接受/拒绝/fetch 数量、安全 stable id 和 external version；

@@ -8,6 +8,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -162,7 +163,7 @@ def test_injected_live_run_records_injected_execution_provenance(tmp_path: Path)
     )
 
     assert exit_code == 0
-    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    assert report.get("schema_version") == "acquisition-source-smoke/v3"
     execution = report.get("execution")
     assert execution is not None
     assert set(execution) == {
@@ -177,6 +178,61 @@ def test_injected_live_run_records_injected_execution_provenance(tmp_path: Path)
     assert isinstance(execution["worktree_clean_at_start"], bool) or execution[
         "worktree_clean_at_start"
     ] is None
+
+
+def test_non_adapter_injection_cannot_claim_cli_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output = tmp_path / "injected-provenance.json"
+    monkeypatch.delenv("GILDATA_TOKEN", raising=False)
+
+    exit_code = smoke_acquisition_sources.run(
+        [
+            "--source",
+            "gildata",
+            "--security-code",
+            "600000",
+            "--days",
+            "2",
+            "--output",
+            str(output),
+        ],
+        clock=lambda: FIXED_NOW,
+        commit_resolver=lambda: "a" * 40,
+        worktree_state_resolver=lambda: True,
+        sleeper=lambda _seconds: None,
+    )
+
+    assert exit_code != 0
+    report = json.loads(output.read_text())
+    assert report["execution"] == {
+        "generator": GENERATOR,
+        "mode": "in_process_injected",
+        "network": "injected",
+        "worktree_clean_at_start": True,
+    }
+
+
+def test_git_attestation_is_anchored_to_source_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        stdout = "a" * 40 + "\n" if command[-2:] == ["rev-parse", "HEAD"] else ""
+        return SimpleNamespace(stdout=stdout)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(smoke_acquisition_sources.subprocess, "run", fake_run)
+
+    assert smoke_acquisition_sources._git_commit() == "a" * 40
+    assert smoke_acquisition_sources._git_worktree_clean() is True
+    repository_root = str(BACKEND_ROOT.parent.resolve())
+    assert calls == [
+        ["git", "-C", repository_root, "rev-parse", "HEAD"],
+        ["git", "-C", repository_root, "status", "--porcelain"],
+    ]
 
 
 @pytest.mark.parametrize("resolver_outcome", ["raises", "raw_status"])
@@ -253,7 +309,7 @@ def test_gildata_without_token_exits_nonzero_and_writes_safe_failure_report(
     report = json.loads(output.read_text())
     assert report["status"] == "failed"
     assert report["live_success"] is False
-    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    assert report.get("schema_version") == "acquisition-source-smoke/v3"
     execution = report.get("execution")
     assert execution is not None
     assert set(execution) == {
@@ -311,7 +367,7 @@ def test_default_cli_dry_run_records_non_network_execution_provenance(
 
     assert completed.returncode == 0
     report = json.loads(output.read_text())
-    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    assert report.get("schema_version") == "acquisition-source-smoke/v3"
     execution = report.get("execution")
     assert execution is not None
     assert set(execution) == {

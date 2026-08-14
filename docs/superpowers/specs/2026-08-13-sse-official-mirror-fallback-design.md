@@ -97,3 +97,14 @@ verified official mirror. The amendment above adds only the structured
 `content_encoding` rejection as a trigger. It does not permit decompression,
 broaden accepted response types, or turn network/status/redirect failures into
 fallbacks.
+
+## 2026-08-14 Execution-Attestation Amendment
+
+Smoke report schema v3 separates the module CLI entrypoint from the public
+in-process runner. Only `python -m app.scripts.smoke_acquisition_sources` can
+record `cli_live` or `cli_dry_run`; every call through public `run()` records
+`in_process_injected`, even when only a clock, Git resolver, or sleeper is
+injected. Git commit and clean-worktree checks run with `git -C` against the
+repository containing this script, so invoking the CLI from another directory
+cannot attest to unrelated Git state. Existing v2 reports must be regenerated
+through the documented CLI before they count as live acceptance evidence.
