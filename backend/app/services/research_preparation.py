@@ -112,7 +112,8 @@ class ResearchPreparationService:
                 claim_review_state="locked",
                 protocol_review_state="locked",
                 plan_review_state="locked",
-                research_run_id=None,
+            research_run_id=None,
+                authorized_evidence_plan=None,
                 next_attempt_at=None,
                 last_error_code=None,
                 created_at=now,
@@ -142,6 +143,7 @@ class ResearchPreparationService:
         # following status transition; never flush an authorized row without
         # its required run reference.
         preparation.research_run_id = None
+        preparation.authorized_evidence_plan = None
         preparation.status = "preparing"
         preparation.parse_claims_state = "queued"
         preparation.draft_protocol_state = "queued"
@@ -199,6 +201,7 @@ class ResearchPreparationService:
         # Keep this change in one flush: an authorized preparation cannot
         # temporarily exist without its required run reference.
         preparation.research_run_id = None
+        preparation.authorized_evidence_plan = None
         preparation.status = "preparing"
         preparation.draft_protocol_state = (
             "queued"
@@ -798,10 +801,17 @@ class ResearchPreparationService:
         budget = self._plan_budget(plan.payload)
         # Protocol rows are created at human protocol confirmation, never at
         # authorization. Authorization only freezes and dispatches that review.
-        run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, commit=False, trigger="preparation_authorized")
+        thesis_ids = current_scope_thesis_ids(self._session, case_id)
+        if thesis_ids is None:
+            from app.models.ledger import Thesis
+            thesis_ids = {thesis.id for thesis in self._session.scalars(select(Thesis).where(Thesis.research_case_id == case_id))}
+        if not thesis_ids:
+            raise ValidationError("research authorization requires a nonempty scope")
+        run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, thesis_ids=sorted(thesis_ids, key=str), commit=False, trigger="preparation_authorized")
         # Set both fields before the next flush so the authorization constraint
         # never observes a transient unauthorized run reference.
         preparation.research_run_id = run.id
+        preparation.authorized_evidence_plan = copy.deepcopy(plan.payload)
         preparation.status = "authorized"
         preparation.plan_review_state = "confirmed"
         preparation.updated_at = _utcnow()

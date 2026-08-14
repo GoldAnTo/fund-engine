@@ -65,8 +65,8 @@ class ResearchPreparation(Base):
             name="ck_research_preparations_plan_review_state",
         ),
         CheckConstraint(
-            "(status = 'authorized' AND research_run_id IS NOT NULL) OR "
-            "(status <> 'authorized' AND research_run_id IS NULL)",
+            "(status = 'authorized' AND research_run_id IS NOT NULL AND authorized_evidence_plan IS NOT NULL) OR "
+            "(status <> 'authorized' AND research_run_id IS NULL AND authorized_evidence_plan IS NULL)",
             name="ck_research_preparations_authorized_run",
         ),
     )
@@ -90,6 +90,7 @@ class ResearchPreparation(Base):
         Uuid,
         nullable=True,
     )
+    authorized_evidence_plan: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

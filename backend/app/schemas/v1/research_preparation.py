@@ -47,6 +47,7 @@ class ResearchPreparationDTO(V1Model):
     next_attempt_at: str | None = None
     last_error_message: str | None = None
     artifacts: dict[str, PreparationArtifactDTO | None]
+    authorized_evidence_plan: dict[str, Any] | None = None
 class ResearchPreparationEventDTO(V1Model):
     seq: int
     type: str
