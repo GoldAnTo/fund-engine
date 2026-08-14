@@ -186,6 +186,30 @@ describe("ResearchPreparationPage", () => {
     expect(within(steps!).getByText("生成补证计划草案", { selector: "strong" }).closest("li")).toHaveClass("is-waiting");
   });
 
+  it("shows the first queued preparation step as next work rather than active work", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "preparing" });
+    const originalPreparation = adapter.getResearchPreparation.bind(adapter);
+    vi.spyOn(adapter, "getResearchPreparation").mockImplementation(async (caseId) => {
+      const preparation = await originalPreparation(caseId);
+      return {
+        ...preparation,
+        system: { ...preparation.system, candidateClaims: { state: "queued", artifactSequence: null } },
+        progress: { completedSteps: 0, totalSteps: 3, currentStep: null, failedStep: null },
+      };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation/preparation"]}>
+        <Routes><Route path="/events/:caseId/preparation" element={<ResearchPreparationPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("研究准备");
+    expect(document.querySelector(".ros-preparation-progress")).toHaveTextContent("下一步：解析冻结原文（已排队）");
+    const timeline = screen.getByLabelText("系统准备活动");
+    expect(within(timeline.querySelector<HTMLElement>(".ros-preparation-timeline")!).getByText("解析冻结原文", { selector: "strong" }).closest("li")).toHaveClass("is-waiting");
+  });
+
   it("shows the case, frozen material, progress and only allowlisted activity detail", async () => {
     const adapter = new MockResearchAdapter({ preparationScenario: "preparing" });
     const originalPreparation = adapter.getResearchPreparation.bind(adapter);

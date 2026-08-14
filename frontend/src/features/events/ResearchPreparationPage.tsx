@@ -126,6 +126,15 @@ function timelineState(preparation: ResearchPreparation, index: number): "done" 
   return system === "running" || system === "retrying" ? "current" : "waiting";
 }
 
+function nextQueuedStep(preparation: ResearchPreparation): ResearchPreparationEventStep | null {
+  for (const step of STEP_LABELS) {
+    if (preparation.system[step.system].state === "queued") {
+      return step.key === "claims" ? "parse_claims" : step.key === "protocol" ? "draft_protocol" : "draft_evidence_plan";
+    }
+  }
+  return null;
+}
+
 export function ResearchPreparationPage() {
   const { caseId = "" } = useParams();
   const [preparation, setPreparation] = useState<ResearchPreparation | null>(null);
@@ -327,6 +336,7 @@ export function ResearchPreparationPage() {
   const canAuthorizeEvidencePlan = typeof evidencePlanSequence === "number" && Number.isInteger(evidencePlanSequence) && evidencePlanSequence > 0;
   const material = preparation.initialMaterial;
   const progress = preparation.progress;
+  const queuedStep = preparation.status === "preparing" && progress?.currentStep === null ? nextQueuedStep(preparation) : null;
   return <main className="ros-page ros-preparation-page">
     <header className="ros-page-head ros-preparation-head">
       <div>
@@ -334,7 +344,7 @@ export function ResearchPreparationPage() {
         <h1>研究准备</h1>
         {preparation.caseTitle && <p className="ros-preparation-case-title">{preparation.caseTitle}</p>}
         {material && <p className="ros-preparation-material"><strong>{material.title || "冻结原文"}</strong><span>材料版本：{material.documentVersionId.slice(0, 8)}</span></p>}
-        {progress && <p className="ros-preparation-progress">准备进度：{progress.completedSteps} / {progress.totalSteps}{progress.currentStep ? ` · 当前：${stepLabel(progress.currentStep)}` : ""}</p>}
+        {progress && <p className="ros-preparation-progress">准备进度：{progress.completedSteps} / {progress.totalSteps}{progress.currentStep ? ` · 当前：${stepLabel(progress.currentStep)}` : queuedStep ? ` · 下一步：${stepLabel(queuedStep)}（已排队）` : ""}</p>}
         <p>{runStarted ? "正式研究运行已建立，后续补证将按已授权计划受控执行。" : "系统只准备草案，研究员逐步确认；在授权前不会创建 ResearchRun 或运行任何外部 Provider。"}</p>
       </div>
       <p className={runStarted ? "ros-preparation-run is-started" : "ros-preparation-run"}>{runStarted ? "正式研究已启动" : "正式研究尚未启动"}</p>
