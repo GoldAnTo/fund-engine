@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
@@ -21,6 +23,10 @@ _PLAN_ITEM_KEYS = {
     "stop_condition",
     "budget",
 }
+_MIGRATION_REASON = "preparation_authorized_plan_migration_required"
+_ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_for_review")
+_ACTIVE_JOB_STATUSES = ("queued", "running", "waiting_for_review")
+_ACTIVE_TASK_STATUSES = ("queued", "running", "blocked")
 
 
 def _is_recoverable_plan(payload: object) -> bool:
@@ -83,17 +89,58 @@ def upgrade() -> None:
         sa.column("payload", sa.JSON()),
         sa.column("state", sa.String()),
     )
+    runs = sa.table(
+        "research_runs",
+        sa.column("id", sa.Uuid()),
+        sa.column("status", sa.String()),
+        sa.column("stage", sa.String()),
+        sa.column("stop_reason", sa.Text()),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+    )
+    jobs = sa.table(
+        "jobs",
+        sa.column("kind", sa.String()),
+        sa.column("status", sa.String()),
+        sa.column("cancel_requested", sa.Boolean()),
+        sa.column("target_type", sa.String()),
+        sa.column("target_id", sa.Uuid()),
+        sa.column("step", sa.String()),
+        sa.column("error", sa.Text()),
+        sa.column("finished_at", sa.DateTime(timezone=True)),
+    )
+    tasks = sa.table(
+        "research_tasks",
+        sa.column("run_id", sa.Uuid()),
+        sa.column("status", sa.String()),
+        sa.column("stage", sa.String()),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+    )
+    run_events = sa.table(
+        "research_run_events",
+        sa.column("id", sa.Uuid()),
+        sa.column("run_id", sa.Uuid()),
+        sa.column("seq", sa.Integer()),
+        sa.column("stage", sa.String()),
+        sa.column("status", sa.String()),
+        sa.column("message", sa.Text()),
+        sa.column("payload_json", sa.JSON()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+    )
     join_condition = sa.and_(
         artifacts.c.research_preparation_id == preparations.c.id,
         artifacts.c.kind == "evidence_acquisition_plan",
         artifacts.c.state == "current",
     )
     rows = list(bind.execute(
-        sa.select(preparations.c.id, artifacts.c.payload)
+        sa.select(
+            preparations.c.id,
+            preparations.c.research_run_id,
+            artifacts.c.payload,
+        )
         .select_from(preparations.outerjoin(artifacts, join_condition))
         .where(preparations.c.status == "authorized")
     ))
-    for preparation_id, payload in rows:
+    for preparation_id, run_id, payload in rows:
         if isinstance(payload, str):
             try:
                 payload = json.loads(payload)
@@ -108,6 +155,63 @@ def upgrade() -> None:
         else:
             # Preserve the Run and all audit rows, but require a human to
             # re-authorize a plan whose legacy snapshot cannot be trusted.
+            # An old queued/in-flight run must never be executable after its
+            # authorization is revoked, so terminalize its operational handoff
+            # in the same migration transaction before clearing the link.
+            now = datetime.now(timezone.utc)
+            if run_id is not None:
+                cancelled = bind.execute(
+                    runs.update()
+                    .where(runs.c.id == run_id)
+                    .where(runs.c.status.in_(_ACTIVE_RUN_STATUSES))
+                    .values(
+                        status="cancelled",
+                        stage="stopped",
+                        stop_reason=_MIGRATION_REASON,
+                        updated_at=now,
+                    )
+                )
+                bind.execute(
+                    tasks.update()
+                    .where(tasks.c.run_id == run_id)
+                    .where(tasks.c.status.in_(_ACTIVE_TASK_STATUSES))
+                    .values(status="cancelled", stage="stopped", updated_at=now)
+                )
+                bind.execute(
+                    jobs.update()
+                    .where(jobs.c.kind == "research_run")
+                    .where(jobs.c.target_type == "research_run")
+                    .where(jobs.c.target_id == run_id)
+                    .where(jobs.c.status.in_(_ACTIVE_JOB_STATUSES))
+                    .values(
+                        status="cancelled",
+                        cancel_requested=True,
+                        step="stopped",
+                        error=_MIGRATION_REASON,
+                        finished_at=now,
+                    )
+                )
+                if cancelled.rowcount:
+                    next_sequence = (
+                        bind.scalar(
+                            sa.select(sa.func.max(run_events.c.seq)).where(
+                                run_events.c.run_id == run_id
+                            )
+                        )
+                        or 0
+                    ) + 1
+                    bind.execute(
+                        run_events.insert().values(
+                            id=uuid.uuid4(),
+                            run_id=run_id,
+                            seq=next_sequence,
+                            stage="stopped",
+                            status="cancelled",
+                            message="research run cancelled because its legacy authorization plan could not be frozen",
+                            payload_json={"stop_reason": _MIGRATION_REASON},
+                            created_at=now,
+                        )
+                    )
             bind.execute(
                 preparations.update()
                 .where(preparations.c.id == preparation_id)
@@ -115,7 +219,7 @@ def upgrade() -> None:
                     status="recoverable_failure",
                     research_run_id=None,
                     authorized_evidence_plan=None,
-                    last_error_code="preparation_authorized_plan_migration_required",
+                    last_error_code=_MIGRATION_REASON,
                 )
             )
     with op.batch_alter_table("research_preparations") as batch:

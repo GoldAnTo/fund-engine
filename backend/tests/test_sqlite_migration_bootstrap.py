@@ -112,6 +112,14 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
             "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
             "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
         ), {"id": "00000000000000000000000000000031", "preparation_id": "00000000000000000000000000000021", "fingerprint": "a" * 64, "payload": __import__("json").dumps(valid_plan), "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO jobs (id, kind, status, progress, attempt, cancel_requested, target_type, target_id, research_case_id, created_at) "
+            "VALUES (:id, 'research_run', 'queued', 0, 1, 0, 'research_run', :run_id, :case_id, :now)"
+        ), {"id": "00000000000000000000000000000041", "run_id": "00000000000000000000000000000012", "case_id": "00000000000000000000000000000002", "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO research_tasks (id, run_id, research_case_id, thesis_id, status, stage, round, task_type, query, evidence_count, gap_reason, result, created_at, updated_at) "
+            "VALUES (:id, :run_id, :case_id, NULL, 'queued', 'planned', 1, 'support', 'legacy queued task', 0, NULL, NULL, :now, :now)"
+        ), {"id": "00000000000000000000000000000051", "run_id": "00000000000000000000000000000012", "case_id": "00000000000000000000000000000002", "now": now})
 
     upgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "0055"],
@@ -133,7 +141,27 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
         )).one()
         assert kept.status == "authorized" and kept.research_run_id is not None
         assert __import__("json").loads(kept.authorized_evidence_plan) == valid_plan
+        assert connection.execute(sa.text(
+            "SELECT status FROM research_runs WHERE id = '00000000000000000000000000000011'"
+        )).scalar_one() == "queued"
         assert recovered == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
+        cancelled_run = connection.execute(sa.text(
+            "SELECT status, stage, stop_reason FROM research_runs WHERE id = '00000000000000000000000000000012'"
+        )).one()
+        cancelled_job = connection.execute(sa.text(
+            "SELECT status, cancel_requested, error, finished_at FROM jobs WHERE id = '00000000000000000000000000000041'"
+        )).one()
+        cancelled_task = connection.execute(sa.text(
+            "SELECT status, stage FROM research_tasks WHERE id = '00000000000000000000000000000051'"
+        )).one()
+        migration_event = connection.execute(sa.text(
+            "SELECT status, payload_json FROM research_run_events WHERE run_id = '00000000000000000000000000000012'"
+        )).one()
+        assert cancelled_run == ("cancelled", "stopped", "preparation_authorized_plan_migration_required")
+        assert cancelled_job.status == "cancelled" and cancelled_job.cancel_requested and cancelled_job.error == "preparation_authorized_plan_migration_required"
+        assert cancelled_job.finished_at is not None
+        assert cancelled_task == ("cancelled", "stopped")
+        assert migration_event.status == "cancelled" and __import__("json").loads(migration_event.payload_json) == {"stop_reason": "preparation_authorized_plan_migration_required"}
 
     downgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "0054"],
