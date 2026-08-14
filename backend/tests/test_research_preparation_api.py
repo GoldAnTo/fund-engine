@@ -9,6 +9,9 @@ from app.services.research_preparation import ResearchPreparationService
 from app.models.operational import Job, ResearchRun
 from app.models.research_preparation import ResearchPreparationArtifact
 from app.models.ledger import SourceSpan, AtomicClaimReview
+from app.models.ledger import Thesis
+from app.models.source_governance import SourceContract
+from app.models.research_protocol import MechanismTemplateVersion, MechanismNodeVersion, MechanismEdgeVersion, MetricDefinitionVersion, OutcomeBindingVersion, CaseMechanismSelectionVersion, VerificationRuleVersion
 from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
 from sqlalchemy import select
@@ -109,3 +112,45 @@ def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews
     assert response.status_code == 422
     assert list(cmd_session.scalars(select(AtomicClaimReview))) == []
     assert cmd_session.get(type(preparation), preparation.id).claim_review_state == "awaiting_review"
+
+
+def _ready_authorization_case(session, client):
+    case, preparation = _prepared_case(session)
+    now = datetime.now(timezone.utc)
+    document = session.scalar(select(DocumentVersion).join(CaseDocumentVersion).where(CaseDocumentVersion.research_case_id == case.id))
+    session.add(SourceContract(document_version_id=document.id, source_type="uploaded_file", provider_or_tenant="team", allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region="cn", effective_from=None, effective_until=None, retention_policy="case_retained", deletion_policy="manual", downstream_restrictions=[], contract_version="test", intake_metadata={}, declared_by="human", created_at=now))
+    theses=[]; candidates=[]
+    for number in range(3):
+        thesis=Thesis(research_case_id=case.id, statement=f"factor {number}", research_protocol_required=True, created_by="human", created_at=now); session.add(thesis); session.flush(); theses.append(thesis)
+        text=f"claim {number}"; span=SourceSpan(document_version_id=document.id, locator={"page": number + 1}, verbatim_text=text); session.add(span); session.flush()
+        candidates.append(AtomicClaimService(session).admit(AtomicClaimDraft(source_span_id=span.id, quote=text, quote_start=0, quote_end=len(text), normalized_text=text, claim_type="forecast", assertion_actor="company", subject="x", predicate="will", object_text=None, numeric_value=None, unit=None, observed_period=None, scope={}), authority_level="primary_disclosure", run_ref=f"prep:{number}"))
+    ResearchPreparationService(session).complete_system_step(case.id,"parse_claims",{"candidates":[{"candidate_id":str(candidate.id)} for candidate in candidates]},expected_version=1,expected_fingerprint="a" * 64)
+    template=MechanismTemplateVersion(template_key="test-template",version=1,display_name="Template",industry_scope="test",supersedes_id=None,approved_by="human",reason="fixture",created_at=now); session.add(template); session.flush()
+    source=MechanismNodeVersion(template_version_id=template.id,node_key="source",display_name="Source",role="driver",created_at=now); target=MechanismNodeVersion(template_version_id=template.id,node_key="target",display_name="Target",role="outcome",created_at=now); session.add_all([source,target]); session.flush()
+    edge=MechanismEdgeVersion(template_version_id=template.id,edge_key="edge",source_node_id=source.id,target_node_id=target.id,created_at=now); session.add(edge); session.commit()
+    claims=client.post(f"/api/v1/event-research/{case.id}/preparation/claims/confirm",json={"revision":1,"actor":"human","decisions":[{"candidate_id":str(c.id),"outcome":"confirmed","reason":"checked"} for c in candidates]}); assert claims.status_code==200, claims.text
+    service=ResearchPreparationService(session); session.refresh(preparation); context=service.current_candidate_context_fingerprint(case.id)
+    baseline={"source_ref":f"document:{document.id}","value":"1","unit":"yuan","observed_period":"2025-12-31","available_at":document.available_at.replace(tzinfo=timezone.utc).isoformat()}
+    outcomes=[]
+    for thesis in theses:
+        outcomes.append({"thesis_id":str(thesis.id),"metric":{"metric_id":f"metric-{thesis.id}","display_name":"Revenue","canonical_definition":"Revenue", "entity_scope":"business_line","unit":"yuan","frequency":"quarterly","period_semantics":"period_end","allowed_source_roles":["primary_disclosure"],"role_eligibility":["outcome"]},"binding":{"entity_scope":{"company_id":"company","business_line":"line"},"direction":"increase","baseline":baseline,"horizon_start":"2026-01-01","horizon_end":"2026-12-31"},"template_version_id":str(template.id),"verification_rules":[{"mechanism_edge_id":str(edge.id),"expected_direction":"increase","support_predicate":"support","contradiction_predicate":"contradict","allowed_source_roles":["primary_disclosure"],"observed_period_start":"2026-01-01","observed_period_end":"2026-12-31","available_at_deadline":"2027-01-01","next_verification_event":"earnings"}]})
+    draft=service.complete_system_step(case.id,"draft_protocol",{"outcomes":outcomes,"baseline":{},"horizon":{},"mechanisms":{},"verification_rules":[]},expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()
+    confirmed=client.post(f"/api/v1/event-research/{case.id}/preparation/protocol/confirm",json={"revision":1,"actor":"human","draft_sequence":session.scalar(select(ResearchPreparationArtifact.sequence).where(ResearchPreparationArtifact.research_preparation_id==preparation.id,ResearchPreparationArtifact.kind=="research_protocol_draft",ResearchPreparationArtifact.state=="current")),"edits":{}}); assert confirmed.status_code==200,confirmed.text
+    session.refresh(preparation); service.complete_system_step(case.id,"draft_evidence_plan",{"items":[{"budget":3},{"budget":3},{"budget":3}]},expected_version=preparation.version,expected_fingerprint=preparation.input_fingerprint,expected_context_fingerprint=context); session.commit()
+    plan=session.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id==preparation.id,ResearchPreparationArtifact.kind=="evidence_acquisition_plan",ResearchPreparationArtifact.state=="current")); return case, preparation, plan, theses
+
+
+def test_public_authorization_materializes_protocol_once_and_replays_idempotently(cmd_client, cmd_session):
+    case, preparation, plan, theses = _ready_authorization_case(cmd_session, cmd_client)
+    body={"revision":1,"actor":"human","plan_sequence":plan.sequence,"idempotency_key":"happy-authorization"}
+    first=cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize",json=body)
+    replay=cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize",json=body)
+    assert first.status_code == replay.status_code == 201, (first.text,replay.text)
+    assert first.json()["research_run_id"] == replay.json()["research_run_id"]
+    assert len(list(cmd_session.scalars(select(ResearchRun)))) == 1
+    assert len(list(cmd_session.scalars(select(MetricDefinitionVersion)))) == 3
+    assert len(list(cmd_session.scalars(select(OutcomeBindingVersion).where(OutcomeBindingVersion.state == "approved")))) == 3
+    assert len(list(cmd_session.scalars(select(CaseMechanismSelectionVersion)))) == 3
+    assert len(list(cmd_session.scalars(select(VerificationRuleVersion)))) == 3
+    conflict=cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize",json={**body,"idempotency_key":"another-key"})
+    assert conflict.status_code == 409
