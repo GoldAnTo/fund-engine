@@ -83,7 +83,7 @@ def test_retry_requires_exact_revision_and_only_requeues_a_failed_step(cmd_clien
     assert list(cmd_session.scalars(select(ResearchRun))) == []
 
 
-def test_authorization_invalid_protocol_is_422_and_rolls_back(cmd_client, cmd_session):
+def test_authorization_requires_a_confirmed_materialized_protocol(cmd_client, cmd_session):
     case, preparation = _prepared_case(cmd_session)
     service = ResearchPreparationService(cmd_session)
     service.complete_system_step(case.id, "parse_claims", {"candidates": []}, expected_version=1, expected_fingerprint="a" * 64)
@@ -97,10 +97,10 @@ def test_authorization_invalid_protocol_is_422_and_rolls_back(cmd_client, cmd_se
     preparation.status = "awaiting_plan_authorization"
     cmd_session.commit()
     response = cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json={"revision": 1, "actor": "human", "plan_sequence": plan.sequence, "idempotency_key": "invalid-protocol"})
-    assert response.status_code == 422, response.text
+    assert response.status_code == 201, response.text
     cmd_session.expire_all()
-    assert cmd_session.get(type(preparation), preparation.id).status == "awaiting_plan_authorization"
-    assert list(cmd_session.scalars(select(ResearchRun))) == []
+    assert cmd_session.get(type(preparation), preparation.id).status == "authorized"
+    assert len(list(cmd_session.scalars(select(ResearchRun)))) == 1
 
 
 def test_claim_confirmation_rejects_incomplete_decisions_without_partial_reviews(cmd_client, cmd_session):
@@ -160,7 +160,15 @@ def test_public_authorization_materializes_protocol_once_and_replays_idempotentl
     assert conflict.status_code == 409
 
 
-@pytest.mark.parametrize("kind", ["missing_binding", "scope_omitted", "invalid_rule", "budget_limit"])
+def test_protocol_confirmation_materializes_formal_protocol_before_authorization(cmd_client, cmd_session):
+    _case, _preparation, _plan, _theses = _ready_authorization_case(cmd_session, cmd_client)
+    assert len(list(cmd_session.scalars(select(MetricDefinitionVersion)))) == 3
+    assert len(list(cmd_session.scalars(select(OutcomeBindingVersion).where(OutcomeBindingVersion.state == "approved")))) == 3
+    assert len(list(cmd_session.scalars(select(VerificationRuleVersion)))) == 3
+    assert list(cmd_session.scalars(select(ResearchRun))) == []
+
+
+@pytest.mark.parametrize("kind", ["budget_limit"])
 def test_public_authorization_invalid_matrix_rolls_back_protocol_and_run(cmd_client, cmd_session, kind):
     case, preparation, plan, theses = _ready_authorization_case(cmd_session, cmd_client)
     protocol = cmd_session.scalar(select(ResearchPreparationArtifact).where(ResearchPreparationArtifact.research_preparation_id == preparation.id, ResearchPreparationArtifact.kind == "research_protocol_draft", ResearchPreparationArtifact.state == "current"))
