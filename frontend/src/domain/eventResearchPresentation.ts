@@ -15,6 +15,17 @@ const PREPARATION_TASK_LABELS: Partial<Record<ResearchPreparationStatus, string>
   recoverable_failure: "恢复研究准备",
 };
 
+const PREPARATION_REVIEW_STATUSES: readonly ResearchPreparationStatus[] = [
+  "awaiting_claim_review",
+  "awaiting_protocol_confirmation",
+  "awaiting_plan_authorization",
+  "recoverable_failure",
+];
+
+function isPreparationReviewStatus(status: ResearchPreparationStatus): boolean {
+  return PREPARATION_REVIEW_STATUSES.includes(status);
+}
+
 export function isPreparationReviewAction(
   kind: EventNextActionKind | null | undefined,
 ): boolean {
@@ -97,7 +108,9 @@ export function eventActionPresentation(
   const base = `/events/${caseId}`;
   if (hasPendingResearchPreparation(workbench)) {
     const preparationTaskLabel = researchPreparationStatusLabel(workbench);
-    const isHumanPreparationTask = Boolean(preparationTaskLabel);
+    const isHumanPreparationTask = isPreparationReviewStatus(
+      workbench.preparation!.status,
+    );
     return {
       owner: isHumanPreparationTask ? "你需要做" : "现在不用做",
       title: isHumanPreparationTask

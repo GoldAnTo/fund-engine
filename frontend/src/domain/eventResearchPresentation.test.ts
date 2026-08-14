@@ -132,6 +132,20 @@ describe("event research presentation", () => {
     expect(presentation.buttonLabel).toBe("查看系统正在做什么");
   });
 
+  it("keeps preparation generation as system work until a review action exists", () => {
+    const presentation = eventActionPresentation(
+      preparationWorkbench("preparing", { kind: "wait", label: "系统正在准备研究材料" }),
+      "event-1",
+    );
+
+    expect(presentation.owner).toBe("现在不用做");
+    expect(presentation.title).toBe("系统正在准备研究材料");
+    expect(presentation.why).toContain("解析冻结原文");
+    expect(presentation.why).not.toContain("已完成草案");
+    expect(presentation.to).toBe("/events/event-1/preparation");
+    expect(presentation.buttonLabel).toBe("查看研究准备进度");
+  });
+
   it.each([
     ["review_preparation_claims", "awaiting_claim_review", "核验原文与候选陈述"],
     ["review_preparation_protocol", "awaiting_protocol_confirmation", "确认研究协议草案"],
