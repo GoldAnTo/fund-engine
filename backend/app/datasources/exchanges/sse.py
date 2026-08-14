@@ -532,10 +532,17 @@ class SSEAnnouncementSource(SourceAdapter):
             raise SourceProtocolError("SSE downloaded bytes were evicted") from None
         if len(self._fetched) >= _MAX_KNOWN_REFERENCES:
             raise SourceProtocolError("SSE fetched identity limit exceeded") from None
+        canonical_path = urlsplit(reference.canonical_url).path
+        static_url = f"https://static.sse.com.cn{canonical_path}"
         mirror_url: str | None = None
         try:
             response = self._transport.request(
-                "GET", reference.canonical_url, expected="pdf"
+                "GET",
+                reference.canonical_url,
+                expected="pdf",
+                allowed_final_urls=frozenset(
+                    {reference.canonical_url, static_url}
+                ),
             )
         except SourceProtocolError as error:
             if error.diagnostics.get("error_type") not in {
@@ -545,14 +552,18 @@ class SSEAnnouncementSource(SourceAdapter):
                 raise
             mirror_url = _official_mirror_url(reference.canonical_url)
         if mirror_url is not None:
-            response = self._transport.request("GET", mirror_url, expected="pdf")
+            response = self._transport.request(
+                "GET",
+                mirror_url,
+                expected="pdf",
+                allowed_final_urls=frozenset({mirror_url}),
+            )
             if response.final_url != mirror_url:
                 raise SourceProtocolError(
                     "SSE official mirror final PDF URL did not match derived URL"
                 ) from None
         else:
             final = urlsplit(response.final_url)
-            canonical_path = urlsplit(reference.canonical_url).path
             if response.final_url != reference.canonical_url and not (
                 final.scheme == "https"
                 and final.hostname == "static.sse.com.cn"

@@ -202,6 +202,106 @@ def test_sse_www_redirect_to_exact_official_static_host_is_allowed():
     assert response.content == b"%PDF-1.7\nofficial"
 
 
+def test_allowed_final_urls_use_exact_normalized_comparison():
+    canonical = "https://www.sse.com.cn/disclosure/announcement.pdf"
+    final = "https://static.sse.com.cn/disclosure/announcement.pdf"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(301, headers={"Location": final})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nofficial",
+        )
+
+    value = ExchangeHttpTransport(
+        client_for(handler),
+        allowed_hosts=frozenset({"www.sse.com.cn", "static.sse.com.cn"}),
+    )
+
+    response = value.request(
+        "GET",
+        canonical,
+        expected="pdf",
+        allowed_final_urls=frozenset(
+            {
+                canonical,
+                "HTTPS://STATIC.SSE.COM.CN:443/disclosure/announcement.pdf",
+            }
+        ),
+    )
+
+    assert response.final_url == final
+
+
+def test_allowed_final_urls_default_preserves_transport_final_url():
+    requested = "HTTPS://query.sse.com.cn:443/search"
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=b"{}",
+        )
+
+    response = transport_for(handler).request("GET", requested, expected="json")
+
+    assert calls == ["https://query.sse.com.cn:443/search"]
+    assert response.final_url == calls[0]
+
+
+def test_disallowed_final_url_is_rejected_before_encoded_body_without_leakage():
+    canonical = "https://www.sse.com.cn/disclosure/original.pdf"
+    allowed_static = "https://static.sse.com.cn/disclosure/original.pdf"
+    rejected = "https://static.sse.com.cn/disclosure/url-secret.pdf?download=1"
+    calls: list[str] = []
+    stream = ChunkStream(b"encoded-body-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(301, headers={"Location": rejected})
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Encoding": "gzip",
+                "Content-Length": "19",
+                "X-Leak-Probe": "header-secret",
+            },
+            stream=stream,
+        )
+
+    value = ExchangeHttpTransport(
+        client_for(handler),
+        allowed_hosts=frozenset({"www.sse.com.cn", "static.sse.com.cn"}),
+    )
+
+    with pytest.raises(SourceProtocolError) as caught:
+        value.request(
+            "GET",
+            canonical,
+            expected="pdf",
+            allowed_final_urls=frozenset({canonical, allowed_static}),
+        )
+
+    assert str(caught.value) == "official exchange final URL was not allowed"
+    assert caught.value.retryable is False
+    assert caught.value.diagnostics == {"error_type": "final_url"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    exposed = f"{caught.value!r} {caught.value.diagnostics!r}"
+    assert "url-secret" not in exposed
+    assert "header-secret" not in exposed
+    assert "body-secret" not in exposed
+    assert rejected not in exposed
+    assert stream.yielded == 0
+    assert calls == [canonical, rejected]
+
+
 @pytest.mark.parametrize(
     "target",
     [
@@ -578,7 +678,7 @@ def test_advertised_oversize_body_is_rejected_before_streaming():
 
 
 def test_compressed_body_is_rejected_before_decompression_or_iteration():
-    compressed = gzip.compress(b"body-secret" * 500_000)
+    compressed = gzip.compress(b"body-secret" * 40_000)
     stream = ChunkStream(compressed)
     value = transport_for(
         lambda request: httpx.Response(
@@ -611,6 +711,41 @@ def test_compressed_body_is_rejected_before_decompression_or_iteration():
     assert "header-secret" not in exposed
     assert "body-secret" not in exposed
     assert "gzip" not in exposed
+    assert stream.yielded == 0
+
+
+@pytest.mark.parametrize(
+    ("content_length", "message"),
+    [
+        ("wat", "malformed exchange content length"),
+        ("0", "official exchange returned an empty body"),
+        ("1025", "exchange response exceeded byte limit"),
+    ],
+)
+def test_content_length_rejection_precedes_content_encoding(
+    content_length: str, message: str
+):
+    stream = ChunkStream(b"encoded-body-must-not-be-read")
+    value = transport_for(
+        lambda request: httpx.Response(
+            200,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Encoding": "gzip",
+                "Content-Length": content_length,
+            },
+            stream=stream,
+        ),
+        max_response_bytes=1024,
+    )
+
+    with pytest.raises(SourceProtocolError) as caught:
+        value.request("GET", "https://query.sse.com.cn/search", expected="json")
+
+    assert str(caught.value) == message
+    assert caught.value.diagnostics == {}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
     assert stream.yielded == 0
 
 

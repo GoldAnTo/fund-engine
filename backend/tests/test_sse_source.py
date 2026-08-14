@@ -633,6 +633,7 @@ def test_fetch_falls_back_from_static_gzip_to_exact_official_mirror_once():
     fixture = json.loads(FIXTURE.read_text())
     fixture["pageHelp"]["pageCount"] = 1
     pdf_calls: list[str] = []
+    denial = b"encoded denial must not be read"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "query.sse.com.cn":
@@ -654,8 +655,9 @@ def test_fetch_falls_back_from_static_gzip_to_exact_official_mirror_once():
                 headers={
                     "Content-Type": "text/html; charset=utf-8",
                     "Content-Encoding": "gzip",
+                    "Content-Length": str(len(denial)),
                 },
-                stream=httpx.ByteStream(b"encoded denial must not be read"),
+                stream=httpx.ByteStream(denial),
             )
         return httpx.Response(
             200,
@@ -678,6 +680,127 @@ def test_fetch_falls_back_from_static_gzip_to_exact_official_mirror_once():
     assert pdf_calls == [reference.canonical_url, expected_static, expected_mirror]
     assert envelope.final_url == expected_mirror
     assert envelope.content == b"%PDF-1.7\nmirror-after-encoding"
+
+
+@pytest.mark.parametrize("mismatch", ["path", "query"])
+@pytest.mark.parametrize("denial", ["gzip", "html"])
+def test_fetch_rejects_mismatched_static_denial_before_mirror(
+    mismatch: str, denial: str
+):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+    target = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        requested_url = str(request.url)
+        pdf_calls.append(requested_url)
+        if request.url.host == "big5.sse.com.cn":
+            pytest.fail("official mirror must not be requested")
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(302, headers={"Location": target})
+        if denial == "gzip":
+            body = b"encoded denial must not be read"
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Encoding": "gzip",
+                    "Content-Length": str(len(body)),
+                },
+                stream=httpx.ByteStream(body),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            content=b"<html>not the requested PDF</html>",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    expected_static = reference.canonical_url.replace(
+        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+    )
+    target = (
+        "https://static.sse.com.cn/unrelated.pdf"
+        if mismatch == "path"
+        else f"{expected_static}?download=1"
+    )
+
+    with pytest.raises(SourceProtocolError, match="final URL") as caught:
+        source.fetch(reference)
+
+    assert caught.value.diagnostics == {"error_type": "final_url"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert target not in f"{caught.value!r} {caught.value.diagnostics!r}"
+    assert pdf_calls == [reference.canonical_url, target]
+
+
+@pytest.mark.parametrize(
+    ("content_length", "message"),
+    [
+        ("wat", "malformed exchange content length"),
+        ("0", "official exchange returned an empty body"),
+        (
+            str(B_SCOPE_POLICY.max_response_bytes + 1),
+            "exchange response exceeded byte limit",
+        ),
+    ],
+)
+def test_fetch_gzip_length_rejection_does_not_invoke_mirror(
+    content_length: str, message: str
+):
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        requested_url = str(request.url)
+        pdf_calls.append(requested_url)
+        if request.url.host == "big5.sse.com.cn":
+            pytest.fail("official mirror must not be requested")
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": requested_url.replace(
+                        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+                    )
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Encoding": "gzip",
+                "Content-Length": content_length,
+            },
+            stream=httpx.ByteStream(b"encoded denial must not be read"),
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    expected_static = reference.canonical_url.replace(
+        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+    )
+
+    with pytest.raises(SourceProtocolError) as caught:
+        source.fetch(reference)
+
+    assert str(caught.value) == message
+    assert caught.value.diagnostics == {}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert pdf_calls == [reference.canonical_url, expected_static]
 
 
 def test_fetch_valid_canonical_pdf_does_not_invoke_mirror():
@@ -911,9 +1034,13 @@ def test_fetch_rejects_mirror_redirect_that_changes_final_path():
         source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
     )[0]
 
-    with pytest.raises(SourceProtocolError, match="mirror final PDF URL"):
+    with pytest.raises(SourceProtocolError, match="final URL") as caught:
         source.fetch(reference)
 
+    assert caught.value.diagnostics == {"error_type": "final_url"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert "changed.pdf" not in f"{caught.value!r} {caught.value.diagnostics!r}"
     assert calls == [
         reference.canonical_url,
         mirror_url(reference.canonical_url),
@@ -1127,9 +1254,13 @@ def test_fetch_rejects_static_cdn_final_document_identity_mismatch(mismatch: str
         else f"{static_url}?download=1"
     )
 
-    with pytest.raises(SourceProtocolError, match="final PDF URL"):
+    with pytest.raises(SourceProtocolError, match="final URL") as caught:
         source.fetch(reference)
 
+    assert caught.value.diagnostics == {"error_type": "final_url"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert target not in f"{caught.value!r} {caught.value.diagnostics!r}"
     assert len(pdf_calls) == 3
     assert pdf_calls[-2:] == [reference.canonical_url, target]
 
@@ -1178,8 +1309,13 @@ def test_fetch_rejects_redirected_final_pdf_identity_mismatch():
         if item.canonical_url.endswith("11FJ.pdf")
     )
 
-    with pytest.raises(SourceProtocolError, match="final PDF URL"):
+    with pytest.raises(SourceProtocolError, match="final URL") as caught:
         source.fetch(reference)
+
+    assert caught.value.diagnostics == {"error_type": "final_url"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert "other.pdf" not in f"{caught.value!r} {caught.value.diagnostics!r}"
 
 
 def test_evicted_download_is_never_fetched_twice_in_same_lifecycle():

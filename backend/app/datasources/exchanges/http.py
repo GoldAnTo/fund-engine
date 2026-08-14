@@ -10,7 +10,7 @@ from email.utils import parsedate_to_datetime
 from math import ceil
 from types import MappingProxyType
 from typing import Any, Callable, Final, Literal
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -236,6 +236,24 @@ class ExchangeHttpTransport:
             raise SourceProtocolError(f"unsafe {label}") from None
         return raw_url
 
+    def _normalize_url(self, raw_url: str, *, redirect: bool = False) -> str:
+        validated = self._validate_url(raw_url, redirect=redirect)
+        try:
+            parsed = urlsplit(validated)
+            normalized = urlunsplit(
+                (
+                    parsed.scheme.casefold(),
+                    parsed.hostname.casefold().rstrip("."),
+                    parsed.path,
+                    parsed.query,
+                    "",
+                )
+            )
+            return str(httpx.URL(normalized))
+        except (httpx.InvalidURL, UnicodeError, ValueError):
+            label = "redirect URL" if redirect else "request URL boundary"
+            raise SourceProtocolError(f"unsafe {label}") from None
+
     def request(
         self,
         method: str,
@@ -245,12 +263,22 @@ class ExchangeHttpTransport:
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        allowed_final_urls: frozenset[str] | None = None,
     ) -> SafeHttpResponse:
         normalized_method = method.upper()
         if normalized_method not in {"GET", "POST"}:
             raise ValueError("exchange transport supports only GET and POST")
         if expected not in {"json", "pdf"}:
             raise ValueError("unsupported expected response kind")
+        if allowed_final_urls is not None and not isinstance(
+            allowed_final_urls, frozenset
+        ):
+            raise ValueError("allowed_final_urls must be a frozenset")
+        normalized_final_urls = (
+            frozenset(self._normalize_url(value) for value in allowed_final_urls)
+            if allowed_final_urls is not None
+            else None
+        )
         supplied_headers = dict(headers or {})
         if any(
             _SECRET_KEY_RE.search(key) is not None
@@ -318,13 +346,23 @@ class ExchangeHttpTransport:
                     continue
 
                 self._raise_for_status(response.status_code, response.headers)
+                final_url = self._validate_url(str(response.url))
+                normalized_final_url = self._normalize_url(final_url)
+                if (
+                    normalized_final_urls is not None
+                    and normalized_final_url not in normalized_final_urls
+                ):
+                    raise SourceProtocolError(
+                        "official exchange final URL was not allowed",
+                        diagnostics={"error_type": "final_url"},
+                    ) from None
                 content = self._read_bounded(response)
                 mime_type = self._validate_response_type(
                     response.headers.get("content-type"), content, expected
                 )
                 return SafeHttpResponse(
                     content=content,
-                    final_url=self._validate_url(str(response.url)),
+                    final_url=final_url,
                     mime_type=mime_type,
                     status=response.status_code,
                     etag=self._safe_scalar(response.headers.get("etag")),
@@ -399,18 +437,23 @@ class ExchangeHttpTransport:
             ) from None
 
     def _read_bounded(self, response: httpx.Response) -> bytes:
+        raw_length = response.headers.get("content-length")
+        if raw_length is not None:
+            if re.fullmatch(r"0|[1-9][0-9]*", raw_length) is None:
+                raise SourceProtocolError("malformed exchange content length") from None
+            content_length = int(raw_length)
+            if content_length == 0:
+                raise SourceProtocolError(
+                    "official exchange returned an empty body"
+                ) from None
+            if content_length > self._max_response_bytes:
+                raise SourceProtocolError("exchange response exceeded byte limit") from None
         content_encoding = response.headers.get("content-encoding", "").strip().casefold()
         if content_encoding not in {"", "identity"}:
             raise SourceProtocolError(
                 "unsupported exchange content encoding",
                 diagnostics={"error_type": "content_encoding"},
             ) from None
-        raw_length = response.headers.get("content-length")
-        if raw_length is not None:
-            if re.fullmatch(r"0|[1-9][0-9]*", raw_length) is None:
-                raise SourceProtocolError("malformed exchange content length") from None
-            if int(raw_length) > self._max_response_bytes:
-                raise SourceProtocolError("exchange response exceeded byte limit") from None
         chunks: list[bytes] = []
         byte_count = 0
         for chunk in response.iter_bytes():
