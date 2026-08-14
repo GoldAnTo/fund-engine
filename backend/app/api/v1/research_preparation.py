@@ -66,6 +66,9 @@ def authorize(case_id:uuid.UUID,payload:AuthorizeEvidencePlanRequest,db:Session=
     try:
         ResearchPreparationService(db).authorize_evidence_plan(case_id,actor=payload.actor,revision=payload.revision,plan_sequence=payload.plan_sequence)
         repo.complete(row,response_status=201,response_payload={"case_id":str(case_id)}); _commit(db)
+    except ValidationError as exc:
+        db.rollback()
+        raise ValidationFailedError("authorization request is invalid") from exc
     except Exception:
         db.rollback(); raise
     return _dto(db,case_id)
