@@ -29,8 +29,11 @@ _ACTIVE_JOB_STATUSES = ("queued", "running", "waiting_for_review")
 _ACTIVE_TASK_STATUSES = ("queued", "running", "blocked")
 
 
-def _is_recoverable_plan(payload: object) -> bool:
-    """Conservatively recognize a plan safe to freeze during migration."""
+def _is_recoverable_plan(payload: object, current_scope_factors: list[str]) -> bool:
+    """Recognize only a structurally and scope-exact plan safe to freeze."""
+    expected_factors = set(current_scope_factors)
+    if not expected_factors or len(expected_factors) != len(current_scope_factors):
+        return False
     if not isinstance(payload, dict) or set(payload) != {"items"}:
         return False
     items = payload["items"]
@@ -62,7 +65,7 @@ def _is_recoverable_plan(payload: object) -> bool:
         if type(item["budget"]) is not int or item["budget"] <= 0:
             return False
         budget += item["budget"]
-    return budget <= 10000
+    return budget <= 10000 and factors == expected_factors
 
 
 def upgrade() -> None:
@@ -77,6 +80,7 @@ def upgrade() -> None:
     preparations = sa.table(
         "research_preparations",
         sa.column("id", sa.Uuid()),
+        sa.column("research_case_id", sa.Uuid()),
         sa.column("status", sa.String()),
         sa.column("research_run_id", sa.Uuid()),
         sa.column("authorized_evidence_plan", sa.JSON(none_as_null=True)),
@@ -88,6 +92,17 @@ def upgrade() -> None:
         sa.column("kind", sa.String()),
         sa.column("payload", sa.JSON()),
         sa.column("state", sa.String()),
+    )
+    scope_versions = sa.table(
+        "event_research_scope_versions",
+        sa.column("id", sa.Uuid()),
+        sa.column("research_case_id", sa.Uuid()),
+        sa.column("version", sa.Integer()),
+    )
+    scope_factors = sa.table(
+        "event_research_scope_factors",
+        sa.column("scope_version_id", sa.Uuid()),
+        sa.column("statement", sa.Text()),
     )
     runs = sa.table(
         "research_runs",
@@ -134,19 +149,31 @@ def upgrade() -> None:
     rows = list(bind.execute(
         sa.select(
             preparations.c.id,
+            preparations.c.research_case_id,
             preparations.c.research_run_id,
             artifacts.c.payload,
         )
         .select_from(preparations.outerjoin(artifacts, join_condition))
         .where(preparations.c.status == "authorized")
     ))
-    for preparation_id, run_id, payload in rows:
+    for preparation_id, case_id, run_id, payload in rows:
         if isinstance(payload, str):
             try:
                 payload = json.loads(payload)
             except json.JSONDecodeError:
                 payload = None
-        if _is_recoverable_plan(payload):
+        scope_id = bind.scalar(
+            sa.select(scope_versions.c.id)
+            .where(scope_versions.c.research_case_id == case_id)
+            .order_by(scope_versions.c.version.desc())
+            .limit(1)
+        )
+        current_scope_factors = [] if scope_id is None else list(bind.scalars(
+            sa.select(scope_factors.c.statement).where(
+                scope_factors.c.scope_version_id == scope_id
+            )
+        ))
+        if _is_recoverable_plan(payload, current_scope_factors):
             bind.execute(
                 preparations.update()
                 .where(preparations.c.id == preparation_id)

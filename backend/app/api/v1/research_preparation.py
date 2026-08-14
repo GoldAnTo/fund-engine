@@ -1,6 +1,7 @@
 """Human preparation review commands and safe preparation activity reads."""
 from __future__ import annotations
 import re, uuid
+from urllib.parse import parse_qsl, urlsplit
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,17 +17,37 @@ from app.schemas.v1.research_preparation import *
 from app.schemas.v1.common import ErrorEnvelope
 
 router = APIRouter(prefix="/event-research", tags=["research-preparation-v1"], dependencies=[Depends(require_research_tenant)])
-_SECRET = re.compile(r"(?i)(token|authorization|password|secret|bearer|sk-[\w-]+|[?&](?:token|key|auth)=)")
+_SECRET_VALUE = re.compile(r"(?i)(?:\b(?:token|authorization|password|secret|bearer)\b|sk-[\w-]+)")
+_SENSITIVE_KEY_PARTS = ("token", "authorization", "password", "secret", "bearer", "apikey", "accesskey", "signature")
 _ERRORS = {"preparation_provider_unavailable": "准备服务暂时不可用", "preparation_internal_error": "准备任务暂时失败", "preparation_backfill_candidate_limit": "候选数量超出处理限制"}
 _WRITE_ERRORS = {
     409: {"model": ErrorEnvelope, "description": "Conflict"},
     422: {"model": ErrorEnvelope, "description": "Validation failed"},
 }
 def _case(db, case_id, tenant): CaseTenantAccess(db).require_case(case_id, tenant)
+
+
+def _sensitive_key(value: object) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+
+
+def _sensitive_query(value: str) -> bool:
+    if "?" not in value:
+        return False
+    try:
+        query = urlsplit(value).query
+        return any(_sensitive_key(key) for key, _ in parse_qsl(query, keep_blank_values=True))
+    except ValueError:
+        # Invalid URLs are still untrusted text; the ordinary value matcher
+        # below covers conventional credential tokens without parsing them.
+        return False
+
+
 def _safe(value):
-    if isinstance(value, dict): return {str(k): _safe(v) for k,v in value.items() if not _SECRET.search(str(k))}
+    if isinstance(value, dict): return {str(k): _safe(v) for k,v in value.items() if not _sensitive_key(k)}
     if isinstance(value, list): return [_safe(v) for v in value]
-    return "[redacted]" if isinstance(value, str) and _SECRET.search(value) else value
+    return "[redacted]" if isinstance(value, str) and (_SECRET_VALUE.search(value) or _sensitive_query(value)) else value
 def _dto(db, case_id):
     prep = db.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
     if prep is None: from app.errors import NotFoundError; raise NotFoundError("research preparation not found")

@@ -56,7 +56,6 @@ from app.domain.atomic_claims import AtomicClaimDraft
 from app.domain.research_preparation import preparation_input_fingerprint
 from app.services.research_preparation import (
     ClaimDecision,
-    ProtocolConfirmation,
     ResearchPreparationService,
 )
 
@@ -190,20 +189,13 @@ def _complete_preparation_drafts(session, case_id: uuid.UUID) -> ResearchPrepara
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=context_fingerprint,
     )
-    protocol_artifact = session.scalar(
-        select(ResearchPreparationArtifact).where(
-            ResearchPreparationArtifact.research_preparation_id == preparation.id,
-            ResearchPreparationArtifact.kind == "research_protocol_draft",
-            ResearchPreparationArtifact.state == "current",
-        )
-    )
-    assert protocol_artifact is not None
-    service.confirm_protocol(
-        case_id,
-        actor="reviewer",
-        revision=preparation.version,
-        payload=ProtocolConfirmation(draft_sequence=protocol_artifact.sequence, edits={}),
-    )
+    # These scope-replacement fixtures deliberately use legacy factors with
+    # ``research_protocol_required=False``.  They need a completed workbench
+    # state to exercise later scope invalidation, not a materialized formal
+    # protocol (whose strict confirmation correctly rejects the empty legacy
+    # draft above).
+    preparation.protocol_review_state = "confirmed"
+    session.flush()
     service.complete_system_step(
         case_id,
         "draft_evidence_plan",
@@ -475,6 +467,7 @@ def test_scope_change_revokes_authorized_preparation_without_deleting_its_run(
     assert lifecycle is not None
     lifecycle.active_run_id = run.id
     preparation.research_run_id = run.id
+    preparation.authorized_evidence_plan = {"items": []}
     preparation.status = "authorized"
     cmd_session.commit()
 
@@ -620,6 +613,7 @@ def test_scope_change_revokes_current_lineage_successor_of_authorized_preparatio
     lifecycle.active_run_id = successor.id
     lifecycle.status = "continuing"
     preparation.research_run_id = predecessor.id
+    preparation.authorized_evidence_plan = {"items": []}
     preparation.status = "authorized"
     successor_job = cmd_session.scalar(
         select(Job).where(Job.target_type == "research_run", Job.target_id == successor.id)
@@ -725,6 +719,7 @@ def test_scope_change_revokes_two_hop_active_descendant_of_authorized_preparatio
     lifecycle.active_run_id = active_descendant.id
     lifecycle.status = "continuing"
     preparation.research_run_id = root.id
+    preparation.authorized_evidence_plan = {"items": []}
     preparation.status = "authorized"
     active_job = cmd_session.scalar(
         select(Job).where(
@@ -835,6 +830,7 @@ def test_scope_change_fails_closed_for_unproven_preparation_successor_lineage(
     lifecycle.active_run_id = active.id
     lifecycle.status = "continuing"
     preparation.research_run_id = root.id
+    preparation.authorized_evidence_plan = {"items": []}
     preparation.status = "authorized"
     active_job = cmd_session.scalar(
         select(Job).where(Job.target_type == "research_run", Job.target_id == active.id)
@@ -1287,6 +1283,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         )
         assert preparation is not None
         preparation.research_run_id = old_run.id
+        preparation.authorized_evidence_plan = {"items": []}
         preparation.status = "authorized"
         old_run_id = old_run.id
         old_run.max_rounds = 1

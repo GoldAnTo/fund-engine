@@ -69,6 +69,40 @@ def test_preparation_events_enforce_tenant_cursor_and_recursive_secret_redaction
     assert "sk-secret" not in page.text and "Bearer" not in page.text and "sentinel" not in page.text
 
 
+def test_preparation_reads_redact_sensitive_key_variants_and_url_queries(cmd_client, cmd_session):
+    case, preparation, plan, _theses = _ready_authorization_case(cmd_session, cmd_client)
+    body = {"revision": 1, "actor": "human", "plan_sequence": plan.sequence, "idempotency_key": "redaction-plan"}
+    assert cmd_client.post(f"/api/v1/event-research/{case.id}/preparation/authorize", json=body).status_code == 201
+    leaks = {
+        "api_key": "artifact-api-key",
+        "apiKey": "artifact-api-camel",
+        "x-api-key": "artifact-x-api",
+        "access_key": "artifact-access-key",
+        "signature": "artifact-signature",
+        "query": "https://storage.test/file?X-Amz-Signature=artifact-amz-signature&safe=ok",
+    }
+    plan.payload = {"nested": leaks, "safe": "artifact-safe"}
+    preparation.authorized_evidence_plan = {"deep": {"apiKey": "authorized-api-key", "url": "https://vendor.test/?access_key=authorized-access-key"}}
+    ResearchPreparationService(cmd_session)._repo.append_event(
+        preparation,
+        research_case_id=case.id,
+        type="unsafe",
+        step=None,
+        message="https://worker.test/?signature=event-signature",
+        detail={"nested": {"X-Amz-Signature": "event-amz-signature", "access_key": "event-access-key"}},
+    )
+    cmd_session.commit()
+
+    summary = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation")
+    events = cmd_client.get(f"/api/v1/event-research/{case.id}/preparation/events")
+
+    assert summary.status_code == events.status_code == 200
+    for secret in (*leaks.values(), "authorized-api-key", "authorized-access-key", "event-signature", "event-amz-signature", "event-access-key"):
+        assert secret not in summary.text
+        assert secret not in events.text
+    assert summary.json()["artifacts"]["plan"]["payload"]["safe"] == "artifact-safe"
+
+
 def test_retry_requires_exact_revision_and_only_requeues_a_failed_step(cmd_client, cmd_session):
     case, preparation = _prepared_case(cmd_session)
     preparation.parse_claims_state = "failed"

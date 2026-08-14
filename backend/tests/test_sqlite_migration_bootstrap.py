@@ -90,11 +90,25 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
             "budget": 10,
         }]
     }
+    def plan_for(*factors: str) -> dict:
+        return {
+            "items": [{
+                "factor": factor,
+                "evidence_target": "primary disclosure",
+                "allowed_source_roles": ["primary_disclosure"],
+                "priority": "high",
+                "stop_condition": "one reviewed source",
+                "budget": 10,
+            } for factor in factors]
+        }
+
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.begin() as connection:
         for case_id, run_id, preparation_id, title in (
             ("00000000000000000000000000000001", "00000000000000000000000000000011", "00000000000000000000000000000021", "case 01"),
             ("00000000000000000000000000000002", "00000000000000000000000000000012", "00000000000000000000000000000022", "case 02"),
+            ("00000000000000000000000000000003", "00000000000000000000000000000013", "00000000000000000000000000000023", "case 03"),
+            ("00000000000000000000000000000004", "00000000000000000000000000000014", "00000000000000000000000000000024", "case 04"),
         ):
             connection.execute(sa.text(
                 "INSERT INTO research_cases (id, title, industry_topic, created_at, created_by) "
@@ -107,11 +121,36 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
             connection.execute(sa.text(
                 "INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) "
                 "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'succeeded', 'succeeded', 'succeeded', 'confirmed', 'confirmed', 'confirmed', :run_id, :now, :now)"
-            ), {"id": preparation_id, "case_id": case_id, "fingerprint": "a" * 64, "run_id": run_id, "now": now})
+                ), {"id": preparation_id, "case_id": case_id, "fingerprint": "a" * 64, "run_id": run_id, "now": now})
+        for scope_id, case_id, version, factors in (
+            ("00000000000000000000000000000061", "00000000000000000000000000000001", 1, ("authorized factor",)),
+            ("00000000000000000000000000000062", "00000000000000000000000000000002", 1, ("stale factor",)),
+            ("00000000000000000000000000000065", "00000000000000000000000000000002", 2, ("current factor",)),
+            ("00000000000000000000000000000063", "00000000000000000000000000000003", 1, ("missing current one", "missing current two")),
+            ("00000000000000000000000000000064", "00000000000000000000000000000004", 1, ("extra current only",)),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO event_research_scope_versions (id, research_case_id, version, changed_by, change_summary, created_at) "
+                "VALUES (:id, :case_id, :version, 'tester', 'current scope', :now)"
+            ), {"id": scope_id, "case_id": case_id, "version": version, "now": now})
+            for position, statement in enumerate(factors, start=1):
+                connection.execute(sa.text(
+                    "INSERT INTO event_research_scope_factors (id, scope_version_id, statement, position) "
+                    "VALUES (:id, :scope_id, :statement, :position)"
+                ), {"id": f"0000000000000000000000000000007{scope_id[-1]}{position}", "scope_id": scope_id, "statement": statement, "position": position})
         connection.execute(sa.text(
             "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
             "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
         ), {"id": "00000000000000000000000000000031", "preparation_id": "00000000000000000000000000000021", "fingerprint": "a" * 64, "payload": __import__("json").dumps(valid_plan), "now": now})
+        for artifact_id, preparation_id, payload in (
+            ("00000000000000000000000000000032", "00000000000000000000000000000022", plan_for("stale factor")),
+            ("00000000000000000000000000000033", "00000000000000000000000000000023", plan_for("missing current one")),
+            ("00000000000000000000000000000034", "00000000000000000000000000000024", plan_for("extra current only", "extra plan factor")),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
+                "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
+            ), {"id": artifact_id, "preparation_id": preparation_id, "fingerprint": "a" * 64, "payload": __import__("json").dumps(payload), "now": now})
         connection.execute(sa.text(
             "INSERT INTO jobs (id, kind, status, progress, attempt, cancel_requested, target_type, target_id, research_case_id, created_at) "
             "VALUES (:id, 'research_run', 'queued', 0, 1, 0, 'research_run', :run_id, :case_id, :now)"
@@ -135,16 +174,24 @@ def test_0055_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> 
             "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
             "FROM research_preparations WHERE id = '00000000000000000000000000000021'"
         )).one()
-        recovered = connection.execute(sa.text(
+        stale = connection.execute(sa.text(
             "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
             "FROM research_preparations WHERE id = '00000000000000000000000000000022'"
+        )).one()
+        missing = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000023'"
+        )).one()
+        extra = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000024'"
         )).one()
         assert kept.status == "authorized" and kept.research_run_id is not None
         assert __import__("json").loads(kept.authorized_evidence_plan) == valid_plan
         assert connection.execute(sa.text(
             "SELECT status FROM research_runs WHERE id = '00000000000000000000000000000011'"
         )).scalar_one() == "queued"
-        assert recovered == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
+        assert stale == missing == extra == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
         cancelled_run = connection.execute(sa.text(
             "SELECT status, stage, stop_reason FROM research_runs WHERE id = '00000000000000000000000000000012'"
         )).one()
