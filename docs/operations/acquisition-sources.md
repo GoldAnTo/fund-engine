@@ -18,8 +18,8 @@ live 结果。
 只允许 policy 中的 HTTPS 精确 host，并限制响应大小和重定向次数。
 
 当前启用的来源策略为 `b-scope-v2`。SSE 搜索结果中的主站 canonical URL
-保持不变并始终先尝试；只有该请求返回结构化的 `response_type` 失败时，SSE
-或 `content_encoding` 失败时，adapter 才会尝试官方繁体中文镜像
+保持不变并始终先尝试；只有该请求返回结构化的 `response_type` 或
+`content_encoding` 失败时，SSE adapter 才会尝试官方繁体中文镜像
 `big5.sse.com.cn`。若主站响应因不支持的内容编码被拒绝，其编码 bytes 绝不被
 读取、解压或冻结。镜像 URL 只能由已验证的
 主站 URL 机械转换为
@@ -59,8 +59,7 @@ Asia/Shanghai 来源日历包含今天和前一天：在 2026-08-13 对应
   --output ../docs/evaluation/reports/acquisition-gildata.json
 ```
 
-示例中的 Gildata 赋值是占位说明，不应原样运行。优先让进程继承已注入的
-环境变量。
+Gildata 命令应直接继承秘密管理器注入的环境变量，不要在命令行中内联 token。
 
 `--dry-run` 只构造 adapter、验证配置和 descriptor，然后关闭 adapter；它不
 调用网络，不表示 live 成功，报告固定为 `status=dry_run`、
@@ -80,9 +79,11 @@ Asia/Shanghai 来源日历包含今天和前一天：在 2026-08-13 对应
 
 遵守交易所页面公布的使用条款及任何最新限流提示。不要并发运行同一来源的
 smoke。adapter 自身限制搜索页数和响应字节数；smoke 最多 fetch 三个按稳定
-顺序返回的 reference，fetch 间隔 0.5 秒。遇到 HTTP 429、`Retry-After`、超时
-或来源不可用时停止批量尝试，保留失败报告，按官方要求延后重试。不要用提高
-并发、扩大 page limit 或改 User-Agent 的方式绕过限制。
+顺序返回的 reference，fetch 间隔 0.5 秒。若某次 fetch 因 HTTP 429、超时、
+网络错误或其他 retryable `SourceUnavailable` 失败，smoke 立即停止后续 fetch，
+不再 sleep，并把未尝试的 accepted reference 计入 `not_fetched_count`；非 retryable
+的单项失败仍按顺序继续有限 fetch。保留真实失败报告，按官方要求延后重试。
+不要用提高并发、扩大 page limit 或改 User-Agent 的方式绕过限制。
 
 输出文件必须位于已存在、无符号链接的目录。允许用同一命令明确覆盖同名普通
 文件；写入使用同目录临时文件、`fsync` 和原子 `replace`。符号链接、目录和
@@ -90,6 +91,11 @@ smoke。adapter 自身限制搜索页数和响应字节数；smoke 最多 fetch 
 
 报告可记录：
 
+- schema `acquisition-source-smoke/v2`，以及 `execution` 对象中的固定 generator、
+  `mode`、`network` 和 `worktree_clean_at_start`；仅默认真实 adapter 的非 dry-run
+  CLI 可记录 `mode=cli_live`、`network=live`，默认 dry-run 记录
+  `cli_dry_run`/`none`，注入 `adapter_factory` 的进程内运行记录
+  `in_process_injected`/`injected`；worktree 状态只能是 boolean，解析失败为 `null`；
 - UTC timestamp、Git commit、adapter key/version 和完整 descriptor；
 - query SHA-256 与日期窗口，不记录 name 或完整 query；
 - 返回/接受/拒绝/fetch 数量、安全 stable id 和 external version；

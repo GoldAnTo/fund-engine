@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.acquisition.sources import (
     RetrievedEnvelope,
@@ -26,6 +27,7 @@ from app.scripts import smoke_acquisition_sources
 
 BACKEND_ROOT = Path(__file__).parents[1]
 FIXED_NOW = datetime(2026, 8, 13, 4, 5, 6, tzinfo=UTC)
+GENERATOR = "app.scripts.smoke_acquisition_sources"
 
 
 class StubAdapter:
@@ -35,7 +37,7 @@ class StubAdapter:
         key: str = "sse",
         search_results: tuple[SourceReferenceValue, ...] = (),
         search_error: Exception | None = None,
-        fetch_errors: frozenset[str] = frozenset(),
+        fetch_errors: dict[str, Exception] | None = None,
     ) -> None:
         self._descriptor = SourceDescriptor(
             adapter_key=key,
@@ -46,7 +48,7 @@ class StubAdapter:
         )
         self.search_results = search_results
         self.search_error = search_error
-        self.fetch_errors = fetch_errors
+        self.fetch_errors = fetch_errors or {}
         self.search_calls = 0
         self.fetch_calls: list[str] = []
         self.close_calls = 0
@@ -64,11 +66,7 @@ class StubAdapter:
     def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:
         self.fetch_calls.append(reference.external_record_id)
         if reference.external_record_id in self.fetch_errors:
-            raise SourceUnavailable(
-                "provider failed with token=must-not-leak",
-                retryable=True,
-                diagnostics={"error_type": "timeout"},
-            )
+            raise self.fetch_errors[reference.external_record_id]
         return RetrievedEnvelope(
             content=f"safe bytes {reference.external_record_id}".encode(),
             mime_type="application/pdf",
@@ -149,6 +147,80 @@ def run_in_process(
     return exit_code, output, json.loads(output.read_text())
 
 
+def test_injected_live_run_records_injected_execution_provenance(tmp_path: Path):
+    adapter = StubAdapter(search_results=(reference(1),))
+
+    exit_code, _output, report = run_in_process(
+        tmp_path,
+        "--source",
+        "sse",
+        "--security-code",
+        "600000",
+        "--days",
+        "2",
+        adapter=adapter,
+    )
+
+    assert exit_code == 0
+    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    execution = report.get("execution")
+    assert execution is not None
+    assert set(execution) == {
+        "generator",
+        "mode",
+        "network",
+        "worktree_clean_at_start",
+    }
+    assert execution["generator"] == GENERATOR
+    assert execution["mode"] == "in_process_injected"
+    assert execution["network"] == "injected"
+    assert isinstance(execution["worktree_clean_at_start"], bool) or execution[
+        "worktree_clean_at_start"
+    ] is None
+
+
+@pytest.mark.parametrize("resolver_outcome", ["raises", "raw_status"])
+def test_worktree_state_resolution_fails_safe_without_path_or_status_leakage(
+    tmp_path: Path,
+    resolver_outcome: str,
+):
+    output = tmp_path / "provenance.json"
+    adapter = StubAdapter(search_results=(reference(1),))
+
+    def resolver():
+        if resolver_outcome == "raises":
+            raise OSError("git failed for /secret/worktree/path")
+        return " M backend/secret-production-file.py"
+
+    try:
+        exit_code = smoke_acquisition_sources.run(
+            [
+                "--source",
+                "sse",
+                "--security-code",
+                "600000",
+                "--days",
+                "2",
+                "--output",
+                str(output),
+            ],
+            adapter_factory=lambda _key: adapter,
+            clock=lambda: FIXED_NOW,
+            commit_resolver=lambda: "a" * 40,
+            worktree_state_resolver=resolver,
+            sleeper=lambda _seconds: None,
+        )
+    except OSError as exc:
+        pytest.fail(f"worktree resolver exception escaped: {type(exc).__name__}")
+
+    report = json.loads(output.read_text())
+    assert exit_code == 0
+    assert report["execution"]["worktree_clean_at_start"] is None
+    serialized = output.read_text().casefold()
+    assert "/secret/worktree/path" not in serialized
+    assert "secret-production-file.py" not in serialized
+
+
 def test_gildata_without_token_exits_nonzero_and_writes_safe_failure_report(
     tmp_path: Path,
 ):
@@ -181,6 +253,21 @@ def test_gildata_without_token_exits_nonzero_and_writes_safe_failure_report(
     report = json.loads(output.read_text())
     assert report["status"] == "failed"
     assert report["live_success"] is False
+    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    execution = report.get("execution")
+    assert execution is not None
+    assert set(execution) == {
+        "generator",
+        "mode",
+        "network",
+        "worktree_clean_at_start",
+    }
+    assert execution["generator"] == GENERATOR
+    assert execution["mode"] == "cli_live"
+    assert execution["network"] == "live"
+    assert isinstance(execution["worktree_clean_at_start"], bool) or execution[
+        "worktree_clean_at_start"
+    ] is None
     assert report["errors"] == [
         {
             "category": "configuration",
@@ -193,6 +280,52 @@ def test_gildata_without_token_exits_nonzero_and_writes_safe_failure_report(
     assert "traceback" not in serialized
     assert completed.stderr == ""
     assert str(output) in completed.stdout
+    assert str(BACKEND_ROOT).casefold() not in serialized
+
+
+def test_default_cli_dry_run_records_non_network_execution_provenance(
+    tmp_path: Path,
+):
+    output = tmp_path / "sse-dry-run.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            GENERATOR,
+            "--source",
+            "sse",
+            "--security-code",
+            "600000",
+            "--days",
+            "2",
+            "--dry-run",
+            "--output",
+            str(output),
+        ],
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    report = json.loads(output.read_text())
+    assert report.get("schema_version") == "acquisition-source-smoke/v2"
+    execution = report.get("execution")
+    assert execution is not None
+    assert set(execution) == {
+        "generator",
+        "mode",
+        "network",
+        "worktree_clean_at_start",
+    }
+    assert execution["generator"] == GENERATOR
+    assert execution["mode"] == "cli_dry_run"
+    assert execution["network"] == "none"
+    assert isinstance(execution["worktree_clean_at_start"], bool) or execution[
+        "worktree_clean_at_start"
+    ] is None
 
 
 def test_dry_run_validates_descriptor_without_search_fetch_or_live_success(
@@ -434,12 +567,18 @@ def test_provider_search_failure_is_sanitized_nonzero_and_closes_adapter(
     assert "traceback" not in serialized
 
 
-def test_fetch_failure_after_success_is_partial_nonzero_and_rate_limited(
+def test_nonretryable_fetch_failure_continues_and_is_partial_and_rate_limited(
     tmp_path: Path,
 ):
     adapter = StubAdapter(
         search_results=tuple(reference(number) for number in range(1, 5)),
-        fetch_errors=frozenset({"sse:record-2"}),
+        fetch_errors={
+            "sse:record-2": SourceUnavailable(
+                "nonretryable provider item failure",
+                retryable=False,
+                diagnostics={"error_type": "response_type"},
+            )
+        },
     )
     sleeps: list[float] = []
 
@@ -469,9 +608,58 @@ def test_fetch_failure_after_success_is_partial_nonzero_and_rate_limited(
     assert report["fetch_limit"] == 3
     assert report["not_fetched_count"] == 1
     assert report["errors"] == [
-        {"category": "provider_unavailable", "retryable": True, "stage": "fetch"}
+        {"category": "provider_unavailable", "retryable": False, "stage": "fetch"}
     ]
     assert report["fetches"][0]["provider_request_id"].startswith("sha256:")
+
+
+@pytest.mark.parametrize("error_type", ["http_429", "timeout", "network"])
+def test_retryable_fetch_unavailability_stops_remaining_fetches_without_sleep(
+    tmp_path: Path,
+    error_type: str,
+):
+    adapter = StubAdapter(
+        search_results=tuple(reference(number) for number in range(1, 4)),
+        fetch_errors={
+            "sse:record-1": SourceUnavailable(
+                "provider failed at /secret/worktree/path with token=must-not-leak",
+                retryable=True,
+                diagnostics={"error_type": error_type},
+            )
+        },
+    )
+    sleeps: list[float] = []
+
+    exit_code, output, report = run_in_process(
+        tmp_path,
+        "--source",
+        "sse",
+        "--security-code",
+        "600000",
+        "--days",
+        "2",
+        adapter=adapter,
+        sleeper=sleeps.append,
+    )
+
+    assert exit_code != 0
+    assert adapter.fetch_calls == ["sse:record-1"]
+    assert sleeps == []
+    assert adapter.close_calls == 1
+    assert report["status"] == "failed"
+    assert report["counts"] == {
+        "accepted": 3,
+        "fetched": 0,
+        "rejected": 0,
+        "returned": 3,
+    }
+    assert report["not_fetched_count"] == 2
+    assert report["errors"] == [
+        {"category": "provider_unavailable", "retryable": True, "stage": "fetch"}
+    ]
+    serialized = output.read_text().casefold()
+    assert "must-not-leak" not in serialized
+    assert "/secret/worktree/path" not in serialized
 
 
 def test_persist_case_id_fails_closed_before_adapter_or_network(tmp_path: Path):

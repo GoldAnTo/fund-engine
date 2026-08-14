@@ -32,7 +32,8 @@ from app.datasources.gildata.research_source import GildataResearchSource
 
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
-_SCHEMA_VERSION = "acquisition-source-smoke/v1"
+_SCHEMA_VERSION = "acquisition-source-smoke/v2"
+_GENERATOR = "app.scripts.smoke_acquisition_sources"
 _FETCH_LIMIT = 3
 _FETCH_INTERVAL_SECONDS = 0.5
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
@@ -46,6 +47,7 @@ _ADAPTER_VERSIONS = {
 AdapterFactory = Callable[[str], SourceAdapter]
 Clock = Callable[[], datetime]
 CommitResolver = Callable[[], str]
+WorktreeStateResolver = Callable[[], bool | None]
 Sleeper = Callable[[float], None]
 
 
@@ -105,11 +107,34 @@ def _git_commit() -> str:
     return "unknown"
 
 
+def _git_worktree_clean() -> bool | None:
+    try:
+        completed = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout == ""
+
+
+def _resolve_worktree_state(resolver: WorktreeStateResolver) -> bool | None:
+    try:
+        value = resolver()
+    except Exception:
+        return None
+    return value if isinstance(value, bool) else None
+
+
 def _base_report(
     args: argparse.Namespace,
     *,
     now: datetime,
     commit: str,
+    execution: dict[str, Any],
     window: tuple[date, date] | None,
 ) -> dict[str, Any]:
     start, end = window if window is not None else (None, None)
@@ -128,6 +153,7 @@ def _base_report(
         "schema_version": _SCHEMA_VERSION,
         "timestamp_utc": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "git_commit": commit,
+        "execution": execution,
         "status": "failed",
         "live_success": False,
         "source": {"adapter_key": args.source},
@@ -351,13 +377,18 @@ def _run_live(
     report["fetch_limit"] = _FETCH_LIMIT
     report["not_fetched_count"] = max(0, len(accepted) - _FETCH_LIMIT)
 
-    for index, (reference, inline_envelope) in enumerate(accepted[:_FETCH_LIMIT]):
+    selected = accepted[:_FETCH_LIMIT]
+    for index, (reference, inline_envelope) in enumerate(selected):
         if index:
             sleeper(_FETCH_INTERVAL_SECONDS)
         try:
             envelope = inline_envelope or adapter.fetch(reference)
         except Exception as exc:
-            report["errors"].append(_safe_error(exc, stage="fetch"))
+            error = _safe_error(exc, stage="fetch")
+            report["errors"].append(error)
+            if error["retryable"]:
+                report["not_fetched_count"] += len(selected) - index - 1
+                break
             continue
         report["fetches"].append(_fetch_value(reference, envelope))
         report["counts"]["fetched"] += 1
@@ -376,9 +407,11 @@ def run(
     adapter_factory: AdapterFactory | None = None,
     clock: Clock = lambda: datetime.now(UTC),
     commit_resolver: CommitResolver = _git_commit,
+    worktree_state_resolver: WorktreeStateResolver = _git_worktree_clean,
     sleeper: Sleeper = time.sleep,
 ) -> int:
     args = _parser().parse_args(argv)
+    worktree_clean_at_start = _resolve_worktree_state(worktree_state_resolver)
     try:
         _atomic_write_path_check(args.output)
     except ValueError:
@@ -391,7 +424,27 @@ def run(
         window = _window(args, today=now.astimezone(_SHANGHAI).date())
     except ValueError:
         window = None
-    report = _base_report(args, now=now, commit=commit_resolver(), window=window)
+    if adapter_factory is not None:
+        mode = "in_process_injected"
+        network = "injected"
+    elif args.dry_run:
+        mode = "cli_dry_run"
+        network = "none"
+    else:
+        mode = "cli_live"
+        network = "live"
+    report = _base_report(
+        args,
+        now=now,
+        commit=commit_resolver(),
+        execution={
+            "generator": _GENERATOR,
+            "mode": mode,
+            "network": network,
+            "worktree_clean_at_start": worktree_clean_at_start,
+        },
+        window=window,
+    )
     if not _validate_args(args, window):
         report["errors"] = [
             {"category": "invalid_arguments", "retryable": False, "stage": "validation"}
