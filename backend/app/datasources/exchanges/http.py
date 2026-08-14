@@ -401,7 +401,10 @@ class ExchangeHttpTransport:
     def _read_bounded(self, response: httpx.Response) -> bytes:
         content_encoding = response.headers.get("content-encoding", "").strip().casefold()
         if content_encoding not in {"", "identity"}:
-            raise SourceProtocolError("unsupported exchange content encoding") from None
+            raise SourceProtocolError(
+                "unsupported exchange content encoding",
+                diagnostics={"error_type": "content_encoding"},
+            ) from None
         raw_length = response.headers.get("content-length")
         if raw_length is not None:
             if re.fullmatch(r"0|[1-9][0-9]*", raw_length) is None:

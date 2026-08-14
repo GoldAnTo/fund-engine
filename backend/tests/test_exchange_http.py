@@ -578,7 +578,7 @@ def test_advertised_oversize_body_is_rejected_before_streaming():
 
 
 def test_compressed_body_is_rejected_before_decompression_or_iteration():
-    compressed = gzip.compress(b"x" * 5_000_000)
+    compressed = gzip.compress(b"body-secret" * 500_000)
     stream = ChunkStream(compressed)
     value = transport_for(
         lambda request: httpx.Response(
@@ -587,15 +587,30 @@ def test_compressed_body_is_rejected_before_decompression_or_iteration():
                 "Content-Type": "application/json",
                 "Content-Encoding": "gzip",
                 "Content-Length": str(len(compressed)),
+                "X-Leak-Probe": "header-secret",
             },
             stream=stream,
         ),
         max_response_bytes=1024,
     )
 
-    with pytest.raises(SourceProtocolError, match="content encoding"):
-        value.request("GET", "https://query.sse.com.cn/search", expected="json")
+    with pytest.raises(SourceProtocolError) as caught:
+        value.request(
+            "GET",
+            "https://www.sse.com.cn/url-secret/file.pdf",
+            expected="json",
+        )
 
+    assert str(caught.value) == "unsupported exchange content encoding"
+    assert caught.value.retryable is False
+    assert caught.value.diagnostics == {"error_type": "content_encoding"}
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    exposed = f"{caught.value!r} {caught.value.diagnostics!r}"
+    assert "url-secret" not in exposed
+    assert "header-secret" not in exposed
+    assert "body-secret" not in exposed
+    assert "gzip" not in exposed
     assert stream.yielded == 0
 
 

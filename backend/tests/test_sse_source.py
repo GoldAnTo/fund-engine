@@ -629,6 +629,57 @@ def test_fetch_falls_back_from_static_html_to_exact_official_mirror_once():
     assert envelope.content == b"%PDF-1.7\nmirror"
 
 
+def test_fetch_falls_back_from_static_gzip_to_exact_official_mirror_once():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    pdf_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        requested_url = str(request.url)
+        pdf_calls.append(requested_url)
+        if request.url.host == "www.sse.com.cn":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": requested_url.replace(
+                        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+                    )
+                },
+            )
+        if request.url.host == "static.sse.com.cn":
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Encoding": "gzip",
+                },
+                stream=httpx.ByteStream(b"encoded denial must not be read"),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.7\nmirror-after-encoding",
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+    expected_static = reference.canonical_url.replace(
+        "https://www.sse.com.cn/", "https://static.sse.com.cn/"
+    )
+    expected_mirror = mirror_url(reference.canonical_url)
+
+    envelope = source.fetch(reference)
+
+    assert reference.canonical_url.startswith("https://www.sse.com.cn/")
+    assert pdf_calls == [reference.canonical_url, expected_static, expected_mirror]
+    assert envelope.final_url == expected_mirror
+    assert envelope.content == b"%PDF-1.7\nmirror-after-encoding"
+
+
 def test_fetch_valid_canonical_pdf_does_not_invoke_mirror():
     fixture = json.loads(FIXTURE.read_text())
     fixture["pageHelp"]["pageCount"] = 1
@@ -709,7 +760,6 @@ def test_fetch_cache_rejection_does_not_fence_reference(use_mirror: bool):
         ("network_error", SourceUnavailable, "network"),
         ("connect_error", SourceUnavailable, "network"),
         ("unsafe_redirect", SourceProtocolError, "redirect"),
-        ("unsupported_encoding", SourceProtocolError, "content encoding"),
         ("oversized_body", SourceProtocolError, "byte limit"),
         ("empty_body", SourceProtocolError, "empty body"),
     ],
@@ -745,15 +795,6 @@ def test_fetch_non_response_type_failures_do_not_invoke_mirror(
                 headers={
                     "Location": "https://evil.static.sse.com.cn/disclosure/file.pdf"
                 },
-            )
-        if failure == "unsupported_encoding":
-            return httpx.Response(
-                200,
-                headers={
-                    "Content-Type": "application/pdf",
-                    "Content-Encoding": "gzip",
-                },
-                stream=httpx.ByteStream(b"%PDF-1.7\nencoded"),
             )
         if failure == "empty_body":
             return httpx.Response(
@@ -904,6 +945,36 @@ def test_fetch_propagates_invalid_mirror_response_without_further_endpoint():
         source.fetch(reference)
 
     assert caught.value.diagnostics == {"error_type": "response_type"}
+    assert calls == [reference.canonical_url, mirror_url(reference.canonical_url)]
+
+
+def test_fetch_propagates_mirror_gzip_without_another_fallback():
+    fixture = json.loads(FIXTURE.read_text())
+    fixture["pageHelp"]["pageCount"] = 1
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "query.sse.com.cn":
+            return response_json(fixture)
+        calls.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Encoding": "gzip",
+            },
+            stream=httpx.ByteStream(b"encoded denial must not be read"),
+        )
+
+    source = make_source(handler)
+    reference = accepted(
+        source.search("688256", datetime(2025, 4, 20, tzinfo=UTC))
+    )[0]
+
+    with pytest.raises(SourceProtocolError, match="content encoding") as caught:
+        source.fetch(reference)
+
+    assert caught.value.diagnostics == {"error_type": "content_encoding"}
     assert calls == [reference.canonical_url, mirror_url(reference.canonical_url)]
 
 

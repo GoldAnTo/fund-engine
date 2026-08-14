@@ -538,7 +538,10 @@ class SSEAnnouncementSource(SourceAdapter):
                 "GET", reference.canonical_url, expected="pdf"
             )
         except SourceProtocolError as error:
-            if error.diagnostics.get("error_type") != "response_type":
+            if error.diagnostics.get("error_type") not in {
+                "response_type",
+                "content_encoding",
+            }:
                 raise
             mirror_url = _official_mirror_url(reference.canonical_url)
         if mirror_url is not None:
