@@ -45,6 +45,32 @@ function workbench(
   };
 }
 
+function preparationWorkbench(
+  status: NonNullable<EventWorkbench["preparation"]>["status"],
+  nextAction: EventWorkbench["nextAction"],
+): EventWorkbench {
+  return {
+    ...workbench("researching", nextAction),
+    preparation: {
+      status,
+      revision: 1,
+      researchRunId: status === "authorized" ? "run-1" : null,
+      nextAttemptAt: null,
+      lastErrorMessage: status === "recoverable_failure" ? "准备任务暂时未完成" : null,
+      system: {
+        candidateClaims: { state: status === "recoverable_failure" ? "failed" : "succeeded" },
+        protocol: { state: status === "recoverable_failure" ? "stale" : "succeeded" },
+        evidencePlan: { state: status === "recoverable_failure" ? "stale" : "succeeded" },
+      },
+      review: {
+        candidateClaims: { state: "awaiting_review" },
+        protocol: { state: "locked" },
+        evidencePlan: { state: "locked" },
+      },
+    },
+  };
+}
+
 describe("event research presentation", () => {
   it("maps backend lifecycle states onto the six user-facing research stages", () => {
     expect(EVENT_RESEARCH_STAGES.map((stage) => stage.label)).toEqual([
@@ -104,5 +130,45 @@ describe("event research presentation", () => {
     expect(presentation.steps).toContain("需要判断时生成明确的人工任务");
     expect(presentation.to).toBe("/events/event-1/monitor");
     expect(presentation.buttonLabel).toBe("查看系统正在做什么");
+  });
+
+  it("keeps preparation generation as system work until a review action exists", () => {
+    const presentation = eventActionPresentation(
+      preparationWorkbench("preparing", { kind: "wait", label: "系统正在准备研究材料" }),
+      "event-1",
+    );
+
+    expect(presentation.owner).toBe("现在不用做");
+    expect(presentation.title).toBe("系统正在准备研究材料");
+    expect(presentation.why).toContain("解析冻结原文");
+    expect(presentation.why).not.toContain("已完成草案");
+    expect(presentation.to).toBe("/events/event-1/preparation");
+    expect(presentation.buttonLabel).toBe("查看研究准备进度");
+  });
+
+  it.each([
+    ["review_preparation_claims", "awaiting_claim_review", "核验原文与候选陈述"],
+    ["review_preparation_protocol", "awaiting_protocol_confirmation", "确认研究协议草案"],
+    ["authorize_preparation_plan", "awaiting_plan_authorization", "审核补证计划并授权启动"],
+    ["recover_preparation", "recoverable_failure", "恢复研究准备"],
+  ] as const)("routes %s to the review-gated preparation workbench", (kind, status, label) => {
+    const presentation = eventActionPresentation(
+      preparationWorkbench(status, { kind, label }),
+      "event-1",
+    );
+
+    expect(presentation.owner).toBe("你需要做");
+    expect(presentation.to).toBe("/events/event-1/preparation");
+    expect(presentation.buttonLabel).toBe("进入研究准备");
+  });
+
+  it("returns to the formal research path after preparation authorization", () => {
+    const presentation = eventActionPresentation(
+      preparationWorkbench("authorized", { kind: "review_evidence", label: "审核 2 条关键证据", count: 2 }),
+      "event-1",
+    );
+
+    expect(presentation.to).toBe("/events/event-1/review");
+    expect(presentation.buttonLabel).toBe("进入证据审核");
   });
 });

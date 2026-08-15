@@ -1,3 +1,10 @@
+import type {
+  ResearchPreparationStatus,
+  ResearchPreparationStages,
+  ResearchPreparationSystemStep,
+  ResearchPreparationReviewStep,
+} from "./researchPreparation";
+
 export type EventLifecycleStatus =
   | "extracting"
   | "researching"
@@ -43,6 +50,10 @@ export interface CreateEventResearchInput extends EventExtraction {
   createdBy: string;
 }
 
+export interface CreateUploadedEventResearchInput extends CreateEventResearchInput {
+  file: File;
+}
+
 export interface EventLifecycle {
   status: EventLifecycleStatus;
   activeRunId: string | null;
@@ -83,6 +94,17 @@ export interface WorkbenchProgress {
   pending: number;
   invalidSource: number;
   currentGap: string | null;
+}
+
+/** Safe preparation projection carried by the existing event workbench read model. */
+export interface EventPreparationSummary {
+  status: ResearchPreparationStatus;
+  revision: number;
+  researchRunId: string | null;
+  nextAttemptAt: string | null;
+  lastErrorMessage: string | null;
+  system: ResearchPreparationStages<Pick<ResearchPreparationSystemStep, "state">>;
+  review: ResearchPreparationStages<ResearchPreparationReviewStep>;
 }
 
 export interface EventResearchScope {
@@ -171,6 +193,7 @@ export interface EventWorkbench {
   progress: WorkbenchProgress;
   scope: EventResearchScope;
   nextAction: { kind: EventNextActionKind; label: string; count?: number };
+  preparation?: EventPreparationSummary | null;
 }
 
 export interface EventConclusionVersion {
@@ -203,6 +226,7 @@ export interface PublishedMaterialDecision {
 export interface EventResearchClient {
   extractEventResearch(input: EventExtractionInput): Promise<EventExtraction>;
   createEventResearch(input: CreateEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
+  createEventResearchFromUpload(input: CreateUploadedEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }>;
   attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }>;
   uploadEventMaterial(input: { caseId: string; file: File; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string; parseState: "parsed" | "partial" | "failed"; nextAction: "review_original" | "supplement_original" }>;
   listEventResearch(status?: EventLifecycleStatus): Promise<EventResearchListItem[]>;
@@ -214,4 +238,10 @@ export interface EventResearchClient {
   updateEventResearchScope(input: { caseId: string; factors: EventResearchScopeFactorInput[]; changedBy: string; changeReason: string }): Promise<EventResearchScope & { reclassifiedEvidenceCount: number }>;
   getEventReviewQueue(caseId: string): Promise<EventReviewQueue>;
   publishEventConclusion(input: { caseId: string; text: string; reviewer: string }): Promise<{ conclusionId: string; state: "published" }>;
+  getResearchPreparation(caseId: string): Promise<import("./researchPreparation").ResearchPreparation>;
+  listResearchPreparationEvents(caseId: string, cursor?: { afterSeq?: number; limit?: number }): Promise<import("./researchPreparation").ResearchPreparationEventsPage>;
+  confirmResearchPreparationClaims(input: import("./researchPreparation").ConfirmResearchPreparationClaimsInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  confirmResearchPreparationProtocol(input: import("./researchPreparation").ConfirmResearchPreparationProtocolInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  retryResearchPreparation(input: import("./researchPreparation").RetryResearchPreparationInput): Promise<import("./researchPreparation").ResearchPreparation>;
+  authorizeResearchPreparation(input: import("./researchPreparation").AuthorizeResearchPreparationInput): Promise<import("./researchPreparation").ResearchPreparation>;
 }

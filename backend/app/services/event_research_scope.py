@@ -19,18 +19,25 @@ from app.models.event_research import (
 )
 from app.models.ledger import EvidenceLink, Thesis
 from app.models.operational import EventResearchLifecycle, ResearchRun
+from app.models.research_preparation import ResearchPreparation
+from app.models.research_monitor import ResearchRunEvent
 from app.services.auto_research import AutoResearchService
+from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
     normalize_event_research_scope_factors,
 )
 from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_preparation import ResearchPreparationService
 from app.services.research_protocol import ResearchProtocolService
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+MAX_PREPARATION_RUN_LINEAGE_DEPTH = 32
 
 
 @dataclass(frozen=True)
@@ -142,7 +149,18 @@ class EventResearchScopeService:
         # remain immutable audit records, but their review tasks must no
         # longer appear actionable while the successor run is pending.
         EventReviewQueueService(self._session).reconcile_event_review_queue(case_id)
-        if lifecycle is not None:
+        self._revoke_active_preparation_run(lifecycle, case_id)
+        preparation = ResearchPreparationService(
+            self._session
+        ).invalidate_from_scope_change(
+            case_id,
+            scope.id,
+            actor=changed_by.strip(),
+            case_locked=True,
+        )
+        # Preparation supersedes automatic formal-run continuation.  Legacy
+        # event Cases without a preparation preserve their historical path.
+        if lifecycle is not None and preparation is None:
             self._continue_research_if_needed(lifecycle, active_theses, now)
         self._session.flush()
         return UpdatedEventResearchScope(
@@ -155,6 +173,109 @@ class EventResearchScopeService:
                 thesis.statement in removed for _, thesis in reviewed_evidence
             ),
         )
+
+    def _revoke_active_preparation_run(
+        self, lifecycle: EventResearchLifecycle | None, case_id: uuid.UUID
+    ) -> None:
+        """Stop a formal run before scope invalidates its preparation.
+
+        The caller already holds the stable Case then lifecycle lock.  The
+        cancellation path extends that order with ResearchRun then its Job,
+        so a provider-returning worker cannot commit output for a superseded
+        scope.  No successor is created here; a new run requires a later
+        authorization.
+        """
+        preparation = self._session.scalar(
+            select(ResearchPreparation).where(
+                ResearchPreparation.research_case_id == case_id
+            )
+        )
+        if (
+            preparation is None
+            or preparation.status != "authorized"
+            or preparation.research_run_id is None
+        ):
+            return
+        run_ids = {preparation.research_run_id}
+        if (
+            lifecycle is not None
+            and lifecycle.active_run_id is not None
+            and lifecycle.active_run_id != preparation.research_run_id
+            and self._is_preparation_successor(
+                lifecycle.active_run_id, preparation.research_run_id, case_id
+            )
+        ):
+            run_ids.add(lifecycle.active_run_id)
+        auto_research = AutoResearchService(self._session)
+        locked_runs: list[ResearchRun] = []
+        for run_id in sorted(run_ids, key=str):
+            run = auto_research._lock_run_for_transition(run_id, case_locked=True)
+            if run is not None and run.research_case_id == case_id:
+                locked_runs.append(run)
+        cancelled_run_ids: set[uuid.UUID] = set()
+        # All mutable run rows are now locked in canonical order before any
+        # cancellation traverses into Job rows.
+        for run in locked_runs:
+            if auto_research.repo.cancel_run(run):
+                run.stop_reason = "scope_changed"
+                cancelled_run_ids.add(run.id)
+                ResearchRunEventRepository(self._session).append(
+                    run.id,
+                    stage="stopped",
+                    status="cancelled",
+                    message="研究范围已变更；已撤销本次正式研究运行。",
+                    payload_json={"stop_reason": "scope_changed"},
+                )
+        if lifecycle is not None and lifecycle.active_run_id in cancelled_run_ids:
+            lifecycle.active_run_id = None
+            lifecycle.status = "awaiting_key_review"
+            lifecycle.status_summary = "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
+            lifecycle.current_gap = "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动"
+            lifecycle.next_human_action = None
+            lifecycle.updated_at = _utcnow()
+
+    def _is_preparation_successor(
+        self,
+        run_id: uuid.UUID,
+        predecessor_run_id: uuid.UUID,
+        case_id: uuid.UUID,
+    ) -> bool:
+        """Prove an active run descends from an authorized preparation run.
+
+        Lineage is carried only in each run's immutable frozen-scope event.
+        Treat absent, malformed, cyclic, cross-case, and overlong histories
+        as unproven so a scope rewrite never cancels an unrelated run.
+        """
+        current_run_id = run_id
+        visited: set[uuid.UUID] = set()
+        for _ in range(MAX_PREPARATION_RUN_LINEAGE_DEPTH):
+            if current_run_id in visited:
+                return False
+            visited.add(current_run_id)
+            current_run = self._session.get(ResearchRun, current_run_id)
+            if current_run is None or current_run.research_case_id != case_id:
+                return False
+            if current_run_id == predecessor_run_id:
+                return True
+            event = self._session.scalar(
+                select(ResearchRunEvent)
+                .where(ResearchRunEvent.run_id == current_run_id)
+                .where(ResearchRunEvent.stage == "scope")
+                .order_by(ResearchRunEvent.seq)
+                .limit(1)
+            )
+            if event is None or not isinstance(event.payload_json, dict):
+                return False
+            raw_predecessor_id = event.payload_json.get("predecessor_run_id")
+            try:
+                next_run_id = uuid.UUID(str(raw_predecessor_id))
+            except (TypeError, ValueError, AttributeError):
+                return False
+            next_run = self._session.get(ResearchRun, next_run_id)
+            if next_run is None or next_run.research_case_id != case_id:
+                return False
+            current_run_id = next_run_id
+        return False
 
     def _backfill_legacy_scope(
         self, case_id: uuid.UUID

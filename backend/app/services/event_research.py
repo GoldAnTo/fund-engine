@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.domain.research_preparation import preparation_input_fingerprint
 from app.models.event_research import (
     EventResearchBrief,
     EventResearchFactorDraft,
@@ -18,7 +19,9 @@ from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
 from app.services.ingest import DocumentService
+from app.services.document_uploads import DocumentUploadService
 from app.services.research import ResearchService
+from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
 from app.services.case_tenant_access import CaseTenantAccess
 from app.errors import ValidationFailedError
@@ -46,12 +49,21 @@ class CreatedEventResearch:
     lifecycle: EventResearchLifecycle
 
 
+@dataclass(frozen=True)
+class InitialUploadedOriginal:
+    raw: bytes
+    file_name: str
+    mime_type: str
+    source_metadata: dict
+
+
 class EventResearchService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def create(
-        self, payload: CreateEventResearchRequest, *, tenant_id: str
+        self, payload: CreateEventResearchRequest, *, tenant_id: str,
+        initial_uploaded_original: InitialUploadedOriginal | None = None,
     ) -> CreatedEventResearch:
         research = ResearchService(ResearchRepository(self._session))
         case = research.add_case(
@@ -64,40 +76,36 @@ class EventResearchService:
             evidence_cutoff=payload.event_at.date() if payload.event_at else None,
         )
         document_service = DocumentService(DocumentRepository(self._session))
-        document_url = payload.source_url or {
-            "pasted_snapshot": "event://pasted-news",
-            "uploaded_file": "upload://event-text-snapshot",
-            "licensed_provider": "provider://unresolved-record",
-            "public_url": "https://invalid.example/public-url-required",
-        }[payload.source_type]
-        document = document_service.freeze(
-            raw=payload.raw_input.encode("utf-8"),
-            source_url=document_url,
-            parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[payload.source_type],
-            title=payload.event_title,
-            parse_state="partial",
-            source_authority=payload.source_metadata.get("authority_level", "unknown"),
-        )
-        document_service.attach_to_case(
-            research_case_id=case.id, document_version_id=document.id
-        )
-        CaseTenantAccess(self._session).admit_initial_case(
-            case_id=case.id,
-            tenant_id=tenant_id,
-            initial_document_version_id=document.id,
-            admitted_by=payload.created_by,
-        )
-        SourceGovernanceService(self._session).record_event_intake(
-            document=document,
-            source_type=payload.source_type,
-            source_metadata=payload.source_metadata,
-            declared_by=payload.created_by,
-            incoming_source_url=payload.source_url,
-        )
-        document_service.add_span(
-            document_version_id=document.id,
-            locator={"kind": payload.source_type, "source_metadata": payload.source_metadata},
-            verbatim_text=payload.raw_input,
+        document = None
+        if initial_uploaded_original is None:
+            document_url = payload.source_url or {
+                "pasted_snapshot": "event://pasted-news",
+                "uploaded_file": "upload://event-text-snapshot",
+                "licensed_provider": "provider://unresolved-record",
+                "public_url": "https://invalid.example/public-url-required",
+            }[payload.source_type]
+            document = document_service.freeze(
+                raw=payload.raw_input.encode("utf-8"),
+                source_url=document_url,
+                parser_version={"pasted_snapshot": "user-pasted-v1", "uploaded_file": "uploaded-text-v1", "licensed_provider": "provider-snapshot-v1", "public_url": "user-pasted-public-url-v1"}[payload.source_type],
+                title=payload.event_title,
+                parse_state="partial",
+                source_authority=payload.source_metadata.get("authority_level", "unknown"),
+            )
+            document_service.attach_to_case(
+                research_case_id=case.id, document_version_id=document.id
+            )
+            SourceGovernanceService(self._session).record_event_intake(
+                document=document,
+                source_type=payload.source_type,
+                source_metadata=payload.source_metadata,
+                declared_by=payload.created_by,
+                incoming_source_url=payload.source_url,
+            )
+            document_service.add_span(
+                document_version_id=document.id,
+                locator={"kind": payload.source_type, "source_metadata": payload.source_metadata},
+                verbatim_text=payload.raw_input,
         )
         now = _utcnow()
         brief = EventResearchBrief(
@@ -154,22 +162,66 @@ class EventResearchService:
             )
         self._session.flush()
 
-        # Intake freezes a source snapshot and a researcher-proposed scope;
-        # it is deliberately not authorization to run collection or model
-        # work. The original material must be inspected and the Case protocol
-        # completed before a separately configured ResearchRun can exist.
-        lifecycle = EventResearchLifecycle(
-            research_case_id=case.id,
-            status="awaiting_key_review",
-            active_run_id=None,
-            current_round=0,
-            status_summary="资料已冻结，等待核验原文与研究协议；尚未启动后台研究",
-            current_gap="原文资料、来源许可与研究协议尚未完成核验",
-            next_human_action="核验原文资料并完成研究协议",
-            updated_at=_utcnow(),
-        )
-        self._session.add(lifecycle)
-        self._session.commit()
+        try:
+            lifecycle = None
+            if initial_uploaded_original is not None:
+                # The upload service deliberately requires an event lifecycle.
+                # It is staged in this uncommitted transaction, before the
+                # original is frozen and before any preparation job is queued.
+                lifecycle = EventResearchLifecycle(
+                    research_case_id=case.id,
+                    status="awaiting_key_review",
+                    active_run_id=None,
+                    current_round=0,
+                    status_summary="资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划",
+                    current_gap="研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+                    next_human_action=None,
+                    updated_at=_utcnow(),
+                )
+                self._session.add(lifecycle)
+                self._session.flush()
+                uploaded = DocumentUploadService(self._session).freeze_case_material(
+                    case_id=case.id,
+                    raw=initial_uploaded_original.raw,
+                    file_name=initial_uploaded_original.file_name,
+                    mime_type=initial_uploaded_original.mime_type,
+                    actor=payload.created_by,
+                    source_metadata=initial_uploaded_original.source_metadata,
+                )
+                document = uploaded.document
+            assert document is not None
+            CaseTenantAccess(self._session).admit_initial_case(
+                case_id=case.id,
+                tenant_id=tenant_id,
+                initial_document_version_id=document.id,
+                admitted_by=payload.created_by,
+            )
+            # Preparation only schedules the source-bound draft workflow. It
+            # never authorizes collection or creates a formal ResearchRun.
+            ResearchPreparationService(self._session).create_for_case(
+                case.id,
+                input_fingerprint=preparation_input_fingerprint(document.id, scope.id),
+                actor=payload.created_by,
+            )
+            if lifecycle is None:
+                lifecycle = EventResearchLifecycle(
+                    research_case_id=case.id,
+                    status="awaiting_key_review",
+                    active_run_id=None,
+                    current_round=0,
+                    status_summary="资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划",
+                    current_gap="研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+                    next_human_action=None,
+                    updated_at=_utcnow(),
+                )
+                self._session.add(lifecycle)
+            self._session.commit()
+        except Exception:
+            # Preparation is part of event intake's one unit of work.  In
+            # particular, a failed job enqueue must not leave a half-created
+            # Case, frozen document, or tenant admission behind.
+            self._session.rollback()
+            raise
         return CreatedEventResearch(
             case_id=str(case.id), brief_id=str(brief.id), lifecycle=lifecycle
         )

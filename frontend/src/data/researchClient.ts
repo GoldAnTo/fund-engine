@@ -29,6 +29,7 @@ export function resetResearchClient(): void {
 export const researchClient: ActiveResearchClient = {
   extractEventResearch: (input) => _client.extractEventResearch(input),
   createEventResearch: (input) => _client.createEventResearch(input),
+  createEventResearchFromUpload: (input) => _client.createEventResearchFromUpload(input),
   attachEventMaterial: (input) => _client.attachEventMaterial(input),
   uploadEventMaterial: (input) => _client.uploadEventMaterial(input),
   listEventResearch: (status) => _client.listEventResearch(status),
@@ -41,6 +42,16 @@ export const researchClient: ActiveResearchClient = {
   updateEventResearchScope: (input) => _client.updateEventResearchScope(input),
   getEventReviewQueue: (caseId) => _client.getEventReviewQueue(caseId),
   publishEventConclusion: (input) => _client.publishEventConclusion(input),
+  getResearchPreparation: (caseId) => _client.getResearchPreparation(caseId),
+  listResearchPreparationEvents: (caseId, cursor) =>
+    _client.listResearchPreparationEvents(caseId, cursor),
+  confirmResearchPreparationClaims: (input) =>
+    _client.confirmResearchPreparationClaims(input),
+  confirmResearchPreparationProtocol: (input) =>
+    _client.confirmResearchPreparationProtocol(input),
+  retryResearchPreparation: (input) => _client.retryResearchPreparation(input),
+  authorizeResearchPreparation: (input) =>
+    _client.authorizeResearchPreparation(input),
   getOverview: (q) => _client.getOverview(q),
   getCaseDossier: (id, q) => _client.getCaseDossier(id, q),
   getRelationshipGraph: (id, q) => _client.getRelationshipGraph(id, q),

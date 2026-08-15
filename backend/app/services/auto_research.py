@@ -723,6 +723,7 @@ class AutoResearchService:
                     budget=run.budget,
                     commit=False,
                     thesis_ids=self._run_thesis_ids(run),
+                    scope_context={"predecessor_run_id": str(run.id)},
                 )
                 lifecycle_repo.update(
                     lifecycle,
@@ -792,6 +793,7 @@ class AutoResearchService:
             budget=active_run.budget if active_run else 100,
             commit=False,
             thesis_ids=self._run_thesis_ids(active_run) if active_run else None,
+            scope_context={"predecessor_run_id": str(active_run.id)} if active_run else None,
         )
         next_round = lifecycle.current_round + 1
         lifecycle_repo.update(

@@ -1,0 +1,1149 @@
+"""In-process command state machine for pre-authorization research work."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import uuid
+from datetime import date
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Literal
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.domain.research_preparation import (
+    ArtifactKind,
+    MAX_CANDIDATES,
+    PreparationStep,
+    candidate_context_fingerprint,
+    preparation_input_fingerprint,
+)
+from app.errors import ConflictError, NotFoundError
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    AtomicClaimReview,
+    CaseTenantAdmission,
+    SourceStatement,
+    ValidationError,
+)
+from app.models.research_preparation import (
+    ResearchPreparation,
+    ResearchPreparationArtifact,
+)
+from app.models.event_research import EventResearchScopeFactor, EventResearchScopeVersion
+from app.repositories.research_preparation import ResearchPreparationRepository
+from app.services.atomic_claims import AtomicClaimService
+from app.services.auto_research import AutoResearchService
+from app.services.event_research_scope_evidence import current_scope_thesis_ids, lock_event_research_lifecycle
+from app.repositories.event_research import EventResearchLifecycleRepository
+from app.services.research_protocol import ResearchProtocolService, MetricDefinitionInput, OutcomeBindingInput, VerificationRuleInput
+from app.services.preparation_display import preparation_artifact_allows_display
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimDecision:
+    candidate_id: uuid.UUID
+    outcome: Literal["confirmed", "modified", "rejected"]
+    reason: str
+    normalized_text: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProtocolConfirmation:
+    draft_sequence: int
+    edits: dict[str, object]
+
+
+_STEP_FIELDS: dict[PreparationStep, str] = {
+    "parse_claims": "parse_claims_state",
+    "draft_protocol": "draft_protocol_state",
+    "draft_evidence_plan": "draft_evidence_plan_state",
+}
+_STEP_ARTIFACTS: dict[PreparationStep, ArtifactKind] = {
+    "parse_claims": "atomic_claim_candidates",
+    "draft_protocol": "research_protocol_draft",
+    "draft_evidence_plan": "evidence_acquisition_plan",
+}
+PreparationFailureCode = Literal[
+    "provider_unavailable",
+    "invalid_response",
+    "retry_exhausted",
+]
+_PREPARATION_FAILURE_CODES = frozenset(
+    {"provider_unavailable", "invalid_response", "retry_exhausted"}
+)
+_PERSISTED_PROVIDER_FAILURE = "preparation_provider_unavailable"
+_CLAIM_OUTCOMES = frozenset({"confirmed", "modified", "rejected"})
+_EDITABLE_PROTOCOL_KEYS = frozenset(
+    {
+        "outcomes",
+        "baseline",
+        "horizon",
+        "mechanisms",
+        "verification_rules",
+        "rationale",
+    }
+)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ResearchPreparationService:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._repo = ResearchPreparationRepository(session)
+        self._claims = AtomicClaimService(session)
+
+    def create_for_case(
+        self, case_id: uuid.UUID, *, input_fingerprint: str, actor: str
+    ) -> ResearchPreparation:
+        preparation = self._lock(case_id)
+        if preparation is None:
+            now = _utcnow()
+            preparation = ResearchPreparation(
+                research_case_id=case_id,
+                version=1,
+                input_fingerprint=input_fingerprint,
+                status="preparing",
+                parse_claims_state="queued",
+                draft_protocol_state="queued",
+                draft_evidence_plan_state="queued",
+                claim_review_state="locked",
+                protocol_review_state="locked",
+                plan_review_state="locked",
+            research_run_id=None,
+                authorized_evidence_plan=None,
+                next_attempt_at=None,
+                last_error_code=None,
+                created_at=now,
+                updated_at=now,
+            )
+            self._session.add(preparation)
+            self._session.flush()
+            self._repo.append_event(
+                preparation,
+                research_case_id=case_id,
+                type="preparation_created",
+                step=None,
+                message="research preparation created",
+                detail={"actor": actor},
+            )
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="parse_claims"
+            )
+            return preparation
+        if preparation.input_fingerprint == input_fingerprint:
+            return preparation
+
+        preparation.version += 1
+        preparation.input_fingerprint = input_fingerprint
+        self._invalidate_current_artifacts(preparation, reason="input_changed")
+        # The check constraint permits this only as one atomic UPDATE with the
+        # following status transition; never flush an authorized row without
+        # its required run reference.
+        preparation.research_run_id = None
+        preparation.authorized_evidence_plan = None
+        preparation.status = "preparing"
+        preparation.parse_claims_state = "queued"
+        preparation.draft_protocol_state = "queued"
+        preparation.draft_evidence_plan_state = "queued"
+        preparation.claim_review_state = "locked"
+        preparation.protocol_review_state = "locked"
+        preparation.plan_review_state = "locked"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_inputs_replaced",
+            step=None,
+            message="research preparation inputs replaced",
+            detail={"actor": actor, "version": preparation.version},
+        )
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="parse_claims"
+        )
+        return preparation
+
+    def invalidate_from_scope_change(
+        self,
+        case_id: uuid.UUID,
+        new_scope_id: uuid.UUID,
+        *,
+        actor: str,
+        case_locked: bool = False,
+    ) -> ResearchPreparation | None:
+        """Invalidate scope-dependent drafts without replacing claim review.
+
+        Scope changes use the same frozen admitted document.  Claim candidates
+        and their human decisions stay intact; only protocol and evidence-plan
+        drafts become stale.  This command never creates a ResearchRun.
+        """
+        preparation = self._lock(case_id, case_locked=case_locked)
+        if preparation is None:
+            return None
+        document_id = self._session.scalar(
+            select(CaseTenantAdmission.initial_document_version_id).where(
+                CaseTenantAdmission.research_case_id == case_id
+            )
+        )
+        if document_id is None:
+            raise ConflictError("research preparation requires an admitted document")
+        input_fingerprint = preparation_input_fingerprint(document_id, new_scope_id)
+        if preparation.input_fingerprint == input_fingerprint:
+            return preparation
+
+        preparation.version += 1
+        preparation.input_fingerprint = input_fingerprint
+        self._invalidate_downstream(preparation, reason="scope_changed")
+        # Keep this change in one flush: an authorized preparation cannot
+        # temporarily exist without its required run reference.
+        preparation.research_run_id = None
+        preparation.authorized_evidence_plan = None
+        preparation.status = "preparing"
+        preparation.draft_protocol_state = (
+            "queued"
+            if preparation.claim_review_state == "confirmed"
+            else "stale"
+        )
+        preparation.draft_evidence_plan_state = "stale"
+        preparation.protocol_review_state = "locked"
+        preparation.plan_review_state = "locked"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_scope_changed",
+            step=None,
+            message="preparation drafts invalidated by scope change",
+            detail={"actor": actor, "version": preparation.version},
+        )
+        if preparation.claim_review_state == "confirmed":
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="draft_protocol"
+            )
+        elif preparation.parse_claims_state != "succeeded":
+            # The predecessor's queued job is version-guarded and will be
+            # discarded, so ensure this new preparation version remains live.
+            preparation.parse_claims_state = "queued"
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="parse_claims"
+            )
+        self._set_aggregate_status(preparation)
+        return preparation
+
+    def complete_system_step(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        payload: dict[str, object],
+        *,
+        expected_version: int,
+        expected_fingerprint: str,
+        expected_context_fingerprint: str | None = None,
+    ) -> ResearchPreparation:
+        preparation = self._require_preparation(case_id)
+        if expected_version is None or expected_fingerprint is None:
+            raise ConflictError("preparation output guards are required")
+        if (
+            expected_version != preparation.version
+        ) or (
+            expected_fingerprint != preparation.input_fingerprint
+        ):
+            self._repo.append_event(
+                preparation,
+                research_case_id=case_id,
+                type="preparation_output_discarded",
+                step=step,
+                message="stale preparation output discarded",
+                detail={"current_version": preparation.version},
+            )
+            return preparation
+        allowed_states = {"queued", "running", "retrying"}
+        if step == "draft_protocol":
+            allowed_states.add("stale")
+        self._require_eligible_step(preparation, step, allowed_states=allowed_states)
+        context_fingerprint = None
+        if step == "parse_claims":
+            if expected_context_fingerprint is not None:
+                raise ConflictError("parse claim output cannot carry a context fingerprint")
+        else:
+            current_context_fingerprint = self.current_candidate_context_fingerprint(
+                case_id
+            )
+            if (
+                expected_context_fingerprint is None
+                or expected_context_fingerprint != current_context_fingerprint
+            ):
+                self._repo.append_event(
+                    preparation,
+                    research_case_id=case_id,
+                    type="preparation_output_discarded",
+                    step=step,
+                    message="stale preparation output discarded",
+                    detail={"current_version": preparation.version},
+                )
+                return preparation
+            context_fingerprint = current_context_fingerprint
+        artifact = self._repo.append_artifact(
+            preparation,
+            research_case_id=case_id,
+            kind=_STEP_ARTIFACTS[step],
+            input_fingerprint=preparation.input_fingerprint,
+            payload=payload,
+            context_fingerprint=context_fingerprint,
+        )
+        setattr(preparation, _STEP_FIELDS[step], "succeeded")
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        if step == "parse_claims":
+            preparation.claim_review_state = "awaiting_review"
+        elif step == "draft_protocol":
+            preparation.protocol_review_state = "awaiting_review"
+        else:
+            preparation.plan_review_state = "awaiting_review"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_completed",
+            step=step,
+            message="preparation system step completed",
+            detail={"artifact_sequence": artifact.sequence},
+        )
+        return preparation
+
+    def current_candidate_context_fingerprint(self, case_id: uuid.UUID) -> str:
+        """Return the ordered current-review context used to guard drafts."""
+        preparation = self._require_preparation(case_id)
+        artifact = self._repo.current_artifact(
+            preparation.id, "atomic_claim_candidates"
+        )
+        if artifact is None:
+            return candidate_context_fingerprint(None, ())
+        candidate_ids = self._ordered_candidate_ids(artifact)
+        if not candidate_ids:
+            return candidate_context_fingerprint(artifact.sequence, ())
+        candidates = {
+            candidate.id: candidate
+            for candidate in self._session.scalars(
+                select(AtomicClaimCandidate).where(
+                    AtomicClaimCandidate.id.in_(candidate_ids)
+                )
+            )
+        }
+        if set(candidates) != set(candidate_ids):
+            raise ConflictError("current claim candidates are missing")
+        latest_reviews: dict[uuid.UUID, AtomicClaimReview] = {}
+        for review in self._session.scalars(
+            select(AtomicClaimReview)
+            .where(AtomicClaimReview.atomic_claim_candidate_id.in_(candidate_ids))
+            .order_by(
+                AtomicClaimReview.atomic_claim_candidate_id,
+                AtomicClaimReview.created_at.desc(),
+                AtomicClaimReview.id.desc(),
+            )
+        ):
+            latest_reviews.setdefault(review.atomic_claim_candidate_id, review)
+        decisions: list[tuple[str, str, str, str | None, str | None]] = []
+        for candidate_id in candidate_ids:
+            review = latest_reviews.get(candidate_id)
+            if review is None:
+                continue
+            candidate = candidates[candidate_id]
+            normalized_text: str | None = None
+            if review.outcome == "confirmed":
+                normalized_text = candidate.normalized_text
+            elif review.outcome == "modified":
+                statement = self._session.get(
+                    SourceStatement, review.published_source_statement_id
+                )
+                if (
+                    statement is None
+                    or statement.atomic_claim_candidate_id != candidate.id
+                    or statement.source_span_id != candidate.source_span_id
+                    or not statement.normalized_text.strip()
+                ):
+                    raise ConflictError("modified claim context is unavailable")
+                normalized_text = statement.normalized_text
+            decisions.append((
+                str(candidate_id),
+                str(review.id),
+                review.outcome,
+                str(review.published_source_statement_id)
+                if review.published_source_statement_id else None,
+                hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+                if normalized_text is not None else None,
+            ))
+        return candidate_context_fingerprint(artifact.sequence, tuple(decisions))
+
+    def mark_step_failed(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        *,
+        error_code: PreparationFailureCode,
+        retry_at: datetime | None,
+    ) -> ResearchPreparation:
+        preparation = self._require_preparation(case_id)
+        self._require_eligible_step(preparation, step, allowed_states={"queued", "running"})
+        # Provider adapters pass a semantic category, never exception text.
+        # Keep the durable projection deliberately coarser so credentials,
+        # endpoint URLs, and provider response bodies cannot enter activity.
+        if error_code not in _PREPARATION_FAILURE_CODES:
+            raise ConflictError("preparation failure code is invalid")
+        safe_error_code = _PERSISTED_PROVIDER_FAILURE
+        setattr(preparation, _STEP_FIELDS[step], "retrying" if retry_at else "failed")
+        preparation.next_attempt_at = retry_at
+        preparation.last_error_code = safe_error_code
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_failed",
+            step=step,
+            message="preparation system step failed",
+            detail={"error_code": safe_error_code, "retry_scheduled": retry_at is not None},
+        )
+        return preparation
+
+    def mark_step_internal_failure(
+        self, case_id: uuid.UUID, step: PreparationStep
+    ) -> ResearchPreparation:
+        """Finish an owned unexpected worker failure without exposing details."""
+        preparation = self._require_preparation(case_id)
+        self._require_eligible_step(preparation, step, allowed_states={"running"})
+        setattr(preparation, _STEP_FIELDS[step], "failed")
+        preparation.next_attempt_at = None
+        preparation.last_error_code = "preparation_internal_error"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_internal_failed",
+            step=step,
+            message="preparation system step failed",
+            detail={"error_code": "preparation_internal_error"},
+        )
+        return preparation
+
+    def mark_backfill_candidate_limit(
+        self, case_id: uuid.UUID
+    ) -> ResearchPreparation:
+        """Stop an oversized historical reuse without invoking a provider."""
+        preparation = self._require_preparation(case_id)
+        self._require_eligible_step(preparation, "parse_claims", allowed_states={"queued"})
+        preparation.parse_claims_state = "failed"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = "preparation_backfill_candidate_limit"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_backfill_candidate_limit",
+            step="parse_claims",
+            message="preparation backfill candidate limit exceeded",
+            detail={
+                "error_code": "preparation_backfill_candidate_limit",
+                "candidate_limit": MAX_CANDIDATES,
+            },
+        )
+        return preparation
+
+    def start_system_step(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        *,
+        expected_version: int,
+        expected_fingerprint: str,
+    ) -> ResearchPreparation:
+        """Mark a freshly claimed worker step running under the Case lock."""
+        preparation = self._require_preparation(case_id)
+        if (
+            preparation.version != expected_version
+            or preparation.input_fingerprint != expected_fingerprint
+        ):
+            raise ConflictError("preparation job is stale")
+        # A stale worker is recovered by re-queuing its *same* Job.  The
+        # projection may still say running, so accepting that state here is
+        # the narrow, idempotent recovery path (the Job claim itself remains
+        # the concurrency authority).
+        self._require_eligible_step(preparation, step, allowed_states={"queued", "retrying", "running"})
+        setattr(preparation, _STEP_FIELDS[step], "running")
+        preparation.updated_at = _utcnow()
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_started",
+            step=step,
+            message="preparation system step started",
+            detail={},
+        )
+        return preparation
+
+    def reuse_existing_claim_candidates(
+        self,
+        case_id: uuid.UUID,
+        *,
+        candidate_ids: list[uuid.UUID],
+        every_candidate_reviewed: bool,
+    ) -> ResearchPreparation:
+        """Attach already-admitted candidates without re-running an LLM.
+
+        Backfill calls this immediately after ``create_for_case``.  It keeps
+        candidate ledger rows immutable and deliberately does *not* queue the
+        protocol step: a person must still advance the preparation explicitly.
+        """
+        preparation = self._require_preparation(case_id)
+        if preparation.parse_claims_state != "queued":
+            raise ConflictError("claim candidates cannot be reused for this preparation")
+        payload = {"candidates": [{"candidate_id": str(candidate_id)} for candidate_id in candidate_ids]}
+        preparation = self.complete_system_step(
+            case_id,
+            "parse_claims",
+            payload,
+            expected_version=preparation.version,
+            expected_fingerprint=preparation.input_fingerprint,
+        )
+        if every_candidate_reviewed:
+            preparation.claim_review_state = "confirmed"
+            self._set_aggregate_status(preparation)
+            preparation.updated_at = _utcnow()
+            self._repo.append_event(
+                preparation,
+                research_case_id=case_id,
+                type="preparation_claim_candidates_reused",
+                step="parse_claims",
+                message="existing reviewed claim candidates attached",
+                detail={"candidate_count": len(candidate_ids)},
+            )
+            self._repo.queue_step_job(
+                preparation, research_case_id=case_id, step="draft_protocol"
+            )
+        return preparation
+
+    def record_worker_output_discarded(
+        self,
+        case_id: uuid.UUID,
+        step: PreparationStep,
+        *,
+        job_id: uuid.UUID,
+        reason: Literal[
+            "version_changed",
+            "input_changed",
+            "candidate_context_changed",
+            "cancelled",
+            "step_no_longer_eligible",
+        ],
+    ) -> ResearchPreparation:
+        """Audit a worker output that lost its guarded output slot."""
+        preparation = self._require_preparation(case_id)
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_output_discarded",
+            step=step,
+            message="stale preparation output discarded",
+            detail={"job_id": str(job_id), "step": step, "reason": reason},
+        )
+        return preparation
+
+    def confirm_claims(
+        self,
+        case_id: uuid.UUID,
+        *,
+        actor: str,
+        revision: int,
+        decisions: list[ClaimDecision],
+    ) -> ResearchPreparation:
+        preparation = self._repo.preparation_for_case(case_id)
+        if preparation is None:
+            raise NotFoundError(f"research preparation for case {case_id} not found")
+        self._require_revision(preparation, revision)
+        if preparation.claim_review_state != "awaiting_review":
+            raise ConflictError("claim review is not awaiting review")
+        artifact = self._repo.current_artifact(preparation.id, "atomic_claim_candidates")
+        if artifact is None:
+            raise ConflictError("current claim candidates are missing")
+        candidate_ids = self._candidate_ids(artifact)
+        self._validate_claim_decisions(
+            actor=actor, candidate_ids=candidate_ids, decisions=decisions
+        )
+        persisted_candidate_ids = set(
+            self._session.scalars(
+                select(AtomicClaimCandidate.id).where(
+                    AtomicClaimCandidate.id.in_(candidate_ids)
+                )
+            )
+        )
+        if persisted_candidate_ids != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
+        locked_candidate_ids = {
+            candidate.id for candidate in self._repo.lock_candidate_rows(candidate_ids)
+        }
+        if locked_candidate_ids != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
+
+        # Candidate locks are acquired before the Case lock. Recheck all
+        # mutable preparation state after taking the normal Case → prep lock.
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        if preparation.claim_review_state != "awaiting_review":
+            raise ConflictError("claim review is not awaiting review")
+        artifact = self._repo.current_artifact(preparation.id, "atomic_claim_candidates")
+        if artifact is None or self._candidate_ids(artifact) != candidate_ids:
+            raise ConflictError("current claim candidates are missing")
+        self._require_human_display_access(case_id, artifact.payload)
+        self._validate_claim_decisions(
+            actor=actor, candidate_ids=candidate_ids, decisions=decisions
+        )
+        for decision in decisions:
+            self._claims.review(
+                decision.candidate_id,
+                outcome=decision.outcome,
+                reviewer=actor,
+                reason=decision.reason,
+                normalized_text=decision.normalized_text,
+                idempotency_key=self._claim_review_idempotency_key(decision),
+                preparation_locking="already_locked",
+            )
+        modified_count = sum(decision.outcome == "modified" for decision in decisions)
+        rejected_count = sum(decision.outcome == "rejected" for decision in decisions)
+        preparation.claim_review_state = "confirmed"
+        if modified_count or rejected_count:
+            preparation.version += 1
+            self._invalidate_downstream(preparation, reason="claim_decisions_changed")
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_protocol"
+        )
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_claims_confirmed",
+            step="parse_claims",
+            message="claim review confirmed",
+            detail={
+                "confirmed_count": len(decisions) - modified_count - rejected_count,
+                "modified_count": modified_count,
+                "rejected_count": rejected_count,
+            },
+        )
+        return preparation
+
+    @staticmethod
+    def _claim_review_idempotency_key(decision: ClaimDecision) -> str:
+        """Deduplicate the same global candidate decision across preparations."""
+        normalized_text = (decision.normalized_text or "").strip()
+        decision_hash = hashlib.sha256(
+            f"{decision.outcome}\n{normalized_text}".encode("utf-8")
+        ).hexdigest()
+        return f"preparation:claim:{decision.candidate_id}:{decision_hash}"
+
+    def confirm_protocol(
+        self,
+        case_id: uuid.UUID,
+        *,
+        actor: str,
+        revision: int,
+        payload: ProtocolConfirmation,
+    ) -> ResearchPreparation:
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        if preparation.protocol_review_state != "awaiting_review":
+            raise ConflictError("protocol review is not awaiting review")
+        artifact = self._repo.current_artifact(preparation.id, "research_protocol_draft")
+        if artifact is None or artifact.sequence != payload.draft_sequence:
+            raise ConflictError("protocol draft revision is stale")
+        self._require_human_display_access(case_id, artifact.payload)
+        if (
+            artifact.context_fingerprint is None
+            or artifact.context_fingerprint
+            != self.current_candidate_context_fingerprint(case_id)
+        ):
+            self._invalidate_protocol_context(preparation, artifact, case_id)
+            raise ConflictError("protocol draft candidate context changed; refresh required")
+        self._validate_protocol_edits(artifact.payload, payload.edits)
+        source_draft_sequence = artifact.sequence
+        confirmed_draft_sequence = source_draft_sequence
+        if payload.edits:
+            merged_payload = self._merge_protocol_edits(
+                artifact.payload, payload.edits
+            )
+            successor = self._repo.append_artifact(
+                preparation,
+                research_case_id=case_id,
+                kind="research_protocol_draft",
+                input_fingerprint=preparation.input_fingerprint,
+                payload=merged_payload,
+                context_fingerprint=artifact.context_fingerprint,
+            )
+            confirmed_draft_sequence = successor.sequence
+            artifact = successor
+        # A protocol cannot be merely acknowledged as an opaque LLM payload.
+        # Materialize the exact reviewed successor before advancing the human
+        # gate; any strict validation failure leaves this preparation awaiting
+        # review in the caller's transaction.
+        self._materialize_protocol(case_id, artifact.payload, actor, artifact.sequence)
+        preparation.protocol_review_state = "confirmed"
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_evidence_plan"
+        )
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_protocol_confirmed",
+            step="draft_protocol",
+            message="protocol review confirmed",
+            detail={
+                "source_draft_sequence": source_draft_sequence,
+                "confirmed_draft_sequence": confirmed_draft_sequence,
+                "edit_count": len(payload.edits),
+            },
+        )
+        return preparation
+
+    def _invalidate_protocol_context(
+        self,
+        preparation: ResearchPreparation,
+        artifact: ResearchPreparationArtifact,
+        case_id: uuid.UUID,
+    ) -> None:
+        """Durably invalidate a draft whose reviewed claims have changed.
+
+        ``confirm_protocol`` must return a 409 for this conflict.  Normal API
+        request cleanup rolls back a session after that exception, so this
+        narrow boundary commits the already-validated invalidation, retry job,
+        and audit event before the caller raises.  Other confirmation failures
+        intentionally retain normal unit-of-work rollback semantics.
+        """
+        artifact.state = "stale"
+        artifact.invalidated_reason = "candidate_context_changed"
+        preparation.draft_protocol_state = "stale"
+        preparation.protocol_review_state = "locked"
+        preparation.draft_evidence_plan_state = "stale"
+        preparation.plan_review_state = "locked"
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        self._set_aggregate_status(preparation)
+        preparation.updated_at = _utcnow()
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step="draft_protocol"
+        )
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_protocol_context_stale",
+            step="draft_protocol",
+            message="protocol draft invalidated by changed claim context",
+            detail={"source_draft_sequence": artifact.sequence},
+        )
+        self._session.commit()
+
+    def retry_failed_step(
+        self, case_id: uuid.UUID, *, actor: str, revision: int
+    ) -> ResearchPreparation:
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        failed_step = next(
+            (
+                step
+                for step, field in _STEP_FIELDS.items()
+                if getattr(preparation, field) == "failed"
+            ),
+            None,
+        )
+        if failed_step is None:
+            raise ConflictError("no failed preparation step to retry")
+        setattr(preparation, _STEP_FIELDS[failed_step], "queued")
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.status = "preparing"
+        preparation.updated_at = _utcnow()
+        self._repo.queue_step_job(
+            preparation, research_case_id=case_id, step=failed_step
+        )
+        self._repo.append_event(
+            preparation,
+            research_case_id=case_id,
+            type="preparation_step_retried",
+            step=failed_step,
+            message="preparation step requeued",
+            detail={"actor": actor},
+        )
+        return preparation
+
+    def authorize_evidence_plan(self, case_id: uuid.UUID, *, actor: str, revision: int, plan_sequence: int):
+        """Materialize a reviewed draft and queue exactly one formal research run.
+
+        This deliberately accepts no provider input: it is a ledger-only human
+        authorization boundary and remains entirely transactional.
+        """
+        preparation = self._require_preparation(case_id)
+        self._require_revision(preparation, revision)
+        if (preparation.status != "awaiting_plan_authorization" or preparation.plan_review_state != "awaiting_review" or preparation.claim_review_state != "confirmed" or preparation.protocol_review_state != "confirmed" or preparation.research_run_id is not None):
+            raise ConflictError("evidence plan is not ready for authorization")
+        plan = self._repo.current_artifact(preparation.id, "evidence_acquisition_plan")
+        protocol = self._repo.current_artifact(preparation.id, "research_protocol_draft")
+        if plan is None or plan.sequence != plan_sequence or protocol is None:
+            raise ConflictError("evidence plan revision is stale")
+        self._require_human_display_access(case_id, protocol.payload)
+        self._require_human_display_access(case_id, plan.payload)
+        if protocol.context_fingerprint != self.current_candidate_context_fingerprint(case_id):
+            raise ConflictError("protocol draft candidate context changed")
+        budget = self._validate_authorized_evidence_plan(case_id, plan.payload)
+        # Protocol rows are created at human protocol confirmation, never at
+        # authorization. Authorization only freezes and dispatches that review.
+        thesis_ids = current_scope_thesis_ids(self._session, case_id)
+        if not thesis_ids:
+            raise ValidationError("research authorization requires a nonempty scope")
+        run = AutoResearchService(self._session).start(case_id, max_rounds=3, budget=budget, thesis_ids=sorted(thesis_ids, key=str), commit=False, trigger="preparation_authorized")
+        # Set both fields before the next flush so the authorization constraint
+        # never observes a transient unauthorized run reference.
+        preparation.research_run_id = run.id
+        preparation.authorized_evidence_plan = copy.deepcopy(plan.payload)
+        preparation.status = "authorized"
+        preparation.plan_review_state = "confirmed"
+        preparation.updated_at = _utcnow()
+        lifecycle = lock_event_research_lifecycle(self._session, case_id)
+        if lifecycle is not None:
+            EventResearchLifecycleRepository(self._session).update(lifecycle, status="researching", active_run_id=run.id, summary="研究计划已获授权，正在排队执行", current_gap=None, next_human_action=None)
+        self._repo.append_event(preparation, research_case_id=case_id, type="research_authorized", step="draft_evidence_plan", message="research authorized", detail={"plan_sequence": plan.sequence, "protocol_sequence": protocol.sequence, "run_id": str(run.id)})
+        return run
+
+    def _validate_authorized_evidence_plan(
+        self, case_id: uuid.UUID, payload: object
+    ) -> int:
+        """Validate the exact immutable plan shape at the authorization gate."""
+        scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if scope is None:
+            raise ValidationError("research authorization requires an active scope")
+        factors = set(
+            self._session.scalars(
+                select(EventResearchScopeFactor.statement).where(
+                    EventResearchScopeFactor.scope_version_id == scope.id
+                )
+            )
+        )
+        if not factors:
+            raise ValidationError("research authorization requires a nonempty scope")
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"items"}
+            or not isinstance(payload["items"], list)
+        ):
+            raise ValidationError("evidence plan has invalid shape")
+
+        required = {
+            "factor",
+            "evidence_target",
+            "allowed_source_roles",
+            "priority",
+            "stop_condition",
+            "budget",
+        }
+        seen: set[str] = set()
+        budget = 0
+        for item in payload["items"]:
+            if not isinstance(item, dict) or set(item) != required:
+                raise ValidationError("evidence plan item has invalid shape")
+            factor = item["factor"]
+            if (
+                not isinstance(factor, str)
+                or not factor.strip()
+                or factor not in factors
+                or factor in seen
+            ):
+                raise ValidationError("evidence plan factor is invalid")
+            seen.add(factor)
+            if any(
+                not isinstance(item[field], str) or not item[field].strip()
+                for field in ("evidence_target", "stop_condition")
+            ):
+                raise ValidationError("evidence plan strings must be nonempty")
+            roles = item["allowed_source_roles"]
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) or not role.strip() for role in roles)
+            ):
+                raise ValidationError("evidence plan source roles are invalid")
+            if item["priority"] not in {"high", "normal", "low"}:
+                raise ValidationError("evidence plan priority is invalid")
+            item_budget = item["budget"]
+            if type(item_budget) is not int or item_budget <= 0:
+                raise ValidationError("evidence plan item budget is invalid")
+            budget += item_budget
+        if seen != factors:
+            raise ValidationError("evidence plan must cover current scope exactly once")
+        if budget > 10000:
+            raise ValidationError("evidence plan budget exceeds limit")
+        return budget
+
+    def _materialize_protocol(self, case_id: uuid.UUID, payload: object, actor: str, sequence: int) -> None:
+        self._validate_materializable_protocol_payload(payload)
+        assert isinstance(payload, dict)  # narrowed by the validator above
+        scope=current_scope_thesis_ids(self._session, case_id)
+        if scope is None:
+            scope={x.id for x in self._session.scalars(select(__import__('app.models.ledger', fromlist=['Thesis']).Thesis).where(__import__('app.models.ledger', fromlist=['Thesis']).Thesis.research_case_id==case_id))}
+        seen=set(); service=ResearchProtocolService(self._session); reason=f"preparation artifact {sequence}"
+        for outcome in payload["outcomes"]:
+            if not isinstance(outcome,dict): raise ValidationError("protocol outcome is invalid")
+            try: thesis_id=uuid.UUID(str(outcome["thesis_id"])); metric=outcome["metric"]; binding=outcome["binding"]; template_id=uuid.UUID(str(outcome["template_version_id"]))
+            except (KeyError, ValueError, TypeError) as exc: raise ValidationError("protocol outcome is incomplete") from exc
+            if thesis_id in seen: raise ValidationError("protocol outcome duplicates thesis")
+            seen.add(thesis_id)
+            try:
+                m=service.add_metric_version(MetricDefinitionInput(**metric), approved_by=actor, reason=reason)
+                b=service.create_outcome_binding(thesis_id, OutcomeBindingInput(metric_definition_id=m.id, entity_scope=binding["entity_scope"], direction=binding["direction"], baseline=binding["baseline"], horizon_start=date.fromisoformat(binding["horizon_start"]), horizon_end=date.fromisoformat(binding["horizon_end"]), reviewer=actor, reason=reason))
+                service.approve_outcome_binding(b.id, reviewer=actor, reason=reason); service.select_template(case_id, template_id, reviewer=actor, reason=reason)
+                for rule in outcome.get("verification_rules",[]):
+                    edge=uuid.UUID(str(rule["mechanism_edge_id"])); raw={k:v for k,v in rule.items() if k!="mechanism_edge_id"}; raw["metric_definition_id"]=m.id
+                    for key in ("observed_period_start","observed_period_end","available_at_deadline"): raw[key]=date.fromisoformat(raw[key])
+                    service.add_verification_rule(case_id, edge, VerificationRuleInput(**raw, reviewer=actor, reason=reason))
+            except (KeyError, TypeError, ValueError) as exc: raise ValidationError("protocol outcome is invalid") from exc
+        if seen != scope: raise ValidationError("protocol outcomes must cover current scope exactly once")
+        for thesis_id in scope:
+            if service.check_researchability(thesis_id).status != "ready":
+                raise ValidationError("protocol draft does not satisfy researchability")
+
+    @staticmethod
+    def _validate_materializable_protocol_payload(payload: object) -> None:
+        """Accept only the generator's complete protocol draft envelope.
+
+        Formal protocol rows are represented per outcome, while the top-level
+        fields remain an immutable reviewed rationale. Both representations
+        are mandatory: neither is silently defaulted at confirmation time.
+        """
+        required = {"outcomes", "baseline", "horizon", "mechanisms", "verification_rules"}
+        if not isinstance(payload, dict) or set(payload) != required:
+            raise ValidationError("protocol draft has invalid keys")
+        outcomes = payload["outcomes"]
+        if not isinstance(outcomes, list) or not outcomes or any(
+            not isinstance(outcome, dict) or not outcome for outcome in outcomes
+        ):
+            raise ValidationError("protocol draft requires nonempty outcomes")
+        if not isinstance(payload["baseline"], dict):
+            raise ValidationError("protocol draft baseline is invalid")
+        horizon = payload["horizon"]
+        if not isinstance(horizon, dict) or set(horizon) != {"start", "end"}:
+            raise ValidationError("protocol draft horizon is invalid")
+        try:
+            start = date.fromisoformat(horizon["start"])
+            end = date.fromisoformat(horizon["end"])
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("protocol draft horizon is invalid") from exc
+        if start.isoformat() != horizon["start"] or end.isoformat() != horizon["end"] or start > end:
+            raise ValidationError("protocol draft horizon is invalid")
+        for field in ("mechanisms", "verification_rules"):
+            value = payload[field]
+            if not isinstance(value, list) or not value or any(
+                not isinstance(item, dict) or not item for item in value
+            ):
+                raise ValidationError(f"protocol draft {field} is invalid")
+        for outcome in outcomes:
+            rules = outcome.get("verification_rules")
+            if not isinstance(rules, list) or not rules or any(
+                not isinstance(rule, dict) or not rule for rule in rules
+            ):
+                raise ValidationError("protocol outcome requires verification rules")
+
+    def _lock(
+        self, case_id: uuid.UUID, *, case_locked: bool = False
+    ) -> ResearchPreparation | None:
+        if case_locked:
+            return self._repo.lock_for_case(case_id, case_locked=True)
+        return self._repo.lock_for_case(case_id)
+
+    def _require_preparation(self, case_id: uuid.UUID) -> ResearchPreparation:
+        preparation = self._lock(case_id)
+        if preparation is None:
+            raise NotFoundError(f"research preparation for case {case_id} not found")
+        return preparation
+
+    def _require_revision(self, preparation: ResearchPreparation, revision: int) -> None:
+        if preparation.version != revision:
+            raise ConflictError("preparation revision is stale")
+
+    def _require_human_display_access(self, case_id: uuid.UUID, payload: object) -> None:
+        if not preparation_artifact_allows_display(self._session, case_id, payload):
+            raise ValidationError(
+                "source contract forbids displaying this preparation artifact for human review"
+            )
+
+    def _require_eligible_step(
+        self,
+        preparation: ResearchPreparation,
+        step: PreparationStep,
+        *,
+        allowed_states: set[str],
+    ) -> None:
+        if step not in _STEP_FIELDS:
+            raise ConflictError("unknown preparation step")
+        if getattr(preparation, _STEP_FIELDS[step]) not in allowed_states:
+            raise ConflictError(f"preparation step {step} is not eligible")
+        if step == "draft_protocol" and preparation.claim_review_state != "confirmed":
+            raise ConflictError("protocol drafting requires confirmed claims")
+        if step == "draft_evidence_plan" and preparation.protocol_review_state != "confirmed":
+            raise ConflictError("evidence planning requires confirmed protocol")
+
+    def _invalidate_current_artifacts(
+        self, preparation: ResearchPreparation, *, reason: str
+    ) -> None:
+        artifacts = self._session.scalars(
+            select(ResearchPreparationArtifact)
+            .where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id,
+                ResearchPreparationArtifact.state == "current",
+            )
+            .with_for_update()
+        )
+        for artifact in artifacts:
+            artifact.state = "stale"
+            artifact.invalidated_reason = reason
+
+    def _invalidate_downstream(
+        self, preparation: ResearchPreparation, *, reason: str
+    ) -> None:
+        artifacts = self._session.scalars(
+            select(ResearchPreparationArtifact)
+            .where(
+                ResearchPreparationArtifact.research_preparation_id == preparation.id,
+                ResearchPreparationArtifact.kind.in_(
+                    ("research_protocol_draft", "evidence_acquisition_plan")
+                ),
+                ResearchPreparationArtifact.state == "current",
+            )
+            .with_for_update()
+        )
+        for artifact in artifacts:
+            artifact.state = "stale"
+            artifact.invalidated_reason = reason
+        # A new protocol must be produced for this preparation version; the
+        # plan remains stale until its predecessor has been re-confirmed.
+        preparation.draft_protocol_state = "queued"
+        preparation.draft_evidence_plan_state = "stale"
+        preparation.protocol_review_state = "locked"
+        preparation.plan_review_state = "locked"
+
+    def _candidate_ids(self, artifact: ResearchPreparationArtifact) -> set[uuid.UUID]:
+        return set(self._ordered_candidate_ids(artifact))
+
+    def _ordered_candidate_ids(
+        self, artifact: ResearchPreparationArtifact
+    ) -> list[uuid.UUID]:
+        candidates = artifact.payload.get("candidates")
+        if not isinstance(candidates, list):
+            raise ConflictError("claim candidate artifact is malformed")
+        ids: list[uuid.UUID] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or not isinstance(candidate.get("candidate_id"), str):
+                raise ConflictError("claim candidate artifact is malformed")
+            try:
+                candidate_id = uuid.UUID(candidate["candidate_id"])
+            except ValueError as exc:
+                raise ConflictError("claim candidate artifact is malformed") from exc
+            if candidate_id in ids:
+                raise ConflictError("claim candidate artifact has duplicate candidates")
+            ids.append(candidate_id)
+        return ids
+
+    def _validate_claim_decisions(
+        self,
+        *,
+        actor: str,
+        candidate_ids: set[uuid.UUID],
+        decisions: list[ClaimDecision],
+    ) -> None:
+        if not isinstance(actor, str) or not actor.strip():
+            raise ConflictError("claim reviewer is invalid")
+        decision_ids = [decision.candidate_id for decision in decisions]
+        if any(not isinstance(candidate_id, uuid.UUID) for candidate_id in decision_ids):
+            raise ConflictError("claim decision candidate is invalid")
+        if len(decision_ids) != len(set(decision_ids)) or set(decision_ids) != candidate_ids:
+            raise ConflictError("claim decisions must cover every current candidate exactly once")
+        for decision in decisions:
+            if decision.outcome not in _CLAIM_OUTCOMES:
+                raise ConflictError("claim decision outcome is invalid")
+            if not isinstance(decision.reason, str) or not decision.reason.strip():
+                raise ConflictError("claim decision reason is invalid")
+            if decision.outcome == "modified":
+                if not isinstance(decision.normalized_text, str) or not decision.normalized_text.strip():
+                    raise ConflictError("modified claim requires normalized text")
+            elif decision.normalized_text is not None:
+                raise ConflictError("only modified claim may provide normalized text")
+
+    def _validate_protocol_edits(
+        self, source_payload: object, edits: object
+    ) -> None:
+        if not isinstance(source_payload, dict) or not isinstance(edits, dict):
+            raise ValidationError("protocol edits must be an object")
+
+        def validate_object(
+            current: dict[str, object], patch: dict[object, object], *, top_level: bool
+        ) -> None:
+            for key, value in patch.items():
+                if not isinstance(key, str):
+                    raise ValidationError("protocol edit keys must be strings")
+                if top_level and key not in _EDITABLE_PROTOCOL_KEYS:
+                    raise ValidationError("protocol edit key is not allowed")
+                if key not in current:
+                    raise ValidationError("protocol edit does not match draft structure")
+                if isinstance(value, dict):
+                    existing = current[key]
+                    if not isinstance(existing, dict):
+                        raise ValidationError("protocol edit changes object structure")
+                    validate_object(existing, value, top_level=False)
+
+        validate_object(source_payload, edits, top_level=True)
+
+    def _merge_protocol_edits(
+        self, source_payload: dict[str, object], edits: dict[str, object]
+    ) -> dict[str, object]:
+        merged = copy.deepcopy(source_payload)
+
+        def overlay(target: dict[str, object], patch: dict[str, object]) -> None:
+            for key in sorted(patch):
+                incoming = copy.deepcopy(patch[key])
+                previous = target.get(key)
+                if isinstance(previous, dict) and isinstance(incoming, dict):
+                    overlay(previous, incoming)
+                elif key not in target or previous != incoming:
+                    target[key] = incoming
+
+        overlay(merged, edits)
+        return merged
+
+    def _set_aggregate_status(self, preparation: ResearchPreparation) -> None:
+        if any(
+            getattr(preparation, field) == "failed"
+            for field in _STEP_FIELDS.values()
+        ) and preparation.next_attempt_at is None:
+            preparation.status = "recoverable_failure"
+        elif preparation.claim_review_state == "awaiting_review":
+            preparation.status = "awaiting_claim_review"
+        elif preparation.protocol_review_state == "awaiting_review":
+            preparation.status = "awaiting_protocol_confirmation"
+        elif preparation.plan_review_state == "awaiting_review":
+            preparation.status = "awaiting_plan_authorization"
+        else:
+            preparation.status = "preparing"

@@ -24,6 +24,8 @@ from app.services.case_monitor import (
     CaseMonitorService,
     ResearchRunEventRepository,
 )
+from app.repositories.research_preparation import ResearchPreparationRepository
+from app.services.research_preparation import ResearchPreparationService
 
 
 def _candidate_for_case(session):
@@ -129,6 +131,73 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
     assert item["review_state"] == "modified"
     assert item["review_history"][0]["reason"] == "已复核原文、主体和期间"
     assert item["published_source_statement"]["id"] == body["published_source_statement"]["id"]
+
+
+def test_atomic_claim_review_rejects_shared_cross_tenant_candidate_before_locking(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    """A cross-tenant shared source cannot enter the global review/lock path."""
+    _case, candidate = _candidate_for_case(cmd_session)
+    span = cmd_session.get(SourceSpan, candidate.source_span_id)
+    assert span is not None
+    now = datetime.now(timezone.utc)
+    other_case = ResearchCase(
+        title="其他租户共享来源",
+        industry_topic="ai",
+        created_by="human:other",
+        created_at=now,
+    )
+    cmd_session.add(other_case)
+    cmd_session.flush()
+    cmd_session.add_all([
+        CaseDocumentVersion(
+            research_case_id=other_case.id,
+            document_version_id=span.document_version_id,
+            linked_at=now,
+        ),
+        CaseTenantAdmission(
+            research_case_id=other_case.id,
+            tenant_id="other-team",
+            initial_document_version_id=span.document_version_id,
+            admitted_by="test-fixture",
+            admitted_at=now,
+        ),
+    ])
+    other_preparation = ResearchPreparationService(cmd_session).create_for_case(
+        other_case.id, input_fingerprint="o" * 64, actor="tester"
+    )
+    ResearchPreparationService(cmd_session).complete_system_step(
+        other_case.id,
+        "parse_claims",
+        {"candidates": [{"candidate_id": str(candidate.id)}]},
+        expected_version=other_preparation.version,
+        expected_fingerprint=other_preparation.input_fingerprint,
+    )
+    cmd_session.commit()
+
+    lock_calls: list[uuid.UUID] = []
+
+    def record_lock(self, candidate_id):
+        lock_calls.append(candidate_id)
+        return []
+
+    monkeypatch.setattr(
+        ResearchPreparationRepository,
+        "lock_preparation_for_candidate_review",
+        record_lock,
+    )
+    response = cmd_client.post(
+        f"/api/v1/atomic-claims/{candidate.id}/reviews",
+        json={
+            "outcome": "rejected",
+            "reviewer": "human:reviewer",
+            "reason": "shared cross-tenant candidate",
+            "idempotency_key": "cross-tenant-review",
+        },
+    )
+
+    assert response.status_code == 404
+    assert lock_calls == []
 
 
 def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_session) -> None:

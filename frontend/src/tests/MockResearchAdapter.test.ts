@@ -4,6 +4,35 @@ import { eventActionPresentation } from "../domain/eventResearchPresentation";
 import { PageStateError } from "../domain/types";
 
 describe("MockResearchAdapter scenarios", () => {
+  it.each([
+    ["preparing", "preparing", "locked"],
+    ["review_claims", "awaiting_claim_review", "awaiting_review"],
+    ["review_protocol", "awaiting_protocol_confirmation", "confirmed"],
+    ["review_plan", "awaiting_plan_authorization", "confirmed"],
+    ["recoverable_failure", "recoverable_failure", "locked"],
+    ["authorized", "authorized", "confirmed"],
+  ] as const)("exposes the explicit preparation %s scenario", async (scenario, status, claimsReviewState) => {
+    const adapter = new MockResearchAdapter({ preparationScenario: scenario });
+    const preparation = await adapter.getResearchPreparation("event-preparation");
+
+    expect(preparation.status).toBe(status);
+    expect(preparation.review.candidateClaims.state).toBe(claimsReviewState);
+    expect(preparation.researchRunId).toBe(scenario === "authorized" ? "run-preparation-authorized" : null);
+  });
+
+  it("advances only through explicit preparation confirmations and authorization", async () => {
+    const adapter = new MockResearchAdapter({ preparationScenario: "review_claims" });
+    const claims = await adapter.confirmResearchPreparationClaims({
+      caseId: "event-preparation", revision: 1, actor: "human:researcher",
+      decisions: [{ candidateId: "8a23ef12-9b37-4f54-8f2d-b938605a1d8d", outcome: "confirmed", reason: "原文一致" }],
+    });
+    const protocol = await adapter.confirmResearchPreparationProtocol({ caseId: "event-preparation", revision: claims.revision, actor: "human:researcher", draftSequence: 2 });
+    const authorized = await adapter.authorizeResearchPreparation({ caseId: "event-preparation", revision: protocol.revision, actor: "human:researcher", planSequence: 3, idempotencyKey: "preparation-e2e" });
+
+    expect(claims.status).toBe("awaiting_protocol_confirmation");
+    expect(protocol.status).toBe("awaiting_plan_authorization");
+    expect(authorized).toMatchObject({ status: "authorized", researchRunId: "run-preparation-authorized" });
+  });
   const typical = new MockResearchAdapter();
 
   it("returns the workspace overview with task queue and activity groups", async () => {

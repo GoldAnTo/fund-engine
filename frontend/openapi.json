@@ -4557,6 +4557,66 @@
         }
       }
     },
+    "/api/v1/event-research/uploaded": {
+      "post": {
+        "tags": [
+          "event-research-v1"
+        ],
+        "summary": "Create Event Research From Uploaded Original",
+        "description": "Atomically create a Case from one uploaded frozen original.\n\nThe JSON summary is retained only as the human-confirmed event brief.  It\nis never frozen as a competing source document and preparation is queued\nonly after the file becomes the initial tenant-admitted document.",
+        "operationId": "create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateEventResearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research/{case_id}/tenant-admission": {
       "post": {
         "tags": [
@@ -7077,6 +7137,463 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation": {
+      "get": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Get Preparation",
+        "operationId": "get_preparation_api_v1_event_research__case_id__preparation_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation/events": {
+      "get": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Preparation Events",
+        "operationId": "preparation_events_api_v1_event_research__case_id__preparation_events_get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After Seq"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationEventsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation/claims/confirm": {
+      "post": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Confirm Claims",
+        "operationId": "confirm_claims_api_v1_event_research__case_id__preparation_claims_confirm_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmClaimsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation/protocol/confirm": {
+      "post": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Confirm Protocol",
+        "operationId": "confirm_protocol_api_v1_event_research__case_id__preparation_protocol_confirm_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmProtocolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation/retry": {
+      "post": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Retry",
+        "operationId": "retry_api_v1_event_research__case_id__preparation_retry_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryResearchPreparationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/event-research/{case_id}/preparation/authorize": {
+      "post": {
+        "tags": [
+          "research-preparation-v1"
+        ],
+        "summary": "Authorize",
+        "operationId": "authorize_api_v1_event_research__case_id__preparation_authorize_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeEvidencePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPreparationDTO"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -9862,6 +10379,60 @@
         ],
         "title": "AttachEventMaterialResponse"
       },
+      "AuthorizeEvidencePlanRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "plan_sequence": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Plan Sequence"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "actor",
+          "plan_sequence",
+          "idempotency_key"
+        ],
+        "title": "AuthorizeEvidencePlanRequest"
+      },
+      "Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post": {
+        "properties": {
+          "payload": {
+            "type": "string",
+            "title": "Payload"
+          },
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payload",
+          "file"
+        ],
+        "title": "Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"
+      },
       "Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post": {
         "properties": {
           "file": {
@@ -10761,6 +11332,49 @@
         ],
         "title": "CaseSummaryDTO"
       },
+      "ClaimDecisionDTO": {
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Candidate Id"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "modified",
+              "rejected"
+            ],
+            "title": "Outcome"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "normalized_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "outcome",
+          "reason"
+        ],
+        "title": "ClaimDecisionDTO"
+      },
       "ClaimResponse": {
         "properties": {
           "proposal_id": {
@@ -11406,6 +12020,70 @@
         ],
         "title": "ConclusionResponse",
         "description": "「结论与关键因素」页面完整响应."
+      },
+      "ConfirmClaimsRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimDecisionDTO"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "actor",
+          "decisions"
+        ],
+        "title": "ConfirmClaimsRequest"
+      },
+      "ConfirmProtocolRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          },
+          "draft_sequence": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Draft Sequence"
+          },
+          "edits": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Edits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "actor",
+          "draft_sequence"
+        ],
+        "title": "ConfirmProtocolRequest"
       },
       "ConfirmedFactorOptionDTO": {
         "properties": {
@@ -13374,6 +14052,54 @@
         ],
         "title": "DossierResponse"
       },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "v1",
+            "title": "Schema Version",
+            "default": "v1"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorEnvelope"
+      },
       "EvaluateForecastTargetRequest": {
         "properties": {
           "actual_observation_id": {
@@ -13628,7 +14354,11 @@
               "review_conclusion",
               "edit_factors",
               "complete_research_protocol",
-              "view_conclusion_change"
+              "view_conclusion_change",
+              "review_preparation_claims",
+              "review_preparation_protocol",
+              "authorize_preparation_plan",
+              "recover_preparation"
             ],
             "title": "Kind"
           },
@@ -13655,6 +14385,93 @@
           "label"
         ],
         "title": "EventNextActionDTO"
+      },
+      "EventPreparationStepDTO": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "EventPreparationStepDTO"
+      },
+      "EventPreparationSummaryDTO": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "last_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Message"
+          },
+          "system": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventPreparationStepDTO"
+            },
+            "type": "object",
+            "title": "System"
+          },
+          "review": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventPreparationStepDTO"
+            },
+            "type": "object",
+            "title": "Review"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "revision",
+          "research_run_id",
+          "next_attempt_at",
+          "last_error_message",
+          "system",
+          "review"
+        ],
+        "title": "EventPreparationSummaryDTO",
+        "description": "Safe preparation progress shown alongside the existing event lifecycle."
       },
       "EventResearchFactorDTO": {
         "properties": {
@@ -13850,7 +14667,11 @@
               "review_conclusion",
               "edit_factors",
               "complete_research_protocol",
-              "view_conclusion_change"
+              "view_conclusion_change",
+              "review_preparation_claims",
+              "review_preparation_protocol",
+              "authorize_preparation_plan",
+              "recover_preparation"
             ],
             "title": "Next Action Kind"
           },
@@ -14346,6 +15167,16 @@
           },
           "next_action": {
             "$ref": "#/components/schemas/EventNextActionDTO"
+          },
+          "preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventPreparationSummaryDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -19263,6 +20094,159 @@
         ],
         "title": "PendingProposalDTO"
       },
+      "PreparationArtifactDTO": {
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "context_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Fingerprint"
+          },
+          "display_withheld": {
+            "type": "boolean",
+            "title": "Display Withheld",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sequence",
+          "payload",
+          "state"
+        ],
+        "title": "PreparationArtifactDTO"
+      },
+      "PreparationInitialMaterialDTO": {
+        "properties": {
+          "document_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Version Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "parse_state": {
+            "type": "string",
+            "title": "Parse State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_version_id",
+          "parse_state"
+        ],
+        "title": "PreparationInitialMaterialDTO"
+      },
+      "PreparationProgressDTO": {
+        "properties": {
+          "completed_steps": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Completed Steps"
+          },
+          "total_steps": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Total Steps"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "failed_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Step"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "completed_steps",
+          "total_steps"
+        ],
+        "title": "PreparationProgressDTO"
+      },
+      "PreparationStepDTO": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "review_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review State"
+          },
+          "artifact_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Sequence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "PreparationStepDTO"
+      },
       "ProposeResponse": {
         "properties": {
           "thesis_id": {
@@ -19299,7 +20283,7 @@
           "links"
         ],
         "title": "ProposeResponse",
-        "description": "Result of running evidence proposal for one thesis.\n\nEvery proposed link lands as a ``Proposal(kind=evidence_link)`` in the\nreview queue; nothing is auto-confirmed.  ``job_id`` lets the client track\nprogress / cancellation.  ``mode`` is ``mock`` without an LLM key."
+        "description": "Result of running evidence proposal for one thesis.\n\nEvery proposed link lands as a ``Proposal(kind=evidence_link)`` in the\nreview queue; nothing is auto-confirmed.  ``job_id`` lets the client track\nprogress / cancellation.  ``mode`` is ``mock`` only when\n``APP_ENV=test`` and no LLM key is configured; every non-test runtime\nrequires a live provider."
       },
       "ProposedLinkDTO": {
         "properties": {
@@ -20311,7 +21295,7 @@
           "assessment"
         ],
         "title": "RerunResponse",
-        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key\n(non-production only — production fails closed per provider discipline)."
+        "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` only when\n``APP_ENV=test`` and no LLM key is configured; every non-test runtime\nrequires a live provider."
       },
       "ResearchNetworkResponse": {
         "properties": {
@@ -20383,6 +21367,211 @@
         ],
         "title": "ResearchOpsResponse",
         "description": "研究效能 KPI 快照. ``as_of`` 为时点回放边界：之后创建的记录不参与统计。"
+      },
+      "ResearchPreparationDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Case Id"
+          },
+          "case_title": {
+            "type": "string",
+            "title": "Case Title"
+          },
+          "initial_material": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparationInitialMaterialDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "$ref": "#/components/schemas/PreparationProgressDTO"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
+          },
+          "system": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PreparationStepDTO"
+            },
+            "type": "object",
+            "title": "System"
+          },
+          "review": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PreparationStepDTO"
+            },
+            "type": "object",
+            "title": "Review"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "last_error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Message"
+          },
+          "artifacts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PreparationArtifactDTO"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Artifacts"
+          },
+          "authorized_evidence_plan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized Evidence Plan"
+          },
+          "authorized_evidence_plan_display_withheld": {
+            "type": "boolean",
+            "title": "Authorized Evidence Plan Display Withheld",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "case_title",
+          "progress",
+          "revision",
+          "status",
+          "system",
+          "review",
+          "artifacts"
+        ],
+        "title": "ResearchPreparationDTO"
+      },
+      "ResearchPreparationEventDTO": {
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "seq",
+          "type",
+          "created_at"
+        ],
+        "title": "ResearchPreparationEventDTO"
+      },
+      "ResearchPreparationEventsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchPreparationEventDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_after_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Seq"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResearchPreparationEventsResponse"
       },
       "ResearchRunArchiveDTO": {
         "properties": {
@@ -20972,6 +22161,28 @@
           "next_action"
         ],
         "title": "ResearchabilityDTO"
+      },
+      "RetryResearchPreparationRequest": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Actor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "actor"
+        ],
+        "title": "RetryResearchPreparationRequest"
       },
       "ReviewDecisionRequest": {
         "properties": {
@@ -24332,54 +25543,6 @@
           "items"
         ],
         "title": "ReviewQueueResponse"
-      },
-      "ErrorEnvelope": {
-        "additionalProperties": false,
-        "properties": {
-          "schema_version": {
-            "const": "v1",
-            "default": "v1",
-            "title": "Schema Version",
-            "type": "string"
-          },
-          "error": {
-            "$ref": "#/components/schemas/ErrorBody"
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "title": "ErrorEnvelope",
-        "type": "object"
-      },
-      "ErrorBody": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "title": "Code",
-            "type": "string"
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "request_id": {
-            "title": "Request Id",
-            "type": "string"
-          },
-          "details": {
-            "additionalProperties": true,
-            "title": "Details",
-            "type": "object"
-          }
-        },
-        "required": [
-          "code",
-          "message",
-          "request_id"
-        ],
-        "title": "ErrorBody",
-        "type": "object"
       }
     }
   }

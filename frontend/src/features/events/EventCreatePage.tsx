@@ -91,30 +91,21 @@ export function EventCreatePage() {
     if (!draft || factors.filter((factor) => factor.trim()).length < 3) return;
     setBusy(true); setError(null);
     try {
-      const created = await researchClient.createEventResearch({
+      const createInput = {
         ...draft,
         rawInput: rawInput.trim(),
         sourceUrl: sourceUrl.trim() || undefined,
-        sourceType: originalFile && sourceType === "uploaded_file" ? "pasted_snapshot" : sourceType,
-        sourceMetadata: originalFile && sourceType === "uploaded_file"
-          ? { ...sourceGovernanceMetadata(sourceGovernance), authority_level: "user_supplied", permissions: sourcePermissions, intake_note: "用于识别事件的人工输入；原件另行冻结" }
-          : frozenSourceMetadata,
+        sourceType,
+        sourceMetadata: frozenSourceMetadata,
         eventTitle: draft.eventTitle?.trim() || rawInput.trim().slice(0, 80),
         candidateFactors: factors.map((factor) => factor.trim()).filter(Boolean),
         researchProtocolRequired: true,
         createdBy: "human:researcher",
-      });
-      if (originalFile && sourceType === "uploaded_file") {
-        const uploaded = await researchClient.uploadEventMaterial({
-          caseId: created.caseId,
-          file: originalFile,
-          sourceMetadata: frozenSourceMetadata,
-          actor: "human:researcher",
-        });
-        navigate(`/events/${created.caseId}/documents?document=${encodeURIComponent(uploaded.documentVersionId)}`);
-        return;
-      }
-      navigate(`/events/${created.caseId}`);
+      };
+      const created = originalFile && sourceType === "uploaded_file"
+        ? await researchClient.createEventResearchFromUpload({ ...createInput, file: originalFile })
+        : await researchClient.createEventResearch(createInput);
+      navigate(`/events/${created.caseId}/preparation`);
     } catch {
       setError("Case 尚未创建。请修正必填信息后重试。");
     } finally { setBusy(false); }

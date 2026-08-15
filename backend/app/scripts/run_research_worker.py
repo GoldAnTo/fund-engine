@@ -36,7 +36,7 @@ def _worker_id() -> str:
 def _touch(*, mode: str, state: str) -> None:
     with SessionLocal() as session:
         WorkerHeartbeatService(session).touch(
-            worker_id=_worker_id(), mode=mode, state=state
+            worker_id=_worker_id(), mode=mode, state=state, worker_kind="research_run"
         )
         session.commit()
 

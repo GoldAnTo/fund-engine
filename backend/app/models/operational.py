@@ -22,6 +22,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -37,7 +38,7 @@ from app.models.ledger import Base, _uuid
 # Jobs
 # --------------------------------------------------------------------------- #
 JobStatus = Literal["queued", "running", "waiting_for_review", "succeeded", "failed", "cancelled"]
-JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse"]
+JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse", "prepare_research"]
 
 
 class Job(Base):
@@ -63,6 +64,9 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Soft cancel: the worker polls this and stops at the next safe boundary.
     cancel_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Per-claim ownership lease.  A recovered worker must never be able to
+    # mutate a Job that a newer worker has subsequently claimed.
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The ledger entity this job ultimately mutates (e.g. thesis_id for an
     # assess job), used to resume and to build task items.
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -253,6 +257,14 @@ class ProjectionCheckpoint(Base):
 # --------------------------------------------------------------------------- #
 class ResearchRun(Base):
     __tablename__ = "research_runs"
+    __table_args__ = (
+        Index(
+            "uq_research_runs_case_id",
+            "research_case_id",
+            "id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)
@@ -305,6 +317,9 @@ class ResearchWorkerHeartbeat(Base):
     __tablename__ = "research_worker_heartbeats"
 
     worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="research_run", server_default="research_run"
+    )
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

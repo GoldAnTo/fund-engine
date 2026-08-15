@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from datetime import datetime, timezone
 import hashlib
 
@@ -25,12 +26,16 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle, ResearchRun
+from app.models.operational import EventResearchLifecycle, Job, ResearchRun
 from app.models.proposals import Proposal
+from app.models.research_preparation import ResearchPreparation
+from app.models.ledger import CaseTenantAdmission, ResearchCase
 from app.repositories.operational import TaskRepository
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
+from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
+from app.domain.research_preparation import preparation_input_fingerprint
 
 
 def _confirmed_event() -> dict:
@@ -137,6 +142,21 @@ def _evidence_proposal(
     cmd_session.add(proposal)
     cmd_session.commit()
     return proposal
+
+
+def _mark_preparation_authorized(cmd_session, case_id: uuid.UUID) -> None:
+    """Fixture helper for assertions about the post-authorization lifecycle."""
+    now = datetime.now(timezone.utc)
+    run = ResearchRun(research_case_id=case_id, created_at=now, updated_at=now)
+    cmd_session.add(run)
+    cmd_session.flush()
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.status = "authorized"
+    preparation.research_run_id = run.id
+    preparation.authorized_evidence_plan = {"items": []}
 
 
 def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
@@ -350,12 +370,14 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
     payload.update({"source_type": "uploaded_file", "source_metadata": {"file_name": "event-note.txt", "mime_type": "text/plain", "byte_size": 42}})
     response = cmd_client.post("/api/v1/event-research", json=payload)
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.json()
     body = response.json()
     case_id = body["case_id"]
     assert body["lifecycle"]["status"] == "awaiting_key_review"
     assert body["lifecycle"]["active_run_id"] is None
-    assert body["lifecycle"]["next_human_action"] == "核验原文资料并完成研究协议"
+    assert body["lifecycle"]["status_summary"] == "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
+    assert body["lifecycle"]["current_gap"] == "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动"
+    assert body["lifecycle"]["next_human_action"] is None
 
     parsed_case_id = uuid.UUID(case_id)
     assert cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"])).research_case_id == parsed_case_id
@@ -363,6 +385,33 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
     assert brief.source_type == "uploaded_file"
     assert brief.source_metadata["file_name"] == "event-note.txt"
     assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id is None
+    admission = cmd_session.scalar(
+        select(CaseTenantAdmission).where(
+            CaseTenantAdmission.research_case_id == parsed_case_id
+        )
+    )
+    assert admission is not None
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(
+            ResearchPreparation.research_case_id == parsed_case_id
+        )
+    )
+    assert preparation is not None
+    assert preparation.status == "preparing"
+    assert preparation.research_run_id is None
+    assert preparation.parse_claims_state == "queued"
+    jobs = list(
+        cmd_session.scalars(
+            select(Job).where(
+                Job.kind == "prepare_research",
+                Job.target_type == "research_preparation",
+                Job.target_id == preparation.id,
+                Job.status == "queued",
+            )
+        )
+    )
+    assert len(jobs) == 1
+    assert jobs[0].correlation_id == f"{preparation.id}:1:parse_claims"
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert cmd_session.query(ResearchRun).filter_by(research_case_id=parsed_case_id).count() == 0
@@ -380,6 +429,57 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
             .order_by(EventResearchScopeFactor.position)
         )
     ) == _confirmed_event()["candidate_factors"]
+
+
+def test_uploaded_case_creation_uses_the_uploaded_original_as_its_initial_admission_and_preparation_input(cmd_client, cmd_session) -> None:
+    payload = _confirmed_event()
+    payload["raw_input"] = "这是仅供识别事件的摘要，绝不能成为准备任务的原文输入。"
+    payload["source_type"] = "uploaded_file"
+    payload["source_metadata"] = {"authority_level": "user_supplied"}
+    uploaded_original = "这是上传原件的完整正文，必须成为冻结原文。".encode("utf-8")
+
+    response = cmd_client.post(
+        "/api/v1/event-research/uploaded",
+        data={"payload": json.dumps(payload)},
+        files={"file": ("original.txt", uploaded_original, "text/plain")},
+    )
+
+    assert response.status_code == 201, response.json()
+    case_id = uuid.UUID(response.json()["case_id"])
+    admission = cmd_session.scalar(select(CaseTenantAdmission).where(CaseTenantAdmission.research_case_id == case_id))
+    preparation = cmd_session.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
+    scope = cmd_session.scalar(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case_id))
+    assert admission is not None
+    assert preparation is not None
+    assert scope is not None
+    document = cmd_session.get(DocumentVersion, admission.initial_document_version_id)
+    assert document is not None
+    assert document.title == "original.txt"
+    assert document.source_url.startswith("upload://")
+    spans = list(cmd_session.scalars(select(SourceSpan.verbatim_text).where(SourceSpan.document_version_id == document.id)))
+    assert spans == [uploaded_original.decode("utf-8")]
+    assert preparation.input_fingerprint == preparation_input_fingerprint(document.id, scope.id)
+
+
+def test_create_event_case_rolls_back_every_staged_row_when_preparation_creation_fails(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    def fail_after_staging(self, case_id, *, input_fingerprint, actor):
+        raise ValueError("preparation staging failed")
+
+    monkeypatch.setattr(
+        ResearchPreparationService, "create_for_case", fail_after_staging
+    )
+
+    response = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
+
+    assert response.status_code == 422
+    assert "preparation staging failed" in response.json()["error"]["message"]
+    assert cmd_session.scalars(select(ResearchCase)).all() == []
+    assert cmd_session.scalars(select(DocumentVersion)).all() == []
+    assert cmd_session.scalars(select(EventResearchBrief)).all() == []
+    assert cmd_session.scalars(select(ResearchPreparation)).all() == []
+    assert cmd_session.scalars(select(Job)).all() == []
 
 
 def test_public_url_intake_keeps_the_url_type_and_unverified_snapshot_boundary(
@@ -799,8 +899,8 @@ def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
         json={
             "factors": [
                 active_thesis.statement,
-                "广告业务增长弱于市场预期",
-                "AI 投入回报周期可能拉长",
+                _confirmed_event()["candidate_factors"][1],
+                _confirmed_event()["candidate_factors"][2],
             ],
             "changed_by": "reviewer",
         },
@@ -1122,7 +1222,7 @@ def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_ses
     assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
     assert body["items"][0]["ticker"] == "TSM"
     assert body["items"][0]["lifecycle_status"] == "awaiting_key_review"
-    assert body["items"][0]["next_human_action"] == "核验原文资料并完成研究协议"
+    assert body["items"][0]["next_human_action"] is None
 
 
 def test_event_workbench_never_surfaces_another_case_factors_or_lifecycle(cmd_client) -> None:
@@ -1180,7 +1280,7 @@ def test_event_workbench_uses_summary_without_loading_review_queue_items(
         "verified": 0,
         "pending": 0,
         "invalid_source": 0,
-        "current_gap": "原文资料、来源许可与研究协议尚未完成核验",
+        "current_gap": "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
     }
 
 
@@ -1213,6 +1313,7 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     )
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
+    _mark_preparation_authorized(cmd_session, case_id)
     lifecycle.status = "awaiting_key_review"
     lifecycle.current_gap = "缺少对资本开支解释的反证"
     lifecycle.next_human_action = "审核 1 条关键证据"
@@ -1400,6 +1501,7 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
+    _mark_preparation_authorized(cmd_session, case_id)
 
     for status, expected_kind in [
         ("awaiting_scope", "edit_factors"),
@@ -1415,6 +1517,79 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("preparation_status", "expected_kind", "expected_action"),
+    [
+        ("awaiting_claim_review", "review_preparation_claims", "核验原文与候选陈述"),
+        ("awaiting_protocol_confirmation", "review_preparation_protocol", "确认研究协议草案"),
+        ("awaiting_plan_authorization", "authorize_preparation_plan", "审核补证计划并授权启动"),
+        ("recoverable_failure", "recover_preparation", "恢复研究准备"),
+    ],
+)
+def test_event_desk_projects_the_current_preparation_human_action(
+    cmd_client, cmd_session, preparation_status, expected_kind, expected_action
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.status = preparation_status
+    cmd_session.commit()
+
+    listed = cmd_client.get("/api/v1/event-research").json()["items"]
+    item = next(row for row in listed if row["case_id"] == str(case_id))
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert item["next_action_kind"] == expected_kind
+    assert item["next_human_action"] == expected_action
+    assert workbench["next_action"] == {
+        "kind": expected_kind,
+        "label": expected_action,
+        "count": None,
+    }
+
+
+def test_event_desk_projects_preparing_as_system_work_and_exposes_summary(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    preparation = cmd_session.scalar(
+        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
+    )
+    assert preparation is not None
+    preparation.parse_claims_state = "running"
+    preparation.last_error_code = "preparation_provider_unavailable"
+    cmd_session.commit()
+
+    listed = cmd_client.get("/api/v1/event-research").json()["items"]
+    item = next(row for row in listed if row["case_id"] == str(case_id))
+    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert item["next_action_kind"] == "wait"
+    assert item["next_human_action"] is None
+    assert "系统正在准备" in item["status_summary"]
+    assert workbench["preparation"] == {
+        "status": "preparing",
+        "revision": 1,
+        "research_run_id": None,
+        "next_attempt_at": None,
+        "last_error_message": "准备服务暂时不可用",
+        "system": {
+            "claims": {"state": "running"},
+            "protocol": {"state": "queued"},
+            "plan": {"state": "queued"},
+        },
+        "review": {
+            "claims": {"state": "locked"},
+            "protocol": {"state": "locked"},
+            "plan": {"state": "locked"},
+        },
+    }
 
 
 def test_draft_workbench_exposes_only_current_reviewed_evidence_and_factor_pending_counts(

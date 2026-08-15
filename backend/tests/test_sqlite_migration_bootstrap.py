@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import sqlalchemy as sa
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 
 def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
@@ -33,7 +34,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -52,6 +53,14 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             for column in sa.inspect(connection).get_columns("source_contracts")
         }["research_source_type"]
         assert research_source_type["nullable"] is False
+        heartbeat_columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("research_worker_heartbeats")
+        }
+        assert "worker_kind" in heartbeat_columns
+        assert "claim_token" in {
+            column["name"] for column in sa.inspect(connection).get_columns("jobs")
+        }
         trigger_count = connection.execute(
             sa.text(
                 "SELECT COUNT(*) FROM sqlite_master "
@@ -60,6 +69,474 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert trigger_count == 1
+
+
+def test_0058_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> None:
+    database_path = tmp_path / "authorized-preparations.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0057"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    now = "2026-08-14 00:00:00"
+    valid_plan = {
+        "items": [{
+            "factor": "authorized factor",
+            "evidence_target": "primary disclosure",
+            "allowed_source_roles": ["primary_disclosure"],
+            "priority": "high",
+            "stop_condition": "one reviewed source",
+            "budget": 10,
+        }]
+    }
+    def plan_for(*factors: str) -> dict:
+        return {
+            "items": [{
+                "factor": factor,
+                "evidence_target": "primary disclosure",
+                "allowed_source_roles": ["primary_disclosure"],
+                "priority": "high",
+                "stop_condition": "one reviewed source",
+                "budget": 10,
+            } for factor in factors]
+        }
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        for case_id, run_id, preparation_id, title in (
+            ("00000000000000000000000000000001", "00000000000000000000000000000011", "00000000000000000000000000000021", "case 01"),
+            ("00000000000000000000000000000002", "00000000000000000000000000000012", "00000000000000000000000000000022", "case 02"),
+            ("00000000000000000000000000000003", "00000000000000000000000000000013", "00000000000000000000000000000023", "case 03"),
+            ("00000000000000000000000000000004", "00000000000000000000000000000014", "00000000000000000000000000000024", "case 04"),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO research_cases (id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, 'test', :now, 'tester')"
+            ), {"id": case_id, "title": title, "now": now})
+            connection.execute(sa.text(
+                "INSERT INTO research_runs (id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) "
+                "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+            ), {"id": run_id, "case_id": case_id, "now": now})
+            connection.execute(sa.text(
+                "INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, created_at, updated_at) "
+                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'succeeded', 'succeeded', 'succeeded', 'confirmed', 'confirmed', 'confirmed', :run_id, :now, :now)"
+                ), {"id": preparation_id, "case_id": case_id, "fingerprint": "a" * 64, "run_id": run_id, "now": now})
+        for scope_id, case_id, version, factors in (
+            ("00000000000000000000000000000061", "00000000000000000000000000000001", 1, ("authorized factor",)),
+            ("00000000000000000000000000000062", "00000000000000000000000000000002", 1, ("stale factor",)),
+            ("00000000000000000000000000000065", "00000000000000000000000000000002", 2, ("current factor",)),
+            ("00000000000000000000000000000063", "00000000000000000000000000000003", 1, ("missing current one", "missing current two")),
+            ("00000000000000000000000000000064", "00000000000000000000000000000004", 1, ("extra current only",)),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO event_research_scope_versions (id, research_case_id, version, changed_by, change_summary, created_at) "
+                "VALUES (:id, :case_id, :version, 'tester', 'current scope', :now)"
+            ), {"id": scope_id, "case_id": case_id, "version": version, "now": now})
+            for position, statement in enumerate(factors, start=1):
+                connection.execute(sa.text(
+                    "INSERT INTO event_research_scope_factors (id, scope_version_id, statement, position) "
+                    "VALUES (:id, :scope_id, :statement, :position)"
+                ), {"id": f"0000000000000000000000000000007{scope_id[-1]}{position}", "scope_id": scope_id, "statement": statement, "position": position})
+        connection.execute(sa.text(
+            "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
+            "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
+        ), {"id": "00000000000000000000000000000031", "preparation_id": "00000000000000000000000000000021", "fingerprint": "a" * 64, "payload": __import__("json").dumps(valid_plan), "now": now})
+        for artifact_id, preparation_id, payload in (
+            ("00000000000000000000000000000032", "00000000000000000000000000000022", plan_for("stale factor")),
+            ("00000000000000000000000000000033", "00000000000000000000000000000023", plan_for("missing current one")),
+            ("00000000000000000000000000000034", "00000000000000000000000000000024", plan_for("extra current only", "extra plan factor")),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO research_preparation_artifacts (id, research_preparation_id, kind, sequence, preparation_version, input_fingerprint, context_fingerprint, payload, state, invalidated_reason, created_at) "
+                "VALUES (:id, :preparation_id, 'evidence_acquisition_plan', 1, 1, :fingerprint, NULL, :payload, 'current', NULL, :now)"
+            ), {"id": artifact_id, "preparation_id": preparation_id, "fingerprint": "a" * 64, "payload": __import__("json").dumps(payload), "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO jobs (id, kind, status, progress, attempt, cancel_requested, target_type, target_id, research_case_id, created_at) "
+            "VALUES (:id, 'research_run', 'queued', 0, 1, 0, 'research_run', :run_id, :case_id, :now)"
+        ), {"id": "00000000000000000000000000000041", "run_id": "00000000000000000000000000000012", "case_id": "00000000000000000000000000000002", "now": now})
+        connection.execute(sa.text(
+            "INSERT INTO research_tasks (id, run_id, research_case_id, thesis_id, status, stage, round, task_type, query, evidence_count, gap_reason, result, created_at, updated_at) "
+            "VALUES (:id, :run_id, :case_id, NULL, 'queued', 'planned', 1, 'support', 'legacy queued task', 0, NULL, NULL, :now, :now)"
+        ), {"id": "00000000000000000000000000000051", "run_id": "00000000000000000000000000000012", "case_id": "00000000000000000000000000000002", "now": now})
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0058"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr + upgraded.stdout
+    with engine.connect() as connection:
+        kept = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000021'"
+        )).one()
+        stale = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code, draft_evidence_plan_state, plan_review_state "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000022'"
+        )).one()
+        missing = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000023'"
+        )).one()
+        extra = connection.execute(sa.text(
+            "SELECT status, research_run_id, authorized_evidence_plan, last_error_code "
+            "FROM research_preparations WHERE id = '00000000000000000000000000000024'"
+        )).one()
+        assert kept.status == "authorized" and kept.research_run_id is not None
+        assert __import__("json").loads(kept.authorized_evidence_plan) == valid_plan
+        assert connection.execute(sa.text(
+            "SELECT status FROM research_runs WHERE id = '00000000000000000000000000000011'"
+        )).scalar_one() == "queued"
+        assert stale == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required", "failed", "locked")
+        assert missing == extra == ("recoverable_failure", None, None, "preparation_authorized_plan_migration_required")
+        cancelled_run = connection.execute(sa.text(
+            "SELECT status, stage, stop_reason FROM research_runs WHERE id = '00000000000000000000000000000012'"
+        )).one()
+        cancelled_job = connection.execute(sa.text(
+            "SELECT status, cancel_requested, error, finished_at FROM jobs WHERE id = '00000000000000000000000000000041'"
+        )).one()
+        cancelled_task = connection.execute(sa.text(
+            "SELECT status, stage FROM research_tasks WHERE id = '00000000000000000000000000000051'"
+        )).one()
+        migration_event = connection.execute(sa.text(
+            "SELECT status, payload_json FROM research_run_events WHERE run_id = '00000000000000000000000000000012'"
+        )).one()
+        assert cancelled_run == ("cancelled", "stopped", "preparation_authorized_plan_migration_required")
+        assert cancelled_job.status == "cancelled" and cancelled_job.cancel_requested and cancelled_job.error == "preparation_authorized_plan_migration_required"
+        assert cancelled_job.finished_at is not None
+        assert cancelled_task == ("cancelled", "stopped")
+        assert migration_event.status == "cancelled" and __import__("json").loads(migration_event.payload_json) == {"stop_reason": "preparation_authorized_plan_migration_required"}
+
+    from app.models.operational import Job, ResearchRun
+    from app.models.research_preparation import ResearchPreparation
+    from app.services.research_preparation import ResearchPreparationService
+
+    with sessionmaker(bind=engine, future=True)() as session:
+        case_id = __import__("uuid").UUID("00000000000000000000000000000002")
+        preparation = session.get(ResearchPreparation, __import__("uuid").UUID("00000000000000000000000000000022"))
+        assert preparation is not None
+
+        ResearchPreparationService(session).retry_failed_step(
+            case_id, actor="reviewer", revision=preparation.version
+        )
+        session.commit()
+
+        assert preparation.draft_evidence_plan_state == "queued"
+        assert preparation.status == "preparing"
+        assert preparation.research_run_id is None
+        assert preparation.authorized_evidence_plan is None
+        retry_jobs = list(session.scalars(sa.select(Job).where(
+            Job.kind == "prepare_research",
+            Job.target_type == "research_preparation",
+            Job.target_id == preparation.id,
+            Job.status == "queued",
+        )))
+        assert len(retry_jobs) == 1
+        assert retry_jobs[0].correlation_id == f"{preparation.id}:{preparation.version}:draft_evidence_plan"
+        runs = list(session.scalars(sa.select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
+        assert len(runs) == 1 and runs[0].status == "cancelled"
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0057"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    assert "authorized_evidence_plan" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("research_preparations")
+    }
+
+
+def test_0055_upgrades_a_0051_database_with_preparation_constraints(tmp_path) -> None:
+    database_path = tmp_path / "research-preparation.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0051.returncode == 0, upgraded_to_0051.stderr
+    upgraded_to_head = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_head.returncode == 0, upgraded_to_head.stderr
+
+    normal_app_fk_probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from app.db import SessionLocal, engine
+
+assert engine.dialect.name == 'sqlite'
+with SessionLocal() as session:
+    assert session.connection().exec_driver_sql('PRAGMA foreign_keys').scalar_one() == 1
+    now = '2026-08-13 00:00:00'
+    case_a = '00000000000000000000000000000021'
+    case_b = '00000000000000000000000000000022'
+    case_c = '00000000000000000000000000000023'
+    run_a = '00000000000000000000000000000024'
+    prep_a = '00000000000000000000000000000025'
+    for case_id, title in ((case_a, 'case a'), (case_b, 'case b'), (case_c, 'case c')):
+        session.execute(text(
+            'INSERT INTO research_cases (id, title, industry_topic, created_at, created_by) '
+            "VALUES (:id, :title, 'test', :now, 'tester')"
+        ), {'id': case_id, 'title': title, 'now': now})
+    session.execute(text(
+        'INSERT INTO research_runs (id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) '
+        "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+    ), {'id': run_a, 'case_id': case_a, 'now': now})
+    session.execute(text(
+        'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, authorized_evidence_plan, created_at, updated_at) '
+        "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :plan, :now, :now)"
+    ), {'id': prep_a, 'case_id': case_a, 'fingerprint': 'a' * 64, 'run_id': run_a, 'plan': '{"items": []}', 'now': now})
+    session.execute(text(
+        'INSERT INTO research_preparation_events (id, research_preparation_id, seq, type, step, message, detail, created_at) '
+        "VALUES ('00000000000000000000000000000018', :preparation_id, 1, 'claims_parsed', NULL, NULL, '{}', :now)"
+    ), {'preparation_id': prep_a, 'now': now})
+    session.commit()
+    for case_id, prep_id, referenced_run_id in (
+        (case_b, '00000000000000000000000000000026', run_a),
+        (case_c, '00000000000000000000000000000027', '00000000000000000000000000000028'),
+    ):
+        try:
+            session.execute(text(
+                'INSERT INTO research_preparations (id, research_case_id, version, input_fingerprint, status, parse_claims_state, draft_protocol_state, draft_evidence_plan_state, claim_review_state, protocol_review_state, plan_review_state, research_run_id, authorized_evidence_plan, created_at, updated_at) '
+                "VALUES (:id, :case_id, 1, :fingerprint, 'authorized', 'queued', 'queued', 'queued', 'locked', 'locked', 'locked', :run_id, :plan, :now, :now)"
+            ), {'id': prep_id, 'case_id': case_id, 'fingerprint': 'a' * 64, 'run_id': referenced_run_id, 'plan': '{"items": []}', 'now': now})
+        except IntegrityError:
+            session.rollback()
+        else:
+            raise AssertionError('invalid research_run_id reference was accepted')
+    try:
+        session.execute(text("UPDATE research_preparation_events SET message = 'rewritten' WHERE id = '00000000000000000000000000000018'"))
+    except IntegrityError:
+        session.rollback()
+    else:
+        raise AssertionError('raw preparation event update was accepted')
+    try:
+        session.execute(text("DELETE FROM research_preparation_events WHERE id = '00000000000000000000000000000018'"))
+    except IntegrityError:
+        session.rollback()
+    else:
+        raise AssertionError('raw preparation event delete was accepted')
+""",
+        ],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert normal_app_fk_probe.returncode == 0, normal_app_fk_probe.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
+        assert {
+            "research_preparations",
+            "research_preparation_artifacts",
+            "research_preparation_events",
+        }.issubset(sa.inspect(connection).get_table_names())
+        artifact_columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("research_preparation_artifacts")
+        }
+        assert artifact_columns["preparation_version"]["nullable"] is False
+        assert artifact_columns["context_fingerprint"]["nullable"] is True
+
+        now = "2026-08-13 00:00:00"
+
+        def insert_case(case_id: str, title: str) -> None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO research_cases "
+                    "(id, title, industry_topic, created_at, created_by) "
+                    "VALUES (:id, :title, 'test', :now, 'tester')"
+                ),
+                {"id": case_id, "title": title, "now": now},
+            )
+
+        def insert_preparation(case_id: str, *, preparation_id: str, status: str, run_id: str | None = None) -> None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO research_preparations "
+                    "(id, research_case_id, version, input_fingerprint, status, "
+                    "parse_claims_state, draft_protocol_state, draft_evidence_plan_state, "
+                    "claim_review_state, protocol_review_state, plan_review_state, "
+                    "research_run_id, created_at, updated_at) "
+                    "VALUES (:id, :case_id, 1, :fingerprint, :status, "
+                    "'queued', 'queued', 'queued', 'locked', 'locked', 'locked', "
+                    ":run_id, :now, :now)"
+                ),
+                {
+                    "id": preparation_id,
+                    "case_id": case_id,
+                    "fingerprint": "a" * 64,
+                    "status": status,
+                    "run_id": run_id,
+                    "now": now,
+                },
+            )
+
+        valid_case = "00000000000000000000000000000011"
+        run_id = "00000000000000000000000000000012"
+        insert_case(valid_case, "valid preparation")
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_runs "
+                "(id, research_case_id, status, stage, round, max_rounds, budget, budget_used, created_at, updated_at) "
+                "VALUES (:id, :case_id, 'queued', 'planning', 0, 3, 100, 0, :now, :now)"
+            ),
+            {"id": run_id, "case_id": valid_case, "now": now},
+        )
+        insert_preparation(
+            valid_case,
+            preparation_id="00000000000000000000000000000013",
+            status="preparing",
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_preparation_events "
+                "(id, research_preparation_id, seq, type, step, message, detail, created_at) "
+                "VALUES ('00000000000000000000000000000019', "
+                "'00000000000000000000000000000013', 1, 'claims_parsed', NULL, NULL, '{}', :now)"
+            ),
+            {"now": now},
+        )
+
+        invalid_status_case = "00000000000000000000000000000014"
+        insert_case(invalid_status_case, "invalid status")
+        with pytest.raises(sa.exc.IntegrityError):
+            insert_preparation(
+                invalid_status_case,
+                preparation_id="00000000000000000000000000000015",
+                status="not_a_preparation_status",
+            )
+
+        unauthorized_run_case = "00000000000000000000000000000016"
+        insert_case(unauthorized_run_case, "unauthorized run")
+        with pytest.raises(sa.exc.IntegrityError):
+            insert_preparation(
+                unauthorized_run_case,
+                preparation_id="00000000000000000000000000000017",
+                status="preparing",
+                run_id=run_id,
+            )
+
+
+def test_0056_classifies_legacy_preparation_heartbeats(tmp_path) -> None:
+    database_path = tmp_path / "legacy-preparation-heartbeats.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    before = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0055"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert before.returncode == 0, before.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    now = "2026-08-13 00:00:00"
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO research_worker_heartbeats "
+            "(worker_id, mode, state, started_at, last_seen_at) "
+            "VALUES ('host-preparation', 'loop', 'polling', :now, :now), "
+            "('host-old-mode', 'research_preparation', 'polling', :now, :now), "
+            "('host-run', 'loop', 'polling', :now, :now)"
+        ), {"now": now})
+    after = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert after.returncode == 0, after.stderr
+    with engine.connect() as connection:
+        rows = dict(connection.execute(sa.text(
+            "SELECT worker_id, worker_kind FROM research_worker_heartbeats"
+        )).all())
+    assert rows == {
+        "host-preparation": "research_preparation",
+        "host-old-mode": "research_preparation",
+        "host-run": "research_run",
+    }
+    from sqlalchemy.orm import Session
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    with Session(engine) as session:
+        observed_at = datetime(2026, 8, 13, tzinfo=UTC)
+        assert WorkerHeartbeatService(session).status(now=observed_at)["status"] == "available"
+        assert WorkerHeartbeatService(session).status(
+            now=observed_at, worker_kind="research_preparation"
+        )["status"] == "available"
+
+def test_0055_downgrade_removes_preparation_tables(tmp_path) -> None:
+    database_path = tmp_path / "research-preparation-downgrade.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0051.returncode == 0, upgraded_to_0051.stderr
+    upgraded_to_head = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_head.returncode == 0, upgraded_to_head.stderr
+    downgraded_to_0051 = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0051"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded_to_0051.returncode == 0, downgraded_to_0051.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0051"
+        assert not {
+            "research_preparation_events",
+            "research_preparation_artifacts",
+            "research_preparations",
+        }.intersection(sa.inspect(connection).get_table_names())
+        assert "uq_research_runs_case_id" not in {
+            index["name"] for index in sa.inspect(connection).get_indexes("research_runs")
+        }
 
 
 def test_0051_preserves_legacy_assessment_and_downgrades_cleanly(tmp_path) -> None:
@@ -644,7 +1121,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -698,7 +1175,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0054"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -755,7 +1232,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0054"
+        ).scalar_one() == "0058"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"
@@ -780,3 +1257,68 @@ def test_refuses_to_stamp_an_incomplete_unmanaged_database(tmp_path) -> None:
 
     with engine.connect() as connection:
         assert "alembic_version" not in sa.inspect(connection).get_table_names()
+
+
+def test_0051_upgrade_requires_an_explicit_preparation_backfill(tmp_path) -> None:
+    """Migrations add schema only; the operator explicitly admits old Cases."""
+    database_path = tmp_path / "explicit-preparation-backfill.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0054"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    seeded = subprocess.run(
+        [sys.executable, "-c", """
+from datetime import UTC, datetime
+from app.db import SessionLocal
+from app.models.event_research import EventResearchScopeVersion
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, ResearchCase
+from app.models.operational import EventResearchLifecycle
+from app.models.source_governance import SourceContract
+
+now = datetime.now(UTC)
+with SessionLocal() as session:
+    case = ResearchCase(title='legacy eligible case', industry_topic='test', created_by='test', created_at=now)
+    document = DocumentVersion(content_sha256='a' * 64, source_url='https://example.test/legacy', available_at=now, acquired_at=now, parser_version='test', source_authority='primary_disclosure')
+    session.add_all((case, document)); session.flush()
+    session.add_all((
+        CaseDocumentVersion(research_case_id=case.id, document_version_id=document.id, linked_at=now),
+        CaseTenantAdmission(research_case_id=case.id, tenant_id='test', initial_document_version_id=document.id, admitted_by='test', admitted_at=now),
+        EventResearchScopeVersion(research_case_id=case.id, version=1, changed_by='test', change_summary='legacy scope', created_at=now),
+        EventResearchLifecycle(research_case_id=case.id, status='awaiting_scope', active_run_id=None, current_round=0, status_summary='legacy', current_gap=None, next_human_action=None, updated_at=now),
+        SourceContract(document_version_id=document.id, source_type='uploaded_file', provider_or_tenant='test', allow_ai_processing=True, allow_display=True, allow_export=False, allow_api=False, region='CN', effective_from=None, effective_until=None, retention_policy='case_retained', deletion_policy='manual', downstream_restrictions=[], contract_version='test', intake_metadata={}, declared_by='test', created_at=now),
+    ))
+    session.commit()
+"""],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert seeded.returncode == 0, seeded.stderr
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    verified = subprocess.run(
+        [sys.executable, "-c", """
+from sqlalchemy import select
+from app.db import SessionLocal
+from app.models.operational import Job
+from app.models.research_preparation import ResearchPreparation
+from app.services.research_preparation_backfill import ResearchPreparationBackfill
+
+with SessionLocal() as session:
+    assert session.scalars(select(ResearchPreparation)).all() == []
+    assert session.scalars(select(Job).where(Job.kind == 'prepare_research')).all() == []
+    preparations = ResearchPreparationBackfill(session).enqueue_eligible(limit=1)
+    assert len(preparations) == 1
+    session.commit()
+    assert len(session.scalars(select(ResearchPreparation)).all()) == 1
+    jobs = session.scalars(select(Job).where(Job.kind == 'prepare_research')).all()
+    assert len(jobs) == 1 and jobs[0].correlation_id.endswith(':parse_claims')
+"""],
+        cwd=backend, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert verified.returncode == 0, verified.stderr + verified.stdout

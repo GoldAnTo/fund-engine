@@ -322,6 +322,157 @@ describe("Research OS event entry", () => {
       .toHaveAttribute("href", "/events/ordinary-case/review");
   });
 
+  it("keeps system preparation separate from the one claim review awaiting a researcher", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockResolvedValue([{
+      id: "preparation-running",
+      eventTitle: "系统正在准备研究材料",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_key_review",
+      statusSummary: "系统正在准备研究材料",
+      nextHumanAction: null,
+      nextActionKind: "wait",
+      updatedAt: "2026-08-15T09:00:00Z",
+    }, {
+      id: "preparation-claims",
+      eventTitle: "等待核验原文与候选陈述",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_key_review",
+      statusSummary: "等待核验原文与候选陈述",
+      nextHumanAction: "核验原文与候选陈述",
+      nextActionKind: "review_preparation_claims",
+      updatedAt: "2026-08-15T08:00:00Z",
+    }] as EventResearchListItem[]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("1 项需要人工决定")).toBeVisible();
+    expect(screen.getByRole("link", { name: "系统正在准备研究材料" }))
+      .toHaveAttribute("href", "/events/preparation-running/preparation");
+    expect(screen.getByRole("link", { name: "等待核验原文与候选陈述" }))
+      .toHaveAttribute("href", "/events/preparation-claims/preparation");
+    expect(screen.getByText("正式运行中 Case")).toBeVisible();
+    expect(screen.getByText("系统准备中")).toBeVisible();
+    expect(screen.getByText("准备待确认")).toBeVisible();
+    expect(screen.getByText("正在准备研究材料")).toBeVisible();
+    expect(screen.getByText("1 个 Case 正在准备研究材料，尚未创建正式研究运行。"))
+      .toBeVisible();
+  });
+
+  it("does not present review-gated preparation as active system preparation", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "listEventResearch").mockResolvedValue([{
+      id: "preparation-claims-only",
+      eventTitle: "等待核验原文与候选陈述",
+      companyName: null,
+      ticker: null,
+      eventAt: null,
+      status: "awaiting_key_review",
+      statusSummary: "等待核验原文与候选陈述",
+      nextHumanAction: "核验原文与候选陈述",
+      nextActionKind: "review_preparation_claims",
+      updatedAt: "2026-08-15T08:00:00Z",
+    }] as EventResearchListItem[]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <Routes><Route path="/events" element={<EventDeskPage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("等待研究准备确认")).toBeVisible();
+    expect(screen.getByText("1 个 Case 正在等待研究准备确认，正式研究尚未启动。"))
+      .toBeVisible();
+    expect(screen.queryByText("正在准备研究材料")).not.toBeInTheDocument();
+  });
+
+  it("sends a Case with unapproved preparation to the preparation workbench, not evidence verification", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventWorkbench = adapter.getEventWorkbench.bind(adapter);
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation(async (caseId) => {
+      const workbench = await getEventWorkbench(caseId);
+      return {
+        ...workbench,
+        event: { ...workbench.event, status: "awaiting_key_review", statusSummary: "等待证据审核" },
+        lifecycle: {
+          ...workbench.lifecycle,
+          status: "awaiting_key_review",
+          summary: "等待证据审核",
+          activeRunId: "legacy-run-must-not-be-presented",
+        },
+      };
+    });
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("你需要做")).toBeVisible();
+    expect(screen.getByRole("link", { name: "进入研究准备" }))
+      .toHaveAttribute("href", "/events/event-preparation/preparation");
+    expect(screen.getByText("研究准备尚未完成，尚不能形成研究结论。"))
+      .toBeVisible();
+    expect(screen.queryByText("尚不能下结论：系统正在核验各项解释及其反证。"))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看研究准备 →" }))
+      .toHaveAttribute("href", "/events/event-preparation/preparation");
+    const progress = screen.getByLabelText("当前事件研究进展");
+    expect(within(progress).getByText("研究准备")).toBeVisible();
+    expect(within(progress).queryByText("执行补证")).not.toBeInTheDocument();
+    expect(screen.getByText("正式研究未启动")).toBeVisible();
+  });
+
+  it("returns an authorized preparation Case to the formal research stage", async () => {
+    setResearchClient(new MockResearchAdapter({ preparationScenario: "authorized" }));
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const progress = await screen.findByLabelText("当前事件研究进展");
+    expect(within(progress).getByText("执行补证")).toBeVisible();
+    expect(within(progress).queryByText("研究准备")).not.toBeInTheDocument();
+    expect(screen.getByText("主研究运行可查看")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看系统正在做什么" }))
+      .toHaveAttribute("href", "/events/event-preparation/monitor");
+  });
+
+  it("shows a preparing Case as system work without a human confirmation task", async () => {
+    setResearchClient(new MockResearchAdapter({ preparationScenario: "preparing" }));
+    render(
+      <MemoryRouter initialEntries={["/events/event-preparation"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("现在不用做")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看研究准备进度" }))
+      .toHaveAttribute("href", "/events/event-preparation/preparation");
+    expect(screen.getByText("系统正在解析冻结原文并生成协议与补证计划草案；它不会自行采纳、授权或启动正式研究。"))
+      .toBeVisible();
+    expect(screen.queryByText("系统已完成草案准备，仍需由你逐项确认；未确认前不会采纳候选、启动数据 Provider 或运行正式研究。"))
+      .not.toBeInTheDocument();
+  });
+
   it("does not call active Case work running when the execution worker is unavailable", async () => {
     const api = new MockResearchOsApi(new MockResearchAdapter());
     vi.spyOn(api, "workerStatus").mockResolvedValue({
@@ -1973,7 +2124,7 @@ describe("Research OS event entry", () => {
       <MemoryRouter initialEntries={["/events/new"]}>
         <Routes>
           <Route path="/events/new" element={<EventCreatePage />} />
-          <Route path="/events/:caseId" element={<p>新 Case 已建立</p>} />
+          <Route path="/events/:caseId/preparation" element={<p>新 Case 已建立</p>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -2047,6 +2198,30 @@ describe("Research OS event entry", () => {
     );
     expect(screen.getByText(/原件与解析片段分别冻结/)).toBeVisible();
     expect(screen.getByText(/原件待冻结 · event-note.txt/)).toBeVisible();
+  });
+
+  it("creates an uploaded Case through the atomic original-first preparation path", async () => {
+    const user = userEvent.setup();
+    const adapter = new MockResearchAdapter();
+    const createFromUpload = vi.spyOn(adapter, "createEventResearchFromUpload");
+    setResearchClient(adapter);
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <Routes>
+          <Route path="/events/new" element={<EventCreatePage />} />
+          <Route path="/events/:caseId/preparation" element={<p>已进入准备工作台</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.selectOptions(screen.getByLabelText("来源接入方式"), "uploaded_file");
+    const file = new File(["上传原文，而不是事件摘要。"], "original.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("选择上传原件文件"), file);
+    await user.click(screen.getByRole("button", { name: "识别事件与研究问题" }));
+    await user.click(await screen.findByRole("button", { name: "建立 Case，进入资料核验" }));
+
+    await waitFor(() => expect(createFromUpload).toHaveBeenCalledWith(expect.objectContaining({ file })));
+    expect(await screen.findByText("已进入准备工作台")).toBeVisible();
   });
 
   it("makes the frozen source authority explicit before event creation", async () => {

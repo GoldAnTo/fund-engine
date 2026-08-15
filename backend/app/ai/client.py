@@ -208,7 +208,56 @@ def _mock_response(messages: list[dict], schema_hint: str) -> dict:
         return _mock_assess(data)
     if schema_hint == "rewrite":
         return _mock_rewrite(data)
+    if schema_hint == "preparation_parse_claims":
+        return _mock_preparation_parse_claims(data)
+    if schema_hint == "preparation_draft_protocol":
+        return _mock_preparation_protocol()
+    if schema_hint == "preparation_draft_evidence_plan":
+        return _mock_preparation_evidence_plan(data)
     return {}
+
+
+def _mock_preparation_parse_claims(data: dict) -> dict:
+    """Deterministic test-only source-grounded preparation claims."""
+    statements: list[dict] = []
+    for span in data.get("spans", []):
+        text = span.get("verbatim_text", "")
+        source_span_id = span.get("source_span_id", "")
+        if isinstance(text, str) and text and isinstance(source_span_id, str):
+            statements.append({
+                "source_span_id": source_span_id,
+                "quote": text,
+                "quote_start": 0,
+                "quote_end": len(text),
+                "normalized_text": text,
+                "kind": "reported_claim",
+            })
+    return {"statements": statements}
+
+
+def _mock_preparation_protocol() -> dict:
+    """Static valid preparation protocol fixture for APP_ENV=test only."""
+    return {
+        "outcomes": [{"metric": "draft outcome"}],
+        "baseline": {"metric": "draft baseline"},
+        "horizon": {"start": "2026-01-01", "end": "2026-12-31"},
+        "mechanisms": [{"driver": "draft mechanism"}],
+        "verification_rules": [{"rule": "draft verification"}],
+    }
+
+
+def _mock_preparation_evidence_plan(data: dict) -> dict:
+    """Deterministic valid plan fixture when a current factor is available."""
+    factors = data.get("factors", [])
+    factor = factors[0] if isinstance(factors, list) and factors else "draft factor"
+    return {"items": [{
+        "factor": factor,
+        "evidence_target": "draft evidence target",
+        "allowed_source_roles": ["primary_disclosure"],
+        "priority": "normal",
+        "stop_condition": "draft stop condition",
+        "budget": 1,
+    }]}
 
 
 def _mock_rewrite(data: dict) -> dict:

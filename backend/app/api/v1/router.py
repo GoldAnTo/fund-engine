@@ -32,6 +32,7 @@ from app.api.v1.event_research import router as event_research_router
 from app.api.v1.case_monitor import router as case_monitor_router
 from app.api.v1.market_expression import router as market_expression_router
 from app.api.v1.research_protocol import router as research_protocol_router
+from app.api.v1.research_preparation import router as research_preparation_router
 from app.api.v1.research_session import router as research_session_router
 from app.api.v1.fund_disclosure_sync import router as fund_disclosure_sync_router
 from app.api.v1.forecast_verdicts import router as forecast_verdicts_router
@@ -80,6 +81,7 @@ router.include_router(event_research_router)
 router.include_router(case_monitor_router)
 router.include_router(market_expression_router)
 router.include_router(research_protocol_router)
+router.include_router(research_preparation_router)
 router.include_router(review_proposals_router)
 router.include_router(research_session_router)
 router.include_router(fund_disclosure_sync_router)

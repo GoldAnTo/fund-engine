@@ -73,4 +73,16 @@ describe("Research OS route inventory", () => {
       expect(fetchMock).toHaveBeenCalled();
     },
   );
+
+  it("renders the preparation route and exposes its live-data failure", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/case-route/preparation"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("backend_unavailable");
+    expect(screen.getByRole("heading", { name: "无法读取研究准备" })).toBeVisible();
+    expect(fetchMock).toHaveBeenCalled();
+  });
 });

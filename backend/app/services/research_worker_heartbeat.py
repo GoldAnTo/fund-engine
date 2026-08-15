@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.operational import ResearchWorkerHeartbeat
@@ -21,13 +21,23 @@ class WorkerHeartbeatService:
         worker_id: str,
         mode: str,
         state: str,
+        worker_kind: str = "research_run",
         seen_at: datetime | None = None,
     ) -> ResearchWorkerHeartbeat:
         now = seen_at or datetime.now(timezone.utc)
-        heartbeat = self._session.get(ResearchWorkerHeartbeat, worker_id)
+        storage_worker_id = self._storage_worker_id(worker_id, worker_kind)
+        heartbeat = self._session.get(ResearchWorkerHeartbeat, storage_worker_id)
+        if heartbeat is None and worker_kind == "research_run":
+            # Read and adopt pre-0053 heartbeat rows when their process next
+            # touches.  Until then ``latest`` still treats their raw ID as a
+            # research-run heartbeat.
+            heartbeat = self._session.get(ResearchWorkerHeartbeat, worker_id)
+            if heartbeat is not None:
+                heartbeat.worker_id = storage_worker_id
         if heartbeat is None:
             heartbeat = ResearchWorkerHeartbeat(
-                worker_id=worker_id,
+                worker_id=storage_worker_id,
+                worker_kind=worker_kind,
                 mode=mode,
                 state=state,
                 started_at=now,
@@ -35,21 +45,36 @@ class WorkerHeartbeatService:
             )
             self._session.add(heartbeat)
         else:
+            heartbeat.worker_kind = worker_kind
             heartbeat.mode = mode
             heartbeat.state = state
             heartbeat.last_seen_at = now
         self._session.flush()
         return heartbeat
 
-    def latest(self) -> ResearchWorkerHeartbeat | None:
+    def latest(self, *, worker_kind: str = "research_run") -> ResearchWorkerHeartbeat | None:
+        prefix = f"{worker_kind}:%"
+        # 0053 classifies raw pre-migration IDs by kind.  Keep those rows
+        # visible alongside namespaced IDs until their worker next touches.
+        identity_filter = or_(
+            ResearchWorkerHeartbeat.worker_id.like(prefix),
+            ~ResearchWorkerHeartbeat.worker_id.contains(":"),
+        )
         return self._session.scalar(
-            select(ResearchWorkerHeartbeat).order_by(
+            select(ResearchWorkerHeartbeat)
+            .where(
+                ResearchWorkerHeartbeat.worker_kind == worker_kind,
+                identity_filter,
+            )
+            .order_by(
                 ResearchWorkerHeartbeat.last_seen_at.desc()
             ).limit(1)
         )
 
-    def status(self, *, now: datetime | None = None) -> dict[str, str | None]:
-        heartbeat = self.latest()
+    def status(
+        self, *, now: datetime | None = None, worker_kind: str = "research_run"
+    ) -> dict[str, str | None]:
+        heartbeat = self.latest(worker_kind=worker_kind)
         if heartbeat is None:
             return {
                 "status": "unavailable",
@@ -72,3 +97,7 @@ class WorkerHeartbeatService:
             "mode": heartbeat.mode,
             "state": heartbeat.state,
         }
+
+    @staticmethod
+    def _storage_worker_id(worker_id: str, worker_kind: str) -> str:
+        return f"{worker_kind}:{worker_id}"[:128]

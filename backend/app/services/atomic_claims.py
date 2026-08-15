@@ -6,6 +6,7 @@ import hashlib
 import json
 from calendar import monthrange
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -46,6 +47,7 @@ from app.services.automatic_admission import (
 )
 from app.services.source_admission import source_contract_is_active
 from app.models.source_governance import SourceContract
+from app.repositories.research_preparation import ResearchPreparationRepository
 
 
 _CLAIM_TYPES = frozenset(
@@ -182,7 +184,17 @@ class AtomicClaimService:
         idempotency_key: str,
         normalized_text: str | None = None,
         observed_period: date | None = None,
+        preparation_locking: Literal["direct", "already_locked"] = "direct",
     ) -> AtomicClaimReview:
+        repository = ResearchPreparationRepository(self._session)
+        # Candidate rows are always locked before any Case/preparation lock.
+        # ``confirm_claims`` already owns its Case → preparation lock after
+        # taking this candidate lock, so it must not traverse shared mappings.
+        repository.lock_candidate_rows({candidate_id})
+        if preparation_locking == "direct":
+            repository.lock_preparation_for_candidate_review(candidate_id)
+        elif preparation_locking != "already_locked":
+            raise ValueError("atomic claim preparation locking mode is invalid")
         if self._session.get(AtomicClaimCandidate, candidate_id) is None:
             raise ValidationError("atomic claim candidate not found")
         if (

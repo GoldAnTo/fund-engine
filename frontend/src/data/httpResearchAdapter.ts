@@ -28,6 +28,7 @@ import type {
 import { PageStateError } from "../domain/types";
 import type {
   CreateEventResearchInput,
+  CreateUploadedEventResearchInput,
   EventExtraction,
   EventLifecycle,
   EventLifecycleStatus,
@@ -40,6 +41,20 @@ import type {
   EventSourceType,
   EventWorkbench,
 } from "../domain/eventResearch";
+import {
+  ConflictError,
+  type AuthorizeResearchPreparationInput,
+  type ConfirmResearchPreparationClaimsInput,
+  type ConfirmResearchPreparationProtocolInput,
+  type ResearchPreparation,
+  type ResearchPreparationArtifactState,
+  type ResearchPreparationEventsPage,
+  type ResearchPreparationEventStep,
+  type ResearchPreparationReviewStepState,
+  type ResearchPreparationStatus,
+  type ResearchPreparationSystemStepState,
+  type RetryResearchPreparationInput,
+} from "../domain/researchPreparation";
 import type { ActiveResearchClient } from "../domain/prototypeTypes";
 import type {
   AssessmentReviewPayload,
@@ -191,6 +206,34 @@ const VALID_EVENT_SOURCE_STATUSES: readonly EventSourceStatus[] = [
   "pasted_unverified",
   "invalid",
 ];
+const RESEARCH_PREPARATION_STATUSES = [
+  "preparing",
+  "awaiting_claim_review",
+  "awaiting_protocol_confirmation",
+  "awaiting_plan_authorization",
+  "recoverable_failure",
+  "authorized",
+] as const;
+const RESEARCH_PREPARATION_SYSTEM_STEP_STATES = [
+  "queued",
+  "running",
+  "succeeded",
+  "retrying",
+  "failed",
+  "stale",
+] as const;
+const RESEARCH_PREPARATION_REVIEW_STEP_STATES = [
+  "locked",
+  "awaiting_review",
+  "confirmed",
+  "stale",
+] as const;
+const RESEARCH_PREPARATION_ARTIFACT_STATES = ["current", "stale", "superseded"] as const;
+const RESEARCH_PREPARATION_EVENT_STEPS = [
+  "parse_claims",
+  "draft_protocol",
+  "draft_evidence_plan",
+] as const;
 
 function isEventSourceStatus(value: string): value is EventSourceStatus {
   return VALID_EVENT_SOURCE_STATUSES.includes(value as EventSourceStatus);
@@ -337,7 +380,93 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
-  private async get<T>(path: string): Promise<T> {
+  private preparationDataError(): PageStateError {
+    return new PageStateError("backend_unavailable", "研究准备数据不完整，请刷新后重试。");
+  }
+
+  private requirePreparationValue<T extends string>(
+    value: unknown,
+    valid: readonly T[],
+    field: string,
+  ): T {
+    if (typeof value === "string" && valid.includes(value as T)) return value as T;
+    throw new PageStateError(
+      "backend_unavailable",
+      `研究准备${field}状态无效，请刷新后重试。`,
+    );
+  }
+
+  private requirePreparationContainer(value: unknown): Record<string, unknown> {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw this.preparationDataError();
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private requirePreparationString(value: unknown): string {
+    if (typeof value !== "string") throw this.preparationDataError();
+    return value;
+  }
+
+  private requirePreparationNumber(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw this.preparationDataError();
+    }
+    return value;
+  }
+
+  private optionalPreparationString(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    return this.requirePreparationString(value);
+  }
+
+  private optionalPreparationContainer(value: unknown): Record<string, unknown> | null {
+    if (value === undefined || value === null) return null;
+    return this.requirePreparationContainer(value);
+  }
+
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+  ): Record<string, unknown>;
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+    allowNull: true,
+  ): Record<string, unknown> | null;
+  private requirePreparationStage(
+    source: unknown,
+    key: "claims" | "protocol" | "plan",
+    allowNull = false,
+  ): Record<string, unknown> | null {
+    const container = this.requirePreparationContainer(source);
+    if (!Object.prototype.hasOwnProperty.call(container, key) || container[key] === undefined) {
+      throw this.preparationDataError();
+    }
+    const stage = container[key];
+    if (stage === null && allowNull) return null;
+    return this.requirePreparationContainer(stage);
+  }
+
+  private async responseError(
+    response: Response,
+    options: { preparationSafe?: boolean; notFoundMessage?: string } = {},
+  ): Promise<Error> {
+    if (options.preparationSafe && response.status === 409) return new ConflictError();
+    // Provider proxies can accidentally put credentials or provider diagnostics
+    // in their error envelope.  The UI needs a retryable state, never that body.
+    if (options.preparationSafe && response.status === 503) {
+      return new PageStateError("backend_unavailable", "服务暂时不可用，请稍后重试。");
+    }
+    const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
+    const code = payload?.error?.code;
+    const message = response.status === 404 && options.notFoundMessage
+      ? options.notFoundMessage
+      : payload?.error?.message;
+    return new PageStateError(asPageStateErrorKind(code), message);
+  }
+
+  private async get<T>(path: string, preparationSafe = false): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
@@ -348,19 +477,15 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      const code = payload?.error?.code;
-      const message = response.status === 404
-        ? "自动研究接口不存在，请重启后端服务后重试"
-        : payload?.error?.message;
-      throw new PageStateError(asPageStateErrorKind(code), message);
+      throw await this.responseError(response, {
+        preparationSafe,
+        notFoundMessage: "自动研究接口不存在，请重启后端服务后重试",
+      });
     }
     return (await response.json()) as T;
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async post<T>(path: string, body: unknown, preparationSafe = false): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`${this.options.baseUrl}${path}`, {
@@ -377,14 +502,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      const code = payload?.error?.code;
-      throw new PageStateError(
-        asPageStateErrorKind(code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response, { preparationSafe });
     }
     return (await response.json()) as T;
   }
@@ -402,13 +520,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(
-        () => null,
-      )) as ErrorEnvelopeDTO | null;
-      throw new PageStateError(
-        asPageStateErrorKind(payload?.error?.code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response);
     }
     return (await response.json()) as T;
   }
@@ -433,11 +545,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw new PageStateError("backend_unavailable");
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as ErrorEnvelopeDTO | null;
-      throw new PageStateError(
-        asPageStateErrorKind(payload?.error?.code),
-        payload?.error?.message,
-      );
+      throw await this.responseError(response);
     }
     return (await response.json()) as T;
   }
@@ -2651,6 +2759,31 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
   }
 
+  async createEventResearchFromUpload(input: CreateUploadedEventResearchInput): Promise<{ caseId: string; briefId: string; lifecycle: EventLifecycle }> {
+    const form = new FormData();
+    form.set("file", input.file);
+    form.set("payload", JSON.stringify({
+      raw_input: input.rawInput,
+      source_url: input.sourceUrl || null,
+      source_type: "uploaded_file",
+      source_metadata: input.sourceMetadata ?? {},
+      event_title: input.eventTitle,
+      company_name: input.companyName,
+      ticker: input.ticker,
+      event_at: input.eventAt,
+      market_reaction: input.marketReaction,
+      research_question: input.researchQuestion,
+      candidate_factors: input.candidateFactors,
+      research_protocol_required: input.researchProtocolRequired ?? true,
+      created_by: input.createdBy,
+    }));
+    const dto = await this.postForm<{ case_id: string; brief_id: string; lifecycle: {
+      status: EventLifecycleStatus; active_run_id: string | null; current_round: number;
+      status_summary: string; current_gap: string | null; next_human_action: string | null;
+    } }>("/event-research/uploaded", form);
+    return { caseId: dto.case_id, briefId: dto.brief_id, lifecycle: this.mapEventLifecycle(dto.lifecycle) };
+  }
+
   async attachEventMaterial(input: { caseId: string; rawInput: string; sourceUrl?: string; sourceType: EventSourceType; sourceMetadata: Record<string, unknown>; actor: string }): Promise<{ documentVersionId: string }> {
     const dto = await this.post<{ document_version_id: string }>(
       `/event-research/${encodeURIComponent(input.caseId)}/materials`,
@@ -2705,6 +2838,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       progress: { verified: number; pending: number; invalid_source: number; current_gap: string | null };
       scope: { version: number; factors: Array<string | { statement: string; description?: string | null }>; unmapped_evidence_count: number };
       next_action: { kind: EventNextActionKind; label: string; count?: number | null };
+      preparation?: Schemas["EventPreparationSummaryDTO"] | null;
     }>(`/event-research/${encodeURIComponent(caseId)}/workbench`);
     return {
       event: this.mapEventListItem(dto.event), lifecycle: this.mapEventLifecycle(dto.lifecycle),
@@ -2726,6 +2860,9 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       progress: { verified: dto.progress.verified, pending: dto.progress.pending, invalidSource: dto.progress.invalid_source, currentGap: dto.progress.current_gap },
       scope: { version: dto.scope.version, factors: dto.scope.factors.map((factor) => typeof factor === "string" ? { statement: factor, description: null } : factor), unmappedEvidenceCount: dto.scope.unmapped_evidence_count },
       nextAction: { kind: dto.next_action.kind, label: dto.next_action.label, ...(dto.next_action.count ? { count: dto.next_action.count } : {}) },
+      preparation: dto.preparation
+        ? this.mapEventPreparationSummary(dto.preparation)
+        : dto.preparation === null ? null : undefined,
     };
   }
 
@@ -2864,6 +3001,244 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       { text: input.text, reviewer: input.reviewer },
     );
     return { conclusionId: dto.conclusion_id, state: dto.state };
+  }
+
+  async getResearchPreparation(caseId: string): Promise<ResearchPreparation> {
+    const dto = await this.get<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(caseId)}/preparation`,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async listResearchPreparationEvents(
+    caseId: string,
+    cursor: { afterSeq?: number; limit?: number } = {},
+  ): Promise<ResearchPreparationEventsPage> {
+    const params = new URLSearchParams();
+    if (cursor.afterSeq !== undefined) params.set("after_seq", String(cursor.afterSeq));
+    if (cursor.limit !== undefined) params.set("limit", String(cursor.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const dto = await this.get<Schemas["ResearchPreparationEventsResponse"]>(
+      `/event-research/${encodeURIComponent(caseId)}/preparation/events${suffix}`,
+      true,
+    );
+    return {
+      items: dto.items.map((item) => ({
+        seq: item.seq,
+        type: item.type,
+        step: item.step === null || item.step === undefined
+          ? null
+          : this.requirePreparationValue(
+              item.step,
+              RESEARCH_PREPARATION_EVENT_STEPS,
+              "事件步骤",
+            ) as ResearchPreparationEventStep,
+        message: item.message ?? null,
+        detail: item.detail ?? null,
+        createdAt: item.created_at,
+      })),
+      nextAfterSeq: dto.next_after_seq ?? null,
+    };
+  }
+
+  async confirmResearchPreparationClaims(
+    input: ConfirmResearchPreparationClaimsInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["ConfirmClaimsRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      decisions: input.decisions.map((decision) => ({
+        candidate_id: decision.candidateId,
+        outcome: decision.outcome,
+        reason: decision.reason,
+        ...(decision.normalizedText !== undefined
+          ? { normalized_text: decision.normalizedText }
+          : {}),
+      })),
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/claims/confirm`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async confirmResearchPreparationProtocol(
+    input: ConfirmResearchPreparationProtocolInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["ConfirmProtocolRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      draft_sequence: input.draftSequence,
+      ...(input.edits !== undefined ? { edits: input.edits } : {}),
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/protocol/confirm`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async retryResearchPreparation(
+    input: RetryResearchPreparationInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["RetryResearchPreparationRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/retry`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  async authorizeResearchPreparation(
+    input: AuthorizeResearchPreparationInput,
+  ): Promise<ResearchPreparation> {
+    const body: Schemas["AuthorizeEvidencePlanRequest"] = {
+      revision: input.revision,
+      actor: input.actor,
+      plan_sequence: input.planSequence,
+      idempotency_key: input.idempotencyKey,
+    };
+    const dto = await this.post<Schemas["ResearchPreparationDTO"]>(
+      `/event-research/${encodeURIComponent(input.caseId)}/preparation/authorize`,
+      body,
+      true,
+    );
+    return this.mapResearchPreparation(dto);
+  }
+
+  private mapResearchPreparation(dto: unknown): ResearchPreparation {
+    const payload = this.requirePreparationContainer(dto);
+    const mapSystemStep = (step: Record<string, unknown>) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
+        "系统步骤",
+      ) as ResearchPreparationSystemStepState,
+      artifactSequence: typeof step.artifact_sequence === "number" ? step.artifact_sequence : null,
+    });
+    const mapReviewStep = (step: Record<string, unknown>) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_REVIEW_STEP_STATES,
+        "审核步骤",
+      ) as ResearchPreparationReviewStepState,
+    });
+    const mapArtifact = (artifact: Record<string, unknown> | null) => artifact === null
+      ? null
+      : {
+          sequence: typeof artifact.sequence === "number"
+            ? artifact.sequence
+            : (() => { throw this.preparationDataError(); })(),
+          state: this.requirePreparationValue(
+            artifact.state,
+            RESEARCH_PREPARATION_ARTIFACT_STATES,
+            "产物",
+          ) as ResearchPreparationArtifactState,
+          payload: this.requirePreparationContainer(artifact.payload),
+          contextFingerprint: typeof artifact.context_fingerprint === "string"
+            ? artifact.context_fingerprint
+            : null,
+          displayWithheld: artifact.display_withheld === true,
+        };
+    const initialMaterial = this.optionalPreparationContainer(payload.initial_material);
+    const progress = this.optionalPreparationContainer(payload.progress);
+    return {
+      caseId: this.requirePreparationString(payload.case_id),
+      caseTitle: this.optionalPreparationString(payload.case_title),
+      initialMaterial: initialMaterial
+        ? {
+            documentVersionId: this.requirePreparationString(initialMaterial.document_version_id),
+            title: this.optionalPreparationString(initialMaterial.title),
+            parseState: this.requirePreparationString(initialMaterial.parse_state),
+          }
+        : null,
+      progress: progress
+        ? {
+            completedSteps: this.requirePreparationNumber(progress.completed_steps),
+            totalSteps: this.requirePreparationNumber(progress.total_steps),
+            currentStep: progress.current_step === null || progress.current_step === undefined
+              ? null
+              : this.requirePreparationValue(progress.current_step, RESEARCH_PREPARATION_EVENT_STEPS, "当前准备步骤") as ResearchPreparationEventStep,
+            failedStep: progress.failed_step === null || progress.failed_step === undefined
+              ? null
+              : this.requirePreparationValue(progress.failed_step, RESEARCH_PREPARATION_EVENT_STEPS, "失败准备步骤") as ResearchPreparationEventStep,
+          }
+        : null,
+      revision: this.requirePreparationNumber(payload.revision),
+      status: this.requirePreparationValue(
+        this.requirePreparationString(payload.status),
+        RESEARCH_PREPARATION_STATUSES,
+        "整体",
+      ) as ResearchPreparationStatus,
+      researchRunId: this.optionalPreparationString(payload.research_run_id),
+      system: {
+        candidateClaims: mapSystemStep(this.requirePreparationStage(payload.system, "claims")),
+        protocol: mapSystemStep(this.requirePreparationStage(payload.system, "protocol")),
+        evidencePlan: mapSystemStep(this.requirePreparationStage(payload.system, "plan")),
+      },
+      review: {
+        candidateClaims: mapReviewStep(this.requirePreparationStage(payload.review, "claims")),
+        protocol: mapReviewStep(this.requirePreparationStage(payload.review, "protocol")),
+        evidencePlan: mapReviewStep(this.requirePreparationStage(payload.review, "plan")),
+      },
+      nextAttemptAt: this.optionalPreparationString(payload.next_attempt_at),
+      lastErrorMessage: this.optionalPreparationString(payload.last_error_message),
+      artifacts: {
+        candidateClaims: mapArtifact(this.requirePreparationStage(payload.artifacts, "claims", true)),
+        protocol: mapArtifact(this.requirePreparationStage(payload.artifacts, "protocol", true)),
+        evidencePlan: mapArtifact(this.requirePreparationStage(payload.artifacts, "plan", true)),
+      },
+      authorizedEvidencePlan: this.optionalPreparationContainer(payload.authorized_evidence_plan),
+      authorizedEvidencePlanDisplayWithheld: payload.authorized_evidence_plan_display_withheld === true,
+    };
+  }
+
+  private mapEventPreparationSummary(
+    dto: Schemas["EventPreparationSummaryDTO"],
+  ): import("../domain/eventResearch").EventPreparationSummary {
+    const mapSystemStep = (step: Record<string, unknown>) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_SYSTEM_STEP_STATES,
+        "系统步骤",
+      ) as ResearchPreparationSystemStepState,
+    });
+    const mapReviewStep = (step: Record<string, unknown>) => ({
+      state: this.requirePreparationValue(
+        step.state,
+        RESEARCH_PREPARATION_REVIEW_STEP_STATES,
+        "审核步骤",
+      ) as ResearchPreparationReviewStepState,
+    });
+    return {
+      status: this.requirePreparationValue(
+        dto.status,
+        RESEARCH_PREPARATION_STATUSES,
+        "整体",
+      ) as ResearchPreparationStatus,
+      revision: dto.revision,
+      researchRunId: dto.research_run_id,
+      nextAttemptAt: dto.next_attempt_at,
+      lastErrorMessage: dto.last_error_message,
+      system: {
+        candidateClaims: mapSystemStep(this.requirePreparationStage(dto.system, "claims")),
+        protocol: mapSystemStep(this.requirePreparationStage(dto.system, "protocol")),
+        evidencePlan: mapSystemStep(this.requirePreparationStage(dto.system, "plan")),
+      },
+      review: {
+        candidateClaims: mapReviewStep(this.requirePreparationStage(dto.review, "claims")),
+        protocol: mapReviewStep(this.requirePreparationStage(dto.review, "protocol")),
+        evidencePlan: mapReviewStep(this.requirePreparationStage(dto.review, "plan")),
+      },
+    };
   }
 
   private mapEventLifecycle(value: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null }): EventLifecycle {

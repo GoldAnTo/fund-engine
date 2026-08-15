@@ -420,6 +420,22 @@ class EventWorkbenchProgressDTO(V1Model):
     current_gap: str | None
 
 
+class EventPreparationStepDTO(V1Model):
+    state: str
+
+
+class EventPreparationSummaryDTO(V1Model):
+    """Safe preparation progress shown alongside the existing event lifecycle."""
+
+    status: str
+    revision: int
+    research_run_id: str | None
+    next_attempt_at: datetime | None
+    last_error_message: str | None
+    system: dict[str, EventPreparationStepDTO]
+    review: dict[str, EventPreparationStepDTO]
+
+
 class EventResearchScopeDTO(V1Model):
     version: int
     factors: list[EventResearchScopeFactorDTO]
@@ -435,3 +451,4 @@ class EventWorkbenchDTO(V1Model):
     progress: EventWorkbenchProgressDTO
     scope: EventResearchScopeDTO
     next_action: EventNextActionDTO
+    preparation: EventPreparationSummaryDTO | None = None

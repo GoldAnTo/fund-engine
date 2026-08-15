@@ -361,3 +361,10 @@ API 至少需要支持：
 - 既有未启动 Case 自动回填，而不是等待用户首次打开。
 - 使用有限重试、产物保留、版本失效和精确下游重生成。
 - 首版采用轮询与游标日志，不引入 WebSocket。
+
+## 已实现并验证
+
+- 数据库迁移已验证至 `0055`（`authorized_evidence_plan`）。
+- 选定后端准备、事件、协议与 SQLite 迁移验收：`251 passed, 4 skipped`；其中 PostgreSQL 并发用例因未设置 `TEST_DATABASE_URL` 而按环境门禁跳过。
+- 前端准备页、Desk 与数据适配验收：`273 passed`；全量后端回归：`1276 passed, 20 skipped`；全量前端回归：`332 passed`。TypeScript 类型检查和 OpenAPI 合同同步检查通过。
+- 本机 OpenAI-compatible 假 Provider 的端到端验收已验证三次准备调用、显式授权前零个 Run、授权后恰好一个 Run，以及 Worker 崩溃回收不重复写入当前产物。
