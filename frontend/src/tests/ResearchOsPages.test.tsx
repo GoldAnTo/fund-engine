@@ -273,6 +273,10 @@ describe("Research OS event entry", () => {
     expect(
       await screen.findByRole("heading", { name: "今天，先推进哪一个判断？" }),
     ).toBeVisible();
+    expect(screen.getByRole("link", { name: "＋ 开始自动研究" })).toHaveAttribute(
+      "href",
+      "/events/new",
+    );
     expect(await screen.findByText("当前优先")).toBeVisible();
     expect(await screen.findByText("研究网络")).toBeVisible();
     expect(
@@ -552,6 +556,10 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("全局运行档案加载中")).toBeVisible();
     expect(screen.getAllByTestId("global-run-skeleton")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "＋ 开始自动研究" })).toHaveAttribute(
+      "href",
+      "/events/new",
+    );
   });
 
   it("keeps reviewed and candidate relation lanes visible while the network loads", () => {
@@ -568,6 +576,10 @@ describe("Research OS event entry", () => {
 
     expect(screen.getByLabelText("跨 Case 关联加载中")).toBeVisible();
     expect(screen.getAllByTestId("network-relation-skeleton")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "＋ 开始自动研究" })).toHaveAttribute(
+      "href",
+      "/events/new",
+    );
   });
 
   it("lets a researcher retry the network after its live relation read is unavailable", async () => {

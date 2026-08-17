@@ -9,6 +9,10 @@
   border-bottom: 1px solid var(--ros-rule);
 }
 
+.automatic-research-entry .ros-eyebrow {
+  color: var(--automatic-entry-secondary);
+}
+
 .automatic-research-entry__heading h1 {
   max-width: 20ch;
   margin-bottom: .75rem;

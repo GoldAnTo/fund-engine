@@ -70,9 +70,18 @@ describe("EventCreatePage automatic research entry", () => {
       "placeholder",
       expect.stringMatching(/粘贴公告、研报或原始材料/),
     );
+    expect(screen.getByLabelText("研究主题或材料")).toHaveAttribute(
+      "name",
+      "researchInput",
+    );
+    expect(screen.getByLabelText("研究主题或材料")).toHaveAttribute(
+      "autocomplete",
+      "off",
+    );
     expect(
       screen.getAllByRole("button", { name: "开始自动研究" }),
     ).toHaveLength(1);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(screen.queryByText(/资料使用许可声明/)).not.toBeInTheDocument();
     expect(screen.queryByText(/关键因素/)).not.toBeInTheDocument();
     expect(screen.queryByText(/严格研究协议/)).not.toBeInTheDocument();
@@ -207,15 +216,17 @@ describe("EventCreatePage automatic research entry", () => {
     );
     expect(screen.getByRole("alert")).toHaveFocus();
     expect(screen.getByLabelText("研究主题或材料")).not.toHaveFocus();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 
-  it("keeps secondary text and the textarea boundary above WCAG AA contrast", () => {
+  it("keeps the eyebrow, secondary text, and textarea boundary above WCAG AA contrast", () => {
     const secondary = AUTOMATIC_RESEARCH_ENTRY_COLORS.secondary;
+    const eyebrow = AUTOMATIC_RESEARCH_ENTRY_COLORS.secondary;
     const fieldBorder = AUTOMATIC_RESEARCH_ENTRY_COLORS.fieldBorder;
     const page = { lightness: .972, chroma: .008, hue: 85 };
     const field = { lightness: .985, chroma: .006, hue: 85 };
 
-    expect(contrastRatio(secondary, page)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(eyebrow, page)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(secondary, field)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(fieldBorder, field)).toBeGreaterThanOrEqual(3);
   });

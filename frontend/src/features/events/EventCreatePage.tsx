@@ -86,6 +86,8 @@ export function EventCreatePage() {
         <label htmlFor="automatic-research-input">研究主题或材料</label>
         <textarea
           id="automatic-research-input"
+          name="researchInput"
+          autoComplete="off"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           placeholder="例如：英伟达新产品会如何影响供应链？也可以直接粘贴公告、研报或原始材料。"
