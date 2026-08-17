@@ -558,6 +558,46 @@ class AcquisitionRunner:
                     "document_version_id": str(document.id),
                 },
             )
+            checkpoint = session.execute(
+                select(AcquisitionAttempt, RetrievalArtifact)
+                .join(
+                    RetrievalArtifact,
+                    RetrievalArtifact.attempt_id == AcquisitionAttempt.id,
+                )
+                .join(
+                    RetrievalArtifactDocument,
+                    RetrievalArtifactDocument.retrieval_artifact_id
+                    == RetrievalArtifact.id,
+                )
+                .where(
+                    AcquisitionAttempt.job_id == claim.job_id,
+                    AcquisitionAttempt.adapter_key == "intake_material",
+                    AcquisitionAttempt.operation == "fetch",
+                    AcquisitionAttempt.outcome == "succeeded",
+                    AcquisitionAttempt.finished_at.is_not(None),
+                    RetrievalArtifact.source_reference_id == reference.id,
+                    RetrievalArtifact.content_sha256 == document.content_sha256,
+                    RetrievalArtifact.final_url == document.source_url,
+                    RetrievalArtifactDocument.document_version_id == document.id,
+                )
+                .order_by(AcquisitionAttempt.started_at, AcquisitionAttempt.id)
+                .limit(1)
+            ).first()
+            if checkpoint is not None:
+                attempt, artifact = checkpoint
+                metadata = (
+                    attempt.safe_metadata
+                    if isinstance(attempt.safe_metadata, dict)
+                    else {}
+                )
+                if (
+                    metadata.get("source_reference_id") != str(reference.id)
+                    or artifact.raw_bytes != raw
+                    or artifact.mime_type != mime_type
+                ):
+                    raise ValueError("intake material checkpoint is inconsistent")
+                session.commit()
+                return True
             now = self._now()
             attempt = repository.record_attempt(
                 claim.job_id,

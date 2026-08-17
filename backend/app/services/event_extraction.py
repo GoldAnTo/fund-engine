@@ -68,7 +68,7 @@ class EventExtractionService:
         event_at = _supported_datetime(result.get("event_at"), raw_input)
         question = _question(result.get("research_question"))
         factors = _factors(result.get("candidate_factors"))
-        input_kind = _input_kind(result.get("input_kind"))
+        input_kind = _input_kind(result.get("input_kind"), raw_input)
         return EventExtraction(
             event_title=title,
             company_name=company_name,
@@ -201,6 +201,35 @@ def _factors(value: object) -> tuple[str, ...]:
     return tuple(clean)
 
 
-def _input_kind(value: object) -> str:
-    """Fail safe: uncertain classifications remain prompts, never evidence."""
-    return value if value in {"topic", "material"} else "topic"
+_MATERIAL_MARKER_RE = re.compile(
+    r"(?:公告|财报|报告显示|披露|数据显示|宣布|通知|会议纪要|"
+    r"announcement|reported|report shows|disclosed|data shows)",
+    re.IGNORECASE,
+)
+_MATERIAL_FACT_RE = re.compile(
+    r"(?:20\d{2}[-年/]\d{1,2}|\d+(?:\.\d+)?\s*(?:%|元|万元|亿元|usd|rmb))",
+    re.IGNORECASE,
+)
+_TOPIC_PROMPT_RE = re.compile(
+    r"^(?:请|帮我|研究|分析|调查|评估|看看|what\b|how\b|research\b|analy[sz]e\b)",
+    re.IGNORECASE,
+)
+
+
+def _input_kind(value: object, raw_input: str) -> str:
+    """Require deterministic material signals before granting evidence intent."""
+    if value != "material":
+        return "topic"
+    normalized = raw_input.strip()
+    if not normalized:
+        return "topic"
+    if (
+        len(normalized) <= 100
+        and (_TOPIC_PROMPT_RE.search(normalized) or normalized.endswith(("?", "？")))
+    ):
+        return "topic"
+    if _MATERIAL_MARKER_RE.search(normalized) or _MATERIAL_FACT_RE.search(normalized):
+        return "material"
+    if len(normalized) >= 160 and len(re.findall(r"[。.!；;\n]", normalized)) >= 2:
+        return "material"
+    return "topic"

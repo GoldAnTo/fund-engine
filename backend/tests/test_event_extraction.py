@@ -73,6 +73,22 @@ def test_extraction_defaults_unknown_input_kind_to_topic() -> None:
     assert result.input_kind == "topic"
 
 
+def test_extraction_does_not_turn_a_topic_prompt_into_material_on_model_label() -> None:
+    class MisclassifyingClient:
+        def chat_json(self, messages, schema_hint=""):
+            return {
+                "input_kind": "material",
+                "research_question": "英伟达供应链会如何变化？",
+                "candidate_factors": ["需求", "供给", "替代"],
+            }
+
+    result = EventExtractionService(client=MisclassifyingClient()).extract(
+        raw_input="研究英伟达供应链会如何变化？", source_url=None
+    )
+
+    assert result.input_kind == "topic"
+
+
 def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input() -> None:
     class InventingClient:
         def chat_json(self, messages, schema_hint):

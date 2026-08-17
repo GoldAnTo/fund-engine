@@ -509,6 +509,63 @@ def test_uploaded_material_runner_reads_the_frozen_original_not_the_brief(
     assert artifact.mime_type == "text/plain"
 
 
+def test_material_prepare_checkpoint_is_reused_after_worker_restart(session) -> None:
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    class NoClaimsClient:
+        model_version = "no-claims-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            return {"statements": []}
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=_MaterialIntakeExtractor()
+    ).start("收入 100，利润 20，订单 30。", tenant_id="team-a")
+    run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    assert run is not None
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    session.commit()
+    session_factory = sessionmaker(
+        bind=session.get_bind(), future=True, expire_on_commit=False
+    )
+    runner = AcquisitionRunner(
+        session_factory, adapters={}, llm_client=NoClaimsClient()
+    )
+    with session_factory() as claim_session:
+        claim = AcquisitionRepository(claim_session).claim_next(
+            worker_id="system:acquisition-worker@test#material-checkpoint",
+            lease_for=timedelta(minutes=5),
+        )
+        assert claim is not None
+        claim_session.commit()
+    contract = runner._load_contract(claim)
+    assert contract is not None
+    request, _policy, stage = contract
+    assert stage == "searching"
+
+    assert runner._prepare_intake_material(claim, request)
+    assert runner._prepare_intake_material(claim, request)
+
+    session.expire_all()
+    assert session.scalar(
+        select(func.count())
+        .select_from(AcquisitionAttempt)
+        .where(AcquisitionAttempt.job_id == claim.job_id)
+    ) == 1
+    assert session.scalar(
+        select(func.count())
+        .select_from(RetrievalArtifact)
+        .join(
+            SourceReference,
+            SourceReference.id == RetrievalArtifact.source_reference_id,
+        )
+        .where(SourceReference.job_id == claim.job_id)
+    ) == 1
+
+
 class _WorkerChainExtractor:
     def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
         assert source_url is None
