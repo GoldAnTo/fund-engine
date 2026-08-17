@@ -15,6 +15,7 @@ from app.models.event_research import (
 )
 from app.models.ledger import Thesis
 from app.models.operational import ResearchRun
+from app.models.research_monitor import CaseMonitorVersion
 
 
 _OBJECTIVES = ["support", "contradict", "alternative_explanation"]
@@ -59,6 +60,10 @@ def validate_automatic_research_scope(
     payload: dict,
 ) -> ValidatedAutomaticResearchScope:
     """Validate one run's frozen protocol, plan, theses, and current scope."""
+    if type(run.max_rounds) is not int or not 1 <= run.max_rounds <= 3:
+        raise _frozen_invalid("automatic research max rounds is invalid")
+    if type(run.budget) is not int or run.budget < 1:
+        raise _frozen_invalid("automatic research budget is invalid")
     if not isinstance(payload, dict) or payload.get("workflow_mode") != "automatic":
         raise _frozen_invalid("automatic research scope event is invalid")
     factor_values = payload.get("factor_ids")
@@ -132,6 +137,51 @@ def validate_automatic_research_scope(
         raise _frozen_invalid("automatic research source scope is invalid")
     if "source_scope" in payload and not isinstance(payload["source_scope"], dict):
         raise _frozen_invalid("automatic research source scope is invalid")
+
+    expected_monitor_id = (
+        str(run.monitor_version_id) if run.monitor_version_id is not None else None
+    )
+    if (
+        "monitor_version_id" not in payload
+        or payload["monitor_version_id"] != expected_monitor_id
+    ):
+        raise _frozen_invalid("automatic research monitor identity is invalid")
+    monitor_fields = (
+        "frequency",
+        "next_verification_event",
+        "configured_by",
+        "configuration_change_reason",
+    )
+    if run.monitor_version_id is None:
+        if allowed_source_types != [] or any(
+            field not in payload or payload[field] is not None
+            for field in monitor_fields
+        ):
+            raise _frozen_invalid("automatic research monitor scope is invalid")
+    else:
+        monitor = session.get(CaseMonitorVersion, run.monitor_version_id)
+        if (
+            monitor is None
+            or monitor.research_case_id != run.research_case_id
+            or not isinstance(monitor.allowed_source_types, list)
+            or any(
+                not isinstance(value, str) for value in monitor.allowed_source_types
+            )
+            or len(monitor.allowed_source_types)
+            != len(set(monitor.allowed_source_types))
+        ):
+            raise _frozen_invalid("automatic research monitor scope is invalid")
+        expected_monitor_fields = {
+            "frequency": monitor.frequency,
+            "next_verification_event": monitor.next_verification_event,
+            "configured_by": monitor.changed_by,
+            "configuration_change_reason": monitor.change_reason,
+        }
+        if allowed_source_types != monitor.allowed_source_types or any(
+            payload.get(field) != value
+            for field, value in expected_monitor_fields.items()
+        ):
+            raise _frozen_invalid("automatic research monitor scope is invalid")
 
     current_scope = session.scalar(
         select(EventResearchScopeVersion)

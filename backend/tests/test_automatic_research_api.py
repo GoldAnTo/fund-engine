@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.errors import ValidationFailedError
 from app.models.acquisition import (
     AcquisitionException,
     AcquisitionJob,
@@ -31,9 +32,11 @@ from app.models.ledger import (
 )
 from app.models.operational import (
     EventResearchLifecycle,
+    Job,
     ResearchRun,
     ResearchTask,
 )
+from app.models.research_monitor import CaseMonitorVersion
 from app.services.automatic_research_intake import AutomaticResearchIntakeService
 from app.services.event_extraction import EventExtraction
 from app.services.event_extraction import EventExtractionProviderError
@@ -283,6 +286,59 @@ def _scope_payload(cmd_session, run_id: uuid.UUID) -> dict:
     )
     assert event is not None
     return copy.deepcopy(event.payload_json)
+
+
+def _fail_run_with_scope(cmd_session, run: ResearchRun, payload: dict) -> None:
+    from app.services.case_monitor import ResearchRunEventRepository
+
+    lifecycle = cmd_session.get(EventResearchLifecycle, run.research_case_id)
+    assert lifecycle is not None
+    ResearchRunEventRepository(cmd_session).append(
+        run.id,
+        stage="scope",
+        status="completed",
+        message="frozen scope mutation",
+        payload_json=payload,
+    )
+    run.status = "failed"
+    run.stage = "failed"
+    run.stop_reason = "no_usable_evidence"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+
+
+def _assert_get_retry_scope_conflict_without_new_work(
+    cmd_client, cmd_session, case_id: str
+) -> None:
+    case_uuid = uuid.UUID(case_id)
+    run_ids_before = list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(ResearchRun.research_case_id == case_uuid)
+        )
+    )
+    job_ids_before = list(
+        cmd_session.scalars(select(Job.id).where(Job.research_case_id == case_uuid))
+    )
+
+    get_response = cmd_client.get(f"/api/v1/automatic-research/{case_id}")
+    retry_response = cmd_client.post(
+        f"/api/v1/automatic-research/{case_id}/retry"
+    )
+
+    for response in (get_response, retry_response):
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "conflict"
+        assert error["message"] == "自动研究范围不可用，请稍后重试"
+        assert "monitor" not in response.text.lower()
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(ResearchRun.research_case_id == case_uuid)
+        )
+    ) == run_ids_before
+    assert list(
+        cmd_session.scalars(select(Job.id).where(Job.research_case_id == case_uuid))
+    ) == job_ids_before
 
 
 def test_get_queued_view_always_has_five_ordered_stages(
@@ -836,6 +892,259 @@ def test_retry_rejects_malformed_frozen_scope(
             )
         )
     ) == 1
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda run, payload: payload.update(
+            {"allowed_source_types": ["licensed_provider"]}
+        ),
+        lambda run, payload: payload.update(
+            {"monitor_version_id": str(uuid.uuid4())}
+        ),
+        lambda run, payload: payload.pop("monitor_version_id"),
+        lambda run, payload: payload.update({"frequency": "weekday_08_30"}),
+        lambda run, payload: payload.pop("frequency"),
+        lambda run, payload: payload.update(
+            {"next_verification_event": "provider-secret event"}
+        ),
+        lambda run, payload: payload.update({"configured_by": "provider-secret"}),
+        lambda run, payload: payload.update(
+            {"configuration_change_reason": "provider-secret reason"}
+        ),
+        lambda run, payload: setattr(run, "max_rounds", 0),
+        lambda run, payload: setattr(run, "max_rounds", 4),
+        lambda run, payload: setattr(run, "budget", 0),
+    ],
+    ids=[
+        "no-monitor-source-types",
+        "no-monitor-id",
+        "no-monitor-id-missing",
+        "no-monitor-frequency",
+        "no-monitor-frequency-missing",
+        "no-monitor-event",
+        "no-monitor-configured-by",
+        "no-monitor-reason",
+        "max-rounds-zero",
+        "max-rounds-four",
+        "budget-zero",
+    ],
+)
+def test_get_and_retry_reject_nonreplayable_run_scope_without_new_work(
+    cmd_client, cmd_session, monkeypatch, mutate
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    payload = _scope_payload(cmd_session, run.id)
+    mutate(run, payload)
+    _fail_run_with_scope(cmd_session, run, payload)
+
+    _assert_get_retry_scope_conflict_without_new_work(
+        cmd_client, cmd_session, created["case_id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda run, monitor, payload: payload.update(
+            {"monitor_version_id": str(uuid.uuid4())}
+        ),
+        lambda run, monitor, payload: payload.pop("frequency"),
+        lambda run, monitor, payload: payload.update({"frequency": "forged"}),
+        lambda run, monitor, payload: payload.update(
+            {"allowed_source_types": []}
+        ),
+        lambda run, monitor, payload: payload.update(
+            {"next_verification_event": "forged"}
+        ),
+        lambda run, monitor, payload: payload.update({"configured_by": "forged"}),
+        lambda run, monitor, payload: payload.update(
+            {"configuration_change_reason": "forged"}
+        ),
+    ],
+    ids=[
+        "monitor-id",
+        "monitor-frequency-missing",
+        "monitor-frequency-wrong",
+        "monitor-sources",
+        "monitor-event",
+        "monitor-configured-by",
+        "monitor-reason",
+    ],
+)
+def test_get_and_retry_reject_forged_monitor_snapshot_without_new_work(
+    cmd_client, cmd_session, monkeypatch, mutate
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    payload = _scope_payload(cmd_session, run.id)
+    monitor = CaseMonitorVersion(
+        research_case_id=run.research_case_id,
+        version=1,
+        status="active",
+        frequency="weekday_08_30",
+        factor_ids=list(payload["factor_ids"]),
+        allowed_source_types=["licensed_provider"],
+        next_verification_event="2026Q4 财报披露",
+        budget=run.budget,
+        changed_by="human:reviewer",
+        change_reason="monitor fixture",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(monitor)
+    cmd_session.flush()
+    run.monitor_version_id = monitor.id
+    payload.update(
+        {
+            "monitor_version_id": str(monitor.id),
+            "allowed_source_types": list(monitor.allowed_source_types),
+            "frequency": monitor.frequency,
+            "next_verification_event": monitor.next_verification_event,
+            "configured_by": monitor.changed_by,
+            "configuration_change_reason": monitor.change_reason,
+        }
+    )
+    mutate(run, monitor, payload)
+    _fail_run_with_scope(cmd_session, run, payload)
+
+    _assert_get_retry_scope_conflict_without_new_work(
+        cmd_client, cmd_session, created["case_id"]
+    )
+
+
+def test_monitor_backed_retry_clones_exact_saved_monitor_scope(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    old_run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert old_run is not None
+    old_payload = _scope_payload(cmd_session, old_run.id)
+    monitor = CaseMonitorVersion(
+        research_case_id=old_run.research_case_id,
+        version=1,
+        status="active",
+        frequency="weekday_08_30",
+        factor_ids=list(old_payload["factor_ids"]),
+        allowed_source_types=["licensed_provider"],
+        next_verification_event="2026Q4 财报披露",
+        budget=old_run.budget,
+        changed_by="human:reviewer",
+        change_reason="monitor fixture",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(monitor)
+    cmd_session.flush()
+    old_run.monitor_version_id = monitor.id
+    old_payload.update(
+        {
+            "monitor_version_id": str(monitor.id),
+            "allowed_source_types": list(monitor.allowed_source_types),
+            "frequency": monitor.frequency,
+            "next_verification_event": monitor.next_verification_event,
+            "configured_by": monitor.changed_by,
+            "configuration_change_reason": monitor.change_reason,
+        }
+    )
+    _fail_run_with_scope(cmd_session, old_run, old_payload)
+
+    response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    assert response.status_code == 201, response.text
+    new_run = cmd_session.get(ResearchRun, uuid.UUID(response.json()["run_id"]))
+    assert new_run is not None
+    assert new_run.monitor_version_id == monitor.id
+    new_payload = _scope_payload(cmd_session, new_run.id)
+    expected = copy.deepcopy(old_payload)
+    expected["trigger"] = "retry"
+    expected["retried_from_run_id"] = str(old_run.id)
+    assert new_payload == expected
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        ValueError("provider-secret invalid start"),
+        ValidationFailedError("provider-secret validation failure"),
+    ],
+    ids=["value-error", "validation-error"],
+)
+def test_retry_maps_start_validation_failure_to_safe_scope_conflict(
+    cmd_client, cmd_session, monkeypatch, raised
+) -> None:
+    from app.services.auto_research import AutoResearchService
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    payload = _scope_payload(cmd_session, run.id)
+    _fail_run_with_scope(cmd_session, run, payload)
+    run_ids_before = list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == run.research_case_id
+            )
+        )
+    )
+    job_ids_before = list(
+        cmd_session.scalars(
+            select(Job.id).where(Job.research_case_id == run.research_case_id)
+        )
+    )
+
+    def fail_start(service, *args, **kwargs):
+        raise raised
+
+    monkeypatch.setattr(AutoResearchService, "start", fail_start)
+    response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["message"] == "自动研究范围不可用，请稍后重试"
+    assert "provider-secret" not in response.text
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == run.research_case_id
+            )
+        )
+    ) == run_ids_before
+    assert list(
+        cmd_session.scalars(
+            select(Job.id).where(Job.research_case_id == run.research_case_id)
+        )
+    ) == job_ids_before
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [("max_rounds", True), ("budget", True)],
+)
+def test_scope_validator_rejects_boolean_run_limits(
+    cmd_client, cmd_session, monkeypatch, attribute, value
+) -> None:
+    from app.services.automatic_research_scope import AutomaticResearchScopeError
+    from app.services.automatic_research_scope import validate_automatic_research_scope
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    payload = _scope_payload(cmd_session, run.id)
+    setattr(run, attribute, value)
+    if attribute == "max_rounds":
+        payload["automatic_evidence_plan"]["max_rounds"] = 1
+    else:
+        payload["budget"] = 1
+        payload["automatic_evidence_plan"]["budget"] = 1
+
+    with pytest.raises(AutomaticResearchScopeError):
+        validate_automatic_research_scope(cmd_session, run, payload)
 
 
 def test_scope_validator_exposes_stable_frozen_error_reason(

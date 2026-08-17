@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.errors import ConflictError, NotFoundError
+from app.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.models.acquisition import AcquisitionJob
 from app.models.event_research import EventResearchBrief
 from app.models.ledger import ResearchCase
@@ -137,21 +137,26 @@ class AutomaticResearchRetryService:
         expected_payload = copy.deepcopy(frozen)
         expected_payload["trigger"] = "retry"
         expected_payload["retried_from_run_id"] = str(old_run.id)
-        new_run = AutoResearchService(self._session).start(
-            case_id,
-            max_rounds=old_run.max_rounds,
-            budget=old_run.budget,
-            commit=False,
-            thesis_ids=list(validated_scope.factor_ids),
-            monitor_version_id=old_run.monitor_version_id,
-            trigger="retry",
-            allowed_source_types=(
-                list(frozen["allowed_source_types"])
-                if old_run.monitor_version_id is not None
-                else None
-            ),
-            scope_context=copy.deepcopy(expected_payload),
-        )
+        try:
+            new_run = AutoResearchService(self._session).start(
+                case_id,
+                max_rounds=old_run.max_rounds,
+                budget=old_run.budget,
+                commit=False,
+                thesis_ids=list(validated_scope.factor_ids),
+                monitor_version_id=old_run.monitor_version_id,
+                trigger="retry",
+                allowed_source_types=(
+                    list(frozen["allowed_source_types"])
+                    if old_run.monitor_version_id is not None
+                    else None
+                ),
+                scope_context=copy.deepcopy(expected_payload),
+            )
+        except (ValueError, ValidationFailedError) as exc:
+            raise ConflictError(
+                AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE
+            ) from exc
         new_scope_event = self._session.scalar(
             select(ResearchRunEvent)
             .where(
