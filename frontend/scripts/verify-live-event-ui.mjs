@@ -489,15 +489,42 @@ async function main() {
       if (message.type() === "error") browserFailures.push(`console: ${message.text()}`);
     });
     const title = "真实浏览器默认 HTTP 事件验收";
-    await page.goto(`${uiBase}/events/new`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "先冻结材料，再决定它属于哪个研究" }).waitFor();
-    await page.getByLabel("事件原始输入").fill(`${title}。研报预计验收公司2024年归母净利润为1亿元，等待人工核验。`);
-    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
-    await page.getByLabel("研究问题").waitFor();
-    await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
-    await page.waitForURL(/\/events\/[0-9a-f-]{36}\/preparation$/u);
-    const caseId = new URL(page.url()).pathname.split("/").at(-2);
-    if (!caseId) throw new Error("created Case URL did not contain an id");
+    const rawInput = `${title}。研报预计验收公司2024年归母净利润为1亿元，等待人工核验。`;
+    // The default creation page is intentionally the one-click automatic
+    // flow. Seed one legacy reviewed Case through its supported API so this
+    // verifier can keep proving that all reviewed workbench pages still work.
+    const extracted = await apiJson(apiBase, "/event-research/extract", token, {
+      method: "POST",
+      body: JSON.stringify({
+        raw_input: rawInput,
+        source_url: null,
+        source_type: "pasted_snapshot",
+        source_metadata: {},
+      }),
+    });
+    const createdReviewed = await apiJson(apiBase, "/event-research", token, {
+      method: "POST",
+      body: JSON.stringify({
+        raw_input: rawInput,
+        source_url: null,
+        source_type: "pasted_snapshot",
+        source_metadata: {
+          authority_level: "user_supplied",
+          permissions: { ai_processing: true, display: true },
+        },
+        event_title: title,
+        company_name: extracted.company_name,
+        ticker: extracted.ticker,
+        event_at: extracted.event_at,
+        market_reaction: extracted.market_reaction,
+        research_question: extracted.research_question,
+        candidate_factors: extracted.candidate_factors,
+        research_protocol_required: true,
+        created_by: "human:live-verifier",
+      }),
+    });
+    const caseId = createdReviewed.case_id;
+    if (!caseId) throw new Error("seeded reviewed Case response did not contain an id");
 
     const caseReadChecks = [
       ["", () => page.getByRole("heading", { name: title }).waitFor()],
@@ -700,8 +727,6 @@ async function main() {
       throw new Error(`default frontend unexpectedly used mock mode: ${apiRequests.join(" | ")}`);
     }
     const expectedRequests = [
-      ["POST /event-research/extract", (request) => request.startsWith("POST ") && request.endsWith("/event-research/extract")],
-      ["POST /event-research", (request) => request.startsWith("POST ") && request.endsWith("/event-research")],
       ["PUT /research-cases/:caseId/monitor", (request) => request.startsWith("PUT ") && request.endsWith(`/research-cases/${caseId}/monitor`)],
       ["POST /research-cases/:caseId/monitor/runs", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/monitor/runs`)],
       ["POST /research-cases/:caseId/report-claims", (request) => request.startsWith("POST ") && request.endsWith(`/research-cases/${caseId}/report-claims`)],
@@ -738,7 +763,7 @@ async function main() {
     }
     await browser.close();
     browser = undefined;
-    console.log("PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API");
+    console.log("PASS: default frontend operated a seeded reviewed Case, configured and registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API");
   } catch (error) {
     const serverOutput = [api, vite]
       .filter(Boolean)

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def test_live_event_ui_verifier_creates_market_factor_instrument_fund_chain_runs_pauses_and_reads_a_case_through_default_http_client() -> None:
+def test_live_event_ui_verifier_keeps_reviewed_case_pages_working_through_default_http_client() -> None:
     """Use live HTTP/browser adapters with an explicit external-provider fake."""
     frontend = Path(__file__).parents[2] / "frontend"
     script = frontend / "scripts" / "verify-live-event-ui.mjs"
@@ -25,4 +25,4 @@ def test_live_event_ui_verifier_creates_market_factor_instrument_fund_chain_runs
     )
 
     assert result.returncode == 0, result.stderr
-    assert "PASS: default frontend created, configured, registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API" in result.stdout
+    assert "PASS: default frontend operated a seeded reviewed Case, configured and registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API" in result.stdout

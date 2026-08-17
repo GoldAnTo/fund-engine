@@ -67,6 +67,22 @@ cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node
 本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
 与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
 
+### 一键自动研究运行条件
+
+真实环境要让一键研究从排队持续推进到结论，需要由 supervisor 同时管理 API、
+研究 worker 和受治理资料采集 worker：
+
+```bash
+cd backend
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+.venv/bin/python -m app.scripts.run_research_worker --loop
+.venv/bin/python -m app.scripts.run_acquisition_worker --loop
+```
+
+两个 worker 都必须持续受监督运行，并先配置所启用来源需要的凭证，系统才会真正
+自动采集、校验证据并恢复研究任务。`research_preparation` worker 仅供旧版
+`reviewed` Case 使用；一键自动研究不依赖它。
+
 ## 仓库结构
 
 | 路径 | 内容 |

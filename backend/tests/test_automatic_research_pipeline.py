@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -9,6 +10,13 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.acquisition.policy import B_SCOPE_POLICY
+from app.acquisition.sources import (
+    RetrievedEnvelope,
+    RetrievedSearchResult,
+    SourceAdapter,
+    SourceDescriptor,
+    SourceReferenceValue,
+)
 from app.errors import ValidationFailedError
 from app.models.acquisition import (
     AcquisitionAttempt,
@@ -34,6 +42,7 @@ from app.models.ledger import (
     EvidenceLink,
     EvidenceSnapshot,
     ResearchCase,
+    ReviewDecision,
     SourceSpan,
     SourceStatement,
     Thesis,
@@ -50,6 +59,254 @@ from app.models.research_monitor import ResearchRunEvent
 from app.models.proposals import Proposal
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.case_monitor import ResearchRunEventRepository
+from app.services.event_extraction import EventExtraction
+
+
+class _WorkerChainExtractor:
+    def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
+        assert source_url is None
+        return EventExtraction(
+            event_title=raw_input,
+            company_name="Example Corp",
+            ticker="600001",
+            event_at=None,
+            market_reaction=None,
+            summary=None,
+            research_question="Example Corp Revenue 是否继续增长？",
+            candidate_factors=("Revenue", "Margin", "Orders"),
+        )
+
+
+class _WorkerChainExtractionClient:
+    model_version = "fake-worker-chain-extractor-v1"
+
+    def chat_json(self, messages, schema_hint=""):
+        assert schema_hint == "extract"
+        payload = json.loads(messages[-1]["content"])
+        span = payload["spans"][0]
+        quote = span["verbatim_text"]
+        metric = next(
+            value for value in ("Revenue", "Margin", "Orders") if value in quote
+        )
+        return {
+            "statements": [
+                {
+                    "span_id": span["span_id"],
+                    "kind": "disclosed_fact",
+                    "quote": quote,
+                    "quote_start": 0,
+                    "quote_end": len(quote),
+                    "normalized_text": quote,
+                    "assertion_actor": "Example Corp",
+                    "subject": "Example Corp",
+                    "predicate": metric,
+                    "object_text": "100 USD",
+                    "numeric_value": "100",
+                    "unit": "USD",
+                    "observed_period": "2026-08-12",
+                    "scope": {"company": "Example Corp", "metric": metric},
+                }
+            ]
+        }
+
+
+class _WorkerChainAdapter(SourceAdapter):
+    def __init__(self, adapter_key: str) -> None:
+        self._descriptor = SourceDescriptor(
+            adapter_key=adapter_key,
+            provider_identity=f"Worker chain {adapter_key}",
+            allowed_schemes=frozenset({"https"}),
+            allowed_hosts=frozenset(
+                {
+                    "www.sse.com.cn"
+                    if adapter_key == "sse"
+                    else "www.szse.cn"
+                    if adapter_key == "szse"
+                    else "licensed.example.test"
+                }
+            ),
+            allowed_source_roles=frozenset({"company_disclosure"}),
+        )
+
+    @property
+    def descriptor(self) -> SourceDescriptor:
+        return self._descriptor
+
+    def search(self, query: str, cutoff: datetime):
+        if self.descriptor.adapter_key != "sse" or "支持 增长 改善" not in query:
+            return ()
+        metric = next(
+            value for value in ("Revenue", "Margin", "Orders") if value in query
+        )
+        reference = SourceReferenceValue(
+            adapter_key="sse",
+            external_record_id=f"worker-chain-{metric.casefold()}",
+            external_version="v1",
+            canonical_url="https://www.sse.com.cn/disclosure.txt",
+            title=f"Example Corp {metric} disclosure",
+            published_at=datetime(2026, 8, 13, 8, tzinfo=timezone.utc),
+            source_role="company_disclosure",
+            fetch_locator={
+                "canonical_url": "https://www.sse.com.cn/disclosure.txt"
+            },
+            metadata={
+                "provider_identity": "Shanghai Stock Exchange",
+                "security_code": "600001",
+            },
+        )
+        if metric == "Orders":
+            return (RetrievedSearchResult(reference, self._envelope(reference)),)
+        return (reference,)
+
+    def fetch(self, reference: SourceReferenceValue) -> RetrievedEnvelope:
+        assert self.descriptor.adapter_key == "sse"
+        return self._envelope(reference)
+
+    @staticmethod
+    def _envelope(reference: SourceReferenceValue) -> RetrievedEnvelope:
+        metric = reference.external_record_id.removeprefix("worker-chain-").title()
+        assert metric in {"Revenue", "Margin", "Orders"}
+        content = f"Example Corp 2026-08-12 {metric} was 100 USD.".encode()
+        return RetrievedEnvelope(
+            content=content,
+            mime_type="text/plain; charset=utf-8",
+            final_url="https://www.sse.com.cn/disclosure.txt",
+            etag='"worker-chain-v1"',
+            last_modified="Thu, 13 Aug 2026 08:00:00 GMT",
+            provider_request_id="worker-chain-request-1",
+            metadata={
+                "adapter_key": "sse",
+                "external_record_id": reference.external_record_id,
+                "provider_identity": "Shanghai Stock Exchange",
+            },
+        )
+
+    def restore_reference(self, reference: SourceReferenceValue) -> None:
+        self.descriptor.validate_reference(reference)
+
+    def close(self) -> None:
+        return None
+
+
+def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
+    tmp_path, monkeypatch
+) -> None:
+    from app.models.ledger import Base
+    from app.models.research_preparation import ResearchPreparation
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.scripts import run_acquisition_worker, run_research_worker
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'automatic-worker-chain.db'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+
+    with session_local() as intake_session:
+        started = AutomaticResearchIntakeService(
+            intake_session, extractor=_WorkerChainExtractor()
+        ).start("Example Corp Revenue research", tenant_id="team-a")
+        run_id = uuid.UUID(started.run_id)
+        case_id = uuid.UUID(started.case_id)
+        intake_session.commit()
+
+    monkeypatch.setattr(run_research_worker, "SessionLocal", session_local)
+    assert run_research_worker.run_once()
+
+    # A fresh session sees the durable park state before any source worker runs.
+    with session_local() as waiting_session:
+        waiting_run = waiting_session.get(ResearchRun, run_id)
+        waiting_lifecycle = waiting_session.get(EventResearchLifecycle, case_id)
+        waiting_job = waiting_session.scalar(
+            select(Job).where(
+                Job.target_type == "research_run", Job.target_id == run_id
+            )
+        )
+        assert waiting_run is not None
+        assert waiting_run.status == "waiting_for_sources"
+        assert waiting_lifecycle is not None
+        assert waiting_lifecycle.status == "researching"
+        assert waiting_lifecycle.next_human_action is None
+        assert waiting_job is not None
+        assert waiting_job.status == "waiting_for_sources"
+
+    runner = AcquisitionRunner(
+        session_local,
+        adapters={
+            key: _WorkerChainAdapter(key) for key in B_SCOPE_POLICY.enabled_adapter_keys
+        },
+        llm_client=_WorkerChainExtractionClient(),
+    )
+    source_jobs_processed = 0
+    while run_acquisition_worker.run_once(
+        runner=runner,
+        session_factory=session_local,
+        worker_id="system:acquisition-worker@test#worker-chain",
+        lease_for=timedelta(minutes=5),
+    ):
+        source_jobs_processed += 1
+    assert source_jobs_processed == 9
+
+    # This second research-worker call opens another session and resumes only
+    # from the committed source terminal states.
+    assert run_research_worker.run_once()
+
+    with session_local() as final_session:
+        run = final_session.get(ResearchRun, run_id)
+        lifecycle = final_session.get(EventResearchLifecycle, case_id)
+        conclusion = final_session.scalar(
+            select(EventResearchConclusion).where(
+                EventResearchConclusion.research_case_id == case_id
+            )
+        )
+        source_jobs = list(
+            final_session.scalars(
+                select(AcquisitionJob).where(AcquisitionJob.research_run_id == run_id)
+            )
+        )
+        admitted_links = list(
+            final_session.scalars(
+                select(EvidenceLink).where(
+                    EvidenceLink.review_state == "automatically_admitted"
+                )
+            )
+        )
+        admission_decisions = list(final_session.scalars(select(AutomaticAdmissionDecision)))
+        open_tasks = list(
+            final_session.scalars(
+                select(TaskItem).where(TaskItem.status.in_(("open", "in_progress")))
+            )
+        )
+
+        assert run is not None and run.status == "succeeded"
+        assert lifecycle is not None and lifecycle.status == "completed"
+        assert lifecycle.next_human_action is None
+        assert conclusion is not None
+        assert conclusion.state == "system_generated"
+        assert conclusion.reviewer is None
+        assert set(conclusion.evidence_link_ids) == {
+            str(link.id) for link in admitted_links
+        }
+        assert len(source_jobs) == 9
+        assert all(job.status in {"succeeded", "failed"} for job in source_jobs)
+        assert len(admitted_links) == 3
+        assert all(link.creator_type == "ai" for link in admitted_links)
+        assert all(
+            link.automatic_admission_decision_id is not None
+            for link in admitted_links
+        )
+        assert len(admission_decisions) == 3
+        assert {decision.outcome for decision in admission_decisions} == {"admitted"}
+        assert open_tasks == []
+        assert list(final_session.scalars(select(ResearchPreparation))) == []
+        assert list(final_session.scalars(select(Proposal))) == []
+        assert list(final_session.scalars(select(AtomicClaimReview))) == []
+        assert list(final_session.scalars(select(ReviewDecision))) == []
+
 
 
 def _automatic_run(
