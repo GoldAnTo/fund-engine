@@ -102,7 +102,8 @@ cd backend
 token 读取 `/api/v1/research-runs/worker-status` 检查研究 worker 心跳；资料采集
 worker 目前没有独立健康端点，应由 supervisor 检查进程存活并观察采集任务日志。
 停止时向两个 worker 发送 `SIGINT`（前台运行可按 Ctrl-C）；资料采集 worker 也会
-处理 `SIGTERM`，完成当前短事务后退出。API 按 Uvicorn 的正常停止信号优雅关闭。
+处理 `SIGTERM`，完成当前 claim 后退出，外部 provider/LLM 调用可能延迟停止。API
+按 Uvicorn 的正常停止信号优雅关闭。
 
 ## 仓库结构
 

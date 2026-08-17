@@ -391,6 +391,39 @@ def test_inline_checkpoint_retains_provider_observation_and_monotonic_persisted_
         assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 1
 
 
+def test_inline_checkpoint_rolls_back_reference_when_checkpoint_precedes_observation(
+    session,
+):
+    case, job = _seed_job(session, stage="searching")
+    provider_observed_at = NOW + timedelta(seconds=2)
+    checkpoint_at = NOW + timedelta(seconds=1)
+    freezer = RetrievedDocumentFreezer(
+        _factory(session), clock=MutableClock(checkpoint_at)
+    )
+
+    with pytest.raises(
+        ValueError, match="checkpoint time must not precede provider observation"
+    ):
+        freezer.checkpoint_search_result(
+            _inline_reference(),
+            _envelope(
+                b"inline response",
+                final_url="https://issuer.example/inline.txt",
+            ),
+            _fetch_context(job, case, retrieved_at=provider_observed_at),
+            started_at=NOW,
+        )
+
+    with _factory(session)() as verify:
+        assert verify.scalar(select(func.count(SourceReference.id))) == 0
+        assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 0
+        assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 0
+        persisted_job = verify.get(AcquisitionJob, job.id)
+        assert persisted_job is not None
+        assert persisted_job.status == "running"
+        assert persisted_job.stage == "searching"
+
+
 def _seed_file_sqlite(tmp_path, *, reference_count=2):
     engine = create_engine(
         f"sqlite:///{tmp_path / f'retrieved-{uuid.uuid4().hex}.sqlite3'}",

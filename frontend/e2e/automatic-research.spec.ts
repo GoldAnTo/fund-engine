@@ -33,5 +33,6 @@ for (const automaticInput of automaticInputs) {
     for (const role of ["button", "textbox", "combobox", "checkbox", "radio", "spinbutton"] as const) {
       await expect(process.getByRole(role, { name: forbiddenControlName })).toHaveCount(0);
     }
+    await expect(process.getByRole("link", { name: forbiddenControlName })).toHaveCount(0);
   });
 }
