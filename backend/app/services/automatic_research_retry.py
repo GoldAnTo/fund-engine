@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.domain.automatic_research import AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES
+from app.domain.automatic_research import (
+    AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES,
+    AUTOMATIC_RESEARCH_UNMANAGED_RUN_MESSAGE,
+)
 from app.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.models.acquisition import AcquisitionJob
 from app.models.event_research import EventResearchBrief
@@ -93,7 +96,7 @@ class AutomaticResearchRetryService:
             )
         )
         if active_runs:
-            raise ConflictError("automatic research already has an active run")
+            raise ConflictError(AUTOMATIC_RESEARCH_UNMANAGED_RUN_MESSAGE)
         list(
             self._session.scalars(
                 select(AcquisitionJob)

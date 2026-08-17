@@ -739,15 +739,23 @@ def test_unmanaged_active_run_blocks_automatic_get_and_retry(
     )
 
     get_response = cmd_client.get(
-        f"/api/v1/automatic-research/{created['case_id']}"
+        f"/api/v1/automatic-research/{created['case_id']}",
+        headers={"x-request-id": "unmanaged-active-run"},
     )
     retry_response = cmd_client.post(
-        f"/api/v1/automatic-research/{created['case_id']}/retry"
+        f"/api/v1/automatic-research/{created['case_id']}/retry",
+        headers={"x-request-id": "unmanaged-active-run"},
     )
 
     for response in (get_response, retry_response):
         assert response.status_code == 409
-        assert response.json()["error"]["code"] == "conflict"
+    assert get_response.json() == retry_response.json()
+    assert get_response.json()["error"] == {
+        "code": "conflict",
+        "message": "自动研究存在其他进行中的运行，请稍后重试",
+        "details": {},
+        "request_id": "unmanaged-active-run",
+    }
     assert lifecycle.active_run_id == old_run.id
     assert list(
         cmd_session.scalars(
