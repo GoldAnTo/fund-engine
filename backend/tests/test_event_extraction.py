@@ -89,6 +89,62 @@ def test_extraction_does_not_turn_a_topic_prompt_into_material_on_model_label() 
     assert result.input_kind == "topic"
 
 
+@pytest.mark.parametrize(
+    "raw_input",
+    [
+        "请分析公告：公司披露收入增长20%",
+        "公司公告显示收入增长20%，意味着什么？",
+        "Please analyze this announcement: Example Corp disclosed revenue increased 20%.",
+        "研报指出：公司订单增长15%，收入达到20亿元。",
+        "Research report:\nRevenue increased 20%.\nOrders reached 300 USD.",
+        "公司一季度收入增长20%。\n订单同比增加15%。\n毛利率达到30%。",
+    ],
+)
+def test_extraction_prioritizes_strong_material_facts_over_prompt_shape(
+    raw_input: str,
+) -> None:
+    class MaterialClient:
+        def chat_json(self, messages, schema_hint=""):
+            return {
+                "input_kind": "material",
+                "research_question": "材料中的变化意味着什么？",
+                "candidate_factors": ["收入", "订单", "利润率"],
+            }
+
+    result = EventExtractionService(client=MaterialClient()).extract(
+        raw_input=raw_input,
+        source_url=None,
+    )
+
+    assert result.input_kind == "material"
+
+
+@pytest.mark.parametrize(
+    "raw_input",
+    [
+        "请研究AI服务器电力需求",
+        "AI服务器电力需求会如何变化？",
+        "研究公告行业",
+        "Please research the announcement industry",
+    ],
+)
+def test_extraction_keeps_short_research_prompts_as_topic(raw_input: str) -> None:
+    class MisclassifyingClient:
+        def chat_json(self, messages, schema_hint=""):
+            return {
+                "input_kind": "material",
+                "research_question": "这个主题会如何变化？",
+                "candidate_factors": ["需求", "供给", "替代"],
+            }
+
+    result = EventExtractionService(client=MisclassifyingClient()).extract(
+        raw_input=raw_input,
+        source_url=None,
+    )
+
+    assert result.input_kind == "topic"
+
+
 def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input() -> None:
     class InventingClient:
         def chat_json(self, messages, schema_hint):
