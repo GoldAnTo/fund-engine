@@ -9,6 +9,7 @@ import {
   formatAutomaticDuration,
   formatAutomaticTimestamp,
   normalizeAutomaticResearchView,
+  stableRepeatedTextEntries,
   type AutomaticResearchSource,
   type AutomaticResearchView,
 } from "../../domain/automaticResearch";
@@ -114,11 +115,13 @@ export function AutomaticResearchPage() {
   const [transientError, setTransientError] = useState(false);
   const [retryError, setRetryError] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [reading, setReading] = useState(false);
   const [pollVersion, setPollVersion] = useState(0);
   const mountedRef = useRef(false);
   const requestTokenRef = useRef(0);
   const flowTokenRef = useRef(0);
   const seedViewRef = useRef<AutomaticResearchView | null>(null);
+  const activeReadRef = useRef<Promise<AutomaticResearchView> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -146,9 +149,21 @@ export function AutomaticResearchPage() {
     if (!caseId) return undefined;
 
     const load = async () => {
+      const existingRead = activeReadRef.current;
+      if (existingRead) {
+        try {
+          await existingRead;
+        } catch {
+          // The owning flow presents the failure. A newer flow waits so GETs stay serialized.
+        }
+        if (!mountedRef.current || flowToken !== flowTokenRef.current) return;
+      }
       const requestToken = ++requestTokenRef.current;
+      const request = researchClient.getAutomaticResearch(caseId);
+      activeReadRef.current = request;
+      setReading(true);
       try {
-        const response = await researchClient.getAutomaticResearch(caseId);
+        const response = await request;
         const nextView = normalizeAutomaticResearchView(response);
         if (!nextView) throw new InvalidAutomaticResearchProjectionError();
         if (
@@ -195,6 +210,13 @@ export function AutomaticResearchPage() {
         setView(null);
         setLoadError("unavailable");
         setTransientError(false);
+      } finally {
+        if (activeReadRef.current === request) activeReadRef.current = null;
+        if (
+          mountedRef.current
+          && flowToken === flowTokenRef.current
+          && requestToken === requestTokenRef.current
+        ) setReading(false);
       }
     };
 
@@ -207,8 +229,13 @@ export function AutomaticResearchPage() {
   }, [caseId, pollVersion]);
 
   function readProgressNow() {
-    if (!caseId || !view || !transientError || !isActive(view)) return;
+    if (!caseId || !view || reading || !transientError || !isActive(view)) return;
     seedViewRef.current = view;
+    setPollVersion((version) => version + 1);
+  }
+
+  function readEmptyError() {
+    if (!caseId || reading || !loadError) return;
     setPollVersion((version) => version + 1);
   }
 
@@ -270,6 +297,14 @@ export function AutomaticResearchPage() {
               ? "系统收到的阶段记录不符合固定的五阶段结构，已停止展示以避免误导。"
               : "它可能不存在，或研究服务暂时不可用。请稍后从研究调度页重试。"}
           </p>
+          <button
+            type="button"
+            className="ros-button ros-button--secondary"
+            disabled={reading}
+            onClick={readEmptyError}
+          >
+            重新读取
+          </button>
         </div>
       </main>
     );
@@ -277,6 +312,10 @@ export function AutomaticResearchPage() {
 
   const duration = formatAutomaticDuration(view.stats.durationSeconds);
   const liveStage = currentStage(view);
+  const activityEntries = stableRepeatedTextEntries(
+    view.recentActivity,
+    `${view.runId}-activity`,
+  );
 
   return (
     <main
@@ -314,7 +353,9 @@ export function AutomaticResearchPage() {
           aria-label="进度暂时无法更新"
         >
           <p>进度暂时无法更新，系统会继续自动读取。</p>
-          <button type="button" onClick={readProgressNow}>立即重新读取</button>
+          <button type="button" disabled={reading} onClick={readProgressNow}>
+            立即重新读取
+          </button>
         </section>
       )}
 
@@ -413,8 +454,8 @@ export function AutomaticResearchPage() {
           {view.recentActivity.length > 0 && (
             <section>
               <h3>最近活动</h3>
-              <ul>{view.recentActivity.map((activity, index) => (
-                <li key={`${view.runId}-activity-${index}`}>{activity}</li>
+              <ul>{activityEntries.map((activity) => (
+                <li key={activity.key}>{activity.text}</li>
               ))}</ul>
             </section>
           )}

@@ -277,6 +277,28 @@ describe("AutomaticResearchPage", () => {
     expect(get).toHaveBeenCalledTimes(3);
   });
 
+  it("disables immediate reading while the automatic recovery GET is in flight", async () => {
+    vi.useFakeTimers();
+    let resolveRecovery!: (view: AutomaticResearchView) => void;
+    const get = vi.spyOn(adapter, "getAutomaticResearch")
+      .mockResolvedValueOnce(activeView("running"))
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRecovery = resolve; }));
+
+    renderPage();
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+
+    const readNow = screen.getByRole("button", { name: "立即重新读取" });
+    expect(readNow).toBeDisabled();
+    fireEvent.click(readNow);
+    expect(get).toHaveBeenCalledTimes(3);
+
+    await act(async () => { resolveRecovery(completedView()); await Promise.resolve(); });
+    expect(screen.getByText("已完成", { selector: ".automatic-research-process__overall-status" })).toBeVisible();
+  });
+
   it("does not overlap polling requests while a progress read is pending", async () => {
     vi.useFakeTimers();
     let resolveSecond!: (view: AutomaticResearchView) => void;
@@ -406,6 +428,29 @@ describe("AutomaticResearchPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("缺少自动研究标识");
   });
 
+  it("re-reads an initially unavailable automatic research from its empty error page", async () => {
+    vi.spyOn(adapter, "getAutomaticResearch")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(completedView());
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法读取这项自动研究");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("heading", { name: "英伟达新产品供应链影响" })).toBeVisible();
+    expect(adapter.getAutomaticResearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads an invalid stage projection instead of leaving a dead-end error", async () => {
+    vi.spyOn(adapter, "getAutomaticResearch")
+      .mockResolvedValueOnce(completedView({ stages: completedView().stages.slice(0, 4) }))
+      .mockResolvedValueOnce(completedView());
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("自动研究过程记录不完整");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByRole("heading", { name: "英伟达新产品供应链影响" })).toBeVisible();
+  });
+
   it("rejects an incomplete stage projection instead of showing a partial process", async () => {
     vi.spyOn(adapter, "getAutomaticResearch").mockResolvedValue(completedView({
       stages: completedView().stages.slice(0, 4),
@@ -436,14 +481,14 @@ describe("AutomaticResearchPage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "切换 Case" }));
-    expect(await screen.findByRole("heading", { name: "第二个 Case" })).toBeVisible();
     await act(async () => { resolveFirst(completedView({ title: "旧 Case" })); await Promise.resolve(); });
+    expect(await screen.findByRole("heading", { name: "第二个 Case" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "旧 Case" })).not.toBeInTheDocument();
   });
 
   it("keeps only the current StrictMode request result", async () => {
     let resolveFirst!: (view: AutomaticResearchView) => void;
-    vi.spyOn(adapter, "getAutomaticResearch")
+    const get = vi.spyOn(adapter, "getAutomaticResearch")
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockResolvedValueOnce(completedView({ title: "当前结果" }));
     render(
@@ -456,8 +501,9 @@ describe("AutomaticResearchPage", () => {
       </StrictMode>,
     );
 
-    expect(await screen.findByRole("heading", { name: "当前结果" })).toBeVisible();
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
     await act(async () => { resolveFirst(completedView({ title: "过期结果" })); await Promise.resolve(); });
+    expect(await screen.findByRole("heading", { name: "当前结果" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "过期结果" })).not.toBeInTheDocument();
   });
 });

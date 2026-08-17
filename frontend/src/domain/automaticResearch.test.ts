@@ -8,6 +8,7 @@ import {
   formatAutomaticDuration,
   formatAutomaticTimestamp,
   normalizeAutomaticResearchStages,
+  stableRepeatedTextEntries,
 } from "./automaticResearch";
 
 describe("automatic research presentation helpers", () => {
@@ -89,5 +90,21 @@ describe("automatic research presentation helpers", () => {
       startedAt: null,
       completedAt: null,
     })))).toBeNull();
+  });
+
+  it("keeps repeated activity keys stable when unrelated text is inserted", () => {
+    const original = stableRepeatedTextEntries(
+      ["采集完成", "采集完成", "生成结论"],
+      "run-1-activity",
+    );
+    const inserted = stableRepeatedTextEntries(
+      ["开始运行", "采集完成", "采集完成", "生成结论"],
+      "run-1-activity",
+    );
+
+    expect(new Set(original.map((entry) => entry.key)).size).toBe(3);
+    expect(inserted.slice(1).map((entry) => entry.key)).toEqual(
+      original.map((entry) => entry.key),
+    );
   });
 });

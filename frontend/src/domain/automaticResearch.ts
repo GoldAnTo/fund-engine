@@ -194,3 +194,18 @@ export function normalizeAutomaticResearchView(
   const stages = normalizeAutomaticResearchStages(view.stages);
   return stages ? { ...view, stages } : null;
 }
+
+export function stableRepeatedTextEntries(
+  values: readonly string[],
+  prefix: string,
+): Array<{ key: string; text: string }> {
+  const occurrences = new Map<string, number>();
+  return values.map((text) => {
+    const occurrence = (occurrences.get(text) || 0) + 1;
+    occurrences.set(text, occurrence);
+    return {
+      key: `${prefix}:${JSON.stringify(text)}:${occurrence}`,
+      text,
+    };
+  });
+}
