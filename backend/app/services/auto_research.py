@@ -391,27 +391,27 @@ class AutoResearchService:
             .order_by(ResearchRunEvent.seq.desc())
             .limit(1)
         )
-        brief_mode = self.session.scalar(
-            select(EventResearchBrief.workflow_mode)
-            .where(EventResearchBrief.research_case_id == run.research_case_id)
-            .order_by(EventResearchBrief.created_at.desc(), EventResearchBrief.id.desc())
-            .limit(1)
-        )
         payload = scope.payload_json if scope is not None else None
-        scope_mode = payload.get("workflow_mode") if isinstance(payload, dict) else None
-        # If either immutable record says automatic, route through the
-        # fail-closed pipeline, which verifies that both records agree.
-        return scope_mode == "automatic" or brief_mode == "automatic"
+        scope_mode = (
+            payload.get("workflow_mode", "reviewed")
+            if isinstance(payload, dict)
+            else "reviewed"
+        )
+        return scope_mode == "automatic"
 
     def execute(self, run):
-        if self._is_automatic_workflow(run) and run.stage != "analyze":
+        if self._is_automatic_workflow(run):
             # Import locally so the automatic acquisition seam can depend on
             # repository/model vocabulary without creating a service cycle.
             from app.services.automatic_research_pipeline import (
                 AutomaticResearchPipeline,
             )
 
-            return AutomaticResearchPipeline(self.session).dispatch_sources(run)
+            return AutomaticResearchPipeline(
+                self.session,
+                client=self.client,
+                repository=self.repo,
+            ).advance(run)
         self.repo.update_run(run, status="running", stage="extract")
         ResearchRunEventRepository(self.session).append(
             run.id,

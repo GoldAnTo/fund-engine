@@ -3,23 +3,33 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.acquisition.policy import B_SCOPE_POLICY
+from app.ai.assessment_gen import AssessmentGenerator
+from app.ai.client import LLMClient
+from app.domain.automatic_research import AUTOMATIC_SOURCE_JOB_TERMINAL
 from app.domain.acquisition import (
     AcquisitionPrincipal,
     AcquisitionRequest,
     EvidenceObjective,
 )
+from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
 from app.models.event_research import EventResearchBrief
-from app.models.ledger import CaseTenantAdmission, Thesis
-from app.models.operational import ResearchRun, ResearchTask
+from app.models.ledger import AIAssessment, CaseTenantAdmission, EvidenceLink, Thesis
+from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
 from app.models.research_monitor import ResearchRunEvent
+from app.repositories.acquisition import AcquisitionRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.acquisition import AcquisitionModule
 from app.services.case_monitor import ResearchRunEventRepository
+from app.services.event_conclusion import EventConclusionService
+from app.services.event_research_scope_evidence import (
+    append_current_scope_evidence_assignment,
+)
 
 
 _TASK_OBJECTIVES = {
@@ -40,15 +50,115 @@ _PLAN_OBJECTIVES = frozenset(
 
 
 class AutomaticResearchPipeline:
-    """Translate a frozen automatic scope into governed acquisition jobs."""
+    """Run the automatic workflow without introducing human review gates."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        client: LLMClient | None = None,
+        repository: AutoResearchRepository | None = None,
+        assessment_generator: Any | None = None,
+    ) -> None:
         self._session = session
+        self._client = client
+        self._repository = repository or AutoResearchRepository(session)
+        self._assessment_generator = assessment_generator
+
+    def advance(self, run: ResearchRun) -> str:
+        """Advance one durable automatic run by at most one acquisition round."""
+        locked_run, locked_job = self._repository.lock_source_dispatch(run.id)
+        if locked_run is None or locked_job is None:
+            raise ValueError("automatic research run is missing")
+        run = locked_run
+        if run.status == "succeeded":
+            return "completed"
+        if run.status == "failed":
+            return "failed"
+        if (
+            run.status == "cancelled"
+            or locked_job.status == "cancelled"
+            or locked_job.cancel_requested
+        ):
+            raise ValueError("automatic research run is no longer dispatchable")
+
+        run.round = max(1, run.round or 1)
+        tasks = self._round_tasks(run)
+        source_tasks = [task for task in tasks if task.task_type != "result"]
+        if not source_tasks or all(
+            not isinstance(task.result, dict)
+            or not task.result.get("acquisition_job_id")
+            for task in source_tasks
+        ):
+            return self.dispatch_sources(run)
+
+        jobs = self._linked_jobs(run, source_tasks)
+        if any(
+            job.status not in AUTOMATIC_SOURCE_JOB_TERMINAL
+            or job.lease_owner is not None
+            or job.lease_token is not None
+            or job.lease_expires_at is not None
+            for job in jobs.values()
+        ):
+            run.status = "waiting_for_sources"
+            run.stage = "retrieve"
+            run.updated_at = datetime.now(UTC)
+            return "waiting_for_sources"
+
+        self._reconcile_sources(run, source_tasks, jobs)
+        run.budget_used = self._acquisition_count(run)
+        admitted_count = self._admitted_count(run)
+        final_attempt = run.round >= run.max_rounds or run.budget_used >= run.budget
+        if admitted_count == 0 and final_attempt:
+            return self._fail_no_usable_evidence(run)
+
+        assessments = self._assess_result_tasks(run, tasks)
+        gaps = sorted(
+            {
+                str(gap).strip()
+                for assessment in assessments
+                for gap in (assessment.gaps or [])
+                if str(gap).strip()
+            }
+        )
+        scope = self._latest_scope(run)
+        next_source_count = len(
+            self._expected_task_matrix(
+                run=run,
+                scope=scope,
+                plan_by_factor=self._frozen_plan(scope),
+            )
+        )
+        can_replenish = (
+            bool(gaps)
+            and run.round < run.max_rounds
+            and run.budget_used + next_source_count <= run.budget
+        )
+        if can_replenish:
+            self._create_next_round(run, gaps)
+            return self.dispatch_sources(run)
+        if admitted_count == 0:
+            return self._fail_no_usable_evidence(run)
+
+        EventConclusionService(self._session).create_automatic_result(
+            run.research_case_id,
+            run.id,
+        )
+        ResearchRunEventRepository(self._session).append(
+            run.id,
+            stage="complete",
+            status="completed",
+            message="自动研究已基于自动准入证据完成",
+            payload_json={
+                "round": run.round,
+                "budget_used": run.budget_used,
+                "stop_reason": "automatic_completed",
+            },
+        )
+        return "completed"
 
     def dispatch_sources(self, run: ResearchRun) -> str:
-        locked_run, locked_job = AutoResearchRepository(
-            self._session
-        ).lock_source_dispatch(run.id)
+        locked_run, locked_job = self._repository.lock_source_dispatch(run.id)
         if (
             locked_run is None
             or locked_job is None
@@ -176,6 +286,15 @@ class AutomaticResearchPipeline:
                 ),
             )
 
+        already_bound = sum(
+            1
+            for task in current_tasks
+            if isinstance(task.result, dict) and task.result.get("acquisition_job_id")
+        )
+        existing_count = self._acquisition_count(run)
+        if existing_count + len(current_tasks) - already_bound > run.budget:
+            raise ValueError("automatic research acquisition budget is exhausted")
+
         module = AcquisitionModule(self._session)
         principal = AcquisitionPrincipal(
             tenant_id=admission.tenant_id,
@@ -196,6 +315,7 @@ class AutomaticResearchPipeline:
 
         run.status = "waiting_for_sources"
         run.stage = "retrieve"
+        run.budget_used = self._acquisition_count(run)
         if wrote_task_binding:
             ResearchRunEventRepository(self._session).append(
                 run.id,
@@ -205,6 +325,282 @@ class AutomaticResearchPipeline:
                 payload_json={"round": run.round},
             )
         return "waiting_for_sources"
+
+    def _round_tasks(self, run: ResearchRun) -> list[ResearchTask]:
+        tasks = list(
+            self._session.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.research_case_id == run.research_case_id)
+                .where(ResearchTask.round == run.round)
+                .order_by(ResearchTask.created_at, ResearchTask.id)
+            )
+        )
+        if not tasks:
+            raise ValueError("automatic research current round has no tasks")
+        return tasks
+
+    def _linked_jobs(
+        self,
+        run: ResearchRun,
+        tasks: list[ResearchTask],
+    ) -> dict[uuid.UUID, AcquisitionJob]:
+        jobs: dict[uuid.UUID, AcquisitionJob] = {}
+        for task in tasks:
+            if not isinstance(task.result, dict):
+                raise ValueError("automatic source task has no acquisition binding")
+            try:
+                job_id = uuid.UUID(str(task.result["acquisition_job_id"]))
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise ValueError(
+                    "automatic source task acquisition binding is invalid"
+                ) from exc
+            job = self._session.get(AcquisitionJob, job_id)
+            if (
+                job is None
+                or job.research_run_id != run.id
+                or job.research_case_id != run.research_case_id
+                or job.thesis_id != task.thesis_id
+            ):
+                raise ValueError("automatic source task acquisition binding crosses scope")
+            jobs[task.id] = job
+        return jobs
+
+    def _reconcile_sources(
+        self,
+        run: ResearchRun,
+        tasks: list[ResearchTask],
+        jobs: dict[uuid.UUID, AcquisitionJob],
+    ) -> None:
+        acquisition = AcquisitionRepository(self._session)
+        now = datetime.now(UTC)
+        admitted: list[tuple[EvidenceLink, Thesis]] = []
+        for task in tasks:
+            job = jobs[task.id]
+            task.result = {
+                **(task.result or {}),
+                "acquisition_status": job.status,
+                "reference_count": job.reference_count,
+                "frozen_count": job.frozen_count,
+                "admitted_count": job.admitted_count,
+                "exception_count": job.exception_count,
+            }
+            if job.status in {"succeeded", "partial"}:
+                task.status, task.stage = "done", "completed"
+            else:
+                task.status, task.stage = "failed", "failed"
+            task.evidence_count = job.admitted_count
+            task.updated_at = now
+            for ref in acquisition.admitted_evidence(job.id):
+                link = self._session.get(EvidenceLink, ref.evidence_link_id)
+                thesis = self._session.get(Thesis, job.thesis_id)
+                if (
+                    link is None
+                    or thesis is None
+                    or link.thesis_id != thesis.id
+                    or thesis.research_case_id != run.research_case_id
+                    or link.review_state != "automatically_admitted"
+                ):
+                    raise ValueError("admitted evidence is outside the automatic run scope")
+                admitted.append((link, thesis))
+
+        # Acquisition jobs are terminal and their leases have been released before
+        # this Case -> lifecycle mapping lock is acquired.
+        for link, thesis in admitted:
+            assignment = append_current_scope_evidence_assignment(
+                self._session,
+                case_id=run.research_case_id,
+                evidence_link_id=link.id,
+                factor_statement=thesis.statement,
+                created_at=now,
+            )
+            if (
+                assignment is None
+                or assignment.disposition != "mapped"
+                or assignment.factor_statement != thesis.statement
+            ):
+                raise ValueError(
+                    "admitted evidence is not assignable to the current scope"
+                )
+
+    def _assess_result_tasks(
+        self,
+        run: ResearchRun,
+        tasks: list[ResearchTask],
+    ) -> list[AIAssessment]:
+        assessments: list[AIAssessment] = []
+        generator = self._generator()
+        for task in tasks:
+            if task.task_type != "result":
+                continue
+            assessment = None
+            if task.status == "done" and isinstance(task.result, dict):
+                try:
+                    assessment = self._session.get(
+                        AIAssessment,
+                        uuid.UUID(str(task.result.get("assessment_id"))),
+                    )
+                except (TypeError, ValueError, AttributeError):
+                    assessment = None
+            if assessment is None:
+                if task.thesis_id is None:
+                    raise ValueError("automatic result task has no thesis")
+                assessment = generator.generate(
+                    task.thesis_id,
+                    datetime.now(UTC),
+                    self._session,
+                )
+                if assessment is None:
+                    raise ValueError("automatic assessment was cancelled")
+                task.result = {
+                    "task_type": "result",
+                    "assessment_id": str(assessment.id),
+                    "conclusion": assessment.conclusion,
+                    "gaps": list(assessment.gaps or []),
+                }
+                task.status, task.stage = "done", "completed"
+                task.updated_at = datetime.now(UTC)
+            assessments.append(assessment)
+        if not assessments:
+            raise ValueError("automatic research current round has no result task")
+        return assessments
+
+    def _generator(self):
+        if self._assessment_generator is None:
+            self._assessment_generator = AssessmentGenerator(
+                self._client or LLMClient.from_env()
+            )
+        return self._assessment_generator
+
+    def _create_next_round(self, run: ResearchRun, gaps: list[str]) -> None:
+        next_round = run.round + 1
+        try:
+            scoped_thesis_ids = {
+                uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
+            }
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic run thesis scope is invalid") from exc
+        expected_tasks = {
+            (thesis_id, task_type)
+            for thesis_id in scoped_thesis_ids
+            for task_type in ("support", "contradict", "alternative", "result")
+        }
+        existing = list(
+            self._session.scalars(
+                select(ResearchTask).where(
+                    ResearchTask.run_id == run.id,
+                    ResearchTask.round == next_round,
+                )
+            )
+        )
+        if existing:
+            actual_tasks = {
+                (task.thesis_id, task.task_type)
+                for task in existing
+                if task.research_case_id == run.research_case_id
+            }
+            if len(existing) != len(expected_tasks) or actual_tasks != expected_tasks:
+                raise ValueError("automatic replenishment task matrix is incomplete")
+            run.round = next_round
+            run.status = "queued"
+            run.stage = "planning"
+            run.updated_at = datetime.now(UTC)
+            self._session.flush()
+            return
+        scope = self._latest_scope(run)
+        expected = self._expected_task_matrix(
+            run=run,
+            scope=scope,
+            plan_by_factor=self._frozen_plan(scope),
+        )
+        theses_by_id = {value[0].id: value[0] for value in expected.values()}
+        theses = [theses_by_id[key] for key in sorted(theses_by_id, key=str)]
+        gap_text = "；".join(gaps)
+        labels = {
+            "support": "寻找支持证据",
+            "contradict": "寻找反方证据",
+            "alternative": "寻找替代解释",
+            "result": "形成研究结论",
+        }
+        for thesis in theses:
+            for task_type in ("support", "contradict", "alternative", "result"):
+                self._repository.create_task(
+                    run_id=run.id,
+                    research_case_id=run.research_case_id,
+                    thesis_id=thesis.id,
+                    task_type=task_type,
+                    query=(
+                        f"{labels[task_type]}: {thesis.statement}；"
+                        f"待补证据：{gap_text}"
+                    ),
+                    round=next_round,
+                )
+        run.round = next_round
+        run.status = "queued"
+        run.stage = "planning"
+        run.updated_at = datetime.now(UTC)
+        # The dispatch lock refreshes the run from storage. Persist the new
+        # round before reacquiring it so populate_existing cannot restore the
+        # just-completed round and validate the wrong task matrix.
+        self._session.flush()
+
+    def _acquisition_count(self, run: ResearchRun) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(AcquisitionJob)
+                .where(
+                    AcquisitionJob.research_run_id == run.id,
+                    AcquisitionJob.research_case_id == run.research_case_id,
+                )
+            )
+            or 0
+        )
+
+    def _admitted_count(self, run: ResearchRun) -> int:
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(EvidenceLink)
+                .join(
+                    AutomaticAdmissionDecision,
+                    AutomaticAdmissionDecision.id
+                    == EvidenceLink.automatic_admission_decision_id,
+                )
+                .join(
+                    AcquisitionJob,
+                    AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
+                )
+                .where(
+                    AcquisitionJob.research_run_id == run.id,
+                    AcquisitionJob.research_case_id == run.research_case_id,
+                    EvidenceLink.review_state == "automatically_admitted",
+                )
+            )
+            or 0
+        )
+
+    def _fail_no_usable_evidence(self, run: ResearchRun) -> str:
+        run.status = "failed"
+        run.stage = "failed"
+        run.stop_reason = "no_usable_evidence"
+        run.updated_at = datetime.now(UTC)
+        lifecycle = self._session.get(EventResearchLifecycle, run.research_case_id)
+        if lifecycle is not None and lifecycle.active_run_id == run.id:
+            lifecycle.status = "exhausted"
+            lifecycle.current_round = run.round
+            lifecycle.status_summary = "自动研究未获得可用证据"
+            lifecycle.current_gap = "未获得可自动准入的证据"
+            lifecycle.next_human_action = None
+            lifecycle.updated_at = datetime.now(UTC)
+        ResearchRunEventRepository(self._session).append(
+            run.id,
+            stage="failed",
+            status="failed",
+            message="自动研究未获得可用证据",
+            payload_json={"stop_reason": "no_usable_evidence"},
+        )
+        return "failed"
 
     def _expected_task_matrix(
         self,

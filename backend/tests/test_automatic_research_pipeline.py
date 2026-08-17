@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -8,17 +9,55 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.acquisition.policy import B_SCOPE_POLICY
-from app.models.acquisition import AcquisitionJob
-from app.models.event_research import EventResearchBrief
-from app.models.ledger import CaseTenantAdmission, DocumentVersion, ResearchCase, Thesis
-from app.models.operational import Job, JobEvent, ResearchRun, ResearchTask
+from app.models.acquisition import (
+    AcquisitionAttempt,
+    AcquisitionJob,
+    AutomaticAdmissionDecision,
+    RetrievalArtifact,
+    RetrievalArtifactDocument,
+    SourceReference,
+)
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchConclusion,
+    EventResearchScopeEvidenceAssignment,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
+from app.models.ledger import (
+    AIAssessment,
+    AtomicClaimCandidate,
+    AtomicClaimReview,
+    CaseTenantAdmission,
+    DocumentVersion,
+    EvidenceLink,
+    EvidenceSnapshot,
+    ResearchCase,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
+)
+from app.models.operational import (
+    EventResearchLifecycle,
+    Job,
+    JobEvent,
+    ResearchRun,
+    ResearchTask,
+    TaskItem,
+)
 from app.models.research_monitor import ResearchRunEvent
+from app.models.proposals import Proposal
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.case_monitor import ResearchRunEventRepository
 
 
 def _automatic_run(
-    session, *, factor: str = "需求增长", plan_mutation=None
+    session,
+    *,
+    factor: str = "需求增长",
+    plan_mutation=None,
+    max_rounds: int = 3,
+    budget: int = 100,
 ) -> ResearchRun:
     now = datetime.now(timezone.utc)
     case = ResearchCase(
@@ -73,6 +112,36 @@ def _automatic_run(
     run = repo.create_run(
         research_case_id=case.id,
         scope_thesis_ids=[str(thesis.id)],
+        max_rounds=max_rounds,
+        budget=budget,
+    )
+    scope = EventResearchScopeVersion(
+        research_case_id=case.id,
+        version=1,
+        changed_by="system:automatic-intake",
+        change_summary="automatic scope",
+        created_at=now,
+    )
+    session.add(scope)
+    session.flush()
+    session.add_all(
+        [
+            EventResearchScopeFactor(
+                scope_version_id=scope.id,
+                statement=factor,
+                position=0,
+            ),
+            EventResearchLifecycle(
+                research_case_id=case.id,
+                status="researching",
+                active_run_id=run.id,
+                current_round=0,
+                status_summary="automatic research running",
+                current_gap=None,
+                next_human_action=None,
+                updated_at=now,
+            ),
+        ]
     )
     scope_payload = {
         "workflow_mode": "automatic",
@@ -115,6 +184,155 @@ def _automatic_run(
         )
     repo.enqueue_run_job(run)
     return run
+
+
+def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
+    """Persist one coherent automatic-admission lineage for a source job."""
+    now = datetime.now(timezone.utc)
+    raw = f"admitted-{job.id}".encode()
+    sha = hashlib.sha256(raw).hexdigest()
+    document = DocumentVersion(
+        content_sha256=sha,
+        source_url=f"https://example.test/{job.id}",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    session.add(document)
+    session.flush()
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="自动采集证据",
+    )
+    attempt = AcquisitionAttempt(
+        job_id=job.id,
+        adapter_key="test",
+        operation="fetch",
+        attempt_no=1,
+        started_at=now,
+        finished_at=now,
+        outcome="succeeded",
+        retryable=False,
+        safe_metadata={},
+    )
+    reference = SourceReference(
+        job_id=job.id,
+        adapter_key="test",
+        external_record_id=str(job.id),
+        external_version="v1",
+        canonical_url=document.source_url,
+        title="自动采集证据",
+        published_at=now,
+        source_role="company_disclosure",
+        metadata_json={},
+        created_at=now,
+    )
+    session.add_all([span, attempt, reference])
+    session.flush()
+    candidate = AtomicClaimCandidate(
+        source_span_id=span.id,
+        canonical_key=uuid.uuid4().hex,
+        quote="自动采集证据",
+        quote_start=0,
+        quote_end=6,
+        quote_sha256=hashlib.sha256("自动采集证据".encode()).hexdigest(),
+        normalized_text="自动采集证据",
+        claim_type="reported_claim",
+        authority_level="primary",
+        structured_fields={},
+        validation_result={},
+        created_at=now,
+    )
+    artifact = RetrievalArtifact(
+        source_reference_id=reference.id,
+        attempt_id=attempt.id,
+        content_sha256=sha,
+        raw_bytes=raw,
+        mime_type="text/plain",
+        byte_size=len(raw),
+        final_url=document.source_url,
+        retrieved_at=now,
+    )
+    session.add_all([candidate, artifact])
+    session.flush()
+    session.add(
+        RetrievalArtifactDocument(
+            retrieval_artifact_id=artifact.id,
+            document_version_id=document.id,
+            relation="created",
+            publication_key=sha,
+            created_at=now,
+        )
+    )
+    decision = AutomaticAdmissionDecision(
+        job_id=job.id,
+        candidate_id=candidate.id,
+        retrieval_artifact_id=artifact.id,
+        outcome="admitted",
+        gate_version="test-v1",
+        policy_version=B_SCOPE_POLICY.version,
+        gate_results={},
+        created_at=now,
+    )
+    session.add(decision)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="disclosed_fact",
+        normalized_text="自动采集证据",
+        atomic_claim_candidate_id=candidate.id,
+        automatic_admission_decision_id=decision.id,
+        created_at=now,
+    )
+    session.add(statement)
+    session.flush()
+    link = EvidenceLink(
+        thesis_id=job.thesis_id,
+        source_statement_id=statement.id,
+        role=job.request_snapshot["target_link_role"],
+        reason="automatic admission",
+        scope={},
+        available_at=now,
+        creator_type="ai",
+        review_state="automatically_admitted",
+        automatic_admission_decision_id=decision.id,
+        created_at=now,
+    )
+    session.add(link)
+    session.flush()
+    return link
+
+
+class _AssessmentGenerator:
+    def __init__(self, *, conclusion="supported", gaps=None):
+        self.conclusion = conclusion
+        self.gaps = list(gaps or [])
+        self.calls = []
+
+    def generate(self, thesis_id, cutoff, session):
+        self.calls.append(thesis_id)
+        snapshot = EvidenceSnapshot(
+            thesis_id=thesis_id,
+            cutoff=cutoff,
+            evidence_link_ids=[],
+            created_at=cutoff,
+        )
+        session.add(snapshot)
+        session.flush()
+        assessment = AIAssessment(
+            snapshot_id=snapshot.id,
+            conclusion=self.conclusion,
+            rationale="当前证据的暂定判断",
+            gaps=self.gaps,
+            displayed_as_provisional=True,
+            creator_type="ai",
+            model_version="test",
+            created_at=cutoff,
+        )
+        session.add(assessment)
+        session.flush()
+        return assessment
 
 
 def _scope_event(session, run: ResearchRun) -> ResearchRunEvent:
@@ -595,3 +813,231 @@ def test_requeued_source_ready_job_gets_a_fresh_stale_recovery_clock(session) ->
     assert repo.recover_stale_run_jobs(before=stale_cutoff) == 0
     assert claimed.status == "running"
     assert claimed.attempt == 2
+
+
+def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    generator = _AssessmentGenerator()
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == run.id)
+            .order_by(AcquisitionJob.idempotency_key)
+        )
+    )
+    admitted = _admit_link(session, jobs[0])
+    jobs[0].status, jobs[0].stage, jobs[0].admitted_count = "partial", "partial", 1
+    jobs[1].status, jobs[1].stage = "failed", "failed"
+    jobs[2].status, jobs[2].stage = "cancelled", "cancelled"
+
+    assert pipeline.advance(run) == "completed"
+    assert run.status == "succeeded"
+    assert run.stage == "complete"
+    assert run.stop_reason == "automatic_completed"
+    conclusion = session.scalar(
+        select(EventResearchConclusion).where(
+            EventResearchConclusion.research_case_id == run.research_case_id
+        )
+    )
+    assert conclusion is not None
+    assert conclusion.state == "system_generated"
+    assert conclusion.evidence_link_ids == [str(admitted.id)]
+    lifecycle = session.get(EventResearchLifecycle, run.research_case_id)
+    assert lifecycle is not None
+    assert lifecycle.status == "completed"
+    assert lifecycle.next_human_action is None
+    assert generator.calls == [jobs[0].thesis_id]
+    assert session.scalar(select(func.count()).select_from(TaskItem)) == 0
+
+    source_tasks = list(
+        session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.task_type != "result")
+        )
+    )
+    assert {(task.status, task.stage) for task in source_tasks} == {
+        ("done", "completed"),
+        ("failed", "failed"),
+    }
+    assert all(
+        task.result
+        and set(
+            (
+                "acquisition_job_id",
+                "objective",
+                "acquisition_status",
+                "reference_count",
+                "frozen_count",
+                "admitted_count",
+                "exception_count",
+            )
+        ).issubset(task.result)
+        for task in source_tasks
+    )
+    assignment = session.scalar(
+        select(EventResearchScopeEvidenceAssignment).where(
+            EventResearchScopeEvidenceAssignment.evidence_link_id == admitted.id
+        )
+    )
+    assert assignment is not None and assignment.disposition == "mapped"
+    assert pipeline.advance(run) == "completed"
+    assert session.scalar(
+        select(func.count()).select_from(EventResearchConclusion)
+    ) == 1
+    assert session.scalar(select(func.count()).select_from(Proposal)) == 0
+    assert session.scalar(select(func.count()).select_from(AtomicClaimReview)) == 0
+
+
+def test_advance_fails_final_round_with_no_usable_evidence(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    generator = _AssessmentGenerator()
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    for job in session.scalars(
+        select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+    ):
+        job.status, job.stage = "failed", "failed"
+
+    assert pipeline.advance(run) == "failed"
+    assert run.status == "failed"
+    assert run.stage == "failed"
+    assert run.stop_reason == "no_usable_evidence"
+    assert generator.calls == []
+    assert session.scalar(
+        select(func.count()).select_from(EventResearchConclusion)
+    ) == 0
+
+
+def test_advance_replenishes_once_then_fails_when_all_rounds_have_zero_evidence(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=2, budget=6)
+    pipeline = AutomaticResearchPipeline(
+        session,
+        assessment_generator=_AssessmentGenerator(
+            conclusion="insufficient_evidence", gaps=["尚无可用证据"]
+        ),
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    for job in session.scalars(
+        select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+    ):
+        job.status, job.stage = "failed", "failed"
+    assert pipeline.advance(run) == "waiting_for_sources"
+    assert run.round == 2
+    round_two = [
+        job
+        for job in session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+        if job.request_snapshot["round"] == 2
+    ]
+    assert len(round_two) == 3
+    for job in round_two:
+        job.status, job.stage = "failed", "failed"
+
+    assert pipeline.advance(run) == "failed"
+    assert run.stop_reason == "no_usable_evidence"
+    assert run.budget_used == 6
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_advance_finalizes_gapped_assessment_at_round_limit(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session,
+        assessment_generator=_AssessmentGenerator(
+            conclusion="insufficient_evidence", gaps=["缺少量化验证"]
+        ),
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    assert pipeline.advance(run) == "completed"
+    conclusion = session.scalar(select(EventResearchConclusion))
+    assert conclusion is not None
+    assert "证据不足" in conclusion.text
+    assert "缺少量化验证" in conclusion.text
+
+
+def test_advance_creates_exact_next_round_for_gaps_and_is_idempotent(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=2, budget=6)
+    pipeline = AutomaticResearchPipeline(
+        session,
+        assessment_generator=_AssessmentGenerator(
+            conclusion="insufficient_evidence", gaps=["缺少行业对照"]
+        ),
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    round_one_jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, round_one_jobs[0])
+    for index, job in enumerate(round_one_jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    round_one_jobs[0].admitted_count = 1
+
+    assert pipeline.advance(run) == "waiting_for_sources"
+    assert run.round == 2
+    assert run.status == "waiting_for_sources"
+    tasks = list(
+        session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .order_by(ResearchTask.round, ResearchTask.task_type)
+        )
+    )
+    assert {task.round for task in tasks} == {1, 2}
+    assert {task.task_type for task in tasks if task.round == 2} == {
+        "support",
+        "contradict",
+        "alternative",
+        "result",
+    }
+    assert all(
+        "缺少行业对照" in task.query for task in tasks if task.round == 2
+    )
+    assert session.scalar(
+        select(func.count())
+        .select_from(AcquisitionJob)
+        .where(AcquisitionJob.research_run_id == run.id)
+    ) == 6
+
+    assert pipeline.advance(run) == "waiting_for_sources"
+    assert session.scalar(
+        select(func.count())
+        .select_from(AcquisitionJob)
+        .where(AcquisitionJob.research_run_id == run.id)
+    ) == 6
+    assert session.scalar(
+        select(func.count())
+        .select_from(ResearchTask)
+        .where(ResearchTask.run_id == run.id)
+    ) == 8
