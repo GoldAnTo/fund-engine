@@ -27,6 +27,9 @@ export function resetResearchClient(): void {
 }
 
 export const researchClient: ActiveResearchClient = {
+  startAutomaticResearch: (input) => _client.startAutomaticResearch(input),
+  getAutomaticResearch: (caseId) => _client.getAutomaticResearch(caseId),
+  retryAutomaticResearch: (caseId) => _client.retryAutomaticResearch(caseId),
   extractEventResearch: (input) => _client.extractEventResearch(input),
   createEventResearch: (input) => _client.createEventResearch(input),
   createEventResearchFromUpload: (input) => _client.createEventResearchFromUpload(input),

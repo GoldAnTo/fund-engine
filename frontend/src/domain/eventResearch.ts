@@ -65,6 +65,7 @@ export interface EventLifecycle {
 
 export interface EventResearchListItem {
   id: string;
+  workflowMode: "reviewed" | "automatic";
   eventTitle: string;
   companyName: string | null;
   ticker: string | null;

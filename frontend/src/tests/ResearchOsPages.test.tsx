@@ -3453,6 +3453,7 @@ describe("Research OS event entry", () => {
     const oldRequest = deferred<EventResearchListItem[]>();
     const freshEvents: EventResearchListItem[] = [{
       id: "event-fresh",
+      workflowMode: "reviewed",
       eventTitle: "最新审核任务",
       companyName: null,
       ticker: null,

@@ -53,6 +53,10 @@ import type {
   RetryResearchPreparationInput,
 } from "../domain/researchPreparation";
 import type {
+  AutomaticResearchStart,
+  AutomaticResearchView,
+} from "../domain/automaticResearch";
+import type {
   AssessmentReviewPayload,
   AssessmentReviewResult,
   CaseSummaryItem,
@@ -3173,6 +3177,7 @@ export class MockResearchAdapter implements ResearchClient {
   private queue: ReviewQueueItem[];
   private researchRuns: ResearchRunDetail[];
   private createdResearchRunCount = 0;
+  private createdAutomaticResearchCount = 0;
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
@@ -3186,6 +3191,56 @@ export class MockResearchAdapter implements ResearchClient {
     scope: { version: number; factors: EventResearchScopeFactor[]; unmappedEvidenceCount: number };
     lifecycleSource?: "tsm_review" | "tsm_publication";
   }>();
+
+  async startAutomaticResearch(input: string): Promise<AutomaticResearchStart> {
+    this.throwIfOffline();
+    this.createdAutomaticResearchCount += 1;
+    return simulateLatency({
+      caseId: `automatic-case-${this.createdAutomaticResearchCount}`,
+      runId: `automatic-run-${this.createdAutomaticResearchCount}`,
+      status: "queued",
+    });
+  }
+
+  async getAutomaticResearch(caseId: string): Promise<AutomaticResearchView> {
+    this.throwIfOffline();
+    return simulateLatency({
+      caseId,
+      runId: `automatic-run-${this.createdAutomaticResearchCount || 1}`,
+      title: "自动研究",
+      status: "completed",
+      stages: [
+        { key: "acquire", label: "采集", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
+        { key: "parse", label: "解析", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
+        { key: "admit", label: "准入", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
+        { key: "analyze", label: "分析", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
+        { key: "conclude", label: "结论", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
+      ],
+      stats: { sourceCount: 0, admittedEvidenceCount: 0, skippedCount: 0, durationSeconds: 0 },
+      recentActivity: [],
+      exceptions: [],
+      failureReason: null,
+      result: {
+        label: "系统生成，未经人工审核",
+        humanReviewed: false,
+        conclusion: "自动研究已完成。",
+        keyFindings: [],
+        counterEvidence: [],
+        limitations: [],
+        sources: [],
+      },
+    });
+  }
+
+  async retryAutomaticResearch(caseId: string): Promise<AutomaticResearchStart> {
+    this.throwIfOffline();
+    this.createdAutomaticResearchCount += 1;
+    return simulateLatency({
+      caseId,
+      runId: `automatic-run-${this.createdAutomaticResearchCount}`,
+      status: "queued",
+    });
+  }
   private createdDocuments = new Map<string, {
     document: SourceDocumentView;
     spans: DocumentSpan[];
@@ -4325,6 +4380,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventStates.set(caseId, {
       event: {
         id: caseId,
+        workflowMode: "reviewed",
         eventTitle: input.eventTitle,
         companyName: input.companyName,
         ticker: input.ticker,
@@ -4614,12 +4670,12 @@ export class MockResearchAdapter implements ResearchClient {
   private eventResearchItems(): EventResearchListItem[] {
     const tsmLifecycle = this.eventTsmProjection().lifecycle;
     return [
-      { id: "event-alphabet", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
-      { id: "event-tsm", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: tsmLifecycle.status, statusSummary: tsmLifecycle.summary, nextHumanAction: tsmLifecycle.nextHumanAction, updatedAt: "2026-08-07T09:00:00Z" },
-      { id: "event-cannot-conclude", eventTitle: "公司上调投入指引后下跌", companyName: "样例公司", ticker: null, eventAt: "2026-08-05T00:00:00Z", status: "exhausted", statusSummary: "当前证据不足以区分主要解释", nextHumanAction: null, updatedAt: "2026-08-07T08:30:00Z" },
-      { id: "event-exhausted", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
-      { id: "event-draft", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
-      { id: "event-published", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
+      { id: "event-alphabet", workflowMode: "reviewed", eventTitle: "Alphabet 财报超预期后股价下跌", companyName: "Alphabet", ticker: "GOOGL", eventAt: "2026-08-07T00:00:00Z", status: "researching", statusSummary: "正在核验资本开支是否足以解释盘后跌幅", nextHumanAction: null, updatedAt: "2026-08-07T10:30:00Z" },
+      { id: "event-tsm", workflowMode: "reviewed", eventTitle: "台积电上调 CoWoS 指引后下跌", companyName: "台积电", ticker: "TSM", eventAt: "2026-08-06T00:00:00Z", status: tsmLifecycle.status, statusSummary: tsmLifecycle.summary, nextHumanAction: tsmLifecycle.nextHumanAction, updatedAt: "2026-08-07T09:00:00Z" },
+      { id: "event-cannot-conclude", workflowMode: "reviewed", eventTitle: "公司上调投入指引后下跌", companyName: "样例公司", ticker: null, eventAt: "2026-08-05T00:00:00Z", status: "exhausted", statusSummary: "当前证据不足以区分主要解释", nextHumanAction: null, updatedAt: "2026-08-07T08:30:00Z" },
+      { id: "event-exhausted", workflowMode: "reviewed", eventTitle: "行业指引调整后的价格反应", companyName: null, ticker: null, eventAt: "2026-08-04T00:00:00Z", status: "exhausted", statusSummary: "当前范围已穷尽，建议调整因素", nextHumanAction: null, updatedAt: "2026-08-07T08:00:00Z" },
+      { id: "event-draft", workflowMode: "reviewed", eventTitle: "季度业绩发布后的波动", companyName: null, ticker: null, eventAt: "2026-08-03T00:00:00Z", status: "draft_ready", statusSummary: "关键证据已审核，等待结论复核", nextHumanAction: "审核结论草案", updatedAt: "2026-08-07T07:30:00Z" },
+      { id: "event-published", workflowMode: "reviewed", eventTitle: "经营数据披露后的变动", companyName: null, ticker: null, eventAt: "2026-08-02T00:00:00Z", status: "published", statusSummary: "结论已发布", nextHumanAction: null, updatedAt: "2026-08-07T07:00:00Z" },
       ...[...this.eventStates.values()].flatMap((state) => state.event ? [state.event] : []),
     ];
   }

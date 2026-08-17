@@ -14,6 +14,7 @@ function workbench(
   return {
     event: {
       id: "event-1",
+      workflowMode: "reviewed",
       eventTitle: "测试事件",
       companyName: "测试公司",
       ticker: "TEST",

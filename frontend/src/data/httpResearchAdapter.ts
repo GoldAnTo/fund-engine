@@ -57,6 +57,10 @@ import {
 } from "../domain/researchPreparation";
 import type { ActiveResearchClient } from "../domain/prototypeTypes";
 import type {
+  AutomaticResearchStart,
+  AutomaticResearchView,
+} from "../domain/automaticResearch";
+import type {
   AssessmentReviewPayload,
   AssessmentReviewResult,
   CaseSummaryItem,
@@ -523,6 +527,77 @@ export class HttpResearchAdapter implements ActiveResearchClient {
       throw await this.responseError(response);
     }
     return (await response.json()) as T;
+  }
+
+  async startAutomaticResearch(input: string): Promise<AutomaticResearchStart> {
+    const dto = await this.post<Schemas["AutomaticResearchStartResponse"]>(
+      "/automatic-research",
+      { input } satisfies Schemas["AutomaticResearchStartRequest"],
+    );
+    return this.mapAutomaticResearchStart(dto);
+  }
+
+  async getAutomaticResearch(caseId: string): Promise<AutomaticResearchView> {
+    const dto = await this.get<Schemas["AutomaticResearchViewDTO"]>(
+      `/automatic-research/${encodeURIComponent(caseId)}`,
+    );
+    return {
+      caseId: dto.case_id,
+      runId: dto.run_id,
+      title: dto.title,
+      status: dto.status,
+      stages: dto.stages.map((stage) => ({
+        key: stage.key,
+        label: stage.label,
+        status: stage.status,
+        summary: stage.summary,
+        startedAt: stage.started_at ?? null,
+        completedAt: stage.completed_at ?? null,
+      })),
+      stats: {
+        sourceCount: dto.stats.source_count,
+        admittedEvidenceCount: dto.stats.admitted_evidence_count,
+        skippedCount: dto.stats.skipped_count,
+        durationSeconds: dto.stats.duration_seconds,
+      },
+      recentActivity: dto.recent_activity,
+      exceptions: dto.exceptions.map((exception) => ({
+        reason: exception.reason,
+        stage: exception.stage,
+        count: exception.count,
+      })),
+      failureReason: dto.failure_reason,
+      result: dto.result
+        ? {
+            label: dto.result.label,
+            humanReviewed: dto.result.human_reviewed,
+            conclusion: dto.result.conclusion,
+            keyFindings: dto.result.key_findings,
+            counterEvidence: dto.result.counter_evidence,
+            limitations: dto.result.limitations,
+            sources: dto.result.sources.map((source) => ({
+              title: source.title,
+              url: source.url,
+              role: source.role,
+              reviewState: source.review_state,
+            })),
+          }
+        : null,
+    };
+  }
+
+  async retryAutomaticResearch(caseId: string): Promise<AutomaticResearchStart> {
+    const dto = await this.post<Schemas["AutomaticResearchStartResponse"]>(
+      `/automatic-research/${encodeURIComponent(caseId)}/retry`,
+      undefined,
+    );
+    return this.mapAutomaticResearchStart(dto);
+  }
+
+  private mapAutomaticResearchStart(
+    dto: Schemas["AutomaticResearchStartResponse"],
+  ): AutomaticResearchStart {
+    return { caseId: dto.case_id, runId: dto.run_id, status: dto.status };
   }
 
   private async requestJson<T>(
@@ -3246,7 +3321,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
   }
 
   private mapEventListItem(value: components["schemas"]["EventResearchListItemDTO"]): EventResearchListItem {
-    return { id: value.case_id, eventTitle: value.event_title, companyName: value.company_name, ticker: value.ticker, eventAt: value.event_at, status: value.lifecycle_status as EventLifecycleStatus, statusSummary: value.status_summary, nextHumanAction: value.next_human_action, nextActionKind: value.next_action_kind, updatedAt: value.updated_at };
+    return { id: value.case_id, workflowMode: value.workflow_mode ?? "reviewed", eventTitle: value.event_title, companyName: value.company_name, ticker: value.ticker, eventAt: value.event_at, status: value.lifecycle_status as EventLifecycleStatus, statusSummary: value.status_summary, nextHumanAction: value.next_human_action, nextActionKind: value.next_action_kind, updatedAt: value.updated_at };
   }
 
   async getConclusionView(

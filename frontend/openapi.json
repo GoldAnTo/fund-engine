@@ -4011,6 +4011,183 @@
         }
       }
     },
+    "/api/v1/automatic-research": {
+      "post": {
+        "tags": [
+          "automatic-research-v1"
+        ],
+        "summary": "Start Automatic Research",
+        "operationId": "start_automatic_research_api_v1_automatic_research_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomaticResearchStartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticResearchStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/automatic-research/{case_id}": {
+      "get": {
+        "tags": [
+          "automatic-research-v1"
+        ],
+        "summary": "Get Automatic Research",
+        "operationId": "get_automatic_research_api_v1_automatic_research__case_id__get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticResearchViewDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/automatic-research/{case_id}/retry": {
+      "post": {
+        "tags": [
+          "automatic-research-v1"
+        ],
+        "summary": "Retry Automatic Research",
+        "operationId": "retry_automatic_research_api_v1_automatic_research__case_id__retry_post",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticResearchStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/event-research": {
       "get": {
         "tags": [
@@ -10414,6 +10591,361 @@
         ],
         "title": "AuthorizeEvidencePlanRequest"
       },
+      "AutomaticResearchExceptionDTO": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "stage",
+          "count"
+        ],
+        "title": "AutomaticResearchExceptionDTO"
+      },
+      "AutomaticResearchResultDTO": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "const": "系统生成，未经人工审核",
+            "title": "Label"
+          },
+          "human_reviewed": {
+            "type": "boolean",
+            "const": false,
+            "title": "Human Reviewed"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "key_findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Key Findings"
+          },
+          "counter_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Counter Evidence"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticResearchSourceDTO"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "human_reviewed",
+          "conclusion",
+          "key_findings",
+          "counter_evidence",
+          "limitations",
+          "sources"
+        ],
+        "title": "AutomaticResearchResultDTO"
+      },
+      "AutomaticResearchSourceDTO": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "review_state": {
+            "type": "string",
+            "const": "automatically_admitted",
+            "title": "Review State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "role",
+          "review_state"
+        ],
+        "title": "AutomaticResearchSourceDTO"
+      },
+      "AutomaticResearchStageDTO": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "acquire",
+              "parse",
+              "admit",
+              "analyze",
+              "conclude"
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "status",
+          "summary"
+        ],
+        "title": "AutomaticResearchStageDTO"
+      },
+      "AutomaticResearchStartRequest": {
+        "properties": {
+          "input": {
+            "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Input"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "input"
+        ],
+        "title": "AutomaticResearchStartRequest"
+      },
+      "AutomaticResearchStartResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "run_id",
+          "status"
+        ],
+        "title": "AutomaticResearchStartResponse"
+      },
+      "AutomaticResearchStatsDTO": {
+        "properties": {
+          "source_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Source Count"
+          },
+          "admitted_evidence_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Admitted Evidence Count"
+          },
+          "skipped_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Skipped Count"
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Duration Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_count",
+          "admitted_evidence_count",
+          "skipped_count",
+          "duration_seconds"
+        ],
+        "title": "AutomaticResearchStatsDTO"
+      },
+      "AutomaticResearchViewDTO": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticResearchStageDTO"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 5,
+            "title": "Stages"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/AutomaticResearchStatsDTO"
+          },
+          "recent_activity": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recent Activity"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticResearchExceptionDTO"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticResearchResultDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "run_id",
+          "title",
+          "status",
+          "stages",
+          "stats",
+          "recent_activity",
+          "exceptions",
+          "failure_reason",
+          "result"
+        ],
+        "title": "AutomaticResearchViewDTO"
+      },
       "Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post": {
         "properties": {
           "payload": {
@@ -14601,6 +15133,14 @@
             "type": "string",
             "title": "Case Id"
           },
+          "workflow_mode": {
+            "type": "string",
+            "enum": [
+              "reviewed",
+              "automatic"
+            ],
+            "title": "Workflow Mode"
+          },
           "event_title": {
             "type": "string",
             "title": "Event Title"
@@ -14685,6 +15225,7 @@
         "type": "object",
         "required": [
           "case_id",
+          "workflow_mode",
           "event_title",
           "company_name",
           "ticker",

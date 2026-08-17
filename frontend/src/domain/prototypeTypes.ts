@@ -876,6 +876,7 @@ export interface ThemeWorkbenchView {
 
 import type { ResearchClient as BaseResearchClient } from "./types";
 import type { EventResearchClient } from "./eventResearch";
+import type { AutomaticResearchClient } from "./automaticResearch";
 
 /** Payload for POST /research-cases (screen 2 · 新建研究 submit). */
 export interface CreateCaseInput {
@@ -1134,6 +1135,7 @@ export interface PrototypeClient {
 
 export type ResearchClient = BaseResearchClient &
   EventResearchClient &
+  AutomaticResearchClient &
   AutoResearchClient &
   PrototypeClient &
   ReviewQueueClient &

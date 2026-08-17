@@ -1034,6 +1034,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/automatic-research": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Automatic Research */
+        post: operations["start_automatic_research_api_v1_automatic_research_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automatic-research/{case_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Automatic Research */
+        get: operations["get_automatic_research_api_v1_automatic_research__case_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automatic-research/{case_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Automatic Research */
+        post: operations["retry_automatic_research_api_v1_automatic_research__case_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/event-research": {
         parameters: {
             query?: never;
@@ -2792,6 +2843,125 @@ export interface components {
             /** Idempotency Key */
             idempotency_key: string;
         };
+        /** AutomaticResearchExceptionDTO */
+        AutomaticResearchExceptionDTO: {
+            /** Reason */
+            reason: string;
+            /** Stage */
+            stage: string;
+            /** Count */
+            count: number;
+        };
+        /** AutomaticResearchResultDTO */
+        AutomaticResearchResultDTO: {
+            /**
+             * Label
+             * @constant
+             */
+            label: "系统生成，未经人工审核";
+            /**
+             * Human Reviewed
+             * @constant
+             */
+            human_reviewed: false;
+            /** Conclusion */
+            conclusion: string;
+            /** Key Findings */
+            key_findings: string[];
+            /** Counter Evidence */
+            counter_evidence: string[];
+            /** Limitations */
+            limitations: string[];
+            /** Sources */
+            sources: components["schemas"]["AutomaticResearchSourceDTO"][];
+        };
+        /** AutomaticResearchSourceDTO */
+        AutomaticResearchSourceDTO: {
+            /** Title */
+            title: string | null;
+            /** Url */
+            url: string | null;
+            /** Role */
+            role: string;
+            /**
+             * Review State
+             * @constant
+             */
+            review_state: "automatically_admitted";
+        };
+        /** AutomaticResearchStageDTO */
+        AutomaticResearchStageDTO: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "acquire" | "parse" | "admit" | "analyze" | "conclude";
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed";
+            /** Summary */
+            summary: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+        };
+        /** AutomaticResearchStartRequest */
+        AutomaticResearchStartRequest: {
+            /** Input */
+            input: string;
+        };
+        /** AutomaticResearchStartResponse */
+        AutomaticResearchStartResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "queued";
+        };
+        /** AutomaticResearchStatsDTO */
+        AutomaticResearchStatsDTO: {
+            /** Source Count */
+            source_count: number;
+            /** Admitted Evidence Count */
+            admitted_evidence_count: number;
+            /** Skipped Count */
+            skipped_count: number;
+            /** Duration Seconds */
+            duration_seconds: number;
+        };
+        /** AutomaticResearchViewDTO */
+        AutomaticResearchViewDTO: {
+            /** Case Id */
+            case_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed";
+            /** Stages */
+            stages: components["schemas"]["AutomaticResearchStageDTO"][];
+            stats: components["schemas"]["AutomaticResearchStatsDTO"];
+            /** Recent Activity */
+            recent_activity: string[];
+            /** Exceptions */
+            exceptions: components["schemas"]["AutomaticResearchExceptionDTO"][];
+            /** Failure Reason */
+            failure_reason: string | null;
+            result: components["schemas"]["AutomaticResearchResultDTO"] | null;
+        };
         /** Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post */
         Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post: {
             /** Payload */
@@ -4274,6 +4444,11 @@ export interface components {
         EventResearchListItemDTO: {
             /** Case Id */
             case_id: string;
+            /**
+             * Workflow Mode
+             * @enum {string}
+             */
+            workflow_mode: "reviewed" | "automatic";
             /** Event Title */
             event_title: string;
             /** Company Name */
@@ -10324,6 +10499,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_automatic_research_api_v1_automatic_research_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomaticResearchStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticResearchStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_automatic_research_api_v1_automatic_research__case_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticResearchViewDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_automatic_research_api_v1_automatic_research__case_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticResearchStartResponse"];
                 };
             };
             /** @description Validation Error */

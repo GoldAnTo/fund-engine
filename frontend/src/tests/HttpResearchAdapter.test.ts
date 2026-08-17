@@ -1399,6 +1399,7 @@ describe("HttpResearchAdapter", () => {
         items: [{
           case_id: "event-1", event_title: "Event", company_name: null, ticker: null,
           event_at: null, lifecycle_status: "awaiting_scope", status_summary: "等待协议",
+          workflow_mode: "automatic",
           next_human_action: "完成新增因素的研究协议后再启动补证",
           next_action_kind: "complete_research_protocol",
           updated_at: "2026-08-08T00:00:00Z",
@@ -1409,7 +1410,10 @@ describe("HttpResearchAdapter", () => {
     const events = await new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" })
       .listEventResearch();
 
-    expect(events[0]?.nextActionKind).toBe("complete_research_protocol");
+    expect(events[0]).toMatchObject({
+      workflowMode: "automatic",
+      nextActionKind: "complete_research_protocol",
+    });
   });
 
   it("maps event evidence to a Case-owned frozen-document action", async () => {
