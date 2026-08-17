@@ -1,17 +1,40 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { researchClient } from "../../data/researchClient";
 import {
+  automaticResearchPollDelay,
   automaticResearchStatusLabel,
   automaticStageStatusLabel,
   formatAutomaticDuration,
   formatAutomaticTimestamp,
+  normalizeAutomaticResearchView,
   type AutomaticResearchSource,
   type AutomaticResearchView,
 } from "../../domain/automaticResearch";
 
-const POLL_INTERVAL_MS = 2_000;
+export const AUTOMATIC_RESEARCH_PROCESS_COLORS = {
+  machineLabelBackground: { lightness: .94, chroma: .024, hue: 245 },
+  machineLabelText: { lightness: .34, chroma: .055, hue: 245 },
+} as const;
+
+const automaticResearchProcessStyle: CSSProperties & {
+  "--automatic-process-machine-label-background": string;
+  "--automatic-process-machine-label-text": string;
+} = {
+  "--automatic-process-machine-label-background": toCssOklch(
+    AUTOMATIC_RESEARCH_PROCESS_COLORS.machineLabelBackground,
+  ),
+  "--automatic-process-machine-label-text": toCssOklch(
+    AUTOMATIC_RESEARCH_PROCESS_COLORS.machineLabelText,
+  ),
+};
+
+function toCssOklch(color: { lightness: number; chroma: number; hue: number }): string {
+  return `oklch(${color.lightness} ${color.chroma} ${color.hue})`;
+}
+
+class InvalidAutomaticResearchProjectionError extends Error {}
 
 function isActive(view: AutomaticResearchView): boolean {
   return view.status === "queued" || view.status === "running";
@@ -32,6 +55,37 @@ function sourceRoleLabel(role: string): string {
   if (role === "contradicts" || role === "counter_evidence") return "反证";
   if (role === "contextualizes" || role === "context") return "背景资料";
   return "研究资料";
+}
+
+function currentStage(view: AutomaticResearchView) {
+  return view.stages.find((stage) => stage.status === "running")
+    || view.stages.find((stage) => stage.status === "failed")
+    || (view.status === "completed"
+      ? view.stages[view.stages.length - 1]
+      : view.stages.find((stage) => stage.status === "pending"));
+}
+
+function queuedRetryView(
+  previous: AutomaticResearchView,
+  runId: string,
+): AutomaticResearchView {
+  return {
+    ...previous,
+    runId,
+    status: "queued",
+    stages: previous.stages.map((stage) => ({
+      ...stage,
+      status: "pending",
+      summary: `等待${stage.label}`,
+      startedAt: null,
+      completedAt: null,
+    })),
+    stats: { sourceCount: 0, admittedEvidenceCount: 0, skippedCount: 0, durationSeconds: 0 },
+    recentActivity: ["新的自动研究已排队"],
+    exceptions: [],
+    failureReason: null,
+    result: null,
+  };
 }
 
 function SourceItem({ source }: { source: AutomaticResearchSource }) {
@@ -56,13 +110,15 @@ export function AutomaticResearchPage() {
   const { caseId } = useParams<{ caseId: string }>();
   const [view, setView] = useState<AutomaticResearchView | null>(null);
   const [loading, setLoading] = useState(Boolean(caseId));
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState<"unavailable" | "invalid" | null>(null);
+  const [transientError, setTransientError] = useState(false);
   const [retryError, setRetryError] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [reloadVersion, setReloadVersion] = useState(0);
+  const [pollVersion, setPollVersion] = useState(0);
   const mountedRef = useRef(false);
   const requestTokenRef = useRef(0);
   const flowTokenRef = useRef(0);
+  const seedViewRef = useRef<AutomaticResearchView | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -76,38 +132,69 @@ export function AutomaticResearchPage() {
   useEffect(() => {
     const flowToken = ++flowTokenRef.current;
     let timer: number | null = null;
-    setView(null);
-    setLoadError(false);
+    const seed = seedViewRef.current?.caseId === caseId ? seedViewRef.current : null;
+    seedViewRef.current = null;
+    let lastView = seed;
+    let consecutiveFailures = 0;
+    setView(seed);
+    setLoadError(null);
+    setTransientError(false);
     setRetryError(false);
     setRetrying(false);
-    setLoading(Boolean(caseId));
+    setLoading(Boolean(caseId) && !seed);
 
     if (!caseId) return undefined;
 
     const load = async () => {
       const requestToken = ++requestTokenRef.current;
       try {
-        const nextView = await researchClient.getAutomaticResearch(caseId);
+        const response = await researchClient.getAutomaticResearch(caseId);
+        const nextView = normalizeAutomaticResearchView(response);
+        if (!nextView) throw new InvalidAutomaticResearchProjectionError();
         if (
           !mountedRef.current
           || flowToken !== flowTokenRef.current
           || requestToken !== requestTokenRef.current
         ) return;
+        lastView = nextView;
+        consecutiveFailures = 0;
         setView(nextView);
-        setLoadError(false);
+        setLoadError(null);
+        setTransientError(false);
         setLoading(false);
         if (isActive(nextView)) {
-          timer = window.setTimeout(() => { void load(); }, POLL_INTERVAL_MS);
+          timer = window.setTimeout(
+            () => { void load(); },
+            automaticResearchPollDelay(0),
+          );
         }
-      } catch {
+      } catch (error) {
         if (
           !mountedRef.current
           || flowToken !== flowTokenRef.current
           || requestToken !== requestTokenRef.current
         ) return;
-        setView(null);
-        setLoadError(true);
         setLoading(false);
+        if (error instanceof InvalidAutomaticResearchProjectionError) {
+          setView(null);
+          setLoadError("invalid");
+          setTransientError(false);
+          return;
+        }
+        if (lastView && isActive(lastView)) {
+          consecutiveFailures += 1;
+          setView(lastView);
+          setLoadError(null);
+          setTransientError(true);
+          timer = window.setTimeout(
+            () => { void load(); },
+            automaticResearchPollDelay(consecutiveFailures),
+          );
+          return;
+        }
+        setView(null);
+        setLoadError("unavailable");
+        setTransientError(false);
       }
     };
 
@@ -117,7 +204,13 @@ export function AutomaticResearchPage() {
       requestTokenRef.current += 1;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [caseId, reloadVersion]);
+  }, [caseId, pollVersion]);
+
+  function readProgressNow() {
+    if (!caseId || !view || !transientError || !isActive(view)) return;
+    seedViewRef.current = view;
+    setPollVersion((version) => version + 1);
+  }
 
   async function retry() {
     if (!caseId || retrying || view?.status !== "failed") return;
@@ -125,9 +218,13 @@ export function AutomaticResearchPage() {
     setRetrying(true);
     setRetryError(false);
     try {
-      await researchClient.retryAutomaticResearch(caseId);
+      const started = await researchClient.retryAutomaticResearch(caseId);
       if (!mountedRef.current || requestToken !== requestTokenRef.current) return;
-      setReloadVersion((version) => version + 1);
+      const queued = queuedRetryView(view, started.runId);
+      seedViewRef.current = queued;
+      setView(queued);
+      setRetrying(false);
+      setPollVersion((version) => version + 1);
     } catch {
       if (!mountedRef.current || requestToken !== requestTokenRef.current) return;
       setRetryError(true);
@@ -163,17 +260,29 @@ export function AutomaticResearchPage() {
     return (
       <main className="ros-page automatic-research-process">
         <div className="ros-error" role="alert">
-          <strong>暂时无法读取这项自动研究</strong>
-          <p>它可能不存在，或研究服务暂时不可用。请稍后从研究调度页重试。</p>
+          <strong>
+            {loadError === "invalid"
+              ? "自动研究过程记录不完整"
+              : "暂时无法读取这项自动研究"}
+          </strong>
+          <p>
+            {loadError === "invalid"
+              ? "系统收到的阶段记录不符合固定的五阶段结构，已停止展示以避免误导。"
+              : "它可能不存在，或研究服务暂时不可用。请稍后从研究调度页重试。"}
+          </p>
         </div>
       </main>
     );
   }
 
   const duration = formatAutomaticDuration(view.stats.durationSeconds);
+  const liveStage = currentStage(view);
 
   return (
-    <main className="ros-page automatic-research-process">
+    <main
+      className="ros-page automatic-research-process"
+      style={automaticResearchProcessStyle}
+    >
       <header className="automatic-research-process__header">
         <div>
           <p className="ros-eyebrow">自动研究过程</p>
@@ -186,6 +295,28 @@ export function AutomaticResearchPage() {
           {automaticResearchStatusLabel(view.status)}
         </p>
       </header>
+
+      {liveStage && (
+        <p
+          className="automatic-research-process__current-stage"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          当前阶段：{liveStage.label}，{automaticStageStatusLabel(liveStage.status)}。
+          {liveStage.summary}
+        </p>
+      )}
+
+      {transientError && isActive(view) && (
+        <section
+          className="automatic-research-process__transient-error"
+          role="status"
+          aria-label="进度暂时无法更新"
+        >
+          <p>进度暂时无法更新，系统会继续自动读取。</p>
+          <button type="button" onClick={readProgressNow}>立即重新读取</button>
+        </section>
+      )}
 
       {view.status === "failed" && (
         <section className="automatic-research-process__failure" aria-labelledby="automatic-research-failure">
@@ -220,7 +351,9 @@ export function AutomaticResearchPage() {
             <div className="automatic-research-process__findings">
               <h3>关键发现</h3>
               <ul>
-                {view.result.keyFindings.map((finding) => <li key={finding}>{finding}</li>)}
+                {view.result.keyFindings.map((finding, index) => (
+                  <li key={`${view.runId}-finding-${index}`}>{finding}</li>
+                ))}
               </ul>
             </div>
           )}
@@ -237,7 +370,7 @@ export function AutomaticResearchPage() {
               <li
                 key={stage.key}
                 className={`automatic-research-process__stage automatic-research-process__stage--${stage.status}`}
-                aria-label={`${stage.label}阶段`}
+                aria-label={`${stage.label}阶段，${automaticStageStatusLabel(stage.status)}，${stage.summary}`}
               >
                 <span className="automatic-research-process__stage-number" aria-hidden="true">
                   {index + 1}
@@ -252,9 +385,9 @@ export function AutomaticResearchPage() {
                   <p>{stage.summary}</p>
                   {(startedAt || completedAt) && (
                     <p className="automatic-research-process__stage-time">
-                      {startedAt && <time dateTime={stage.startedAt || undefined}>{startedAt}</time>}
-                      {startedAt && completedAt && <span aria-hidden="true"> 至 </span>}
-                      {completedAt && <time dateTime={stage.completedAt || undefined}>{completedAt}</time>}
+                      {startedAt && <>开始 <time dateTime={stage.startedAt || undefined}>{startedAt}</time></>}
+                      {startedAt && completedAt && <span aria-hidden="true">；</span>}
+                      {completedAt && <>完成 <time dateTime={stage.completedAt || undefined}>{completedAt}</time></>}
                     </p>
                   )}
                 </div>
@@ -280,15 +413,17 @@ export function AutomaticResearchPage() {
           {view.recentActivity.length > 0 && (
             <section>
               <h3>最近活动</h3>
-              <ul>{view.recentActivity.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+              <ul>{view.recentActivity.map((activity, index) => (
+                <li key={`${view.runId}-activity-${index}`}>{activity}</li>
+              ))}</ul>
             </section>
           )}
           {view.exceptions.length > 0 && (
             <section>
               <h3>跳过与异常</h3>
               <ul>
-                {view.exceptions.map((exception) => (
-                  <li key={`${exception.stage}-${exception.reason}`}>
+                {view.exceptions.map((exception, index) => (
+                  <li key={`${view.runId}-exception-${exception.stage}-${index}`}>
                     {exception.reason}（{exception.stage}，{exception.count} 项）
                   </li>
                 ))}
@@ -298,13 +433,17 @@ export function AutomaticResearchPage() {
           {view.result?.counterEvidence.length ? (
             <section>
               <h3>反证</h3>
-              <ul>{view.result.counterEvidence.map((item) => <li key={item}>{item}</li>)}</ul>
+              <ul>{view.result.counterEvidence.map((item, index) => (
+                <li key={`${view.runId}-counter-${index}`}>{item}</li>
+              ))}</ul>
             </section>
           ) : null}
           {view.result?.limitations.length ? (
             <section>
               <h3>限制</h3>
-              <ul>{view.result.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+              <ul>{view.result.limitations.map((item, index) => (
+                <li key={`${view.runId}-limitation-${index}`}>{item}</li>
+              ))}</ul>
             </section>
           ) : null}
           {view.result?.sources.length ? (

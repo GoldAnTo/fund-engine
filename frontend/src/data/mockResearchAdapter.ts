@@ -3187,16 +3187,24 @@ function mockAutomaticResearchView(
     { key: "analyze", label: "分析证据", summary: completed ? "已比较支持证据与反证" : "等待证据准入" },
     { key: "conclude", label: "形成结论", summary: completed ? "已生成自动结论" : "等待证据分析" },
   ];
-  const stages: AutomaticResearchView["stages"] = stageDefinitions.map((stage, index) => ({
-    ...stage,
-    status: completed
-      ? "completed"
-      : failed
-        ? index < 2 ? "completed" : index === 2 ? "failed" : "pending"
-        : index === 0 ? "running" : "pending",
-    startedAt: completed || index === 0 ? "2026-08-17T01:00:00Z" : null,
-    completedAt: completed ? "2026-08-17T01:01:05Z" : null,
-  }));
+  const baseTime = Date.parse("2026-08-17T01:00:00Z");
+  const stages: AutomaticResearchView["stages"] = stageDefinitions.map((stage, index) => {
+    const startedAt = new Date(baseTime + index * 10_000).toISOString();
+    return {
+      ...stage,
+      status: completed
+        ? "completed"
+        : failed
+          ? index < 2 ? "completed" : index === 2 ? "failed" : "pending"
+          : index === 0 ? "running" : "pending",
+      startedAt: completed || (failed && index <= 2) || (!failed && index === 0)
+        ? startedAt
+        : null,
+      completedAt: completed || (failed && index < 2)
+        ? new Date(baseTime + (index + 1) * 10_000).toISOString()
+        : null,
+    };
+  });
 
   return {
     caseId,
@@ -3235,7 +3243,7 @@ export class MockResearchAdapter implements ResearchClient {
   private scenario: MockScenario;
   private readonly preparationScenario: PreparationScenario;
   private readonly automaticResearchScenario: "completed" | "failed";
-  private failNextAutomaticResearch: boolean;
+  private automaticResearchFailures = new Set<string>();
   private preparation: ResearchPreparation;
   // mutable per-instance copies for tests that write review decisions.
   private queue: ReviewQueueItem[];
@@ -3269,6 +3277,9 @@ export class MockResearchAdapter implements ResearchClient {
       started.caseId,
       mockAutomaticResearchView(started.caseId, started.runId, input.trim(), "running"),
     );
+    if (this.automaticResearchScenario === "failed") {
+      this.automaticResearchFailures.add(started.caseId);
+    }
     return simulateLatency(started);
   }
 
@@ -3277,8 +3288,7 @@ export class MockResearchAdapter implements ResearchClient {
     const current = this.automaticResearchViews.get(caseId);
     if (!current) throw new Error("automatic research not found");
     if (current.status !== "running") return simulateLatency(current);
-    if (this.failNextAutomaticResearch) {
-      this.failNextAutomaticResearch = false;
+    if (this.automaticResearchFailures.delete(caseId)) {
       const failed = mockAutomaticResearchView(
         current.caseId,
         current.runId,
@@ -3332,7 +3342,6 @@ export class MockResearchAdapter implements ResearchClient {
     this.scenario = opts.scenario ?? "typical";
     this.preparationScenario = opts.preparationScenario ?? "review_claims";
     this.automaticResearchScenario = opts.automaticResearchScenario ?? "completed";
-    this.failNextAutomaticResearch = this.automaticResearchScenario === "failed";
     this.preparation = mockResearchPreparation(this.preparationScenario);
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.researchRuns = MOCK_RESEARCH_RUNS.map(cloneResearchRun);
@@ -3351,7 +3360,7 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventStates.clear();
     this.automaticResearchViews.clear();
     this.createdAutomaticResearchCount = 0;
-    this.failNextAutomaticResearch = this.automaticResearchScenario === "failed";
+    this.automaticResearchFailures.clear();
     this.createdDocuments.clear();
     this.createdEventCount = 0;
     this.createdSupplementCount = 0;

@@ -227,9 +227,45 @@
   padding: .28rem .55rem;
   border: 1px solid var(--ros-rule);
   border-radius: .25rem;
-  background: var(--ros-muted);
-  color: var(--ros-soft);
+  background: var(--automatic-process-machine-label-background);
+  color: var(--automatic-process-machine-label-text);
   font-size: .75rem;
+  font-weight: 700;
+}
+
+.automatic-research-process__current-stage {
+  max-width: 72ch;
+  margin: 1rem 0 0;
+  color: var(--ros-soft);
+  font-size: .82rem;
+  line-height: 1.55;
+}
+
+.automatic-research-process__transient-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 760px;
+  margin-top: 1rem;
+  padding: .7rem .85rem;
+  border: 1px solid var(--ros-amber);
+  border-radius: .4rem;
+  background: var(--ros-amber-soft);
+}
+
+.automatic-research-process__transient-error p {
+  margin: 0;
+  color: var(--ros-ink);
+  font-size: .8rem;
+}
+
+.automatic-research-process__transient-error button {
+  flex: 0 0 auto;
+  min-height: 2.25rem;
+  border: 0;
+  background: transparent;
+  color: var(--ros-blue);
   font-weight: 700;
 }
 
@@ -436,8 +472,11 @@
 }
 
 .automatic-research-process__case-link {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
   margin-top: 1.5rem;
+  padding-inline: .25rem;
   font-weight: 700;
 }
 
@@ -465,5 +504,14 @@
 
   .automatic-research-process__failure .ros-button {
     width: 100%;
+  }
+
+  .automatic-research-process__transient-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .automatic-research-process__transient-error button {
+    text-align: left;
   }
 }

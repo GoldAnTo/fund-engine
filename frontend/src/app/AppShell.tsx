@@ -28,8 +28,13 @@ function pageLabel(pathname: string) {
   if (pathname.endsWith("/market")) return "市场与表达";
   if (pathname.includes("/monitor")) return "监控与版本";
   if (pathname.endsWith("/review")) return "待我审核";
+  if (pathname.endsWith("/automatic-research")) return "自动研究";
   if (pathname.endsWith("/new")) return "自动研究";
   return "研究调度";
+}
+
+function isAutomaticResearchProcessPath(pathname: string): boolean {
+  return /^\/events\/[^/]+\/automatic-research\/?$/.test(pathname);
 }
 type RunStageEvent = {
   seq: number;
@@ -70,6 +75,7 @@ function queuedRunExecutionState(
 
 export function AppShell() {
   const location = useLocation();
+  const suppressGlobalRunStrips = isAutomaticResearchProcessPath(location.pathname);
   const [events, setEvents] = useState<EventResearchListItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [globalSearchMatches, setGlobalSearchMatches] = useState<SearchHit[]>(
@@ -498,7 +504,7 @@ export function AppShell() {
             ＋ 自动研究
           </Link>
         </header>
-        {runLoadError && (
+        {!suppressGlobalRunStrips && runLoadError && (
           <section
             className="ros-run-strip ros-run-strip--error"
             aria-label="运行状态不可用"
@@ -518,7 +524,7 @@ export function AppShell() {
             </div>
           </section>
         )}
-        {fundRunLoadError && (
+        {!suppressGlobalRunStrips && fundRunLoadError && (
           <section
             className="ros-run-strip ros-run-strip--error"
             aria-label="基金披露运行状态不可用"
@@ -538,7 +544,7 @@ export function AppShell() {
             </div>
           </section>
         )}
-        {activeRuns.map((run) => {
+        {!suppressGlobalRunStrips && activeRuns.map((run) => {
           const runEvents = activeRunEvents[run.run_id];
           const latestActiveEvent = runEvents?.[runEvents.length - 1];
           const activeRunEventError = activeRunEventErrors[run.run_id];
@@ -581,7 +587,7 @@ export function AppShell() {
             </section>
           );
         })}
-        {activeFundRuns.map((run) => (
+        {!suppressGlobalRunStrips && activeFundRuns.map((run) => (
           <section
             className="ros-run-strip"
             aria-label="系统正在运行"
@@ -608,7 +614,7 @@ export function AppShell() {
         ))}
         <Outlet />
       </div>
-      {drawerRun && (
+      {!suppressGlobalRunStrips && drawerRun && (
         <GlobalRunDrawer
           run={drawerRun}
           events={drawerEvents}

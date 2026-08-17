@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
-import { resetResearchOsApi } from "../app/researchOsApi";
+import { resetResearchOsApi, setResearchOsApi } from "../app/researchOsApi";
 import { ResearchOsRoutes } from "../app/routes";
-import { resetResearchClient } from "../data/researchClient";
+import { MockResearchAdapter } from "../data/mockResearchAdapter";
+import { MockResearchOsApi } from "../data/mockResearchOsApi";
+import { resetResearchClient, setResearchClient } from "../data/researchClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -85,6 +87,45 @@ describe("Research OS route inventory", () => {
       "暂时无法读取这项自动研究",
     );
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("keeps unrelated global review-run controls off the automatic process route", async () => {
+    const adapter = new MockResearchAdapter();
+    const started = await adapter.startAutomaticResearch("自动过程页隔离");
+    const api = new MockResearchOsApi(adapter);
+    const activeRuns = vi.spyOn(api, "activeRuns");
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={[`/events/${started.caseId}/automatic-research`]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "自动过程页隔离" })).toBeVisible();
+    await waitFor(() => expect(activeRuns).toHaveBeenCalled());
+    expect(screen.queryByText(/等待人工审核/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /审核关键证据/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开运行详情" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /待我审核/ })).toBeVisible();
+  });
+
+  it("retains the global review-run strip on reviewed research routes", async () => {
+    const adapter = new MockResearchAdapter();
+    const api = new MockResearchOsApi(adapter);
+    setResearchClient(adapter);
+    setResearchOsApi(api);
+
+    render(
+      <MemoryRouter initialEntries={["/events"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    const strip = await screen.findByRole("region", { name: "系统正在运行" });
+    expect(strip).toHaveTextContent("等待人工审核");
+    expect(strip).toHaveTextContent("审核 1 条关键证据");
   });
 
   it.each(caseRoutes)(

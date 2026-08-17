@@ -4,6 +4,14 @@ export type AutomaticStageKey = "acquire" | "parse" | "admit" | "analyze" | "con
 
 export type AutomaticStageStatus = "pending" | "running" | "completed" | "failed";
 
+export const AUTOMATIC_STAGE_ORDER = [
+  "acquire",
+  "parse",
+  "admit",
+  "analyze",
+  "conclude",
+] as const satisfies readonly AutomaticStageKey[];
+
 export interface AutomaticResearchStart {
   caseId: string;
   runId: string;
@@ -115,6 +123,74 @@ export function formatAutomaticTimestamp(value: string | null): string | null {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false,
   }).format(timestamp);
+}
+
+export function automaticResearchPollDelay(consecutiveFailures: number): number {
+  const safeFailures = Number.isFinite(consecutiveFailures)
+    ? Math.max(0, Math.floor(consecutiveFailures))
+    : 0;
+  return Math.min(2_000 * (2 ** safeFailures), 8_000);
+}
+
+function isAutomaticStageKey(value: unknown): value is AutomaticStageKey {
+  return typeof value === "string"
+    && (AUTOMATIC_STAGE_ORDER as readonly string[]).includes(value);
+}
+
+function isAutomaticStageStatus(value: unknown): value is AutomaticStageStatus {
+  return value === "pending"
+    || value === "running"
+    || value === "completed"
+    || value === "failed";
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+export function normalizeAutomaticResearchStages(
+  value: unknown,
+): AutomaticResearchStage[] | null {
+  if (!Array.isArray(value) || value.length !== AUTOMATIC_STAGE_ORDER.length) return null;
+  const byKey = new Map<AutomaticStageKey, AutomaticResearchStage>();
+  for (const candidate of value) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return null;
+    }
+    const stage = candidate as Record<string, unknown>;
+    if (
+      !isAutomaticStageKey(stage.key)
+      || byKey.has(stage.key)
+      || typeof stage.label !== "string"
+      || typeof stage.summary !== "string"
+      || !isAutomaticStageStatus(stage.status)
+      || !isNullableString(stage.startedAt)
+      || !isNullableString(stage.completedAt)
+    ) return null;
+    byKey.set(stage.key, {
+      key: stage.key,
+      label: stage.label,
+      summary: stage.summary,
+      status: stage.status,
+      startedAt: stage.startedAt,
+      completedAt: stage.completedAt,
+    });
+  }
+  const normalized: AutomaticResearchStage[] = [];
+  for (const key of AUTOMATIC_STAGE_ORDER) {
+    const stage = byKey.get(key);
+    if (!stage) return null;
+    normalized.push(stage);
+  }
+  return normalized;
+}
+
+export function normalizeAutomaticResearchView(
+  view: AutomaticResearchView,
+): AutomaticResearchView | null {
+  const stages = normalizeAutomaticResearchStages(view.stages);
+  return stages ? { ...view, stages } : null;
 }
