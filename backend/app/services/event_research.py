@@ -24,6 +24,7 @@ from app.services.research import ResearchService
 from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
 from app.services.case_tenant_access import CaseTenantAccess
+from app.services.auto_research import AutoResearchService
 from app.errors import ValidationFailedError
 
 
@@ -47,6 +48,8 @@ class CreatedEventResearch:
     case_id: str
     brief_id: str
     lifecycle: EventResearchLifecycle
+    run_id: str | None
+    preparation_id: str | None
 
 
 @dataclass(frozen=True)
@@ -64,7 +67,10 @@ class EventResearchService:
     def create(
         self, payload: CreateEventResearchRequest, *, tenant_id: str,
         initial_uploaded_original: InitialUploadedOriginal | None = None,
+        workflow_mode: str = "reviewed",
     ) -> CreatedEventResearch:
+        if workflow_mode not in {"reviewed", "automatic"}:
+            raise ValueError("workflow_mode must be 'reviewed' or 'automatic'")
         research = ResearchService(ResearchRepository(self._session))
         case = research.add_case(
             title=payload.event_title,
@@ -120,7 +126,12 @@ class EventResearchService:
             event_at=payload.event_at,
             market_reaction=payload.market_reaction,
             research_question=payload.research_question,
-            extraction_state="human_confirmed",
+            workflow_mode=workflow_mode,
+            extraction_state=(
+                "human_confirmed"
+                if workflow_mode == "reviewed"
+                else "system_generated"
+            ),
             created_at=now,
         )
         self._session.add(brief)
@@ -133,6 +144,7 @@ class EventResearchService:
         )
         self._session.add(scope)
         self._session.flush()
+        theses = []
         for position, factor in enumerate(payload.candidate_factors, start=1):
             statement = factor.strip()
             self._session.add(
@@ -152,18 +164,22 @@ class EventResearchService:
                     created_at=now,
                 )
             )
-            research.add_thesis(
-                case.id,
-                statement=statement,
-                created_by=payload.created_by,
-                creator_type="human",
-                review_state="confirmed",
-                research_protocol_required=payload.research_protocol_required,
+            theses.append(
+                research.add_thesis(
+                    case.id,
+                    statement=statement,
+                    created_by=payload.created_by,
+                    creator_type="human" if workflow_mode == "reviewed" else "ai",
+                    review_state="confirmed" if workflow_mode == "reviewed" else "draft",
+                    research_protocol_required=payload.research_protocol_required,
+                )
             )
         self._session.flush()
 
         try:
             lifecycle = None
+            preparation = None
+            run = None
             if initial_uploaded_original is not None:
                 # The upload service deliberately requires an event lifecycle.
                 # It is staged in this uncommitted transaction, before the
@@ -196,21 +212,78 @@ class EventResearchService:
                 initial_document_version_id=document.id,
                 admitted_by=payload.created_by,
             )
-            # Preparation only schedules the source-bound draft workflow. It
-            # never authorizes collection or creates a formal ResearchRun.
-            ResearchPreparationService(self._session).create_for_case(
-                case.id,
-                input_fingerprint=preparation_input_fingerprint(document.id, scope.id),
-                actor=payload.created_by,
-            )
-            if lifecycle is None:
+            if workflow_mode == "reviewed":
+                # Preparation only schedules the source-bound draft workflow. It
+                # never authorizes collection or creates a formal ResearchRun.
+                preparation = ResearchPreparationService(
+                    self._session
+                ).create_for_case(
+                    case.id,
+                    input_fingerprint=preparation_input_fingerprint(
+                        document.id, scope.id
+                    ),
+                    actor=payload.created_by,
+                )
+                if lifecycle is None:
+                    lifecycle = EventResearchLifecycle(
+                        research_case_id=case.id,
+                        status="awaiting_key_review",
+                        active_run_id=None,
+                        current_round=0,
+                        status_summary="资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划",
+                        current_gap="研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+                        next_human_action=None,
+                        updated_at=_utcnow(),
+                    )
+                    self._session.add(lifecycle)
+            else:
+                factors = [thesis.statement for thesis in theses]
+                run = AutoResearchService(self._session).start(
+                    case.id,
+                    max_rounds=3,
+                    budget=100,
+                    thesis_ids=[thesis.id for thesis in theses],
+                    trigger="automatic_intake",
+                    commit=False,
+                    scope_context={
+                        "workflow_mode": "automatic",
+                        "automatic_protocol": {
+                            "generated_by": "system",
+                            "research_question": payload.research_question,
+                            "factors": factors,
+                            "conclusion_rule": (
+                                "report support, contradiction, and "
+                                "insufficiency separately"
+                            ),
+                        },
+                        "automatic_evidence_plan": {
+                            "items": [
+                                {
+                                    "factor": factor,
+                                    "objectives": [
+                                        "support",
+                                        "contradict",
+                                        "alternative_explanation",
+                                    ],
+                                    "allowed_source_roles": [
+                                        "company_disclosure",
+                                        "licensed_provider",
+                                    ],
+                                }
+                                for factor in factors
+                            ],
+                            "max_rounds": 3,
+                            "budget": 100,
+                        },
+                    },
+                )
                 lifecycle = EventResearchLifecycle(
                     research_case_id=case.id,
-                    status="awaiting_key_review",
-                    active_run_id=None,
-                    current_round=0,
-                    status_summary="资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划",
-                    current_gap="研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+                    status="researching",
+                    active_run_id=run.id,
+                    current_round=1,
+                    status_summary="自动研究已排队",
+                    current_gap=None,
                     next_human_action=None,
                     updated_at=_utcnow(),
                 )
@@ -223,7 +296,13 @@ class EventResearchService:
             self._session.rollback()
             raise
         return CreatedEventResearch(
-            case_id=str(case.id), brief_id=str(brief.id), lifecycle=lifecycle
+            case_id=str(case.id),
+            brief_id=str(brief.id),
+            lifecycle=lifecycle,
+            run_id=str(run.id) if run is not None else None,
+            preparation_id=(
+                str(preparation.id) if preparation is not None else None
+            ),
         )
 
     def freeze_published_material(
