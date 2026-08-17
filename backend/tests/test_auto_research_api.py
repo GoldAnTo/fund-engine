@@ -149,6 +149,61 @@ def test_waiting_for_sources_run_can_be_cancelled(session):
     assert run.stage == "stopped"
 
 
+def test_service_cancels_waiting_for_sources_run(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="service cancel source wait",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    session.add(case)
+    session.flush()
+    run = AutoResearchRepository(session).create_run(research_case_id=case.id)
+    run.status = "waiting_for_sources"
+    run.stage = "retrieve"
+
+    summary = AutoResearchService(session).cancel_run(
+        run.id,
+        actor="human:test",
+        change_reason="stop parked run",
+    )
+
+    assert summary["status"] == "cancelled"
+    assert run.status == "cancelled"
+
+
+def test_active_endpoint_shows_and_cancels_waiting_for_sources_run(
+    cmd_client, cmd_session
+):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="parked automatic run",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    _admit_case(cmd_session, case)
+    run = AutoResearchRepository(cmd_session).create_run(research_case_id=case.id)
+    run.status = "waiting_for_sources"
+    run.stage = "retrieve"
+    cmd_session.commit()
+
+    active = cmd_client.get("/api/v1/research-runs/active")
+
+    assert active.status_code == 200
+    assert [item["run_id"] for item in active.json()["items"]] == [str(run.id)]
+
+    cancelled = cmd_client.post(
+        f"/api/v1/research-runs/{run.id}/cancel",
+        json={"actor": "human:test", "change_reason": "stop parked run"},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+
 def test_pending_documents_are_isolated_to_the_research_case(session):
     """A run must never extract a document merely because another case owns it."""
     now = datetime.now(timezone.utc)

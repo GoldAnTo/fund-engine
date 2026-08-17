@@ -1,7 +1,8 @@
 """Governed source dispatch for one-click automatic research runs."""
 from __future__ import annotations
 
-from datetime import UTC, timedelta
+import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from app.models.event_research import EventResearchBrief
 from app.models.ledger import CaseTenantAdmission, Thesis
 from app.models.operational import ResearchRun, ResearchTask
 from app.models.research_monitor import ResearchRunEvent
+from app.repositories.auto_research import AutoResearchRepository
 from app.services.acquisition import AcquisitionModule
 from app.services.case_monitor import ResearchRunEventRepository
 
@@ -44,6 +46,26 @@ class AutomaticResearchPipeline:
         self._session = session
 
     def dispatch_sources(self, run: ResearchRun) -> str:
+        locked_run, locked_job = AutoResearchRepository(
+            self._session
+        ).lock_source_dispatch(run.id)
+        if (
+            locked_run is None
+            or locked_job is None
+            or locked_run.status
+            not in {"queued", "running", "waiting_for_sources"}
+            or locked_job.status
+            not in {"queued", "running", "waiting_for_sources"}
+            or locked_job.cancel_requested
+        ):
+            raise ValueError("automatic research run is no longer dispatchable")
+        # A savepoint isolates the complete governed dispatch from the outer
+        # worker transaction. If any request fails, no earlier request, task
+        # binding, run state, or retrieve event survives for terminalization.
+        with self._session.begin_nested():
+            return self._dispatch_locked(locked_run)
+
+    def _dispatch_locked(self, run: ResearchRun) -> str:
         scope = self._latest_scope(run)
         plan_by_factor = self._frozen_plan(scope)
         admission = self._session.scalar(
@@ -78,33 +100,42 @@ class AutomaticResearchPipeline:
                 .order_by(ResearchTask.created_at, ResearchTask.id)
             )
         )
+        expected = self._expected_task_matrix(
+            run=run,
+            scope=scope,
+            plan_by_factor=plan_by_factor,
+        )
+        actual: list[tuple[uuid.UUID, uuid.UUID, EvidenceObjective]] = []
+        for task in current_tasks:
+            mapping = _TASK_OBJECTIVES.get(task.task_type)
+            if (
+                task.research_case_id != run.research_case_id
+                or task.thesis_id is None
+                or mapping is None
+            ):
+                raise ValueError(
+                    "automatic research task matrix does not match the frozen run case"
+                )
+            objective, _target_link_role = mapping
+            actual.append((task.research_case_id, task.thesis_id, objective))
+        if (
+            not actual
+            or len(actual) != len(expected)
+            or set(actual) != set(expected)
+        ):
+            raise ValueError(
+                "automatic research task matrix does not match the frozen evidence plan"
+            )
+
         pending_requests: list[
             tuple[ResearchTask, AcquisitionRequest, EvidenceObjective]
         ] = []
         for task in current_tasks:
-            mapping = _TASK_OBJECTIVES.get(task.task_type)
-            if mapping is None:
-                raise ValueError(
-                    f"invalid automatic evidence objective task: {task.task_type}"
-                )
-            if task.thesis_id is None:
-                raise ValueError("automatic acquisition task has no thesis")
-            thesis = self._session.get(Thesis, task.thesis_id)
-            if thesis is None or thesis.research_case_id != run.research_case_id:
-                raise ValueError(
-                    "automatic acquisition task thesis is outside the run case"
-                )
-            plan_item = plan_by_factor.get(thesis.statement)
-            if plan_item is None:
-                raise ValueError(
-                    f"automatic evidence plan factor missing: {thesis.statement}"
-                )
-            objective, target_link_role = mapping
-            objectives = plan_item["objectives"]
-            if objective.value not in objectives:
-                raise ValueError(
-                    f"automatic evidence plan objective missing: {objective.value}"
-                )
+            assert task.thesis_id is not None
+            objective, target_link_role = _TASK_OBJECTIVES[task.task_type]
+            thesis, plan_item = expected[
+                (run.research_case_id, task.thesis_id, objective)
+            ]
             allowed_roles = frozenset(plan_item["allowed_source_roles"]) & frozenset(
                 B_SCOPE_POLICY.allowed_source_roles
             )
@@ -160,6 +191,7 @@ class AutomaticResearchPipeline:
             if task.result != expected_result or task.stage != "acquire":
                 task.result = expected_result
                 task.stage = "acquire"
+                task.updated_at = datetime.now(UTC)
                 wrote_task_binding = True
 
         run.status = "waiting_for_sources"
@@ -173,6 +205,70 @@ class AutomaticResearchPipeline:
                 payload_json={"round": run.round},
             )
         return "waiting_for_sources"
+
+    def _expected_task_matrix(
+        self,
+        *,
+        run: ResearchRun,
+        scope: dict,
+        plan_by_factor: dict[str, dict[str, list[str]]],
+    ) -> dict[
+        tuple[uuid.UUID, uuid.UUID, EvidenceObjective],
+        tuple[Thesis, dict[str, list[str]]],
+    ]:
+        run_scope = run.scope_thesis_ids
+        factor_ids = scope.get("factor_ids")
+        factor_statements = scope.get("factor_statements")
+        if (
+            not isinstance(run_scope, list)
+            or not run_scope
+            or not isinstance(factor_ids, list)
+            or not factor_ids
+            or not isinstance(factor_statements, list)
+            or len(factor_ids) != len(factor_statements)
+            or any(not isinstance(value, str) for value in factor_statements)
+        ):
+            raise ValueError("automatic research frozen scope is incomplete")
+        try:
+            run_ids = [uuid.UUID(str(value)) for value in run_scope]
+            frozen_ids = [uuid.UUID(str(value)) for value in factor_ids]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic research frozen scope thesis ids are invalid") from exc
+        if (
+            len(run_ids) != len(set(run_ids))
+            or len(frozen_ids) != len(set(frozen_ids))
+            or len(factor_statements) != len(set(factor_statements))
+            or set(run_ids) != set(frozen_ids)
+            or set(factor_statements) != set(plan_by_factor)
+        ):
+            raise ValueError(
+                "automatic research frozen scope factor ids/statements do not match its plan"
+            )
+
+        expected: dict[
+            tuple[uuid.UUID, uuid.UUID, EvidenceObjective],
+            tuple[Thesis, dict[str, list[str]]],
+        ] = {}
+        for thesis_id, factor_statement in zip(frozen_ids, factor_statements):
+            thesis = self._session.get(Thesis, thesis_id)
+            if (
+                thesis is None
+                or thesis.research_case_id != run.research_case_id
+                or thesis.statement != factor_statement
+            ):
+                raise ValueError(
+                    "automatic research frozen scope thesis does not match the run case"
+                )
+            plan_item = plan_by_factor[factor_statement]
+            for raw_objective in plan_item["objectives"]:
+                objective = EvidenceObjective(raw_objective)
+                expected[(run.research_case_id, thesis.id, objective)] = (
+                    thesis,
+                    plan_item,
+                )
+        if not expected:
+            raise ValueError("automatic research plan has no acquisition objectives")
+        return expected
 
     def _latest_scope(self, run: ResearchRun) -> dict:
         event = self._session.scalar(
@@ -201,11 +297,13 @@ class AutomaticResearchPipeline:
             roles = item.get("allowed_source_roles")
             if (
                 not isinstance(objectives, list)
-                or not objectives
                 or any(not isinstance(value, str) for value in objectives)
-                or not set(objectives) <= _PLAN_OBJECTIVES
+                or len(objectives) != len(_PLAN_OBJECTIVES)
+                or set(objectives) != _PLAN_OBJECTIVES
             ):
-                raise ValueError("automatic evidence plan objective is invalid")
+                raise ValueError(
+                    "automatic evidence plan objective is invalid or objective missing"
+                )
             if (
                 not isinstance(roles, list)
                 or any(not isinstance(value, str) for value in roles)

@@ -130,19 +130,69 @@ class AutoResearchRepository:
 
     def wait_for_sources(self, run: ResearchRun, job: Job) -> None:
         """Park a claimed automatic run until its governed source jobs finish."""
+        current_run, current_job = self._lock_terminal_rows(
+            run_id=run.id,
+            case_id=run.research_case_id,
+            job_id=job.id,
+        )
+        if current_run is None or current_job is None:
+            self._session.rollback()
+            return
+        if (
+            current_run.status == "cancelled"
+            or current_job.status == "cancelled"
+            or current_job.cancel_requested
+        ):
+            # Discard any governed-acquisition writes staged by the losing
+            # worker. A cancellation committed before these locks wins.
+            self._session.rollback()
+            return
         now = _utcnow()
-        run.status = "waiting_for_sources"
-        run.stage = "retrieve"
-        run.updated_at = now
-        job.status = "waiting_for_sources"
-        job.step = "retrieve"
-        job.finished_at = None
+        current_run.status = "waiting_for_sources"
+        current_run.stage = "retrieve"
+        current_run.updated_at = now
+        current_job.status = "waiting_for_sources"
+        current_job.step = "retrieve"
+        current_job.finished_at = None
         self._append_job_event(
-            job,
+            current_job,
             status="waiting_for_sources",
             step="retrieve",
             message="waiting for governed acquisition jobs",
         )
+
+    def lock_source_dispatch(
+        self, run_id: uuid.UUID
+    ) -> tuple[ResearchRun | None, Job | None]:
+        """Lock Case -> Run -> latest Job before automatic source dispatch."""
+        with self._session.no_autoflush:
+            case_id = self._session.scalar(
+                select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
+            )
+            if case_id is None:
+                return None, None
+            self._session.scalar(
+                select(ResearchCase)
+                .where(ResearchCase.id == case_id)
+                .with_for_update()
+            )
+            run = self._session.scalar(
+                select(ResearchRun)
+                .where(ResearchRun.id == run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            job = self._session.scalar(
+                select(Job)
+                .where(Job.kind == "research_run")
+                .where(Job.target_type == "research_run")
+                .where(Job.target_id == run_id)
+                .order_by(Job.created_at.desc(), Job.id.desc())
+                .limit(1)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        return run, job
 
     def requeue_source_ready_runs(self) -> int:
         """Requeue parked runs once every tenant-bound acquisition is terminal."""

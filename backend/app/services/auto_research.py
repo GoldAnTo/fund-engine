@@ -1453,7 +1453,12 @@ class AutoResearchService:
         # Already cancelled is idempotent success; other terminal states conflict.
         if run.status == "cancelled":
             return self._run_summary_dict(run)
-        if run.status not in {"running", "queued", "waiting_for_review"}:
+        if run.status not in {
+            "running",
+            "queued",
+            "waiting_for_sources",
+            "waiting_for_review",
+        }:
             raise RuntimeError(f"research run {run_id} is terminal ({run.status})")
         self.repo.cancel_run(run)
         ResearchRunEventRepository(self.session).append(

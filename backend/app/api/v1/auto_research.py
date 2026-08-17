@@ -106,7 +106,11 @@ def list_active_runs(
         db.scalars(
             select(ResearchRun)
             .where(ResearchRun.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)))
-            .where(ResearchRun.status.in_(("queued", "running", "waiting_for_review")))
+            .where(
+                ResearchRun.status.in_(
+                    ("queued", "running", "waiting_for_sources", "waiting_for_review")
+                )
+            )
             .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(limit + 1)
         )
