@@ -179,6 +179,24 @@ class AutoResearchService:
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
                 )
+            material_document_id = (scope_context or {}).get(
+                "intake_material_document_version_id"
+            )
+            if (scope_context or {}).get("input_kind") == "material":
+                if not isinstance(material_document_id, str):
+                    raise ValueError(
+                        "automatic material scope is missing its frozen document"
+                    )
+                self.repo.create_task(
+                    run_id=run.id,
+                    research_case_id=case_id,
+                    thesis_id=thesis.id,
+                    task_type="intake_material",
+                    query=(
+                        "先处理用户提供材料: "
+                        f"{material_document_id}: {thesis.statement}"
+                    ),
+                )
         self.repo.enqueue_run_job(run)
         # HTTP commands only persist a run + job.  A separately supervised
         # worker claims the job, so a provider timeout cannot hold an API

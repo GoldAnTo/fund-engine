@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.acquisition.policy import B_SCOPE_POLICY
+from app.acquisition.policy import B_SCOPE_POLICY, INTAKE_MATERIAL_POLICY
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionJob,
@@ -40,6 +40,8 @@ from app.services.automatic_admission import (
     automatic_temporal_failures,
     canonical_admission_digest,
     frozen_request_digest,
+    intake_material_temporal_failures,
+    intake_material_url_is_authorized,
     lease_write_fence,
     parser_replay_identity,
     trusted_extraction_run,
@@ -494,7 +496,36 @@ class AtomicClaimService:
                 if isinstance(reference.metadata_json, dict)
                 else None
             )
-            if (
+            is_intake_material = (
+                current_snapshot.get("acquisition_kind") == "intake_material"
+            )
+            if is_intake_material:
+                metadata = (
+                    reference.metadata_json
+                    if isinstance(reference.metadata_json, dict)
+                    else {}
+                )
+                document_id = str(document.id)
+                if (
+                    tuple(enabled_adapters)
+                    or frozenset(current_snapshot.get("allowed_source_roles") or ())
+                    != INTAKE_MATERIAL_POLICY.allowed_source_roles
+                    or frozenset(current_policy.get("allowed_source_roles") or ())
+                    != INTAKE_MATERIAL_POLICY.allowed_source_roles
+                    or reference.adapter_key != "intake_material"
+                    or reference.source_role != "user_provided_material"
+                    or current_snapshot.get("document_version_id") != document_id
+                    or reference.external_record_id != document_id
+                    or metadata.get("document_version_id") != document_id
+                    or document.source_authority != "user_supplied"
+                    or candidate.authority_level != "user_supplied"
+                    or document.source_url != reference.canonical_url
+                    or artifact.final_url != reference.canonical_url
+                ):
+                    raise ValidationError(
+                        "automatic publication source authorization failed"
+                    )
+            elif (
                 reference.adapter_key not in B_SCOPE_POLICY.enabled_adapter_keys
                 or reference.adapter_key not in enabled_adapters
                 or mapped_identity is None
@@ -523,26 +554,57 @@ class AtomicClaimService:
                 or attempt.safe_metadata.get("source_reference_id") != str(reference.id)
             ):
                 raise ValidationError("automatic publication attempt lineage mismatch")
-            if (
+            contract_invalid = (
                 current_contract is None
                 or not source_contract_is_active(current_contract, at=checked_at)
                 or not current_contract.allow_ai_processing
                 or not current_contract.allow_display
-                or mapped_identity is None
-                or current_contract.source_type != mapped_identity[0]
-                or current_contract.research_source_type != mapped_identity[0]
-            ):
+            )
+            if is_intake_material and current_contract is not None:
+                contract_invalid = contract_invalid or (
+                    current_contract.source_type
+                    not in {"pasted_snapshot", "uploaded_file"}
+                    or current_contract.research_source_type
+                    != current_contract.source_type
+                    or provider_identity != current_contract.provider_or_tenant
+                    or not intake_material_url_is_authorized(
+                        reference.canonical_url, current_contract.source_type
+                    )
+                    or not intake_material_url_is_authorized(
+                        artifact.final_url, current_contract.source_type
+                    )
+                )
+            elif not is_intake_material:
+                contract_invalid = contract_invalid or (
+                    mapped_identity is None
+                    or current_contract is None
+                    or current_contract.source_type != mapped_identity[0]
+                    or current_contract.research_source_type != mapped_identity[0]
+                )
+            if contract_invalid:
                 raise ValidationError(
                     "automatic publication source contract is invalid"
                 )
-            if automatic_temporal_failures(
-                reference,
-                attempt,
-                artifact,
-                document,
-                cutoff=cutoff,
-                evaluation_at=checked_at,
-            ):
+            temporal_failures = (
+                intake_material_temporal_failures(
+                    reference,
+                    attempt,
+                    artifact,
+                    document,
+                    cutoff=cutoff,
+                    evaluation_at=checked_at,
+                )
+                if is_intake_material
+                else automatic_temporal_failures(
+                    reference,
+                    attempt,
+                    artifact,
+                    document,
+                    cutoff=cutoff,
+                    evaluation_at=checked_at,
+                )
+            )
+            if temporal_failures:
                 raise ValidationError(
                     "automatic publication exceeds the request cutoff"
                 )

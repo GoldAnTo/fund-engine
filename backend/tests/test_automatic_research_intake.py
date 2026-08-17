@@ -38,8 +38,9 @@ from app.schemas.v1.event_research import CreateEventResearchRequest
 
 
 class FakeExtractor:
-    def __init__(self) -> None:
+    def __init__(self, *, input_kind: str = "topic") -> None:
         self.calls: list[tuple[str, str | None]] = []
+        self.input_kind = input_kind
 
     def extract(self, raw_input: str, source_url: str | None) -> EventExtraction:
         self.calls.append((raw_input, source_url))
@@ -52,6 +53,7 @@ class FakeExtractor:
             summary=None,
             research_question=f"{raw_input} 的关键变化是什么？",
             candidate_factors=("需求变化", "供给约束", "替代解释"),
+            input_kind=self.input_kind,
         )
 
 
@@ -141,6 +143,7 @@ def test_topic_input_creates_one_automatic_case_and_queued_run(session) -> None:
     assert extractor.calls == [(raw_input, None)]
     assert brief is not None
     assert brief.workflow_mode == "automatic"
+    assert brief.source_metadata["intake_role"] == "research_prompt"
     assert brief.extraction_state == "system_generated"
     assert lifecycle is not None
     assert lifecycle.status == "researching"
@@ -173,7 +176,9 @@ def test_topic_input_creates_one_automatic_case_and_queued_run(session) -> None:
     assert jobs[0].target_id == run_id
     assert set(runs[0].scope_thesis_ids or []) == thesis_ids
     assert set(scope["factor_ids"]) == thesis_ids
+    assert scope["input_kind"] == "topic"
     assert {str(task.thesis_id) for task in tasks} == thesis_ids
+    assert all(task.task_type != "intake_material" for task in tasks)
     assert scope["automatic_protocol"] == {
         "generated_by": "system",
         "research_question": f"{raw_input} 的关键变化是什么？",
@@ -189,12 +194,20 @@ def test_pasted_material_creates_queued_run_without_human_preparation(session) -
     )
 
     started = AutomaticResearchIntakeService(
-        session, extractor=FakeExtractor()
+        session, extractor=FakeExtractor(input_kind="material")
     ).start(raw_input, tenant_id="material-team")
 
     case_id = uuid.UUID(started.case_id)
     run_id = uuid.UUID(started.run_id)
     run = session.get(ResearchRun, run_id)
+    brief = session.scalar(
+        select(EventResearchBrief).where(EventResearchBrief.research_case_id == case_id)
+    )
+    admission = session.scalar(
+        select(CaseTenantAdmission).where(
+            CaseTenantAdmission.research_case_id == case_id
+        )
+    )
     preparations = list(
         session.scalars(
             select(ResearchPreparation).where(
@@ -205,6 +218,27 @@ def test_pasted_material_creates_queued_run_without_human_preparation(session) -
     assert run is not None
     assert run.research_case_id == case_id
     assert run.status == "queued"
+    assert brief is not None
+    assert admission is not None
+    assert brief.source_metadata["intake_role"] == "provided_material"
+    scope = _scope_event(session, run_id).payload_json
+    assert scope["input_kind"] == "material"
+    assert scope["intake_material_document_version_id"] == str(
+        admission.initial_document_version_id
+    )
+    material_tasks = list(
+        session.scalars(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run_id,
+                ResearchTask.task_type == "intake_material",
+            )
+        )
+    )
+    assert len(material_tasks) == 3
+    assert {str(task.thesis_id) for task in material_tasks} == set(
+        run.scope_thesis_ids or []
+    )
+    assert all(task.round == 1 and task.status == "queued" for task in material_tasks)
     assert started.preparation_id is None
     assert preparations == []
 

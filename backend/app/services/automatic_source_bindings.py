@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.acquisition import AcquisitionJob
-from app.models.ledger import Thesis
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, Thesis
 from app.models.operational import ResearchRun, ResearchTask
 
 
@@ -20,6 +20,7 @@ _TASK_BINDINGS = {
         "alternative_explanation",
         "contextualizes",
     ),
+    "intake_material": ("support", "supports"),
 }
 _EXPECTED_OBJECTIVES = frozenset(
     {"support", "contradict", "alternative_explanation"}
@@ -32,6 +33,8 @@ class ValidatedAutomaticSourceBindings:
     jobs_by_task_id: dict[uuid.UUID, AcquisitionJob]
     job_ids: frozenset[uuid.UUID]
     fingerprint: tuple[tuple[uuid.UUID, uuid.UUID], ...]
+    external_job_ids: frozenset[uuid.UUID]
+    material_job_ids: frozenset[uuid.UUID]
 
     def jobs_for_round(self, round_number: int) -> dict[uuid.UUID, AcquisitionJob]:
         return {
@@ -112,6 +115,35 @@ def validate_automatic_source_bindings(
         for thesis_id, statement in zip(frozen_thesis_ids, factor_statements)
         for objective in objectives_by_statement[statement]
     }
+    material_document_id: uuid.UUID | None = None
+    if frozen_scope.get("input_kind", "topic") == "material":
+        try:
+            material_document_id = uuid.UUID(
+                str(frozen_scope["intake_material_document_version_id"])
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic material source binding is invalid") from exc
+        admission = session.scalar(
+            select(CaseTenantAdmission).where(
+                CaseTenantAdmission.research_case_id == run.research_case_id,
+                CaseTenantAdmission.initial_document_version_id
+                == material_document_id,
+            )
+        )
+        attachment = session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == run.research_case_id,
+                CaseDocumentVersion.document_version_id == material_document_id,
+            )
+        )
+        if admission is None or attachment is None:
+            raise ValueError("automatic material document crosses its Case")
+        expected.update(
+            (1, run.research_case_id, thesis_id, "intake_material")
+            for thesis_id in frozen_thesis_ids
+        )
+    elif "intake_material_document_version_id" in frozen_scope:
+        raise ValueError("automatic topic scope cannot bind intake material")
     task_query = (
         select(ResearchTask)
         .where(ResearchTask.run_id == run.id)
@@ -135,6 +167,8 @@ def validate_automatic_source_bindings(
         ):
             raise ValueError("automatic source task matrix crosses the frozen run")
         objective, _target_role = binding
+        if task.task_type == "intake_material":
+            objective = "intake_material"
         actual.append(
             (task.round, task.research_case_id, task.thesis_id, objective)
         )
@@ -155,15 +189,12 @@ def validate_automatic_source_bindings(
     jobs_by_task_id: dict[uuid.UUID, AcquisitionJob] = {}
     bound_job_ids: set[uuid.UUID] = set()
     current_tasks = [task for task in tasks if task.round == run.round]
-    current_unbound = all(
-        not isinstance(task.result, dict)
-        or not task.result.get("acquisition_job_id")
-        for task in current_tasks
-    )
-    allow_current_unbound = allow_unbound_current_round and current_unbound
-
     for task in tasks:
-        if allow_current_unbound and task.round == run.round:
+        task_unbound = (
+            not isinstance(task.result, dict)
+            or not task.result.get("acquisition_job_id")
+        )
+        if allow_unbound_current_round and task.round == run.round and task_unbound:
             continue
         if not isinstance(task.result, dict):
             raise ValueError("automatic source task acquisition binding is missing")
@@ -178,8 +209,11 @@ def validate_automatic_source_bindings(
             raise ValueError("automatic source task acquisition binding is duplicated")
         bound_job_ids.add(job_id)
         job = jobs_by_id.get(job_id)
+        is_material = task.task_type == "intake_material"
         expected_key = (
-            f"automatic:{run.id}:{task.round}:{task.thesis_id}:{objective}"
+            f"automatic-material:{run.id}:{task.thesis_id}:{material_document_id}"
+            if is_material
+            else f"automatic:{run.id}:{task.round}:{task.thesis_id}:{objective}"
         )
         snapshot = job.request_snapshot if job is not None else None
         if (
@@ -197,6 +231,10 @@ def validate_automatic_source_bindings(
             or snapshot.get("target_link_role") != target_role
             or job.idempotency_key != expected_key
             or snapshot.get("idempotency_key") != expected_key
+            or snapshot.get("acquisition_kind")
+            != ("intake_material" if is_material else "external_gap")
+            or snapshot.get("document_version_id")
+            != (str(material_document_id) if is_material else None)
         ):
             raise ValueError(
                 "automatic source task acquisition binding does not match its frozen task"
@@ -212,5 +250,13 @@ def validate_automatic_source_bindings(
         fingerprint=tuple(
             (task_id, jobs_by_task_id[task_id].id)
             for task_id in sorted(jobs_by_task_id, key=str)
+        ),
+        external_job_ids=frozenset(
+            job.id for task_id, job in jobs_by_task_id.items()
+            if tasks_by_id[task_id].task_type != "intake_material"
+        ),
+        material_job_ids=frozenset(
+            job.id for task_id, job in jobs_by_task_id.items()
+            if tasks_by_id[task_id].task_type == "intake_material"
         ),
     )

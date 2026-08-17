@@ -167,6 +167,43 @@ def test_request_rejects_unknown_source_roles():
         request(allowed_source_roles=frozenset({"arbitrary_web"}))
 
 
+def test_request_keeps_existing_callers_on_external_gap_defaults():
+    value = request()
+
+    assert value.acquisition_kind == "external_gap"
+    assert value.document_version_id is None
+
+
+def test_request_accepts_only_exact_document_bound_intake_material_scope():
+    document_id = uuid4()
+
+    value = request(
+        objective=EvidenceObjective.SUPPORT,
+        target_link_role="supports",
+        acquisition_kind="intake_material",
+        document_version_id=document_id,
+        allowed_source_roles=frozenset({"user_provided_material"}),
+    )
+
+    assert value.document_version_id == document_id
+    assert value.allowed_source_roles == frozenset({"user_provided_material"})
+
+
+def test_request_rejects_intake_role_on_external_acquisition():
+    with pytest.raises(ValueError, match="network source roles"):
+        request(allowed_source_roles=frozenset({"user_provided_material"}))
+
+
+def test_request_rejects_unbound_intake_material():
+    with pytest.raises(ValueError, match="document_version_id"):
+        request(
+            objective=EvidenceObjective.SUPPORT,
+            target_link_role="supports",
+            acquisition_kind="intake_material",
+            allowed_source_roles=frozenset({"user_provided_material"}),
+        )
+
+
 def test_request_rejects_source_policy_version_mismatch():
     with pytest.raises(ValueError, match="source_policy_version"):
         request(source_policy_version="future-policy")

@@ -85,8 +85,10 @@ def test_request_is_idempotent_and_persists_complete_deterministic_snapshots(
     assert job is not None
     assert job.request_snapshot == {
         "allowed_source_roles": ["company_disclosure", "licensed_provider"],
+        "acquisition_kind": "external_gap",
         "case_id": str(admitted_case.id),
         "cutoff": "2026-08-12T16:00:00Z",
+        "document_version_id": None,
         "entity_names": ["示例公司"],
         "idempotency_key": request.idempotency_key,
         "metric_terms": ["营业收入"],

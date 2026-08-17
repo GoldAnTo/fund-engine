@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.domain.acquisition import (
-    ACQUISITION_SOURCE_ROLES,
     B_SCOPE_POLICY_VERSION,
     AcquisitionRequest,
     EvidenceObjective,
@@ -151,7 +150,11 @@ class SourcePolicy:
 B_SCOPE_POLICY: Final = SourcePolicy(
     version=B_SCOPE_POLICY_VERSION,
     enabled_adapter_keys=frozenset({"gildata", "sse", "szse"}),
-    allowed_source_roles=ACQUISITION_SOURCE_ROLES,
+    # Keep the network-acquisition allowlist closed even though the domain
+    # also recognizes the dedicated, non-network intake-material role.
+    allowed_source_roles=frozenset(
+        {"company_disclosure", "licensed_provider"}
+    ),
     exact_hosts=frozenset(
         {
             "query.sse.com.cn",
@@ -170,6 +173,18 @@ B_SCOPE_POLICY: Final = SourcePolicy(
         ("sse", "official-public-disclosure"),
         ("szse", "official-public-disclosure"),
     ),
+)
+
+
+INTAKE_MATERIAL_POLICY: Final = SourcePolicy(
+    version=B_SCOPE_POLICY_VERSION,
+    enabled_adapter_keys=frozenset(),
+    allowed_source_roles=frozenset({"user_provided_material"}),
+    exact_hosts=frozenset(),
+    suffix_hosts=frozenset(),
+    max_response_bytes=20 * 1024 * 1024,
+    per_adapter_page_limit=1,
+    permission_declarations=(),
 )
 
 

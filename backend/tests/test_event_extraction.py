@@ -40,6 +40,39 @@ def test_extraction_keeps_unknown_event_facts_empty_and_marks_confirmation() -> 
     assert len(result.candidate_factors) in {3, 4, 5}
 
 
+def test_extraction_preserves_provider_material_classification() -> None:
+    class MaterialClient:
+        def chat_json(self, messages, schema_hint=""):
+            assert schema_hint == "event_research_extract"
+            return {
+                "input_kind": "material",
+                "research_question": "公告说明了什么？",
+                "candidate_factors": ["收入", "利润", "订单"],
+            }
+
+    result = EventExtractionService(client=MaterialClient()).extract(
+        raw_input="公司公告：收入和利润变化，订单增加。", source_url=None
+    )
+
+    assert result.input_kind == "material"
+
+
+def test_extraction_defaults_unknown_input_kind_to_topic() -> None:
+    class UnknownKindClient:
+        def chat_json(self, messages, schema_hint=""):
+            return {
+                "input_kind": "guess",
+                "research_question": "行业会如何变化？",
+                "candidate_factors": ["需求", "供给", "替代"],
+            }
+
+    result = EventExtractionService(client=UnknownKindClient()).extract(
+        raw_input="行业会如何变化？", source_url=None
+    )
+
+    assert result.input_kind == "topic"
+
+
 def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input() -> None:
     class InventingClient:
         def chat_json(self, messages, schema_hint):

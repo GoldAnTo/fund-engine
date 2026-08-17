@@ -32,6 +32,7 @@ class EventExtraction:
     summary: str | None
     research_question: str
     candidate_factors: tuple[str, ...]
+    input_kind: str = "topic"
     confirmation_required: bool = True
 
 
@@ -67,6 +68,7 @@ class EventExtractionService:
         event_at = _supported_datetime(result.get("event_at"), raw_input)
         question = _question(result.get("research_question"))
         factors = _factors(result.get("candidate_factors"))
+        input_kind = _input_kind(result.get("input_kind"))
         return EventExtraction(
             event_title=title,
             company_name=company_name,
@@ -76,6 +78,7 @@ class EventExtractionService:
             summary=summary,
             research_question=question,
             candidate_factors=factors,
+            input_kind=input_kind,
         )
 
     def _ask_model(self, raw_input: str, source_url: str | None) -> dict[str, Any]:
@@ -85,7 +88,9 @@ class EventExtractionService:
                 "content": (
                     "你是事件研究助理。仅从用户给出的原文提取事件标题、公司、代码、"
                     "时间、市场反应和摘要；无法确认必须返回 null。研究问题和候选因素"
-                    "是待验证假设，返回一个问题和 3 到 5 个因素。仅返回 JSON。"
+                    "是待验证假设，返回一个问题和 3 到 5 个因素。判断输入是仅提出研究"
+                    "主题（topic）还是包含可抽取事实的用户材料（material），并返回"
+                    "input_kind。仅返回 JSON。"
                 ),
             },
             {
@@ -194,3 +199,8 @@ def _factors(value: object) -> tuple[str, ...]:
             "event extraction candidate_factors must be unique after normalization"
         )
     return tuple(clean)
+
+
+def _input_kind(value: object) -> str:
+    """Fail safe: uncertain classifications remain prompts, never evidence."""
+    return value if value in {"topic", "material"} else "topic"

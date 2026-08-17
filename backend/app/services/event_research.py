@@ -250,6 +250,46 @@ class EventResearchService:
                     self._session.add(lifecycle)
             else:
                 factors = [thesis.statement for thesis in theses]
+                input_kind = payload.source_metadata.get("input_kind", "topic")
+                if input_kind not in {"topic", "material"}:
+                    input_kind = "topic"
+                automatic_scope_context = {
+                    "workflow_mode": "automatic",
+                    "input_kind": input_kind,
+                    **(
+                        {"intake_material_document_version_id": str(document.id)}
+                        if input_kind == "material"
+                        else {}
+                    ),
+                    "automatic_protocol": {
+                        "generated_by": "system",
+                        "research_question": payload.research_question,
+                        "factors": factors,
+                        "conclusion_rule": (
+                            "report support, contradiction, and "
+                            "insufficiency separately"
+                        ),
+                    },
+                    "automatic_evidence_plan": {
+                        "items": [
+                            {
+                                "factor": factor,
+                                "objectives": [
+                                    "support",
+                                    "contradict",
+                                    "alternative_explanation",
+                                ],
+                                "allowed_source_roles": [
+                                    "company_disclosure",
+                                    "licensed_provider",
+                                ],
+                            }
+                            for factor in factors
+                        ],
+                        "max_rounds": 3,
+                        "budget": 100,
+                    },
+                }
                 run = AutoResearchService(self._session).start(
                     case.id,
                     max_rounds=3,
@@ -257,37 +297,7 @@ class EventResearchService:
                     thesis_ids=[thesis.id for thesis in theses],
                     trigger="automatic_intake",
                     commit=False,
-                    scope_context={
-                        "workflow_mode": "automatic",
-                        "automatic_protocol": {
-                            "generated_by": "system",
-                            "research_question": payload.research_question,
-                            "factors": factors,
-                            "conclusion_rule": (
-                                "report support, contradiction, and "
-                                "insufficiency separately"
-                            ),
-                        },
-                        "automatic_evidence_plan": {
-                            "items": [
-                                {
-                                    "factor": factor,
-                                    "objectives": [
-                                        "support",
-                                        "contradict",
-                                        "alternative_explanation",
-                                    ],
-                                    "allowed_source_roles": [
-                                        "company_disclosure",
-                                        "licensed_provider",
-                                    ],
-                                }
-                                for factor in factors
-                            ],
-                            "max_rounds": 3,
-                            "budget": 100,
-                        },
-                    },
+                    scope_context=automatic_scope_context,
                 )
                 if lifecycle is None:
                     lifecycle = EventResearchLifecycle(research_case_id=case.id)

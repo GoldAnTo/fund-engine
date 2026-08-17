@@ -10,7 +10,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.acquisition.policy import B_SCOPE_POLICY
+from app.acquisition.policy import B_SCOPE_POLICY, INTAKE_MATERIAL_POLICY
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.domain.automatic_research import AUTOMATIC_SOURCE_JOB_TERMINAL
@@ -129,6 +129,9 @@ class AutomaticResearchPipeline:
             allow_unbound_current_round=True,
         )
         jobs = bindings.jobs_for_round(run.round)
+        unbound_tasks = [
+            task for task in source_tasks if task.id not in bindings.jobs_by_task_id
+        ]
         if not jobs:
             return self.dispatch_sources(run)
 
@@ -144,8 +147,13 @@ class AutomaticResearchPipeline:
             run.updated_at = datetime.now(UTC)
             return "waiting_for_sources"
 
-        self._reconcile_sources(run, source_tasks, jobs)
-        run.budget_used = len(bindings.job_ids)
+        bound_tasks = [
+            task for task in source_tasks if task.id in bindings.jobs_by_task_id
+        ]
+        self._reconcile_sources(run, bound_tasks, jobs)
+        if unbound_tasks:
+            return self.dispatch_sources(run)
+        run.budget_used = len(bindings.external_job_ids)
         allowed_evidence = self._allowed_evidence_by_thesis(
             run,
             scope_version_id=current_scope_id,
@@ -276,8 +284,30 @@ class AutomaticResearchPipeline:
             scope=scope,
             plan_by_factor=plan_by_factor,
         )
+        material_tasks = [
+            task for task in current_tasks if task.task_type == "intake_material"
+        ]
+        external_tasks = [
+            task for task in current_tasks if task.task_type != "intake_material"
+        ]
+        if material_tasks:
+            expected_material_ids = {value[0].id for value in expected.values()}
+            actual_material_ids = [task.thesis_id for task in material_tasks]
+            if (
+                run.round != 1
+                or len(material_tasks) != len(expected_material_ids)
+                or set(actual_material_ids) != expected_material_ids
+            ):
+                raise ValueError(
+                    "automatic intake material task matrix is not exact"
+                )
+            current_tasks = material_tasks
+        else:
+            current_tasks = external_tasks
         actual: list[tuple[uuid.UUID, uuid.UUID, EvidenceObjective]] = []
         for task in current_tasks:
+            if task.task_type == "intake_material":
+                continue
             mapping = _TASK_OBJECTIVES.get(task.task_type)
             if (
                 task.research_case_id != run.research_case_id
@@ -289,10 +319,8 @@ class AutomaticResearchPipeline:
                 )
             objective, _target_link_role = mapping
             actual.append((task.research_case_id, task.thesis_id, objective))
-        if (
-            not actual
-            or len(actual) != len(expected)
-            or set(actual) != set(expected)
+        if not material_tasks and (
+            not actual or len(actual) != len(expected) or set(actual) != set(expected)
         ):
             raise ValueError(
                 "automatic research task matrix does not match the frozen evidence plan"
@@ -303,13 +331,20 @@ class AutomaticResearchPipeline:
         ] = []
         for task in current_tasks:
             assert task.thesis_id is not None
-            objective, target_link_role = _TASK_OBJECTIVES[task.task_type]
-            thesis, plan_item = expected[
-                (run.research_case_id, task.thesis_id, objective)
-            ]
-            allowed_roles = frozenset(plan_item["allowed_source_roles"]) & frozenset(
-                B_SCOPE_POLICY.allowed_source_roles
-            )
+            if task.task_type == "intake_material":
+                objective, target_link_role = EvidenceObjective.SUPPORT, "supports"
+                thesis = self._session.get(Thesis, task.thesis_id)
+                if thesis is None or thesis.research_case_id != run.research_case_id:
+                    raise ValueError("automatic intake material thesis is invalid")
+                allowed_roles = frozenset({"user_provided_material"})
+            else:
+                objective, target_link_role = _TASK_OBJECTIVES[task.task_type]
+                thesis, plan_item = expected[
+                    (run.research_case_id, task.thesis_id, objective)
+                ]
+                allowed_roles = frozenset(plan_item["allowed_source_roles"]) & frozenset(
+                    B_SCOPE_POLICY.allowed_source_roles
+                )
             if not allowed_roles:
                 raise ValueError(
                     "automatic evidence plan source roles are empty after policy intersection"
@@ -339,8 +374,23 @@ class AutomaticResearchPipeline:
                         allowed_source_roles=allowed_roles,
                         source_policy_version=B_SCOPE_POLICY.version,
                         idempotency_key=(
-                            f"automatic:{run.id}:{run.round}:"
+                            f"automatic-material:{run.id}:{thesis.id}:"
+                            f"{scope.get('intake_material_document_version_id')}"
+                            if task.task_type == "intake_material"
+                            else f"automatic:{run.id}:{run.round}:"
                             f"{thesis.id}:{objective.value}"
+                        ),
+                        acquisition_kind=(
+                            "intake_material"
+                            if task.task_type == "intake_material"
+                            else "external_gap"
+                        ),
+                        document_version_id=(
+                            uuid.UUID(
+                                str(scope["intake_material_document_version_id"])
+                            )
+                            if task.task_type == "intake_material"
+                            else None
                         ),
                     ),
                     objective,
@@ -352,19 +402,32 @@ class AutomaticResearchPipeline:
             for task in current_tasks
             if isinstance(task.result, dict) and task.result.get("acquisition_job_id")
         )
-        resulting_count = (
-            len(source_bindings.job_ids) + len(current_tasks) - already_bound
+        resulting_count = len(source_bindings.external_job_ids) + sum(
+            1
+            for task in current_tasks
+            if task.task_type != "intake_material"
+            and not (
+                isinstance(task.result, dict)
+                and task.result.get("acquisition_job_id")
+            )
         )
         if resulting_count > run.budget:
             raise ValueError("automatic research acquisition budget is exhausted")
 
-        module = AcquisitionModule(self._session)
         principal = AcquisitionPrincipal(
             tenant_id=admission.tenant_id,
             actor="system:research-worker",
         )
         wrote_task_binding = False
         for task, request, objective in pending_requests:
+            module = AcquisitionModule(
+                self._session,
+                policy=(
+                    INTAKE_MATERIAL_POLICY
+                    if task.task_type == "intake_material"
+                    else B_SCOPE_POLICY
+                ),
+            )
             acquisition_job = module.request(request, principal=principal)
             expected_result = {
                 "acquisition_job_id": str(acquisition_job.id),
@@ -413,6 +476,8 @@ class AutomaticResearchPipeline:
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise ValueError("automatic result task matrix has invalid frozen scope") from exc
         allowed_types = {*_TASK_OBJECTIVES, "result"}
+        if scope.get("input_kind", "topic") == "material" and run.round == 1:
+            allowed_types.add("intake_material")
         for task in tasks:
             if (
                 task.run_id != run.id

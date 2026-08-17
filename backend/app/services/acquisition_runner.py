@@ -7,6 +7,7 @@ re-read when a lease is reclaimed.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import secrets
@@ -33,6 +34,12 @@ from app.acquisition.sources import (
 )
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
+from app.documents.locators import (
+    SourceLocatorV1,
+    TextPosition,
+    TextQuote,
+    compute_text_sha256,
+)
 from app.domain.acquisition import AcquisitionRequest, EvidenceObjective
 from app.models.acquisition import (
     AcquisitionAttempt,
@@ -42,11 +49,22 @@ from app.models.acquisition import (
     RetrievalArtifactDocument,
     SourceReference,
 )
-from app.models.ledger import AIRun, AtomicClaimCandidate, EvidenceLink, SourceSpan
+from app.models.event_research import EventResearchBrief
+from app.models.ledger import (
+    AIRun,
+    AtomicClaimCandidate,
+    CaseDocumentVersion,
+    DocumentVersion,
+    DocumentUploadArtifact,
+    EvidenceLink,
+    SourceSpan,
+)
+from app.models.source_governance import SourceContract
 from app.repositories.acquisition import (
     AcquisitionClaim,
     AcquisitionRepository,
 )
+from app.repositories.documents import DocumentRepository
 from app.services.atomic_claims import AtomicClaimService
 from app.services.automatic_admission import (
     B_SCOPE_GATE_VERSION,
@@ -54,11 +72,13 @@ from app.services.automatic_admission import (
     AutomaticAdmissionGate,
     lease_write_fence,
 )
+from app.services.ingest import DocumentService
 from app.services.retrieved_documents import (
     FetchCheckpointContext,
     FrozenRequestContext,
     RetrievedDocumentFreezer,
 )
+from app.services.source_admission import source_contract_is_active
 
 
 SessionFactory = Callable[[], Session]
@@ -183,6 +203,20 @@ class AcquisitionRunner:
             for planned in self._planner.plan(request, policy)
             if planned.adapter_key in self._adapters
         }
+        if request.acquisition_kind == "intake_material":
+            if stage == "searching":
+                if not self._prepare_intake_material(claim, request):
+                    return
+                self._advance(claim, "extracting")
+                stage = "extracting"
+            if stage == "extracting":
+                self._extract(claim)
+                self._advance(claim, "admitting")
+                stage = "admitting"
+            if stage == "admitting":
+                self._admit_and_publish(claim, request)
+                self._finish_terminal(claim)
+            return
         if stage == "searching":
             self._search(claim, request, queries)
             if not self._has_references(claim.job_id):
@@ -393,6 +427,14 @@ class AcquisitionRunner:
             ),
             source_policy_version=request_snapshot["source_policy_version"],
             idempotency_key=request_snapshot["idempotency_key"],
+            acquisition_kind=request_snapshot.get(
+                "acquisition_kind", "external_gap"
+            ),
+            document_version_id=(
+                uuid.UUID(request_snapshot["document_version_id"])
+                if request_snapshot.get("document_version_id")
+                else None
+            ),
         )
         policy = SourcePolicy(
             version=policy_snapshot["version"],
@@ -412,6 +454,189 @@ class AcquisitionRunner:
             ),
         )
         return request, policy, stage
+
+    def _prepare_intake_material(
+        self, claim: AcquisitionClaim, request: AcquisitionRequest
+    ) -> bool:
+        """Bind the frozen intake original to governed acquisition lineage."""
+        document_id = request.document_version_id
+        if document_id is None:
+            return False
+        with self._session_factory() as session:
+            repository = AcquisitionRepository(session, clock=self._clock)
+            repository.fence(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                allowed_stages=frozenset({"searching"}),
+            )
+            document = session.get(DocumentVersion, document_id)
+            attachment = session.scalar(
+                select(CaseDocumentVersion.id).where(
+                    CaseDocumentVersion.research_case_id == request.case_id,
+                    CaseDocumentVersion.document_version_id == document_id,
+                )
+            )
+            brief = session.scalar(
+                select(EventResearchBrief)
+                .where(EventResearchBrief.research_case_id == request.case_id)
+                .order_by(EventResearchBrief.created_at.desc())
+                .limit(1)
+            )
+            contract = session.scalar(
+                select(SourceContract).where(
+                    SourceContract.document_version_id == document_id
+                )
+            )
+            upload = session.scalar(
+                select(DocumentUploadArtifact).where(
+                    DocumentUploadArtifact.document_version_id == document_id
+                )
+            )
+            reason: str | None = None
+            raw = (
+                upload.raw_bytes
+                if upload is not None
+                else brief.raw_input.encode("utf-8")
+                if brief is not None
+                else b""
+            )
+            mime_type = (
+                upload.mime_type
+                if upload is not None
+                else "text/plain; charset=utf-8"
+            )
+            if (
+                document is None
+                or attachment is None
+                or brief is None
+                or brief.source_metadata.get("intake_role") != "provided_material"
+            ):
+                reason = "intake_material_scope_mismatch"
+            elif hashlib.sha256(raw).hexdigest() != document.content_sha256:
+                reason = "intake_material_content_mismatch"
+            elif (
+                contract is None
+                or contract.source_type not in {"pasted_snapshot", "uploaded_file"}
+                or contract.research_source_type != contract.source_type
+                or not contract.allow_ai_processing
+                or not contract.allow_display
+                or not source_contract_is_active(contract, at=self._now())
+            ):
+                reason = "intake_material_contract_rejected"
+            if reason is not None:
+                repository.record_exception(
+                    claim.job_id,
+                    lease_token=claim.lease_token,
+                    reason_code=reason,
+                    detail_json={"document_version_id": str(document_id)},
+                )
+                repository.advance(
+                    claim.job_id,
+                    lease_token=claim.lease_token,
+                    stage="failed",
+                    status="failed",
+                    counters={"exception_count": 1},
+                    message="intake material failed governed source checks",
+                    error_code=reason,
+                )
+                session.commit()
+                return False
+
+            assert document is not None and contract is not None
+            reference = repository.create_or_get_reference(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                adapter_key="intake_material",
+                external_record_id=str(document.id),
+                external_version=document.content_sha256,
+                canonical_url=document.source_url,
+                title=document.title or brief.event_title,
+                published_at=document.published_at,
+                source_role="user_provided_material",
+                metadata_json={
+                    "provider_identity": contract.provider_or_tenant,
+                    "document_version_id": str(document.id),
+                },
+            )
+            now = self._now()
+            attempt = repository.record_attempt(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                adapter_key="intake_material",
+                operation="fetch",
+                started_at=now,
+                finished_at=now,
+                outcome="succeeded",
+                retryable=False,
+                safe_metadata={
+                    "source_reference_id": str(reference.id),
+                    "claim_attempt": claim.attempt,
+                    "retrieval_mode": "frozen_intake_original",
+                },
+            )
+            artifact = session.scalar(
+                select(RetrievalArtifact).where(
+                    RetrievalArtifact.source_reference_id == reference.id,
+                    RetrievalArtifact.attempt_id == attempt.id,
+                )
+            )
+            if artifact is None:
+                artifact = RetrievalArtifact(
+                    source_reference_id=reference.id,
+                    attempt_id=attempt.id,
+                    content_sha256=document.content_sha256,
+                    raw_bytes=raw,
+                    mime_type=mime_type,
+                    byte_size=len(raw),
+                    final_url=document.source_url,
+                    etag=None,
+                    last_modified=None,
+                    provider_request_id=f"intake:{document.id}",
+                    retrieved_at=now,
+                )
+                session.add(artifact)
+                session.flush()
+            binding = session.scalar(
+                select(RetrievalArtifactDocument).where(
+                    RetrievalArtifactDocument.retrieval_artifact_id == artifact.id
+                )
+            )
+            if binding is None:
+                session.add(
+                    RetrievalArtifactDocument(
+                        retrieval_artifact_id=artifact.id,
+                        document_version_id=document.id,
+                        relation="intake_original",
+                        publication_key=f"intake:{document.content_sha256}"[:64],
+                        created_at=now,
+                    )
+                )
+            if upload is None:
+                locator = SourceLocatorV1(
+                    document_sha256=document.content_sha256,
+                    page=1,
+                    parser_version=document.parser_version,
+                    text_position=TextPosition(start=0, end=len(brief.raw_input)),
+                    text_quote=TextQuote(exact=brief.raw_input),
+                    extra={"kind": "intake_material"},
+                ).to_storage_dict()
+                replay_span = session.scalar(
+                    select(SourceSpan.id).where(
+                        SourceSpan.document_version_id == document.id,
+                        SourceSpan.locator_v1 == locator,
+                    )
+                )
+                if replay_span is None:
+                    DocumentService(DocumentRepository(session)).add_span(
+                        document_version_id=document.id,
+                        locator=locator,
+                        verbatim_text=brief.raw_input,
+                        text_sha256=compute_text_sha256(brief.raw_input),
+                        context_hash=compute_text_sha256(brief.raw_input),
+                        locator_v1=locator,
+                    )
+            session.commit()
+        return True
 
     def _fence(self, claim: AcquisitionClaim) -> None:
         with self._session_factory() as session:

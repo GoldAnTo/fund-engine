@@ -20,6 +20,7 @@ from app.acquisition.sources import (
 from app.errors import ValidationFailedError
 from app.models.acquisition import (
     AcquisitionAttempt,
+    AcquisitionException,
     AcquisitionJob,
     AutomaticAdmissionDecision,
     RetrievalArtifact,
@@ -62,6 +63,452 @@ from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_extraction import EventExtraction
 
 
+class _MaterialIntakeExtractor:
+    def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
+        return EventExtraction(
+            event_title="用户材料",
+            company_name=None,
+            ticker=None,
+            event_at=None,
+            market_reaction=None,
+            summary=None,
+            research_question="材料说明了什么？",
+            candidate_factors=("收入", "利润", "订单"),
+            input_kind="material",
+        )
+
+
+def test_material_jobs_dispatch_before_external_jobs_without_spending_budget(
+    session,
+) -> None:
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=_MaterialIntakeExtractor()
+    ).start("收入 100，利润 20，订单 30。", tenant_id="team-a")
+    run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    assert run is not None
+
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    assert len(jobs) == 3
+    assert {job.request_snapshot["acquisition_kind"] for job in jobs} == {
+        "intake_material"
+    }
+    assert all(
+        job.request_snapshot["document_version_id"]
+        for job in jobs
+    )
+    assert run.budget_used == 0
+    assert not any(
+        job.request_snapshot.get("acquisition_kind") == "external_gap"
+        for job in jobs
+    )
+
+
+def test_material_acquisition_reuses_frozen_original_with_durable_lineage(
+    session,
+) -> None:
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    class NoClaimsClient:
+        model_version = "no-claims-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            assert schema_hint == "extract"
+            return {"statements": []}
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=_MaterialIntakeExtractor()
+    ).start("收入 100，利润 20，订单 30。", tenant_id="team-a")
+    run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    assert run is not None
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    session.commit()
+
+    session_factory = sessionmaker(
+        bind=session.get_bind(), future=True, expire_on_commit=False
+    )
+    runner = AcquisitionRunner(
+        session_factory, adapters={}, llm_client=NoClaimsClient()
+    )
+    for index in range(3):
+        with session_factory() as claim_session:
+            claim = AcquisitionRepository(claim_session).claim_next(
+                worker_id=f"system:acquisition-worker@test#material-{index}",
+                lease_for=timedelta(minutes=5),
+            )
+            assert claim is not None
+            claim_session.commit()
+        runner.run_claim(claim)
+
+    session.expire_all()
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    assert all(job.status in {"partial", "succeeded"} for job in jobs)
+    for job in jobs:
+        references = list(
+            session.scalars(
+                select(SourceReference).where(SourceReference.job_id == job.id)
+            )
+        )
+        attempts = list(
+            session.scalars(
+                select(AcquisitionAttempt).where(AcquisitionAttempt.job_id == job.id)
+            )
+        )
+        artifacts = list(
+            session.scalars(
+                select(RetrievalArtifact)
+                .join(
+                    SourceReference,
+                    SourceReference.id == RetrievalArtifact.source_reference_id,
+                )
+                .where(SourceReference.job_id == job.id)
+            )
+        )
+        bindings = list(
+            session.scalars(
+                select(RetrievalArtifactDocument)
+                .join(
+                    RetrievalArtifact,
+                    RetrievalArtifact.id
+                    == RetrievalArtifactDocument.retrieval_artifact_id,
+                )
+                .join(
+                    SourceReference,
+                    SourceReference.id == RetrievalArtifact.source_reference_id,
+                )
+                .where(SourceReference.job_id == job.id)
+            )
+        )
+        assert len(references) == len(attempts) == len(artifacts) == len(bindings) == 1
+        assert attempts[0].operation == "fetch"
+        assert bindings[0].document_version_id == uuid.UUID(
+            job.request_snapshot["document_version_id"]
+        )
+
+
+def test_material_acquisition_passes_governed_gate_and_publishes_machine_evidence(
+    session,
+) -> None:
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    class MaterialExtractor:
+        def extract(
+            self, *, raw_input: str, source_url: str | None
+        ) -> EventExtraction:
+            return EventExtraction(
+                event_title="Example Corp material",
+                company_name="Example Corp",
+                ticker="600001",
+                event_at=None,
+                market_reaction=None,
+                summary=None,
+                research_question="What does the material establish?",
+                candidate_factors=("Revenue", "Margin", "Orders"),
+                input_kind="material",
+            )
+
+    class MaterialClaimsClient:
+        model_version = "material-claims-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            assert schema_hint == "extract"
+            payload = json.loads(messages[-1]["content"])
+            statements = []
+            for span in payload["spans"]:
+                quote = span["verbatim_text"]
+                statements.append(
+                    {
+                        "span_id": span["span_id"],
+                        "kind": "reported_claim",
+                        "quote": quote,
+                        "quote_start": 0,
+                        "quote_end": len(quote),
+                        "normalized_text": quote,
+                        "assertion_actor": "Example Corp",
+                        "subject": "Example Corp",
+                        "predicate": "Revenue",
+                        "object_text": "100 USD",
+                        "numeric_value": "100",
+                        "unit": "USD",
+                        "observed_period": "2026-08-12",
+                        "scope": {
+                            "company": "Example Corp",
+                            "metric": "Revenue",
+                        },
+                    }
+                )
+            return {"statements": statements}
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=MaterialExtractor()
+    ).start(
+        "Example Corp 2026-08-12 Revenue was 100 USD.",
+        tenant_id="team-a",
+    )
+    run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    assert run is not None
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    session.commit()
+
+    session_factory = sessionmaker(
+        bind=session.get_bind(), future=True, expire_on_commit=False
+    )
+    runner = AcquisitionRunner(
+        session_factory, adapters={}, llm_client=MaterialClaimsClient()
+    )
+    for index in range(3):
+        with session_factory() as claim_session:
+            claim = AcquisitionRepository(claim_session).claim_next(
+                worker_id=f"system:acquisition-worker@test#material-gate-{index}",
+                lease_for=timedelta(minutes=5),
+            )
+            assert claim is not None
+            claim_session.commit()
+        runner.run_claim(claim)
+
+    session.expire_all()
+    links = list(
+        session.scalars(
+            select(EvidenceLink).where(
+                EvidenceLink.review_state == "automatically_admitted"
+            )
+        )
+    )
+    assert len(links) == 1
+    decision = session.get(
+        AutomaticAdmissionDecision, links[0].automatic_admission_decision_id
+    )
+    assert decision is not None and decision.outcome == "admitted"
+    source = session.get(SourceStatement, links[0].source_statement_id)
+    assert source is not None
+    source_span = session.get(SourceSpan, source.source_span_id)
+    assert source_span is not None
+    assert source_span.document_version_id == uuid.UUID(
+        next(
+            job.request_snapshot["document_version_id"]
+            for job in session.scalars(
+                select(AcquisitionJob).where(
+                    AcquisitionJob.research_run_id == run.id
+                )
+            )
+        )
+    )
+
+
+def test_material_contract_rejection_is_durable_and_produces_no_evidence(
+    session,
+) -> None:
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.schemas.v1.event_research import CreateEventResearchRequest
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_research import EventResearchService
+
+    class NoClaimsClient:
+        model_version = "no-claims-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            return {"statements": []}
+
+    created = EventResearchService(session).create(
+        CreateEventResearchRequest(
+            raw_input="收入 100，利润 20，订单 30。",
+            source_type="pasted_snapshot",
+            source_metadata={
+                "authority_level": "user_supplied",
+                "intake_role": "provided_material",
+                "input_kind": "material",
+                "permissions": {
+                    "ai_processing": True,
+                    "display": False,
+                    "export": False,
+                    "api": False,
+                },
+            },
+            event_title="用户材料",
+            research_question="材料说明了什么？",
+            candidate_factors=["收入", "利润", "订单"],
+            research_protocol_required=False,
+            created_by="tenant:team-a",
+        ),
+        tenant_id="team-a",
+        workflow_mode="automatic",
+    )
+    assert created.run_id is not None
+    run = session.get(ResearchRun, uuid.UUID(created.run_id))
+    assert run is not None
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    material_job = session.scalar(
+        select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+    )
+    assert material_job is not None
+    session.commit()
+
+    session_factory = sessionmaker(
+        bind=session.get_bind(), future=True, expire_on_commit=False
+    )
+    with session_factory() as claim_session:
+        claim = AcquisitionRepository(claim_session).claim_next(
+            worker_id="system:acquisition-worker@test#material-contract-reject",
+            lease_for=timedelta(minutes=5),
+        )
+        assert claim is not None
+        claim_session.commit()
+    AcquisitionRunner(
+        session_factory, adapters={}, llm_client=NoClaimsClient()
+    ).run_claim(claim)
+
+    session.expire_all()
+    rejected_job = session.get(AcquisitionJob, claim.job_id)
+    assert rejected_job is not None
+    assert rejected_job.status == "failed"
+    exception = session.scalar(
+        select(AcquisitionException).where(
+            AcquisitionException.job_id == claim.job_id
+        )
+    )
+    assert exception is not None
+    assert exception.reason_code == "intake_material_contract_rejected"
+    assert session.scalar(
+        select(func.count()).select_from(EvidenceLink)
+    ) == 0
+
+
+def test_material_dispatch_rejects_cross_case_task_before_creating_lineage(
+    session,
+) -> None:
+    from app.services.automatic_research_intake import AutomaticResearchIntakeService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=_MaterialIntakeExtractor()
+    ).start("收入 100，利润 20，订单 30。", tenant_id="team-a")
+    run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    assert run is not None
+    other_case = ResearchCase(
+        title="other",
+        industry_topic="other",
+        created_by="tenant:team-a",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(other_case)
+    session.flush()
+    material_task = session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "intake_material",
+        )
+    )
+    assert material_task is not None
+    material_task.research_case_id = other_case.id
+
+    with pytest.raises(ValueError, match="task matrix|run case"):
+        AutomaticResearchPipeline(session).advance(run)
+
+    assert session.scalar(select(func.count()).select_from(AcquisitionJob)) == 0
+
+
+def test_uploaded_material_runner_reads_the_frozen_original_not_the_brief(
+    session,
+) -> None:
+    from app.repositories.acquisition import AcquisitionRepository
+    from app.schemas.v1.event_research import CreateEventResearchRequest
+    from app.services.acquisition_runner import AcquisitionRunner
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_research import (
+        EventResearchService,
+        InitialUploadedOriginal,
+    )
+
+    class NoClaimsClient:
+        model_version = "no-claims-v1"
+
+        def chat_json(self, messages, schema_hint=""):
+            return {"statements": []}
+
+    original = b"Example Corp 2026-08-12 Revenue was 100 USD."
+    created = EventResearchService(session).create(
+        CreateEventResearchRequest(
+            raw_input="This is only the upload summary.",
+            source_type="uploaded_file",
+            source_metadata={
+                "authority_level": "user_supplied",
+                "intake_role": "provided_material",
+                "input_kind": "material",
+                "permissions": {"ai_processing": True, "display": True},
+            },
+            event_title="Uploaded material",
+            company_name="Example Corp",
+            research_question="What does the upload establish?",
+            candidate_factors=["Revenue", "Margin", "Orders"],
+            research_protocol_required=False,
+            created_by="tenant:team-a",
+        ),
+        tenant_id="team-a",
+        workflow_mode="automatic",
+        initial_uploaded_original=InitialUploadedOriginal(
+            raw=original,
+            file_name="material.txt",
+            mime_type="text/plain",
+            source_metadata={
+                "authority_level": "user_supplied",
+                "permissions": {"ai_processing": True, "display": True},
+            },
+        ),
+    )
+    assert created.run_id is not None
+    run = session.get(ResearchRun, uuid.UUID(created.run_id))
+    assert run is not None
+    assert AutomaticResearchPipeline(session).advance(run) == "waiting_for_sources"
+    session.commit()
+
+    session_factory = sessionmaker(
+        bind=session.get_bind(), future=True, expire_on_commit=False
+    )
+    with session_factory() as claim_session:
+        claim = AcquisitionRepository(claim_session).claim_next(
+            worker_id="system:acquisition-worker@test#uploaded-material",
+            lease_for=timedelta(minutes=5),
+        )
+        assert claim is not None
+        claim_session.commit()
+    AcquisitionRunner(
+        session_factory, adapters={}, llm_client=NoClaimsClient()
+    ).run_claim(claim)
+
+    session.expire_all()
+    artifact = session.scalar(
+        select(RetrievalArtifact)
+        .join(
+            SourceReference,
+            SourceReference.id == RetrievalArtifact.source_reference_id,
+        )
+        .where(SourceReference.job_id == claim.job_id)
+    )
+    assert artifact is not None
+    assert artifact.raw_bytes == original
+    assert artifact.mime_type == "text/plain"
+
+
 class _WorkerChainExtractor:
     def extract(self, *, raw_input: str, source_url: str | None) -> EventExtraction:
         assert source_url is None
@@ -74,6 +521,7 @@ class _WorkerChainExtractor:
             summary=None,
             research_question="Example Corp Revenue 是否继续增长？",
             candidate_factors=("Revenue", "Margin", "Orders"),
+            input_kind="material",
         )
 
 
@@ -83,13 +531,20 @@ class _WorkerChainExtractionClient:
     def chat_json(self, messages, schema_hint=""):
         assert schema_hint == "extract"
         payload = json.loads(messages[-1]["content"])
-        span = payload["spans"][0]
-        quote = span["verbatim_text"]
-        metric = next(
-            value for value in ("Revenue", "Margin", "Orders") if value in quote
-        )
-        return {
-            "statements": [
+        statements = []
+        for span in payload["spans"]:
+            quote = span["verbatim_text"]
+            metric = next(
+                (
+                    value
+                    for value in ("Revenue", "Margin", "Orders")
+                    if value in quote
+                ),
+                None,
+            )
+            if metric is None:
+                continue
+            statements.append(
                 {
                     "span_id": span["span_id"],
                     "kind": "disclosed_fact",
@@ -106,8 +561,8 @@ class _WorkerChainExtractionClient:
                     "observed_period": "2026-08-12",
                     "scope": {"company": "Example Corp", "metric": metric},
                 }
-            ]
-        }
+            )
+        return {"statements": statements}
 
 
 class _WorkerChainAdapter(SourceAdapter):
@@ -188,8 +643,30 @@ class _WorkerChainAdapter(SourceAdapter):
         return None
 
 
+@pytest.mark.parametrize(
+    ("raw_material", "expected_job_kinds", "expected_links", "expected_decisions"),
+    [
+        (
+            "Example Corp 2026-08-12 Revenue was 100 USD.",
+            {"intake_material", "external_gap"},
+            3,
+            8,
+        ),
+        (
+            "User supplied material without quantified evidence.",
+            {"external_gap"},
+            3,
+            3,
+        ),
+    ],
+)
 def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
+    raw_material,
+    expected_job_kinds,
+    expected_links,
+    expected_decisions,
 ) -> None:
     from app.models.ledger import Base
     from app.models.research_preparation import ResearchPreparation
@@ -209,7 +686,10 @@ def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
     with session_local() as intake_session:
         started = AutomaticResearchIntakeService(
             intake_session, extractor=_WorkerChainExtractor()
-        ).start("Example Corp Revenue research", tenant_id="team-a")
+        ).start(
+            raw_material,
+            tenant_id="team-a",
+        )
         run_id = uuid.UUID(started.run_id)
         case_id = uuid.UUID(started.case_id)
         intake_session.commit()
@@ -233,6 +713,19 @@ def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
         assert waiting_lifecycle.next_human_action is None
         assert waiting_job is not None
         assert waiting_job.status == "waiting_for_sources"
+        initial_source_jobs = list(
+            waiting_session.scalars(
+                select(AcquisitionJob).where(
+                    AcquisitionJob.research_run_id == run_id
+                )
+            )
+        )
+        assert len(initial_source_jobs) == 3
+        assert {
+            job.request_snapshot["acquisition_kind"]
+            for job in initial_source_jobs
+        } == {"intake_material"}
+        assert waiting_run.budget_used == 0
 
     runner = AcquisitionRunner(
         session_local,
@@ -241,18 +734,45 @@ def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
         },
         llm_client=_WorkerChainExtractionClient(),
     )
-    source_jobs_processed = 0
+    material_jobs_processed = 0
     while run_acquisition_worker.run_once(
         runner=runner,
         session_factory=session_local,
         worker_id="system:acquisition-worker@test#worker-chain",
         lease_for=timedelta(minutes=5),
     ):
-        source_jobs_processed += 1
-    assert source_jobs_processed == 9
+        material_jobs_processed += 1
+    assert material_jobs_processed == 3
 
-    # This second research-worker call opens another session and resumes only
-    # from the committed source terminal states.
+    # A fresh research session consumes material results before it opens any
+    # external evidence-gap jobs.
+    assert run_research_worker.run_once()
+    with session_local() as external_wait_session:
+        persisted_run = external_wait_session.get(ResearchRun, run_id)
+        external_jobs = list(
+            external_wait_session.scalars(
+                select(AcquisitionJob).where(
+                    AcquisitionJob.research_run_id == run_id,
+                    AcquisitionJob.request_snapshot["acquisition_kind"].as_string()
+                    == "external_gap",
+                )
+            )
+        )
+        assert persisted_run is not None and persisted_run.budget_used == 9
+        assert len(external_jobs) == 9
+
+    external_jobs_processed = 0
+    while run_acquisition_worker.run_once(
+        runner=runner,
+        session_factory=session_local,
+        worker_id="system:acquisition-worker@test#worker-chain",
+        lease_for=timedelta(minutes=5),
+    ):
+        external_jobs_processed += 1
+    assert external_jobs_processed == 9
+
+    # A third research-worker call resumes only from all committed source
+    # terminal states and writes the final snapshot/conclusion.
     assert run_research_worker.run_once()
 
     with session_local() as final_session:
@@ -291,16 +811,38 @@ def test_one_click_worker_chain_resumes_from_persisted_wait_and_completes(
         assert set(conclusion.evidence_link_ids) == {
             str(link.id) for link in admitted_links
         }
-        assert len(source_jobs) == 9
-        assert all(job.status in {"succeeded", "failed"} for job in source_jobs)
-        assert len(admitted_links) == 3
+        assert len(source_jobs) == 12
+        assert all(
+            job.status in {"succeeded", "partial", "failed"}
+            for job in source_jobs
+        )
+        assert len(admitted_links) == expected_links
+        admitted_job_kinds = {
+            final_session.get(AcquisitionJob, decision.job_id).request_snapshot[
+                "acquisition_kind"
+            ]
+            for link in admitted_links
+            if (
+                decision := final_session.get(
+                    AutomaticAdmissionDecision,
+                    link.automatic_admission_decision_id,
+                )
+            )
+            is not None
+        }
+        assert admitted_job_kinds == expected_job_kinds
         assert all(link.creator_type == "ai" for link in admitted_links)
         assert all(
             link.automatic_admission_decision_id is not None
             for link in admitted_links
         )
-        assert len(admission_decisions) == 3
-        assert {decision.outcome for decision in admission_decisions} == {"admitted"}
+        assert len(admission_decisions) == expected_decisions
+        expected_outcomes = (
+            {"admitted", "quarantined"}
+            if "intake_material" in expected_job_kinds
+            else {"admitted"}
+        )
+        assert {decision.outcome for decision in admission_decisions} == expected_outcomes
         assert open_tasks == []
         assert list(final_session.scalars(select(ResearchPreparation))) == []
         assert list(final_session.scalars(select(Proposal))) == []

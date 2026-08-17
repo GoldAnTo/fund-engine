@@ -566,8 +566,10 @@ def test_post_freezes_scope_and_actor_only_from_server_records(
     assert job is not None
     assert job.request_snapshot == {
         "allowed_source_roles": ["company_disclosure", "licensed_provider"],
+        "acquisition_kind": "external_gap",
         "case_id": str(acquisition_api_scope.case_id),
         "cutoff": "2026-08-13T23:59:59.999999Z",
+        "document_version_id": None,
         "entity_names": ["Example Corp"],
         "idempotency_key": "api-task9-frozen-scope-1",
         "metric_terms": ["Revenue"],

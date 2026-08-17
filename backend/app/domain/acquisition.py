@@ -11,7 +11,7 @@ from uuid import UUID
 
 B_SCOPE_POLICY_VERSION: Final = "b-scope-v2"
 ACQUISITION_SOURCE_ROLES: Final = frozenset(
-    {"company_disclosure", "licensed_provider"}
+    {"company_disclosure", "licensed_provider", "user_provided_material"}
 )
 
 
@@ -84,6 +84,8 @@ class AcquisitionRequest:
     allowed_source_roles: frozenset[str]
     source_policy_version: str
     idempotency_key: str
+    acquisition_kind: str = "external_gap"
+    document_version_id: UUID | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -94,6 +96,7 @@ class AcquisitionRequest:
             "period_start",
             "period_end",
             "source_policy_version",
+            "acquisition_kind",
         ):
             object.__setattr__(
                 self,
@@ -141,6 +144,20 @@ class AcquisitionRequest:
             raise ValueError(
                 "source_policy_version does not match the active B-scope policy"
             )
+
+        if self.acquisition_kind not in {"external_gap", "intake_material"}:
+            raise ValueError("acquisition_kind is not supported")
+        if self.acquisition_kind == "intake_material":
+            if self.document_version_id is None:
+                raise ValueError("intake material requires document_version_id")
+            if self.allowed_source_roles != frozenset({"user_provided_material"}):
+                raise ValueError("intake material requires its dedicated source role")
+        elif self.document_version_id is not None:
+            raise ValueError("external acquisition cannot bind an intake document")
+        elif not self.allowed_source_roles <= frozenset(
+            {"company_disclosure", "licensed_provider"}
+        ):
+            raise ValueError("external acquisition requires network source roles")
 
         allowed_link_roles = _OBJECTIVE_LINK_ROLES.get(self.objective)
         if allowed_link_roles is None or self.target_link_role not in allowed_link_roles:

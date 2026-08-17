@@ -44,6 +44,11 @@ class AutomaticResearchIntakeService:
             )
 
         extracted = self._extractor.extract(raw_input=text, source_url=None)
+        input_kind = (
+            extracted.input_kind
+            if extracted.input_kind in {"topic", "material"}
+            else "topic"
+        )
         event_title = (
             extracted.event_title.strip()
             if extracted.event_title and extracted.event_title.strip()
@@ -56,7 +61,12 @@ class AutomaticResearchIntakeService:
                 source_type="pasted_snapshot",
                 source_metadata={
                     "authority_level": "user_supplied",
-                    "intake_role": "research_prompt",
+                    "intake_role": (
+                        "provided_material"
+                        if input_kind == "material"
+                        else "research_prompt"
+                    ),
+                    "input_kind": input_kind,
                     "permissions": {
                         "ai_processing": True,
                         "display": True,
