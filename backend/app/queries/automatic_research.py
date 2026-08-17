@@ -4,12 +4,12 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.errors import NotFoundError
+from app.errors import ConflictError, NotFoundError
 from app.models.acquisition import (
     AcquisitionException,
     AcquisitionJob,
@@ -42,6 +42,11 @@ from app.schemas.v1.automatic_research import (
     AutomaticResearchViewDTO,
 )
 from app.services.automatic_source_bindings import validate_automatic_source_bindings
+from app.services.automatic_research_conclusion import (
+    AutomaticAssessmentInput,
+    AutomaticSourceJobInput,
+    build_automatic_research_conclusion,
+)
 from app.services.automatic_research_scope import validate_automatic_research_scope
 from app.services.case_tenant_access import CaseTenantAccess
 
@@ -95,6 +100,14 @@ def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 @dataclass(frozen=True, slots=True)
 class _ResultProjection:
     result: AutomaticResearchResultDTO | None
@@ -141,8 +154,14 @@ class AutomaticResearchQueries:
             validated_scope = validate_automatic_research_scope(
                 self._session, run, frozen_scope
             )
-        except ValueError:
-            validated_scope = None
+        except (TypeError, ValueError, AttributeError) as exc:
+            if str(exc) in {
+                "automatic research current scope is missing",
+                "automatic research current scope has drifted",
+            }:
+                validated_scope = None
+            else:
+                raise ConflictError("自动研究冻结范围不可用") from exc
 
         jobs: list[AcquisitionJob] = []
         job_ids: frozenset[uuid.UUID] = frozenset()
@@ -194,6 +213,7 @@ class AutomaticResearchQueries:
                 validated_scope.current_scope_id if validated_scope else None,
                 frozen_scope,
                 links,
+                jobs,
             )
             if overall == "completed"
             else _ResultProjection(result=None)
@@ -213,22 +233,15 @@ class AutomaticResearchQueries:
                 acquisition_events,
                 projection_failure_stage=projection.failure_stage,
             )
-        terminal_times = [
-            value
-            for value in (
-                run.updated_at,
-                *(job.finished_at or job.updated_at for job in jobs),
-                *(event.created_at for event in run_events),
-                *(event.created_at for event in acquisition_events),
-            )
-            if value is not None
-        ]
+        started_at = _as_utc(run.created_at)
+        ended_at = (
+            _as_utc(run.updated_at)
+            if overall in {"completed", "failed"}
+            else _utcnow()
+        )
         duration = max(
             0.0,
-            (
-                (max(terminal_times) if terminal_times else run.created_at)
-                - run.created_at
-            ).total_seconds(),
+            (ended_at - started_at).total_seconds(),
         )
         activity = self._activity(run_events, acquisition_events)
         return AutomaticResearchViewDTO(
@@ -304,6 +317,8 @@ class AutomaticResearchQueries:
         for event in acquisition_events:
             timestamps[_ACQUISITION_STAGE.get(event.stage, 0)].append(event.created_at)
         for event in run_events:
+            if event.stage in {"failed", "stopped"}:
+                continue
             index = _RESEARCH_STAGE.get(event.stage)
             if index is not None:
                 timestamps[index].append(event.created_at)
@@ -329,7 +344,9 @@ class AutomaticResearchQueries:
                         "completed": f"{label}已完成",
                         "failed": f"{label}未能完成",
                     }[state],
-                    started_at=min(values) if values else None,
+                    started_at=(
+                        min(values) if values and state != "pending" else None
+                    ),
                     completed_at=(
                         max(values)
                         if values and state in {"completed", "failed"}
@@ -483,10 +500,10 @@ class AutomaticResearchQueries:
         current_scope_id: uuid.UUID | None,
         frozen_scope: dict,
         links: list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]],
+        jobs: list[AcquisitionJob],
     ) -> _ResultProjection:
         if current_scope_id is None:
             return _ResultProjection(result=None, failure_stage=4)
-        link_ids = {link.id for link, _, _, _ in links}
         conclusion = self._session.get(
             EventResearchConclusion,
             uuid.uuid5(
@@ -503,19 +520,34 @@ class AutomaticResearchQueries:
             or conclusion.reviewer is not None
         ):
             return _ResultProjection(result=None, failure_stage=4)
+        if not isinstance(conclusion.evidence_link_ids, list):
+            return _ResultProjection(result=None, failure_stage=4)
         try:
-            conclusion_link_ids = {
+            conclusion_link_ids = [
                 uuid.UUID(str(value)) for value in conclusion.evidence_link_ids
-            }
+            ]
         except (TypeError, ValueError, AttributeError):
             return _ResultProjection(result=None, failure_stage=4)
-        if conclusion_link_ids != link_ids:
+        if len(conclusion_link_ids) != len(set(conclusion_link_ids)):
             return _ResultProjection(result=None, failure_stage=4)
-        findings: list[str] = []
-        limitations: list[str] = []
+        links_by_id = {row[0].id: row for row in links}
+        if (
+            len(links_by_id) != len(links)
+            or set(conclusion_link_ids) != set(links_by_id)
+        ):
+            return _ResultProjection(result=None, failure_stage=4)
+        ordered_links = [links_by_id[link_id] for link_id in conclusion_link_ids]
         try:
-            thesis_ids = {uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]}
+            thesis_ids = [
+                uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]
+            ]
+            factor_statements = list(frozen_scope["factor_statements"])
         except (KeyError, TypeError, ValueError, AttributeError):
+            return _ResultProjection(result=None, failure_stage=3)
+        if (
+            len(thesis_ids) != len(factor_statements)
+            or any(not isinstance(value, str) for value in factor_statements)
+        ):
             return _ResultProjection(result=None, failure_stage=3)
         tasks = list(self._session.scalars(
             select(ResearchTask)
@@ -529,16 +561,23 @@ class AutomaticResearchQueries:
             )
             .order_by(ResearchTask.created_at, ResearchTask.id)
         ))
-        if len(tasks) != len(thesis_ids) or {task.thesis_id for task in tasks} != thesis_ids:
+        if (
+            len(tasks) != len(thesis_ids)
+            or {task.thesis_id for task in tasks} != set(thesis_ids)
+        ):
             return _ResultProjection(result=None, failure_stage=3)
+        tasks_by_thesis = {task.thesis_id: task for task in tasks}
+        tasks = [tasks_by_thesis[thesis_id] for thesis_id in thesis_ids]
         seen_assessments: set[uuid.UUID] = set()
-        assessment_link_ids: list[uuid.UUID] = []
-        link_theses = {link.id: link.thesis_id for link, _, _, _ in links}
-        for task in tasks:
+        assessment_inputs: list[AutomaticAssessmentInput] = []
+        link_theses = {
+            link.id: link.thesis_id for link, _, _, _ in ordered_links
+        }
+        for task, expected_statement in zip(tasks, factor_statements):
             try:
                 assessment_id = uuid.UUID(str((task.result or {})["assessment_id"]))
             except (KeyError, TypeError, ValueError, AttributeError):
-                continue
+                return _ResultProjection(result=None, failure_stage=3)
             if assessment_id in seen_assessments:
                 return _ResultProjection(result=None, failure_stage=3)
             seen_assessments.add(assessment_id)
@@ -548,6 +587,7 @@ class AutomaticResearchQueries:
                 if assessment
                 else None
             )
+            thesis = self._session.get(Thesis, task.thesis_id) if task.thesis_id else None
             try:
                 snapshot_link_ids = [
                     uuid.UUID(str(value))
@@ -558,23 +598,51 @@ class AutomaticResearchQueries:
             if (
                 assessment is None
                 or snapshot is None
-                or assessment.displayed_as_provisional is not True
-                or assessment.creator_type != "ai"
+                or thesis is None
+                or thesis.research_case_id != case_id
+                or thesis.statement != expected_statement
                 or snapshot.thesis_id != task.thesis_id
                 or any(link_theses.get(link_id) != task.thesis_id for link_id in snapshot_link_ids)
             ):
                 return _ResultProjection(result=None, failure_stage=3)
-            assessment_link_ids.extend(snapshot_link_ids)
-            findings.append(assessment.rationale)
-            limitations.extend(str(value) for value in assessment.gaps or [])
-        if (
-            len(assessment_link_ids) != len(set(assessment_link_ids))
-            or set(assessment_link_ids) != link_ids
-        ):
+            assessment_inputs.append(
+                AutomaticAssessmentInput(
+                    assessment_id=assessment.id,
+                    task_thesis_id=task.thesis_id,
+                    snapshot_thesis_id=snapshot.thesis_id,
+                    thesis_statement=thesis.statement,
+                    conclusion=assessment.conclusion,
+                    rationale=assessment.rationale,
+                    gaps=assessment.gaps,
+                    displayed_as_provisional=assessment.displayed_as_provisional,
+                    creator_type=assessment.creator_type,
+                    evidence_link_ids=snapshot.evidence_link_ids,
+                )
+            )
+        try:
+            built = build_automatic_research_conclusion(
+                factor_scope=list(zip(thesis_ids, factor_statements)),
+                assessments=assessment_inputs,
+                source_jobs=[
+                    AutomaticSourceJobInput(
+                        status=job.status,
+                        admitted_count=job.admitted_count,
+                        exception_count=job.exception_count,
+                    )
+                    for job in jobs
+                ],
+            )
+        except ValueError:
             return _ResultProjection(result=None, failure_stage=3)
+        if (
+            list(built.evidence_link_ids) != conclusion_link_ids
+            or built.text != conclusion.text
+            or built.primary_factor != conclusion.primary_factor
+        ):
+            return _ResultProjection(result=None, failure_stage=4)
         sources: list[AutomaticResearchSourceDTO] = []
         source_keys: set[tuple[str | None, str | None, str]] = set()
-        for link, _, document, contract in links:
+        for link, _, document, contract in ordered_links:
             title = document.title if contract is not None and contract.allow_display else None
             url = document.source_url if contract is not None and contract.allow_display else None
             key = (title, url, link.role)
@@ -591,7 +659,7 @@ class AutomaticResearchQueries:
             )
         counter_evidence = [
             statement.normalized_text
-            for link, statement, _, contract in links
+            for link, statement, _, contract in ordered_links
             if link.role == "contradicts"
             and contract is not None
             and contract.allow_display
@@ -601,9 +669,9 @@ class AutomaticResearchQueries:
                 label="系统生成，未经人工审核",
                 human_reviewed=False,
                 conclusion=conclusion.text,
-                key_findings=_dedupe(findings),
+                key_findings=_dedupe(list(built.key_findings)),
                 counter_evidence=_dedupe(counter_evidence),
-                limitations=_dedupe(limitations),
+                limitations=list(built.limitations),
                 sources=sources,
             )
         )

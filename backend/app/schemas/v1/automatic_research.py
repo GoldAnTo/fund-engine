@@ -4,13 +4,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.schemas.v1.common import V1Model
 
 
 class AutomaticResearchStartRequest(V1Model):
     input: str = Field(min_length=1, max_length=100_000)
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def trim_input(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class AutomaticResearchStartResponse(V1Model):

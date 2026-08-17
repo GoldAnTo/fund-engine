@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import copy
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,7 @@ from app.models.event_research import (
 from app.models.ledger import (
     AIAssessment,
     EvidenceSnapshot,
+    ResearchCase,
     SourceSpan,
     SourceStatement,
     Thesis,
@@ -34,6 +36,7 @@ from app.models.operational import (
 )
 from app.services.automatic_research_intake import AutomaticResearchIntakeService
 from app.services.event_extraction import EventExtraction
+from app.services.event_extraction import EventExtractionProviderError
 
 
 def _stage_statuses(body: dict) -> dict[str, str]:
@@ -75,8 +78,91 @@ def test_start_accepts_only_input_and_returns_queued_ids(
     assert response.json()["status"] == "queued"
 
 
+def test_start_trims_input_and_rejects_whitespace_without_rows(
+    cmd_client, cmd_session
+) -> None:
+    from app.schemas.v1.automatic_research import AutomaticResearchStartRequest
+
+    assert AutomaticResearchStartRequest(input="  自动研究主题  ").input == "自动研究主题"
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research",
+        json={"input": " \t\n "},
+    )
+
+    assert response.status_code == 422
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected_status", "expected_code", "expected_message"),
+    [
+        (
+            EventExtractionProviderError("provider secret sk-private"),
+            503,
+            "upstream_unavailable",
+            "自动研究服务暂时不可用，请稍后重试",
+        ),
+        (
+            ValueError("invalid intake with provider secret sk-private"),
+            422,
+            "validation_failed",
+            "自动研究输入无效，请检查后重试",
+        ),
+    ],
+)
+def test_start_maps_intake_failures_safely_and_rolls_back(
+    cmd_client,
+    cmd_session,
+    monkeypatch,
+    raised: Exception,
+    expected_status: int,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    class _FailingIntake:
+        def __init__(self, db) -> None:
+            self._db = db
+
+        def start(self, raw_input: str, *, tenant_id: str):
+            self._db.add(
+                ResearchCase(
+                    title="must roll back",
+                    industry_topic="test",
+                    created_at=datetime.now(timezone.utc),
+                    created_by="test",
+                )
+            )
+            self._db.flush()
+            raise raised
+
+    monkeypatch.setattr(api, "AutomaticResearchIntakeService", _FailingIntake)
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research",
+        json={"input": "自动研究主题"},
+    )
+
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert error["code"] == expected_code
+    assert error["message"] == expected_message
+    assert "sk-private" not in response.text
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+
+
 def test_openapi_marks_exact_automatic_research_wire_fields_required(client) -> None:
     schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    start_request = schemas["AutomaticResearchStartRequest"]
+    assert start_request["required"] == ["input"]
+    assert start_request["properties"]["input"] == {
+        "type": "string",
+        "maxLength": 100_000,
+        "minLength": 1,
+        "title": "Input",
+    }
     expected_required = {
         "AutomaticResearchStartResponse": {"case_id", "run_id", "status"},
         "AutomaticResearchStageDTO": {"key", "label", "status", "summary"},
@@ -230,6 +316,61 @@ def test_get_queued_view_always_has_five_ordered_stages(
     assert item["workflow_mode"] == "automatic"
 
 
+def test_active_duration_advances_with_current_time(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.queries import automatic_research as query_module
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    started_at = run.created_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    clock = [started_at + timedelta(seconds=1)]
+    monkeypatch.setattr(query_module, "_utcnow", lambda: clock[0], raising=False)
+
+    first = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()["stats"]["duration_seconds"]
+    clock[0] += timedelta(seconds=5)
+    second = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()["stats"]["duration_seconds"]
+
+    assert second >= first + 5
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "completed"])
+def test_terminal_duration_ignores_later_events_and_source_updates(
+    cmd_client, cmd_session, monkeypatch, terminal_status: str
+) -> None:
+    if terminal_status == "completed":
+        created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    else:
+        created = _start(cmd_client, monkeypatch)
+        run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+        lifecycle = cmd_session.get(
+            EventResearchLifecycle, uuid.UUID(created["case_id"])
+        )
+        assert run is not None and lifecycle is not None
+        run.status = "failed"
+        run.stage = "failed"
+        run.stop_reason = "dispatch_failed"
+        lifecycle.status = "exhausted"
+    baseline = datetime.now(timezone.utc) - timedelta(seconds=120)
+    run.created_at = baseline
+    run.updated_at = baseline + timedelta(seconds=10)
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == terminal_status
+    assert body["stats"]["duration_seconds"] == 10
+
+
 def test_get_failed_view_redacts_internal_failure_and_has_no_result(
     cmd_client, cmd_session, monkeypatch
 ) -> None:
@@ -356,6 +497,13 @@ def test_analyze_failure_does_not_complete_conclude_stage(
         message="internal provider detail",
         payload_json={},
     )
+    ResearchRunEventRepository(cmd_session).append(
+        run.id,
+        stage="failed",
+        status="failed",
+        message="generic terminal event",
+        payload_json={},
+    )
     cmd_session.commit()
 
     body = cmd_client.get(
@@ -364,6 +512,9 @@ def test_analyze_failure_does_not_complete_conclude_stage(
     stages = _stage_statuses(body)
     assert stages["analyze"] == "failed"
     assert stages["conclude"] == "pending"
+    conclude = next(stage for stage in body["stages"] if stage["key"] == "conclude")
+    assert conclude["started_at"] is None
+    assert conclude["completed_at"] is None
 
 
 def test_get_rejects_reviewed_case_and_other_tenant_without_disclosure(
@@ -399,6 +550,8 @@ def test_get_rejects_reviewed_case_and_other_tenant_without_disclosure(
 def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     cmd_client, cmd_session, monkeypatch
 ) -> None:
+    from app.services.case_monitor import ResearchRunEventRepository
+
     created = _start(cmd_client, monkeypatch)
     old_run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
     lifecycle = cmd_session.get(
@@ -410,6 +563,17 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     old_run.stop_reason = "no_usable_evidence"
     lifecycle.status = "exhausted"
     old_scope = _scope_payload(cmd_session, old_run.id)
+    old_scope["extension_metadata"] = {
+        "ordered_values": ["first", "second"],
+        "nested": {"future_contract": True},
+    }
+    ResearchRunEventRepository(cmd_session).append(
+        old_run.id,
+        stage="scope",
+        status="completed",
+        message="frozen scope with forward-compatible extension",
+        payload_json=old_scope,
+    )
     cmd_session.commit()
 
     response = cmd_client.post(
@@ -430,6 +594,10 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     assert new_run.scope_thesis_ids == old_run.scope_thesis_ids
     assert new_run.max_rounds == old_run.max_rounds
     assert new_run.budget == old_run.budget
+    expected_scope = copy.deepcopy(old_scope)
+    expected_scope["trigger"] = "retry"
+    expected_scope["retried_from_run_id"] = str(old_run.id)
+    assert new_scope == expected_scope
     for key in (
         "factor_ids",
         "factor_statements",
@@ -451,6 +619,150 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
         f"/api/v1/automatic-research/{created['case_id']}/retry"
     )
     assert duplicate.status_code == 409
+
+
+def test_retry_accepts_cancelled_automatic_run(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    old_run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert old_run is not None and lifecycle is not None
+    old_run.status = "cancelled"
+    old_run.stage = "stopped"
+    old_run.stop_reason = "cancelled"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+
+    assert cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()["status"] == "failed"
+    response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    assert response.status_code == 201
+    assert response.json()["run_id"] != str(old_run.id)
+    cmd_session.refresh(old_run)
+    assert old_run.status == "cancelled"
+
+
+def test_retry_accepts_succeeded_run_whose_result_projection_fails_closed(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created, old_run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask)
+            .where(
+                ResearchTask.run_id == old_run.id,
+                ResearchTask.task_type == "result",
+            )
+            .order_by(ResearchTask.id)
+        )
+    )
+    assert len(tasks) >= 2
+    assert isinstance(tasks[1].result, dict)
+    tasks[0].result = {
+        "assessment_id": tasks[1].result["assessment_id"],
+    }
+    cmd_session.commit()
+
+    view = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    )
+    assert view.status_code == 200
+    assert view.json()["status"] == "failed"
+    response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    assert response.status_code == 201
+    assert response.json()["run_id"] != str(old_run.id)
+    cmd_session.refresh(old_run)
+    assert old_run.status == "succeeded"
+
+
+@pytest.mark.pg_only
+def test_postgres_duplicate_retry_creates_exactly_one_new_active_run(
+    engine, session, monkeypatch
+) -> None:
+    from threading import Barrier, Event, Thread
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.errors import ConflictError
+    from app.services.auto_research import AutoResearchService
+    from app.services.automatic_research_retry import AutomaticResearchRetryService
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=_FakeExtractor()
+    ).start("automatic retry race", tenant_id="test-team")
+    old_run = session.get(ResearchRun, uuid.UUID(started.run_id))
+    lifecycle = session.get(
+        EventResearchLifecycle, uuid.UUID(started.case_id)
+    )
+    assert old_run is not None and lifecycle is not None
+    old_run.status = "failed"
+    old_run.stage = "failed"
+    old_run.stop_reason = "no_usable_evidence"
+    lifecycle.status = "exhausted"
+    session.commit()
+
+    entered_start = Event()
+    release_start = Event()
+    original_start = AutoResearchService.start
+
+    def pause_first_start(service, *args, **kwargs):
+        if not entered_start.is_set():
+            entered_start.set()
+            assert release_start.wait(timeout=5)
+        return original_start(service, *args, **kwargs)
+
+    monkeypatch.setattr(AutoResearchService, "start", pause_first_start)
+    session_factory = sessionmaker(bind=engine, future=True)
+    ready = Barrier(2)
+    outcomes: list[int] = []
+    errors: list[BaseException] = []
+
+    def retry() -> None:
+        db = session_factory()
+        try:
+            ready.wait(timeout=5)
+            AutomaticResearchRetryService(db).retry(
+                uuid.UUID(started.case_id), tenant_id="test-team"
+            )
+            outcomes.append(201)
+        except ConflictError:
+            outcomes.append(409)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            db.close()
+
+    first = Thread(target=retry)
+    second = Thread(target=retry)
+    first.start()
+    second.start()
+    assert entered_start.wait(timeout=5)
+    release_start.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert errors == []
+    assert sorted(outcomes) == [201, 409]
+    session.expire_all()
+    runs = list(
+        session.scalars(
+            select(ResearchRun).where(
+                ResearchRun.research_case_id == uuid.UUID(started.case_id)
+            )
+        )
+    )
+    assert len(runs) == 2
+    assert sum(run.status == "queued" for run in runs) == 1
 
 
 @pytest.mark.parametrize(
@@ -497,6 +809,11 @@ def test_retry_rejects_malformed_frozen_scope(
     run.stop_reason = "no_usable_evidence"
     lifecycle.status = "exhausted"
     cmd_session.commit()
+
+    get_response = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    )
+    assert get_response.status_code == 409
 
     response = cmd_client.post(
         f"/api/v1/automatic-research/{created['case_id']}/retry"
@@ -767,6 +1084,127 @@ def test_completed_view_fails_closed_on_assessment_provenance_drift(
     stages = _stage_statuses(body)
     assert stages["analyze"] == "failed"
     assert stages["conclude"] == "pending"
+
+
+def test_completed_projection_rejects_malformed_empty_snapshot_assessment_id(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run.id,
+                ResearchTask.task_type == "result",
+            )
+        )
+    )
+    empty_task = next(
+        task
+        for task in tasks
+        if isinstance(task.result, dict)
+        and not cmd_session.get(
+            EvidenceSnapshot,
+            cmd_session.get(
+                AIAssessment, uuid.UUID(task.result["assessment_id"])
+            ).snapshot_id,
+        ).evidence_link_ids
+    )
+    empty_task.result = {"assessment_id": "malformed"}
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == "failed"
+    assert body["result"] is None
+    assert _stage_statuses(body)["analyze"] == "failed"
+
+
+@pytest.mark.parametrize("drift", ["duplicate", "reordered"])
+def test_completed_projection_rejects_conclusion_evidence_order_drift(
+    cmd_client, cmd_session, monkeypatch, drift: str
+) -> None:
+    created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    conclusion = cmd_session.get(
+        EventResearchConclusion,
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"fund-engine:event-research:automatic:{run.id}",
+        ),
+    )
+    assert conclusion is not None and len(conclusion.evidence_link_ids) >= 2
+    evidence_ids = list(conclusion.evidence_link_ids)
+    drifted = (
+        [*evidence_ids, evidence_ids[0]]
+        if drift == "duplicate"
+        else list(reversed(evidence_ids))
+    )
+    cmd_session.connection().exec_driver_sql(
+        "UPDATE event_research_conclusions "
+        "SET evidence_link_ids = ? WHERE id = ?",
+        (json.dumps(drifted), conclusion.id.hex),
+    )
+    cmd_session.commit()
+    cmd_session.expire_all()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == "failed"
+    assert body["result"] is None
+    assert _stage_statuses(body)["conclude"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("conclusion_value", "rationale", "gaps"),
+    [
+        ("supported", "substituted rationale", ["substituted gap"]),
+        ("unsupported-value", "valid rationale", []),
+        ("supported", "valid rationale", [1]),
+    ],
+    ids=["valid-looking-substitution", "invalid-conclusion", "invalid-gaps"],
+)
+def test_completed_projection_binds_exact_assessment_content(
+    cmd_client,
+    cmd_session,
+    monkeypatch,
+    conclusion_value: str,
+    rationale: str,
+    gaps: list,
+) -> None:
+    created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    task = cmd_session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "result",
+        )
+    )
+    assert task is not None and isinstance(task.result, dict)
+    original = cmd_session.get(AIAssessment, uuid.UUID(task.result["assessment_id"]))
+    assert original is not None
+    replacement = AIAssessment(
+        snapshot_id=original.snapshot_id,
+        conclusion=conclusion_value,
+        rationale=rationale,
+        gaps=gaps,
+        displayed_as_provisional=True,
+        creator_type="ai",
+        model_version="substituted",
+        created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(replacement)
+    cmd_session.flush()
+    task.result = {**task.result, "assessment_id": str(replacement.id)}
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == "failed"
+    assert body["result"] is None
 
 
 @pytest.mark.parametrize(

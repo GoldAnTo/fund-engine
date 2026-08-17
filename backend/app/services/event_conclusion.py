@@ -28,6 +28,11 @@ from app.services.event_research_scope_evidence import (
 from app.services.automatic_source_bindings import (
     validate_automatic_source_bindings,
 )
+from app.services.automatic_research_conclusion import (
+    AutomaticAssessmentInput,
+    AutomaticSourceJobInput,
+    build_automatic_research_conclusion,
+)
 
 
 def _utcnow() -> datetime:
@@ -226,6 +231,8 @@ class EventConclusionService:
             raise ValidationFailedError(
                 "automatic result requires exactly one completed task per thesis"
             )
+        tasks_by_thesis_id = {task.thesis_id: task for task in result_tasks}
+        result_tasks = [tasks_by_thesis_id[thesis_id] for thesis_id in scoped_thesis_ids]
 
         assessment_rows: list[tuple[AIAssessment, EvidenceSnapshot, Thesis]] = []
         seen_assessment_ids: set[uuid.UUID] = set()
@@ -261,10 +268,6 @@ class EventConclusionService:
                 )
             seen_assessment_ids.add(assessment_id)
             assessment_rows.append((assessment, snapshot, thesis))
-        assessment_rows.sort(
-            key=lambda row: (row[2].statement, str(row[2].id), str(row[0].id))
-        )
-
         evidence_rows = list(
             self._session.execute(
                 select(EvidenceLink, Thesis)
@@ -325,74 +328,51 @@ class EventConclusionService:
             )
         evidence_link_ids = assessment_evidence_ids
 
-        labels = {
-            "supported": "得到当前证据支持",
-            "contradicted": "受到当前证据反驳",
-            "insufficient_evidence": "证据不足",
-        }
-        text_lines: list[str] = []
-        gaps: list[str] = []
-        primary_factor = None
-        for assessment, _snapshot, thesis in assessment_rows:
-            label = labels.get(assessment.conclusion)
-            if label is None:
-                raise ValidationFailedError("automatic assessment conclusion is invalid")
-            text_lines.append(f"{thesis.statement}：{label}。{assessment.rationale}")
-            if primary_factor is None and assessment.conclusion == "supported":
-                primary_factor = thesis.statement
-            gaps.extend(
-                str(gap).strip()
-                for gap in (assessment.gaps or [])
-                if str(gap).strip()
-            )
-        unique_gaps = sorted(set(gaps))
-        if unique_gaps:
-            text_lines.append("证据缺口：" + "；".join(unique_gaps))
-        acquisition_statuses = []
-        skipped = 0
-        exception_count = 0
-        partial_without_admitted_count = 0
+        source_inputs: list[AutomaticSourceJobInput] = []
         for task in sorted(
             source_bindings.tasks_by_id.values(),
             key=lambda value: (value.round, value.created_at, str(value.id)),
         ):
             job = source_bindings.jobs_by_task_id[task.id]
-            status = job.status
-            task_exception_count = job.exception_count
-            if (
-                isinstance(task_exception_count, bool)
-                or not isinstance(task_exception_count, int)
-                or task_exception_count < 0
-            ):
-                raise ValidationFailedError(
-                    "automatic source exception count is invalid"
+            source_inputs.append(
+                AutomaticSourceJobInput(
+                    status=job.status,
+                    admitted_count=job.admitted_count,
+                    exception_count=job.exception_count,
                 )
-            exception_count += task_exception_count
-            if status == "partial":
-                admitted_count = job.admitted_count
-                if (
-                    isinstance(admitted_count, bool)
-                    or not isinstance(admitted_count, int)
-                    or admitted_count < 0
-                ):
-                    raise ValidationFailedError(
-                        "automatic partial source admitted count is invalid"
+            )
+        try:
+            projection = build_automatic_research_conclusion(
+                factor_scope=list(zip(scoped_thesis_ids, frozen_statements)),
+                assessments=[
+                    AutomaticAssessmentInput(
+                        assessment_id=assessment.id,
+                        task_thesis_id=thesis.id,
+                        snapshot_thesis_id=snapshot.thesis_id,
+                        thesis_statement=thesis.statement,
+                        conclusion=assessment.conclusion,
+                        rationale=assessment.rationale,
+                        gaps=assessment.gaps,
+                        displayed_as_provisional=assessment.displayed_as_provisional,
+                        creator_type=assessment.creator_type,
+                        evidence_link_ids=snapshot.evidence_link_ids,
                     )
-                if admitted_count == 0:
-                    partial_without_admitted_count += 1
-            acquisition_statuses.append(status)
-        failed_count = acquisition_statuses.count("failed")
-        cancelled_count = acquisition_statuses.count("cancelled")
-        partial_count = acquisition_statuses.count("partial")
-        text_lines.append(
-            "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
-            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，"
-            f"部分完成 {partial_count}，"
-            f"部分完成但无准入证据 {partial_without_admitted_count}，"
-            f"未执行 {skipped}，"
-            f"跳过/异常条目 {exception_count}。"
-        )
-        text = "\n".join(text_lines)
+                    for assessment, snapshot, thesis in assessment_rows
+                ],
+                source_jobs=source_inputs,
+            )
+        except ValueError as exc:
+            raise ValidationFailedError(
+                "automatic result assessment projection is invalid"
+            ) from exc
+        evidence_link_ids = [str(value) for value in projection.evidence_link_ids]
+        if evidence_link_ids != assessment_evidence_ids:
+            raise ValidationFailedError(
+                "automatic result evidence snapshot differs from assessment evidence"
+            )
+        text = projection.text
+        primary_factor = projection.primary_factor
+        unique_gaps = list(projection.limitations)
 
         conclusion_id = uuid.uuid5(
             uuid.NAMESPACE_URL,
