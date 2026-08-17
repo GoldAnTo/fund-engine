@@ -1222,6 +1222,7 @@ def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_ses
     assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
     assert body["items"][0]["ticker"] == "TSM"
     assert body["items"][0]["lifecycle_status"] == "awaiting_key_review"
+    assert body["items"][0]["workflow_mode"] == "reviewed"
     assert body["items"][0]["next_human_action"] is None
 
 

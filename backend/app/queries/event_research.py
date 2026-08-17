@@ -396,6 +396,7 @@ class EventResearchQueries:
         preparation_copy = EventResearchQueries._preparation_copy(preparation)
         return EventResearchListItemDTO(
             case_id=str(brief.research_case_id),
+            workflow_mode=brief.workflow_mode,
             event_title=brief.event_title,
             company_name=brief.company_name,
             ticker=brief.ticker,

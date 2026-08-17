@@ -200,6 +200,7 @@ class EventResearchScopeHistoryResponse(V1Model):
 
 class EventResearchListItemDTO(V1Model):
     case_id: str
+    workflow_mode: Literal["reviewed", "automatic"]
     event_title: str
     company_name: str | None
     ticker: str | None
