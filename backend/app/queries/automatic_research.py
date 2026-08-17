@@ -56,6 +56,7 @@ from app.services.automatic_research_scope import (
     AutomaticResearchScopeError,
     validate_automatic_research_scope,
 )
+from app.services.source_admission import source_contract_is_active
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -657,8 +658,13 @@ class AutomaticResearchQueries:
         sources: list[AutomaticResearchSourceDTO] = []
         source_keys: set[tuple[str | None, str | None, str]] = set()
         for link, _, document, contract in ordered_links:
-            title = document.title if contract is not None and contract.allow_display else None
-            url = document.source_url if contract is not None and contract.allow_display else None
+            display_allowed = bool(
+                contract is not None
+                and contract.allow_display
+                and source_contract_is_active(contract)
+            )
+            title = document.title if display_allowed else None
+            url = document.source_url if display_allowed else None
             key = (title, url, link.role)
             if key in source_keys:
                 continue
@@ -677,6 +683,7 @@ class AutomaticResearchQueries:
             if link.role == "contradicts"
             and contract is not None
             and contract.allow_display
+            and source_contract_is_active(contract)
         ]
         return _ResultProjection(
             result=AutomaticResearchResultDTO(

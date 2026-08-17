@@ -200,7 +200,7 @@ export interface EventWorkbench {
 export interface EventConclusionVersion {
   id: string;
   sequence: number;
-  state: "ai_draft" | "published";
+  state: "ai_draft" | "system_generated" | "published";
   text: string;
   primaryFactor: string | null;
   scopeVersion: number | null;

@@ -245,12 +245,14 @@ class EventResearchQueries:
         )
         event = self._list_item(brief, lifecycle, preparation)
         scope = self._latest_scope(case_id)
-        progress = self._progress(case_id, lifecycle)
         automatic = brief.workflow_mode == "automatic"
         evidence_states = (
             frozenset({"automatically_admitted"})
             if automatic
             else frozenset({"reviewed"})
+        )
+        progress = self._progress(
+            case_id, lifecycle, evidence_states=evidence_states
         )
         factors = self._factors(
             case_id,
@@ -726,11 +728,19 @@ class EventResearchQueries:
         ]
 
     def _progress(
-        self, case_id: uuid.UUID, lifecycle: EventResearchLifecycle
+        self,
+        case_id: uuid.UUID,
+        lifecycle: EventResearchLifecycle,
+        *,
+        evidence_states: frozenset[str] = frozenset({"reviewed"}),
     ) -> EventWorkbenchProgressDTO:
         review_summary = EventReviewQueueService(self._session).summary(case_id)
         return EventWorkbenchProgressDTO(
-            verified=len(current_mapped_evidence_ids(self._session, case_id)),
+            verified=len(
+                current_mapped_evidence_ids(
+                    self._session, case_id, review_states=evidence_states
+                )
+            ),
             pending=review_summary.pending,
             invalid_source=review_summary.invalid_source,
             current_gap=lifecycle.current_gap,

@@ -1390,7 +1390,14 @@ def test_completed_view_returns_machine_result_and_display_safe_sources(
             ),
         ]
     )
-    for link, allow_display in ((visible_link, True), (hidden_link, False)):
+    for link, allow_display, effective_until in (
+        (visible_link, True, None),
+        (
+            hidden_link,
+            True,
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+        ),
+    ):
         statement = cmd_session.get(SourceStatement, link.source_statement_id)
         assert statement is not None
         span = cmd_session.get(SourceSpan, statement.source_span_id)
@@ -1406,6 +1413,7 @@ def test_completed_view_returns_machine_result_and_display_safe_sources(
                 allow_export=False,
                 allow_api=False,
                 region="CN",
+                effective_until=effective_until,
                 retention_policy="retain",
                 deletion_policy="none",
                 downstream_restrictions=[],
@@ -1465,6 +1473,7 @@ def test_professional_workbench_exposes_completed_automatic_result_and_sources(
     assert {
         evidence["review_state"] for evidence in body["evidence"]
     } == {"automatically_admitted"}
+    assert body["progress"]["verified"] == len(body["evidence"])
 
 
 def test_professional_workbench_keeps_running_automatic_case_machine_labeled(

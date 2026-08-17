@@ -2205,7 +2205,11 @@ function ConclusionHistoryContent({ caseId }: { caseId: string }) {
               <span
                 className={`ros-pill ${version.state === "published" ? "ros-pill--system" : "ros-pill--human"}`}
               >
-                {version.state === "published" ? "人工发布" : "AI 草案，未发布"}
+                {version.state === "published"
+                  ? "人工发布"
+                  : version.state === "system_generated"
+                    ? "系统生成，未经人工审核"
+                    : "AI 草案，未发布"}
               </span>
               <article>
                 <header>
@@ -2226,7 +2230,9 @@ function ConclusionHistoryContent({ caseId }: { caseId: string }) {
                     ? `基于草案 ${version.basedOnConclusionId}`
                     : "独立草案起点"}{" "}
                   ·{" "}
-                  {version.reviewer
+                  {version.state === "system_generated"
+                    ? "机器生成；尚未人工审核或发布"
+                    : version.reviewer
                     ? `发布/审核人：${version.reviewer}`
                     : "尚未人工发布"}
                 </p>

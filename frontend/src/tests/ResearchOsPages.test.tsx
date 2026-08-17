@@ -1992,6 +1992,41 @@ describe("Research OS event entry", () => {
     );
   });
 
+  it("labels automatic conclusion history as system-generated and unreviewed", async () => {
+    const adapter = new MockResearchAdapter();
+    vi.spyOn(adapter, "getEventConclusionHistory").mockResolvedValue([
+      {
+        id: "automatic-conclusion-1",
+        sequence: 1,
+        state: "system_generated",
+        text: "系统自动结论",
+        primaryFactor: "需求",
+        scopeVersion: 1,
+        basedOnConclusionId: null,
+        reviewer: null,
+        evidenceCount: 2,
+        createdAt: "2026-08-17T01:00:00Z",
+      },
+    ]);
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/automatic-case/history"]}>
+        <Routes>
+          <Route
+            path="/events/:caseId/history"
+            element={<CaseConclusionHistoryPage />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("系统生成，未经人工审核"),
+    ).toBeVisible();
+    expect(screen.queryByText("AI 草案，未发布")).not.toBeInTheDocument();
+  });
+
   it("requires an explicit reason before a published Case can start a successor run from frozen material", async () => {
     const user = userEvent.setup();
     render(

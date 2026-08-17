@@ -2943,7 +2943,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
 
   async getEventConclusionHistory(caseId: string): Promise<import("../domain/eventResearch").EventConclusionVersion[]> {
     const dto = await this.get<{ versions: Array<{
-      id: string; sequence: number; state: "ai_draft" | "published"; text: string;
+      id: string; sequence: number; state: "ai_draft" | "system_generated" | "published"; text: string;
       primary_factor: string | null; scope_version: number | null;
       based_on_conclusion_id: string | null; reviewer: string | null;
       evidence_count: number; created_at: string;
