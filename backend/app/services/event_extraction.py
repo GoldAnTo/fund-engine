@@ -203,7 +203,7 @@ def _factors(value: object) -> tuple[str, ...]:
 
 _MATERIAL_MARKER_RE = re.compile(
     r"(?:公告|财报|研报|报告显示|披露|数据显示|宣布|通知|会议纪要|"
-    r"announcement|research report|earnings report|reported|report shows|"
+    r"announcement|filing|research report|earnings report|reported|report shows|"
     r"disclosed|data shows)",
     re.IGNORECASE,
 )
@@ -216,18 +216,25 @@ _TOPIC_PROMPT_RE = re.compile(
     r"analy[sz]e\b|please\s+(?:research|analy[sz]e)\b)",
     re.IGNORECASE,
 )
+_TOPIC_INTENT_RE = re.compile(
+    r"(?:研究|分析|影响|如何|意味着什么|research|analy[sz]e|impact|affect|"
+    r"how\b|what\s+does\b[^?？.。]{0,40}\bmean\b)",
+    re.IGNORECASE,
+)
 _MATERIAL_DOCUMENT_ASSERTION_RE = re.compile(
-    r"(?:公告|财报|研报|报告|announcement|research report|earnings report)"
-    r"[^。.!?？\n]{0,16}(?:显示|指出|称|披露|：|:|shows|states|says|disclosed)",
+    r"(?:(?:公告|财报|研报|报告)\s*(?:显示|指出|称|披露|报道|：|:)|"
+    r"根据\s*(?:公司)?\s*(?:公告|财报|研报|报告)|"
+    r"(?:announcement|filing|research report|earnings report)\s*"
+    r"(?:reports?|states?|shows?|discloses?|says?|:)|"
+    r"according\s+to\s+(?:the\s+)?"
+    r"(?:announcement|filing|research report|earnings report))",
     re.IGNORECASE,
 )
 
 
 def _has_strong_material_signal(raw_input: str) -> bool:
     facts = _MATERIAL_FACT_RE.findall(raw_input)
-    if _MATERIAL_DOCUMENT_ASSERTION_RE.search(raw_input):
-        return True
-    if facts and _MATERIAL_MARKER_RE.search(raw_input):
+    if facts and _MATERIAL_DOCUMENT_ASSERTION_RE.search(raw_input):
         return True
     nonempty_lines = [line for line in raw_input.splitlines() if line.strip()]
     return len(nonempty_lines) >= 2 and len(facts) >= 2
@@ -245,12 +252,11 @@ def _input_kind(value: object, raw_input: str) -> str:
     if _has_strong_material_signal(normalized):
         return "material"
     if (
-        len(normalized) <= 100
-        and (_TOPIC_PROMPT_RE.search(normalized) or normalized.endswith(("?", "？")))
+        _TOPIC_PROMPT_RE.search(normalized)
+        or _TOPIC_INTENT_RE.search(normalized)
+        or normalized.endswith(("?", "？"))
     ):
         return "topic"
     if _MATERIAL_MARKER_RE.search(normalized) or _MATERIAL_FACT_RE.search(normalized):
-        return "material"
-    if len(normalized) >= 160 and len(re.findall(r"[。.!；;\n]", normalized)) >= 2:
         return "material"
     return "topic"

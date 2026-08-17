@@ -95,6 +95,8 @@ def test_extraction_does_not_turn_a_topic_prompt_into_material_on_model_label() 
         "请分析公告：公司披露收入增长20%",
         "公司公告显示收入增长20%，意味着什么？",
         "Please analyze this announcement: Example Corp disclosed revenue increased 20%.",
+        "The filing reports revenue increased 20%. What does it mean?",
+        "According to the research report, orders increased 15% and revenue reached 300 USD.",
         "研报指出：公司订单增长15%，收入达到20亿元。",
         "Research report:\nRevenue increased 20%.\nOrders reached 300 USD.",
         "公司一季度收入增长20%。\n订单同比增加15%。\n毛利率达到30%。",
@@ -126,6 +128,17 @@ def test_extraction_prioritizes_strong_material_facts_over_prompt_shape(
         "AI服务器电力需求会如何变化？",
         "研究公告行业",
         "Please research the announcement industry",
+        "研究公司公告中收入增长20%对股价的影响",
+        "2026年8月公司公告会如何影响股价？",
+        "Research the impact of 20% revenue growth in the company announcement",
+        "How will the 2026/08 company announcement affect the share price?",
+        (
+            "围绕AI服务器电力需求建立研究框架。先讨论需求增长，再分析供给约束；"
+            "同时比较不同地区的电网建设节奏。还需要研究设备效率、能源成本和替代方案，"
+            "并评估这些变量对行业竞争格局的长期影响。最后整理可验证的问题和候选因素，"
+            "供后续自动检索公开资料使用。研究范围还包括需求弹性、供给周期、竞争壁垒、"
+            "政策环境和技术路线；这些都只是待验证的问题，不是用户提供的事实材料。"
+        ),
     ],
 )
 def test_extraction_keeps_short_research_prompts_as_topic(raw_input: str) -> None:
