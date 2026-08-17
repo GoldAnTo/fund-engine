@@ -19,7 +19,6 @@ from app.models.event_research import (
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchScopeEvidenceAssignment,
-    EventResearchScopeVersion,
 )
 from app.models.ledger import (
     AIAssessment,
@@ -42,6 +41,7 @@ from app.schemas.v1.automatic_research import (
     AutomaticResearchViewDTO,
 )
 from app.services.automatic_source_bindings import validate_automatic_source_bindings
+from app.services.automatic_research_scope import validate_automatic_research_scope
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -130,10 +130,16 @@ class AutomaticResearchQueries:
         frozen_scope = scope_event.payload_json if scope_event is not None else {}
         if frozen_scope.get("workflow_mode") != "automatic":
             raise NotFoundError("automatic research case not found")
+        try:
+            validated_scope = validate_automatic_research_scope(
+                self._session, run, frozen_scope
+            )
+        except ValueError:
+            validated_scope = None
 
         jobs: list[AcquisitionJob] = []
         job_ids: frozenset[uuid.UUID] = frozenset()
-        if run.round >= 1:
+        if run.round >= 1 and validated_scope is not None:
             try:
                 bindings = validate_automatic_source_bindings(
                     self._session,
@@ -167,10 +173,21 @@ class AutomaticResearchQueries:
         )
         overall = self._overall_status(run, lifecycle)
         stages = self._stages(overall, run, jobs, run_events, acquisition_events)
-        links = self._validated_links(case_id, frozen_scope, job_ids)
+        links = self._validated_links(
+            case_id,
+            validated_scope.current_scope_id if validated_scope else None,
+            frozen_scope,
+            job_ids,
+        )
         exceptions = self._exceptions(job_ids)
         result = (
-            self._result(case_id, run, frozen_scope, links)
+            self._result(
+                case_id,
+                run,
+                validated_scope.current_scope_id if validated_scope else None,
+                frozen_scope,
+                links,
+            )
             if overall == "completed"
             else None
         )
@@ -208,7 +225,7 @@ class AutomaticResearchQueries:
                 source_count=sum(max(0, job.reference_count) for job in jobs),
                 admitted_evidence_count=len(links),
                 skipped_count=sum(max(0, job.exception_count) for job in jobs),
-                duration_seconds=duration,
+                duration_seconds=int(duration),
             ),
             recent_activity=activity,
             exceptions=exceptions,
@@ -244,6 +261,10 @@ class AutomaticResearchQueries:
             current = 0
         elif overall == "completed":
             current = 5
+        elif overall == "failed":
+            current = self._failure_stage(
+                run, jobs, run_events, acquisition_events
+            )
         elif jobs and any(
             job.status not in {"succeeded", "partial", "failed", "cancelled"}
             for job in jobs
@@ -297,25 +318,66 @@ class AutomaticResearchQueries:
             )
         return projected
 
+    @staticmethod
+    def _failure_stage(
+        run: ResearchRun,
+        jobs: list[AcquisitionJob],
+        run_events: list[ResearchRunEvent],
+        acquisition_events: list[AcquisitionJobEvent],
+    ) -> int:
+        # Generic terminal "failed" events do not identify the genuine stage;
+        # prefer a concrete analyze/conclude/retrieve event when one exists.
+        concrete_run_stages = [
+            _RESEARCH_STAGE[event.stage]
+            for event in run_events
+            if event.status == "failed"
+            and event.stage in _RESEARCH_STAGE
+            and event.stage != "failed"
+        ]
+        if concrete_run_stages:
+            return concrete_run_stages[-1]
+
+        acquisition_failure_stages = [
+            _ACQUISITION_STAGE[event.stage]
+            for event in acquisition_events
+            if event.status in {"failed", "cancelled"}
+            and event.stage in _ACQUISITION_STAGE
+        ]
+        if acquisition_failure_stages:
+            return acquisition_failure_stages[-1]
+
+        reason = run.stop_reason or ""
+        if reason == "no_usable_evidence":
+            return 2
+        if "assessment" in reason or "analy" in reason:
+            return 3
+        if "conclusion" in reason or "result" in reason:
+            return 4
+        if not jobs:
+            return 0
+        failed_job_stages = [
+            _ACQUISITION_STAGE.get(job.stage, 2)
+            for job in jobs
+            if job.status in {"failed", "cancelled"}
+        ]
+        if failed_job_stages:
+            return failed_job_stages[-1]
+        # All sources were terminal before an unclassified worker failure, so
+        # the next genuine stage was analysis rather than conclusion.
+        return 3
+
     def _validated_links(
         self,
         case_id: uuid.UUID,
+        current_scope_id: uuid.UUID | None,
         frozen_scope: dict,
         job_ids: frozenset[uuid.UUID],
     ) -> list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]]:
-        if not job_ids:
+        if not job_ids or current_scope_id is None:
             return []
         try:
             thesis_ids = {uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]}
         except (KeyError, TypeError, ValueError):
-            return []
-        scope = self._session.scalar(
-            select(EventResearchScopeVersion)
-            .where(EventResearchScopeVersion.research_case_id == case_id)
-            .order_by(EventResearchScopeVersion.version.desc(), EventResearchScopeVersion.id.desc())
-            .limit(1)
-        )
-        if scope is None:
             return []
         rows = list(
             self._session.execute(
@@ -347,7 +409,8 @@ class AutomaticResearchQueries:
                     EvidenceLink.thesis_id.in_(thesis_ids),
                     Thesis.research_case_id == case_id,
                     EvidenceLink.review_state == "automatically_admitted",
-                    EventResearchScopeEvidenceAssignment.scope_version_id == scope.id,
+                    EventResearchScopeEvidenceAssignment.scope_version_id
+                    == current_scope_id,
                     EventResearchScopeEvidenceAssignment.disposition == "mapped",
                     EventResearchScopeEvidenceAssignment.factor_statement == Thesis.statement,
                 )
@@ -360,35 +423,34 @@ class AutomaticResearchQueries:
         self,
         case_id: uuid.UUID,
         run: ResearchRun,
+        current_scope_id: uuid.UUID | None,
         frozen_scope: dict,
         links: list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]],
     ) -> AutomaticResearchResultDTO | None:
+        if current_scope_id is None:
+            return None
         link_ids = {link.id for link, _, _, _ in links}
-        conclusions = list(
-            self._session.scalars(
-                select(EventResearchConclusion)
-                .where(
-                    EventResearchConclusion.research_case_id == case_id,
-                    EventResearchConclusion.state == "system_generated",
-                )
-                .order_by(
-                    EventResearchConclusion.created_at.desc(),
-                    EventResearchConclusion.id.desc(),
-                )
-            )
+        conclusion = self._session.get(
+            EventResearchConclusion,
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fund-engine:event-research:automatic:{run.id}",
+            ),
         )
-        conclusion = None
-        for item in conclusions:
-            try:
-                conclusion_link_ids = {
-                    uuid.UUID(str(value)) for value in item.evidence_link_ids
-                }
-            except (TypeError, ValueError, AttributeError):
-                continue
-            if conclusion_link_ids == link_ids:
-                conclusion = item
-                break
-        if conclusion is None:
+        if (
+            conclusion is None
+            or conclusion.research_case_id != case_id
+            or conclusion.scope_version_id != current_scope_id
+            or conclusion.state != "system_generated"
+        ):
+            return None
+        try:
+            conclusion_link_ids = {
+                uuid.UUID(str(value)) for value in conclusion.evidence_link_ids
+            }
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if conclusion_link_ids != link_ids:
             return None
         findings: list[str] = []
         limitations: list[str] = []
@@ -437,6 +499,8 @@ class AutomaticResearchQueries:
             if (
                 assessment is None
                 or snapshot is None
+                or assessment.displayed_as_provisional is not True
+                or assessment.creator_type != "ai"
                 or snapshot.thesis_id != task.thesis_id
                 or any(link_theses.get(link_id) != task.thesis_id for link_id in snapshot_link_ids)
             ):
@@ -459,7 +523,12 @@ class AutomaticResearchQueries:
                 continue
             source_keys.add(key)
             sources.append(
-                AutomaticResearchSourceDTO(title=title, url=url, role=link.role)
+                AutomaticResearchSourceDTO(
+                    title=title,
+                    url=url,
+                    role=link.role,
+                    review_state="automatically_admitted",
+                )
             )
         counter_evidence = [
             statement.normalized_text
@@ -469,6 +538,8 @@ class AutomaticResearchQueries:
             and contract.allow_display
         ]
         return AutomaticResearchResultDTO(
+            label="系统生成，未经人工审核",
+            human_reviewed=False,
             conclusion=conclusion.text,
             key_findings=_dedupe(findings),
             counter_evidence=_dedupe(counter_evidence),

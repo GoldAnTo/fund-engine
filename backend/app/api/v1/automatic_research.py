@@ -23,6 +23,7 @@ from app.schemas.v1.automatic_research import (
 )
 from app.services.auto_research import AutoResearchService
 from app.services.automatic_research_intake import AutomaticResearchIntakeService
+from app.services.automatic_research_scope import validate_automatic_research_scope
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -141,43 +142,73 @@ def retry_automatic_research(
     )
     payload = scope_event.payload_json if scope_event is not None else None
     try:
-        if not isinstance(payload, dict) or payload.get("workflow_mode") != "automatic":
-            raise ValueError
-        factor_ids = [uuid.UUID(str(value)) for value in payload["factor_ids"]]
-        if not factor_ids or [str(value) for value in factor_ids] != list(
-            old_run.scope_thesis_ids or []
-        ):
-            raise ValueError
-        automatic_protocol = payload["automatic_protocol"]
-        automatic_evidence_plan = payload["automatic_evidence_plan"]
-        if not isinstance(automatic_protocol, dict) or not isinstance(
-            automatic_evidence_plan, dict
-        ):
-            raise ValueError
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        validated_scope = validate_automatic_research_scope(db, old_run, payload)
+    except (TypeError, ValueError, AttributeError) as exc:
         raise ConflictError("automatic research frozen scope is unavailable") from exc
 
     try:
+        frozen = validated_scope.payload
+        retry_context = {
+            "workflow_mode": "automatic",
+            "automatic_protocol": frozen["automatic_protocol"],
+            "automatic_evidence_plan": frozen["automatic_evidence_plan"],
+            "retried_from_run_id": str(old_run.id),
+        }
+        if "source_scope" in frozen:
+            retry_context["source_scope"] = frozen["source_scope"]
         new_run = AutoResearchService(db).start(
             case_id,
             max_rounds=old_run.max_rounds,
             budget=old_run.budget,
             commit=False,
-            thesis_ids=factor_ids,
+            thesis_ids=list(validated_scope.factor_ids),
             monitor_version_id=old_run.monitor_version_id,
             trigger="retry",
             allowed_source_types=(
-                list(payload.get("allowed_source_types") or [])
+                list(frozen["allowed_source_types"])
                 if old_run.monitor_version_id is not None
                 else None
             ),
-            scope_context={
-                "workflow_mode": "automatic",
-                "automatic_protocol": automatic_protocol,
-                "automatic_evidence_plan": automatic_evidence_plan,
-                "retried_from_run_id": str(old_run.id),
-            },
+            scope_context=retry_context,
         )
+        new_scope_event = db.scalar(
+            select(ResearchRunEvent)
+            .where(
+                ResearchRunEvent.run_id == new_run.id,
+                ResearchRunEvent.stage == "scope",
+            )
+            .order_by(ResearchRunEvent.seq.desc())
+            .limit(1)
+        )
+        new_payload = (
+            new_scope_event.payload_json if new_scope_event is not None else None
+        )
+        new_validated = validate_automatic_research_scope(
+            db, new_run, new_payload
+        )
+        clone_keys = (
+            "factor_ids",
+            "factor_statements",
+            "automatic_protocol",
+            "automatic_evidence_plan",
+            "allowed_source_types",
+            "monitor_version_id",
+            "frequency",
+            "next_verification_event",
+            "configured_by",
+            "configuration_change_reason",
+        )
+        if (
+            new_run.scope_thesis_ids != old_run.scope_thesis_ids
+            or new_run.max_rounds != old_run.max_rounds
+            or new_run.budget != old_run.budget
+            or any(new_payload.get(key) != frozen.get(key) for key in clone_keys)
+            or new_payload.get("trigger") != "retry"
+            or new_payload.get("retried_from_run_id") != str(old_run.id)
+            or new_validated.factor_ids != validated_scope.factor_ids
+            or new_payload.get("source_scope") != frozen.get("source_scope")
+        ):
+            raise ConflictError("automatic research retry scope differs from failed run")
         lifecycle.status = "researching"
         lifecycle.active_run_id = new_run.id
         lifecycle.current_round = 1
@@ -186,6 +217,14 @@ def retry_automatic_research(
         lifecycle.next_human_action = None
         lifecycle.updated_at = new_run.updated_at
         db.commit()
+    except ConflictError:
+        db.rollback()
+        raise
+    except (TypeError, ValueError, AttributeError) as exc:
+        db.rollback()
+        raise ConflictError(
+            "automatic research retry scope differs from failed run"
+        ) from exc
     except Exception:
         db.rollback()
         raise

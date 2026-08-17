@@ -111,6 +111,16 @@ class AutoResearchService:
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
+        if thesis_ids is not None:
+            if len(thesis_ids) != len(set(thesis_ids)):
+                raise ValueError("run thesis scope contains duplicate theses")
+            theses_by_id = {thesis.id: thesis for thesis in theses}
+            if set(theses_by_id) != set(thesis_ids):
+                raise ValueError("run thesis scope contains an unknown Case thesis")
+            # Explicit scopes are immutable ordered snapshots.  SQL IN does
+            # not preserve caller order, so restore it before writing both the
+            # run identity and scope event.
+            theses = [theses_by_id[thesis_id] for thesis_id in thesis_ids]
         # A protocol-required thesis may not create a run merely because a
         # caller reached the run endpoint. The same immutable protocol gate
         # used by assessment generation is enforced at orchestration time.
