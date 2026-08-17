@@ -189,6 +189,7 @@ def retry_automatic_research(
         clone_keys = (
             "factor_ids",
             "factor_statements",
+            "budget",
             "automatic_protocol",
             "automatic_evidence_plan",
             "allowed_source_types",

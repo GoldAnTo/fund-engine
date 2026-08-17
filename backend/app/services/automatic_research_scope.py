@@ -76,6 +76,9 @@ def validate_automatic_research_scope(
     ):
         raise ValueError("automatic research protocol is invalid")
 
+    if type(payload.get("budget")) is not int or payload["budget"] != run.budget:
+        raise ValueError("automatic research top-level budget is invalid")
+
     plan = payload.get("automatic_evidence_plan")
     if (
         not isinstance(plan, dict)

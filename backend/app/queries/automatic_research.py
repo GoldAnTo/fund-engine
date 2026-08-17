@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
@@ -94,6 +95,12 @@ def _dedupe(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
 
 
+@dataclass(frozen=True, slots=True)
+class _ResultProjection:
+    result: AutomaticResearchResultDTO | None
+    failure_stage: int | None = None
+
+
 class AutomaticResearchQueries:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -180,7 +187,7 @@ class AutomaticResearchQueries:
             job_ids,
         )
         exceptions = self._exceptions(job_ids)
-        result = (
+        projection = (
             self._result(
                 case_id,
                 run,
@@ -189,14 +196,23 @@ class AutomaticResearchQueries:
                 links,
             )
             if overall == "completed"
-            else None
+            else _ResultProjection(result=None)
         )
-        if overall == "completed" and result is None:
+        if overall == "completed" and validated_scope is None:
+            projection = _ResultProjection(result=None, failure_stage=4)
+        if overall == "completed" and projection.result is None:
             # A terminal run is not a completed product until its exact
             # system-generated conclusion can be projected from validated
             # run-local evidence.
             overall = "failed"
-            stages = self._stages(overall, run, jobs, run_events, acquisition_events)
+            stages = self._stages(
+                overall,
+                run,
+                jobs,
+                run_events,
+                acquisition_events,
+                projection_failure_stage=projection.failure_stage,
+            )
         terminal_times = [
             value
             for value in (
@@ -232,7 +248,7 @@ class AutomaticResearchQueries:
             failure_reason=(
                 "自动研究未能完成，请稍后重试" if overall == "failed" else None
             ),
-            result=result,
+            result=projection.result,
         )
 
     @staticmethod
@@ -256,6 +272,7 @@ class AutomaticResearchQueries:
         jobs: list[AcquisitionJob],
         run_events: list[ResearchRunEvent],
         acquisition_events: list[AcquisitionJobEvent],
+        projection_failure_stage: int | None = None,
     ) -> list[AutomaticResearchStageDTO]:
         if overall == "queued":
             current = 0
@@ -263,7 +280,11 @@ class AutomaticResearchQueries:
             current = 5
         elif overall == "failed":
             current = self._failure_stage(
-                run, jobs, run_events, acquisition_events
+                run,
+                jobs,
+                run_events,
+                acquisition_events,
+                projection_failure_stage=projection_failure_stage,
             )
         elif jobs and any(
             job.status not in {"succeeded", "partial", "failed", "cancelled"}
@@ -324,7 +345,36 @@ class AutomaticResearchQueries:
         jobs: list[AcquisitionJob],
         run_events: list[ResearchRunEvent],
         acquisition_events: list[AcquisitionJobEvent],
+        projection_failure_stage: int | None = None,
     ) -> int:
+        if projection_failure_stage is not None:
+            return projection_failure_stage
+
+        if run.status == "cancelled":
+            active_jobs = [
+                job
+                for job in jobs
+                if job.status
+                not in {"succeeded", "partial", "failed", "cancelled"}
+            ]
+            if active_jobs:
+                active_ids = {job.id for job in active_jobs}
+                for event in reversed(acquisition_events):
+                    if (
+                        event.job_id in active_ids
+                        and event.status
+                        not in {"succeeded", "partial", "failed", "cancelled"}
+                        and event.stage in _ACQUISITION_STAGE
+                    ):
+                        return _ACQUISITION_STAGE[event.stage]
+                latest = max(
+                    active_jobs,
+                    key=lambda job: (job.updated_at, str(job.id)),
+                )
+                return _ACQUISITION_STAGE.get(latest.stage, 0)
+            if not jobs:
+                return 0
+
         # Generic terminal "failed" events do not identify the genuine stage;
         # prefer a concrete analyze/conclude/retrieve event when one exists.
         concrete_run_stages = [
@@ -426,9 +476,9 @@ class AutomaticResearchQueries:
         current_scope_id: uuid.UUID | None,
         frozen_scope: dict,
         links: list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]],
-    ) -> AutomaticResearchResultDTO | None:
+    ) -> _ResultProjection:
         if current_scope_id is None:
-            return None
+            return _ResultProjection(result=None, failure_stage=4)
         link_ids = {link.id for link, _, _, _ in links}
         conclusion = self._session.get(
             EventResearchConclusion,
@@ -442,22 +492,24 @@ class AutomaticResearchQueries:
             or conclusion.research_case_id != case_id
             or conclusion.scope_version_id != current_scope_id
             or conclusion.state != "system_generated"
+            or conclusion.based_on_conclusion_id is not None
+            or conclusion.reviewer is not None
         ):
-            return None
+            return _ResultProjection(result=None, failure_stage=4)
         try:
             conclusion_link_ids = {
                 uuid.UUID(str(value)) for value in conclusion.evidence_link_ids
             }
         except (TypeError, ValueError, AttributeError):
-            return None
+            return _ResultProjection(result=None, failure_stage=4)
         if conclusion_link_ids != link_ids:
-            return None
+            return _ResultProjection(result=None, failure_stage=4)
         findings: list[str] = []
         limitations: list[str] = []
         try:
             thesis_ids = {uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]}
         except (KeyError, TypeError, ValueError, AttributeError):
-            return None
+            return _ResultProjection(result=None, failure_stage=3)
         tasks = list(self._session.scalars(
             select(ResearchTask)
             .where(
@@ -471,7 +523,7 @@ class AutomaticResearchQueries:
             .order_by(ResearchTask.created_at, ResearchTask.id)
         ))
         if len(tasks) != len(thesis_ids) or {task.thesis_id for task in tasks} != thesis_ids:
-            return None
+            return _ResultProjection(result=None, failure_stage=3)
         seen_assessments: set[uuid.UUID] = set()
         assessment_link_ids: list[uuid.UUID] = []
         link_theses = {link.id: link.thesis_id for link, _, _, _ in links}
@@ -481,7 +533,7 @@ class AutomaticResearchQueries:
             except (KeyError, TypeError, ValueError, AttributeError):
                 continue
             if assessment_id in seen_assessments:
-                return None
+                return _ResultProjection(result=None, failure_stage=3)
             seen_assessments.add(assessment_id)
             assessment = self._session.get(AIAssessment, assessment_id)
             snapshot = (
@@ -495,7 +547,7 @@ class AutomaticResearchQueries:
                     for value in (snapshot.evidence_link_ids if snapshot else [])
                 ]
             except (TypeError, ValueError, AttributeError):
-                return None
+                return _ResultProjection(result=None, failure_stage=3)
             if (
                 assessment is None
                 or snapshot is None
@@ -504,7 +556,7 @@ class AutomaticResearchQueries:
                 or snapshot.thesis_id != task.thesis_id
                 or any(link_theses.get(link_id) != task.thesis_id for link_id in snapshot_link_ids)
             ):
-                return None
+                return _ResultProjection(result=None, failure_stage=3)
             assessment_link_ids.extend(snapshot_link_ids)
             findings.append(assessment.rationale)
             limitations.extend(str(value) for value in assessment.gaps or [])
@@ -512,7 +564,7 @@ class AutomaticResearchQueries:
             len(assessment_link_ids) != len(set(assessment_link_ids))
             or set(assessment_link_ids) != link_ids
         ):
-            return None
+            return _ResultProjection(result=None, failure_stage=3)
         sources: list[AutomaticResearchSourceDTO] = []
         source_keys: set[tuple[str | None, str | None, str]] = set()
         for link, _, document, contract in links:
@@ -537,14 +589,16 @@ class AutomaticResearchQueries:
             and contract is not None
             and contract.allow_display
         ]
-        return AutomaticResearchResultDTO(
-            label="系统生成，未经人工审核",
-            human_reviewed=False,
-            conclusion=conclusion.text,
-            key_findings=_dedupe(findings),
-            counter_evidence=_dedupe(counter_evidence),
-            limitations=_dedupe(limitations),
-            sources=sources,
+        return _ResultProjection(
+            result=AutomaticResearchResultDTO(
+                label="系统生成，未经人工审核",
+                human_reviewed=False,
+                conclusion=conclusion.text,
+                key_findings=_dedupe(findings),
+                counter_evidence=_dedupe(counter_evidence),
+                limitations=_dedupe(limitations),
+                sources=sources,
+            )
         )
 
     def _exceptions(self, job_ids: frozenset[uuid.UUID]) -> list[AutomaticResearchExceptionDTO]:

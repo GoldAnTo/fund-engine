@@ -9,7 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.models.acquisition import AcquisitionException, AcquisitionJob
+from app.models.acquisition import (
+    AcquisitionException,
+    AcquisitionJob,
+    AcquisitionJobEvent,
+)
 from app.models.event_research import (
     EventResearchConclusion,
     EventResearchScopeEvidenceAssignment,
@@ -429,6 +433,7 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     for key in (
         "factor_ids",
         "factor_statements",
+        "budget",
         "automatic_protocol",
         "automatic_evidence_plan",
         "allowed_source_types",
@@ -460,11 +465,12 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
         lambda payload: payload["automatic_evidence_plan"].update(
             {"budget": payload["automatic_evidence_plan"]["budget"] + 1}
         ),
+        lambda payload: payload.update({"budget": payload["budget"] + 1}),
         lambda payload: payload["automatic_evidence_plan"]["items"][0].update(
             {"objectives": ["support"]}
         ),
     ],
-    ids=["protocol", "factor-order", "budget", "plan"],
+    ids=["protocol", "factor-order", "plan-budget", "top-level-budget", "plan"],
 )
 def test_retry_rejects_malformed_frozen_scope(
     cmd_client, cmd_session, monkeypatch, mutate
@@ -703,6 +709,7 @@ def test_completed_view_fails_closed_when_current_scope_order_drifted(
     ).json()
     assert body["status"] == "failed"
     assert body["result"] is None
+    assert _stage_statuses(body)["conclude"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -757,3 +764,213 @@ def test_completed_view_fails_closed_on_assessment_provenance_drift(
     ).json()
     assert body["status"] == "failed"
     assert body["result"] is None
+    stages = _stage_statuses(body)
+    assert stages["analyze"] == "failed"
+    assert stages["conclude"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "conclusion_kind",
+    ["missing", "wrong-state", "reviewer-drift"],
+)
+def test_completed_projection_conclusion_failure_stops_at_conclude(
+    cmd_client, cmd_session, monkeypatch, conclusion_kind: str
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == uuid.UUID(
+                created["case_id"]
+            )
+        )
+    )
+    assert run is not None and lifecycle is not None and scope is not None
+    if conclusion_kind != "missing":
+        cmd_session.add(
+            EventResearchConclusion(
+                id=uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"fund-engine:event-research:automatic:{run.id}",
+                ),
+                research_case_id=run.research_case_id,
+                scope_version_id=scope.id,
+                state=(
+                    "draft"
+                    if conclusion_kind == "wrong-state"
+                    else "system_generated"
+                ),
+                text="forged deterministic conclusion",
+                primary_factor=None,
+                evidence_link_ids=[],
+                based_on_conclusion_id=None,
+                reviewer=(
+                    "unexpected-reviewer"
+                    if conclusion_kind == "reviewer-drift"
+                    else None
+                ),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    run.status = "succeeded"
+    run.stage = "complete"
+    run.stop_reason = "automatic_completed"
+    lifecycle.status = "completed"
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    stages = _stage_statuses(body)
+    assert body["status"] == "failed"
+    assert stages["conclude"] == "failed"
+    assert stages["analyze"] == "completed"
+
+
+def test_completed_projection_wrong_assessment_stops_at_analyze(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask)
+            .where(
+                ResearchTask.run_id == run.id,
+                ResearchTask.task_type == "result",
+                ResearchTask.status == "done",
+            )
+            .order_by(ResearchTask.id)
+        )
+    )
+    assert len(tasks) >= 2
+    assert isinstance(tasks[0].result, dict) and isinstance(tasks[1].result, dict)
+    tasks[0].result = {
+        **tasks[0].result,
+        "assessment_id": tasks[1].result["assessment_id"],
+    }
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    stages = _stage_statuses(body)
+    assert body["status"] == "failed"
+    assert stages["analyze"] == "failed"
+    assert stages["conclude"] == "pending"
+
+
+@pytest.mark.parametrize(
+    ("job_stage", "expected_stage"),
+    [("fetching", "acquire"), ("freezing", "parse"), ("admitting", "admit")],
+)
+def test_cancelled_run_uses_latest_active_acquisition_stage(
+    cmd_client,
+    cmd_session,
+    monkeypatch,
+    job_stage: str,
+    expected_stage: str,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert run is not None and lifecycle is not None
+    assert AutomaticResearchPipeline(cmd_session).advance(run) == "waiting_for_sources"
+    jobs = list(
+        cmd_session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == run.id)
+            .order_by(AcquisitionJob.id)
+        )
+    )
+    active, unrelated = jobs[:2]
+    now = datetime.now(timezone.utc)
+    active.status = "running"
+    active.stage = job_stage
+    active.updated_at = now
+    active_events = list(
+        cmd_session.scalars(
+            select(AcquisitionJobEvent).where(
+                AcquisitionJobEvent.job_id == active.id
+            )
+        )
+    )
+    cmd_session.add(
+        AcquisitionJobEvent(
+            job_id=active.id,
+            seq=max((event.seq for event in active_events), default=-1) + 1,
+            status="running",
+            stage=job_stage,
+            message="active acquisition stage",
+            payload_json={},
+            created_at=now,
+        )
+    )
+    unrelated.status = "failed"
+    unrelated.stage = "failed"
+    unrelated.updated_at = now + timedelta(seconds=1)
+    unrelated_events = list(
+        cmd_session.scalars(
+            select(AcquisitionJobEvent).where(
+                AcquisitionJobEvent.job_id == unrelated.id
+            )
+        )
+    )
+    cmd_session.add(
+        AcquisitionJobEvent(
+            job_id=unrelated.id,
+            seq=max((event.seq for event in unrelated_events), default=-1) + 1,
+            status="failed",
+            stage="failed",
+            message="unrelated failed source",
+            payload_json={},
+            created_at=now + timedelta(seconds=1),
+        )
+    )
+    run.status = "cancelled"
+    run.stage = "stopped"
+    run.stop_reason = "cancelled"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    stages = _stage_statuses(body)
+    assert body["status"] == "failed"
+    assert stages[expected_stage] == "failed"
+    ordered = ["acquire", "parse", "admit", "analyze", "conclude"]
+    later = ordered[ordered.index(expected_stage) + 1 :]
+    assert all(stages[key] == "pending" for key in later)
+
+
+def test_cancelled_run_without_jobs_stops_at_acquire(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert run is not None and lifecycle is not None
+    run.status = "cancelled"
+    run.stage = "stopped"
+    run.stop_reason = "cancelled"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    stages = _stage_statuses(body)
+    assert stages["acquire"] == "failed"
+    assert all(
+        stages[key] == "pending"
+        for key in ("parse", "admit", "analyze", "conclude")
+    )
