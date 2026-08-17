@@ -974,3 +974,64 @@ def test_cancelled_run_without_jobs_stops_at_acquire(
         stages[key] == "pending"
         for key in ("parse", "admit", "analyze", "conclude")
     )
+
+
+@pytest.mark.parametrize("has_failed_source", [False, True])
+def test_cancelled_run_after_terminal_acquisition_stops_at_analyze(
+    cmd_client, cmd_session, monkeypatch, has_failed_source: bool
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert run is not None and lifecycle is not None
+    assert AutomaticResearchPipeline(cmd_session).advance(run) == "waiting_for_sources"
+    jobs = list(
+        cmd_session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == run.id)
+            .order_by(AcquisitionJob.id)
+        )
+    )
+    assert jobs
+    for job in jobs:
+        job.status = "succeeded"
+        job.stage = "succeeded"
+    if has_failed_source:
+        failed_job = jobs[0]
+        failed_job.status = "failed"
+        failed_job.stage = "failed"
+        prior_events = list(
+            cmd_session.scalars(
+                select(AcquisitionJobEvent).where(
+                    AcquisitionJobEvent.job_id == failed_job.id
+                )
+            )
+        )
+        cmd_session.add(
+            AcquisitionJobEvent(
+                job_id=failed_job.id,
+                seq=max((event.seq for event in prior_events), default=-1) + 1,
+                status="failed",
+                stage="failed",
+                message="unrelated terminal source failure",
+                payload_json={},
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    run.status = "cancelled"
+    run.stage = "stopped"
+    run.stop_reason = "cancelled"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    stages = _stage_statuses(body)
+    assert body["status"] == "failed"
+    assert stages["analyze"] == "failed"
+    assert stages["conclude"] == "pending"

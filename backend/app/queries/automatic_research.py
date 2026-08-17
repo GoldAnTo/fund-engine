@@ -374,6 +374,13 @@ class AutomaticResearchQueries:
                 return _ACQUISITION_STAGE.get(latest.stage, 0)
             if not jobs:
                 return 0
+            for event in reversed(run_events):
+                if (
+                    event.status == "cancelled"
+                    and event.stage in {"analyze", "assessing", "conclude"}
+                ):
+                    return _RESEARCH_STAGE[event.stage]
+            return 3
 
         # Generic terminal "failed" events do not identify the genuine stage;
         # prefer a concrete analyze/conclude/retrieve event when one exists.
