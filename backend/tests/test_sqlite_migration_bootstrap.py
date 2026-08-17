@@ -71,6 +71,126 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         assert trigger_count == 1
 
 
+def test_0059_migrates_automatic_research_state_and_downgrades_safely(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "automatic-research-0059.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded_to_0058 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0058"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0058.returncode == 0, upgraded_to_0058.stderr
+
+    now = "2026-08-17 00:00:00"
+    case_id = "10000000000000000000000000000001"
+    brief_id = "20000000000000000000000000000001"
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO research_cases "
+                    "(id, title, industry_topic, created_at, created_by) "
+                    "VALUES (:id, 'legacy event', 'event_research', :now, 'tester')"
+                ),
+                {"id": case_id, "now": now},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO event_research_briefs ("
+                    "id, research_case_id, raw_input, source_url, source_type, "
+                    "source_metadata, event_title, company_name, ticker, event_at, "
+                    "market_reaction, research_question, extraction_state, created_at"
+                    ") VALUES ("
+                    ":id, :case_id, 'legacy raw input', NULL, 'pasted_snapshot', "
+                    "NULL, 'legacy event', NULL, NULL, NULL, NULL, "
+                    "'what changed?', 'human_confirmed', :now)"
+                ),
+                {"id": brief_id, "case_id": case_id, "now": now},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO event_research_lifecycles ("
+                    "research_case_id, status, active_run_id, current_round, "
+                    "status_summary, current_gap, next_human_action, updated_at"
+                    ") VALUES ("
+                    ":case_id, 'draft_ready', NULL, 0, 'legacy draft', NULL, NULL, :now)"
+                ),
+                {"case_id": case_id, "now": now},
+            )
+
+        upgraded_to_0059 = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0059"],
+            cwd=backend,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert upgraded_to_0059.returncode == 0, upgraded_to_0059.stderr
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT workflow_mode FROM event_research_briefs WHERE id = :id"
+                ),
+                {"id": brief_id},
+            ).scalar_one() == "reviewed"
+
+        with engine.begin() as connection:
+            with pytest.raises(sa.exc.IntegrityError):
+                connection.execute(
+                    sa.text(
+                        "UPDATE event_research_briefs SET workflow_mode = 'invalid' "
+                        "WHERE id = :id"
+                    ),
+                    {"id": brief_id},
+                )
+
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "UPDATE event_research_lifecycles SET status = 'completed' "
+                    "WHERE research_case_id = :case_id"
+                ),
+                {"case_id": case_id},
+            )
+
+        downgraded_to_0058 = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0058"],
+            cwd=backend,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert downgraded_to_0058.returncode == 0, downgraded_to_0058.stderr
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT status FROM event_research_lifecycles "
+                    "WHERE research_case_id = :case_id"
+                ),
+                {"case_id": case_id},
+            ).scalar_one() == "draft_ready"
+            assert "workflow_mode" not in {
+                column["name"]
+                for column in sa.inspect(connection).get_columns(
+                    "event_research_briefs"
+                )
+            }
+    finally:
+        engine.dispose()
+
+
 def test_0058_freezes_or_recovers_existing_authorized_preparations(tmp_path) -> None:
     database_path = tmp_path / "authorized-preparations.db"
     backend = Path(__file__).parents[1]

@@ -85,6 +85,70 @@ def test_start_run_not_found(session):
         AutoResearchService(session).start(uuid.uuid4())
 
 
+def test_waiting_for_sources_run_is_active_for_exact_thesis_scope(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="waiting for sources",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="Primary evidence is still being acquired",
+        created_by="u",
+        created_at=now,
+    )
+    session.add(thesis)
+    session.flush()
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_sources",
+        stage="acquire",
+        scope_thesis_ids=[str(thesis.id)],
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+
+    active = AutoResearchRepository(session).active_run_for_exact_thesis_scope(
+        research_case_id=case.id,
+        thesis_id=thesis.id,
+    )
+
+    assert active is run
+
+
+def test_waiting_for_sources_run_can_be_cancelled(session):
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="cancel source wait",
+        industry_topic="i",
+        created_by="u",
+        created_at=now,
+    )
+    session.add(case)
+    session.flush()
+    run = ResearchRun(
+        research_case_id=case.id,
+        status="waiting_for_sources",
+        stage="acquire",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(run)
+    session.flush()
+
+    cancelled = AutoResearchRepository(session).cancel_run(run)
+
+    assert cancelled is True
+    assert run.status == "cancelled"
+    assert run.stage == "stopped"
+
+
 def test_pending_documents_are_isolated_to_the_research_case(session):
     """A run must never extract a document merely because another case owns it."""
     now = datetime.now(timezone.utc)
