@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Thread
@@ -245,6 +246,95 @@ def test_worker_job_error_does_not_persist_unhandled_exception_details(
         assert job is not None and job.status == "failed"
         assert job.error == "AI operation failed"
         assert "sentinel-secret" not in job.error
+
+
+def test_automatic_worker_parks_polls_without_spin_and_resumes_when_sources_finish(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.models.acquisition import AcquisitionJob
+    from app.models.ledger import Base
+    from app.models.operational import Job, ResearchRun
+    from app.schemas.v1.event_research import CreateEventResearchRequest
+    from app.scripts import run_research_worker
+    from app.services.auto_research import AutoResearchService
+    from app.services.event_research import EventResearchService
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'automatic-worker.db'}", future=True)
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine, future=True)
+    with session_local() as setup:
+        created = EventResearchService(setup).create(
+            CreateEventResearchRequest(
+                raw_input="公司订单与产能出现重要变化。",
+                source_type="pasted_snapshot",
+                source_metadata={
+                    "authority_level": "user_supplied",
+                    "permissions": {"ai_processing": True, "display": True},
+                },
+                event_title="自动研究工作器测试",
+                research_question="订单变化是否持续？",
+                candidate_factors=["需求", "供给", "替代解释"],
+                research_protocol_required=False,
+                created_by="tenant:worker-team",
+            ),
+            tenant_id="worker-team",
+            workflow_mode="automatic",
+        )
+        assert created.run_id is not None
+        run_id = uuid.UUID(created.run_id)
+
+    _patch_worker_dependencies(monkeypatch, run_research_worker, session_local)
+
+    assert run_research_worker.run_once()
+    with Session(engine) as check:
+        run = check.get(ResearchRun, run_id)
+        research_job = check.scalar(
+            select(Job).where(Job.target_type == "research_run", Job.target_id == run_id)
+        )
+        source_jobs = list(
+            check.scalars(
+                select(AcquisitionJob).where(AcquisitionJob.research_run_id == run_id)
+            )
+        )
+        assert run is not None and run.status == "waiting_for_sources"
+        assert run.stage == "retrieve"
+        assert research_job is not None and research_job.status == "waiting_for_sources"
+        assert research_job.attempt == 1
+        assert len(source_jobs) == 9
+
+    assert run_research_worker.run_once() is False
+    with Session(engine) as check:
+        research_job = check.scalar(
+            select(Job).where(Job.target_type == "research_run", Job.target_id == run_id)
+        )
+        assert research_job is not None
+        assert research_job.status == "waiting_for_sources"
+        assert research_job.attempt == 1
+        for source_job in check.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run_id)
+        ):
+            source_job.status = "succeeded"
+        check.commit()
+
+    resumed_stages: list[str] = []
+
+    def finish_resumed_automatic_run(self, run):
+        resumed_stages.append(run.stage)
+        run.status = "succeeded"
+        run.stage = "stopped"
+        run.stop_reason = "test_resume_complete"
+
+    monkeypatch.setattr(AutoResearchService, "execute", finish_resumed_automatic_run)
+    assert run_research_worker.run_once()
+    assert resumed_stages == ["analyze"]
+    with Session(engine) as check:
+        run = check.get(ResearchRun, run_id)
+        research_job = check.scalar(
+            select(Job).where(Job.target_type == "research_run", Job.target_id == run_id)
+        )
+        assert run is not None and run.status == "succeeded"
+        assert research_job is not None and research_job.status == "succeeded"
+        assert research_job.attempt == 2
 
 
 def test_worker_stops_on_first_proposal_failure_and_commits_terminal_state_atomically(

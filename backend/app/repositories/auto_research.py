@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
-from app.models.ledger import ResearchCase
+from app.domain.automatic_research import AUTOMATIC_SOURCE_JOB_TERMINAL
+from app.models.acquisition import AcquisitionJob
+from app.models.ledger import CaseTenantAdmission, ResearchCase
 from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent, TaskItem
 from app.services.case_monitor import ResearchRunEventRepository
 
@@ -125,6 +127,101 @@ class AutoResearchRepository:
             job.error = "worker lease expired; requeued"
             self._append_job_event(job, status="queued", step="recovered", message=job.error)
         return len(jobs)
+
+    def wait_for_sources(self, run: ResearchRun, job: Job) -> None:
+        """Park a claimed automatic run until its governed source jobs finish."""
+        now = _utcnow()
+        run.status = "waiting_for_sources"
+        run.stage = "retrieve"
+        run.updated_at = now
+        job.status = "waiting_for_sources"
+        job.step = "retrieve"
+        job.finished_at = None
+        self._append_job_event(
+            job,
+            status="waiting_for_sources",
+            step="retrieve",
+            message="waiting for governed acquisition jobs",
+        )
+
+    def requeue_source_ready_runs(self) -> int:
+        """Requeue parked runs once every tenant-bound acquisition is terminal."""
+        waiting_jobs = list(
+            self._session.execute(
+                select(Job.id, Job.target_id, Job.research_case_id)
+                .where(Job.kind == "research_run")
+                .where(Job.target_type == "research_run")
+                .where(Job.status == "waiting_for_sources")
+                .order_by(Job.created_at, Job.id)
+            )
+        )
+        requeued = 0
+        for job_id, run_id, case_id in waiting_jobs:
+            if run_id is None or case_id is None:
+                continue
+            # Keep the same Case -> Run -> Job lock order as terminal writes
+            # so a source-ready poll cannot deadlock a cancelling worker.
+            self._session.scalar(
+                select(ResearchCase)
+                .where(ResearchCase.id == case_id)
+                .with_for_update()
+            )
+            run = self._session.scalar(
+                select(ResearchRun)
+                .where(ResearchRun.id == run_id)
+                .where(ResearchRun.research_case_id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if run is None or run.status != "waiting_for_sources":
+                continue
+            job = self._session.scalar(
+                select(Job)
+                .where(Job.id == job_id)
+                .where(Job.target_id == run.id)
+                .where(Job.research_case_id == run.research_case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if job is None or job.status != "waiting_for_sources":
+                continue
+            admission = self._session.scalar(
+                select(CaseTenantAdmission).where(
+                    CaseTenantAdmission.research_case_id == run.research_case_id
+                )
+            )
+            if admission is None:
+                continue
+            source_statuses = list(
+                self._session.scalars(
+                    select(AcquisitionJob.status).where(
+                        AcquisitionJob.research_run_id == run.id,
+                        AcquisitionJob.research_case_id == run.research_case_id,
+                        AcquisitionJob.tenant_id == admission.tenant_id,
+                    )
+                )
+            )
+            if not source_statuses or any(
+                status not in AUTOMATIC_SOURCE_JOB_TERMINAL
+                for status in source_statuses
+            ):
+                continue
+            run.status = "queued"
+            run.stage = "analyze"
+            run.updated_at = _utcnow()
+            job.status = "queued"
+            job.step = "analyze"
+            job.error = None
+            job.finished_at = None
+            job.attempt += 1
+            self._append_job_event(
+                job,
+                status="queued",
+                step="analyze",
+                message="sources ready",
+            )
+            requeued += 1
+        return requeued
 
     def get_run(self, run_id: uuid.UUID) -> ResearchRun | None:
         return self._session.get(ResearchRun, run_id)

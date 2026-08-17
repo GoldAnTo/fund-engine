@@ -51,6 +51,7 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
         service.repo.recover_stale_run_jobs(
             before=datetime.now(timezone.utc) - timedelta(minutes=recover_after_minutes)
         )
+        service.repo.requeue_source_ready_runs()
         job = service.repo.claim_next_run_job()
         if job is None:
             session.commit()
@@ -63,12 +64,15 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
             return True
         try:
             service.execute(run)
-            service.repo.record_job_completion(
-                job,
-                status="cancelled" if run.status == "cancelled" else run.status,
-                step=run.stage,
-                run=run,
-            )
+            if run.status == "waiting_for_sources":
+                service.repo.wait_for_sources(run, job)
+            else:
+                service.repo.record_job_completion(
+                    job,
+                    status="cancelled" if run.status == "cancelled" else run.status,
+                    step=run.stage,
+                    run=run,
+                )
             session.commit()
         except Exception:
             service.repo.update_run(run, status="failed", stage="failed", stop_reason="execution_failed")

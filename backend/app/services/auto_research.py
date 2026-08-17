@@ -34,7 +34,7 @@ from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 from app.models.research_expression import KeyFactor
-from app.models.event_research import EventResearchConclusion
+from app.models.event_research import EventResearchBrief, EventResearchConclusion
 from app.models.source_governance import SourceContract
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
@@ -383,7 +383,35 @@ class AutoResearchService:
         )
         return run
 
+    def _is_automatic_workflow(self, run: ResearchRun) -> bool:
+        scope = self.session.scalar(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run.id)
+            .where(ResearchRunEvent.stage == "scope")
+            .order_by(ResearchRunEvent.seq.desc())
+            .limit(1)
+        )
+        brief_mode = self.session.scalar(
+            select(EventResearchBrief.workflow_mode)
+            .where(EventResearchBrief.research_case_id == run.research_case_id)
+            .order_by(EventResearchBrief.created_at.desc(), EventResearchBrief.id.desc())
+            .limit(1)
+        )
+        payload = scope.payload_json if scope is not None else None
+        scope_mode = payload.get("workflow_mode") if isinstance(payload, dict) else None
+        # If either immutable record says automatic, route through the
+        # fail-closed pipeline, which verifies that both records agree.
+        return scope_mode == "automatic" or brief_mode == "automatic"
+
     def execute(self, run):
+        if self._is_automatic_workflow(run) and run.stage != "analyze":
+            # Import locally so the automatic acquisition seam can depend on
+            # repository/model vocabulary without creating a service cycle.
+            from app.services.automatic_research_pipeline import (
+                AutomaticResearchPipeline,
+            )
+
+            return AutomaticResearchPipeline(self.session).dispatch_sources(run)
         self.repo.update_run(run, status="running", stage="extract")
         ResearchRunEventRepository(self.session).append(
             run.id,
