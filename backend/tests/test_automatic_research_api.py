@@ -1490,6 +1490,127 @@ def test_professional_workbench_keeps_running_automatic_case_machine_labeled(
     assert body["conclusion"]["text"] == "自动研究正在处理材料并核验证据缺口。"
 
 
+def test_professional_workbench_binds_automatic_result_to_active_run(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from tests.test_automatic_research_pipeline import (
+        _AssessmentGenerator,
+        _admit_link,
+    )
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    created, old_run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    old_conclusion_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"fund-engine:event-research:automatic:{old_run.id}",
+    )
+    old_conclusion = cmd_session.get(EventResearchConclusion, old_conclusion_id)
+    assert old_conclusion is not None
+    old_text = old_conclusion.text
+
+    # Append one more valid old-run admission after completion. The immutable
+    # conclusion remains history, while its exact-evidence projection now
+    # fails closed and can be retried with the same scope.
+    old_jobs = list(
+        cmd_session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == old_run.id)
+            .order_by(AcquisitionJob.idempotency_key)
+        )
+    )
+    extra_old_link = _admit_link(cmd_session, old_jobs[2])
+    extra_old_thesis = cmd_session.get(Thesis, extra_old_link.thesis_id)
+    assert extra_old_thesis is not None
+    cmd_session.add(
+        EventResearchScopeEvidenceAssignment(
+            scope_version_id=old_conclusion.scope_version_id,
+            evidence_link_id=extra_old_link.id,
+            factor_statement=extra_old_thesis.statement,
+            disposition="mapped",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_session.commit()
+    failed = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+    assert failed["status"] == "failed"
+
+    retried = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+    assert retried.status_code == 201, retried.text
+    new_run = cmd_session.get(ResearchRun, uuid.UUID(retried.json()["run_id"]))
+    assert new_run is not None
+
+    running = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    ).json()
+    assert running["lifecycle"]["active_run_id"] == str(new_run.id)
+    assert running["conclusion"]["state"] == "cannot_conclude"
+    assert running["conclusion"]["text"] == "自动研究正在处理材料并核验证据缺口。"
+    assert running["conclusion"]["citations"] == []
+    assert running["evidence"] == []
+    assert running["progress"]["verified"] == 0
+    assert old_text not in running["conclusion"]["text"]
+
+    history = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/conclusion-history"
+    ).json()
+    assert any(
+        version["id"] == str(old_conclusion_id) and version["text"] == old_text
+        for version in history["versions"]
+    )
+
+    pipeline = AutomaticResearchPipeline(
+        cmd_session,
+        assessment_generator=_AssessmentGenerator(conclusion="contradicted"),
+    )
+    assert pipeline.advance(new_run) == "waiting_for_sources"
+    jobs = list(
+        cmd_session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == new_run.id)
+            .order_by(AcquisitionJob.idempotency_key)
+        )
+    )
+    _admit_link(cmd_session, jobs[0])
+    _admit_link(cmd_session, jobs[1])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index < 2 else "failed"
+        job.stage = job.status
+        job.admitted_count = 1 if index < 2 else 0
+    assert pipeline.advance(new_run) == "completed"
+    cmd_session.commit()
+
+    completed = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    ).json()
+    new_conclusion_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"fund-engine:event-research:automatic:{new_run.id}",
+    )
+    new_conclusion = cmd_session.get(EventResearchConclusion, new_conclusion_id)
+    assert new_conclusion is not None
+    assert completed["conclusion"]["state"] == "system_generated"
+    assert completed["conclusion"]["text"] == new_conclusion.text
+    assert completed["conclusion"]["text"] != old_text
+    assert {
+        citation["document_version_id"]
+        for citation in completed["conclusion"]["citations"]
+    } == {
+        evidence["document_version_id"] for evidence in completed["evidence"]
+    }
+
+    completed_history = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/conclusion-history"
+    ).json()
+    assert {version["id"] for version in completed_history["versions"]} >= {
+        str(old_conclusion_id),
+        str(new_conclusion_id),
+    }
+
+
 def test_completed_view_uses_only_active_run_deterministic_conclusion(
     cmd_client, cmd_session, monkeypatch
 ) -> None:

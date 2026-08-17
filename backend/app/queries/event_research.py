@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
 from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError
 from app.models.event_research import (
@@ -28,7 +29,7 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle
+from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.research_preparation import ResearchPreparation
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
@@ -72,6 +73,12 @@ class _PreparationDeskProjection:
     action: EventNextActionDTO | None = None
     status_summary: str | None = None
     next_human_action: str | None = None
+
+
+@dataclass(frozen=True)
+class _AutomaticWorkbenchProjection:
+    conclusion: EventResearchConclusion | None
+    evidence_link_ids: tuple[uuid.UUID, ...] = ()
 
 
 class EventResearchQueries:
@@ -246,29 +253,44 @@ class EventResearchQueries:
         event = self._list_item(brief, lifecycle, preparation)
         scope = self._latest_scope(case_id)
         automatic = brief.workflow_mode == "automatic"
+        automatic_projection = (
+            self._active_automatic_projection(case_id, lifecycle)
+            if automatic
+            else _AutomaticWorkbenchProjection(conclusion=None)
+        )
+        automatic_evidence_ids = (
+            automatic_projection.evidence_link_ids if automatic else None
+        )
         evidence_states = (
             frozenset({"automatically_admitted"})
             if automatic
             else frozenset({"reviewed"})
         )
         progress = self._progress(
-            case_id, lifecycle, evidence_states=evidence_states
+            case_id,
+            lifecycle,
+            evidence_states=evidence_states,
+            evidence_link_ids=automatic_evidence_ids,
         )
         factors = self._factors(
             case_id,
             scope,
             self._pending_by_factor(case_id, scope),
             evidence_states=evidence_states,
+            evidence_link_ids=automatic_evidence_ids,
         )
         confidence = self._conclusion_confidence(factors)
         evidence = self._formal_evidence(
-            case_id, review_states=evidence_states
+            case_id,
+            list(automatic_evidence_ids) if automatic_evidence_ids is not None else None,
+            review_states=evidence_states,
         )
         conclusion = self._conclusion(
             case_id,
             lifecycle,
             confidence,
             workflow_mode=brief.workflow_mode,
+            automatic_record=automatic_projection.conclusion,
         )
         return EventWorkbenchDTO(
             event=event,
@@ -344,23 +366,17 @@ class EventResearchQueries:
         confidence: str,
         *,
         workflow_mode: str = "reviewed",
+        automatic_record: EventResearchConclusion | None = None,
     ) -> EventConclusionDraftDTO:
         if workflow_mode == "automatic":
-            record = self._session.scalar(
-                select(EventResearchConclusion)
-                .where(EventResearchConclusion.research_case_id == case_id)
-                .where(EventResearchConclusion.state == "system_generated")
-                .order_by(EventResearchConclusion.created_at.desc())
-                .limit(1)
-            )
-            if record is not None:
+            if automatic_record is not None:
                 return EventConclusionDraftDTO(
                     state="system_generated",
-                    text=record.text,
+                    text=automatic_record.text,
                     confidence=confidence,
                     citations=self._formal_evidence(
                         case_id,
-                        record.evidence_link_ids,
+                        automatic_record.evidence_link_ids,
                         review_states=frozenset({"automatically_admitted"}),
                     ),
                 )
@@ -368,10 +384,7 @@ class EventResearchQueries:
                 state="cannot_conclude",
                 text="自动研究正在处理材料并核验证据缺口。",
                 confidence="low",
-                citations=self._formal_evidence(
-                    case_id,
-                    review_states=frozenset({"automatically_admitted"}),
-                ),
+                citations=[],
             )
         if lifecycle.status == "published":
             record = self._session.scalar(
@@ -434,6 +447,83 @@ class EventResearchQueries:
             text="尚不能下结论：系统正在核验各项解释及其反证。",
             confidence="low",
             citations=reviewed,
+        )
+
+    def _active_automatic_projection(
+        self,
+        case_id: uuid.UUID,
+        lifecycle: EventResearchLifecycle,
+    ) -> _AutomaticWorkbenchProjection:
+        if lifecycle.active_run_id is None:
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        run = self._session.get(ResearchRun, lifecycle.active_run_id)
+        if (
+            run is None
+            or run.research_case_id != case_id
+            or run.status != "succeeded"
+            or run.stage != "complete"
+            or lifecycle.status != "completed"
+        ):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        conclusion = self._session.get(
+            EventResearchConclusion,
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fund-engine:event-research:automatic:{run.id}",
+            ),
+        )
+        if (
+            conclusion is None
+            or conclusion.research_case_id != case_id
+            or conclusion.state != "system_generated"
+            or conclusion.based_on_conclusion_id is not None
+            or conclusion.reviewer is not None
+            or not isinstance(conclusion.evidence_link_ids, list)
+        ):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        try:
+            evidence_link_ids = tuple(
+                uuid.UUID(str(value)) for value in conclusion.evidence_link_ids
+            )
+        except (TypeError, ValueError, AttributeError):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        if len(evidence_link_ids) != len(set(evidence_link_ids)):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        run_link_ids = set(
+            self._session.scalars(
+                select(EvidenceLink.id)
+                .join(
+                    AutomaticAdmissionDecision,
+                    AutomaticAdmissionDecision.id
+                    == EvidenceLink.automatic_admission_decision_id,
+                )
+                .join(
+                    AcquisitionJob,
+                    AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
+                )
+                .where(
+                    EvidenceLink.id.in_(evidence_link_ids),
+                    EvidenceLink.review_state == "automatically_admitted",
+                    AutomaticAdmissionDecision.outcome == "admitted",
+                    AcquisitionJob.research_case_id == case_id,
+                    AcquisitionJob.research_run_id == run.id,
+                )
+            )
+        )
+        if run_link_ids != set(evidence_link_ids):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        mapped_ids = set(
+            current_mapped_evidence_ids(
+                self._session,
+                case_id,
+                review_states=frozenset({"automatically_admitted"}),
+            )
+        )
+        if not set(evidence_link_ids).issubset(mapped_ids):
+            return _AutomaticWorkbenchProjection(conclusion=None)
+        return _AutomaticWorkbenchProjection(
+            conclusion=conclusion,
+            evidence_link_ids=evidence_link_ids,
         )
 
     @staticmethod
@@ -531,6 +621,7 @@ class EventResearchQueries:
         pending_by_factor: dict[str, int],
         *,
         evidence_states: frozenset[str] = frozenset({"reviewed"}),
+        evidence_link_ids: tuple[uuid.UUID, ...] | None = None,
     ) -> list[EventResearchFactorDTO]:
         if scope is not None:
             factors = list(
@@ -558,7 +649,7 @@ class EventResearchQueries:
             )
         }
         if scope is not None:
-            rows = self._session.execute(
+            factor_counts = (
                 select(
                     EventResearchScopeEvidenceAssignment.factor_statement,
                     EvidenceLink.role,
@@ -583,6 +674,11 @@ class EventResearchQueries:
                     EvidenceLink.role,
                 )
             )
+            if evidence_link_ids is not None:
+                factor_counts = factor_counts.where(
+                    EvidenceLink.id.in_(evidence_link_ids)
+                )
+            rows = self._session.execute(factor_counts)
             for statement, role, count in rows:
                 if statement is not None:
                     counts_by_factor.setdefault(statement, {})[role] = int(count)
@@ -733,14 +829,17 @@ class EventResearchQueries:
         lifecycle: EventResearchLifecycle,
         *,
         evidence_states: frozenset[str] = frozenset({"reviewed"}),
+        evidence_link_ids: tuple[uuid.UUID, ...] | None = None,
     ) -> EventWorkbenchProgressDTO:
         review_summary = EventReviewQueueService(self._session).summary(case_id)
+        mapped_ids = current_mapped_evidence_ids(
+            self._session, case_id, review_states=evidence_states
+        )
+        if evidence_link_ids is not None:
+            allowed_ids = set(evidence_link_ids)
+            mapped_ids = [link_id for link_id in mapped_ids if link_id in allowed_ids]
         return EventWorkbenchProgressDTO(
-            verified=len(
-                current_mapped_evidence_ids(
-                    self._session, case_id, review_states=evidence_states
-                )
-            ),
+            verified=len(mapped_ids),
             pending=review_summary.pending,
             invalid_source=review_summary.invalid_source,
             current_gap=lifecycle.current_gap,
@@ -757,7 +856,7 @@ class EventResearchQueries:
             self._session, case_id, review_states=review_states
         )
         if evidence_link_ids is not None:
-            snapshot_ids = set(evidence_link_ids)
+            snapshot_ids = {str(value) for value in evidence_link_ids}
             mapped_evidence_ids = [
                 evidence_id
                 for evidence_id in mapped_evidence_ids
