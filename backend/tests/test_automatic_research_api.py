@@ -1441,6 +1441,46 @@ def test_completed_view_returns_machine_result_and_display_safe_sources(
     )
 
 
+def test_professional_workbench_exposes_completed_automatic_result_and_sources(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created, _run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    automatic = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    response = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["event"]["workflow_mode"] == "automatic"
+    assert body["conclusion"]["state"] == "system_generated"
+    assert body["conclusion"]["text"] == automatic["result"]["conclusion"]
+    assert body["conclusion"]["citations"]
+    assert {
+        citation["review_state"] for citation in body["conclusion"]["citations"]
+    } == {"automatically_admitted"}
+    assert {
+        evidence["review_state"] for evidence in body["evidence"]
+    } == {"automatically_admitted"}
+
+
+def test_professional_workbench_keeps_running_automatic_case_machine_labeled(
+    cmd_client, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+
+    body = cmd_client.get(
+        f"/api/v1/event-research/{created['case_id']}/workbench"
+    ).json()
+
+    assert body["event"]["workflow_mode"] == "automatic"
+    assert body["conclusion"]["state"] == "cannot_conclude"
+    assert body["conclusion"]["text"] == "自动研究正在处理材料并核验证据缺口。"
+
+
 def test_completed_view_uses_only_active_run_deterministic_conclusion(
     cmd_client, cmd_session, monkeypatch
 ) -> None:

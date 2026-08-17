@@ -354,6 +354,9 @@ function CaseFrame({
         </div> : <CaseWorkbenchSkeleton />}
       </main>
     );
+  const secondaryPages = data.event.workflowMode === "automatic"
+    ? navigation.section.pages.filter((page) => page.suffix !== "review")
+    : navigation.section.pages;
   return (
     <main className="ros-page ros-case-page">
       <header className="ros-case-header">
@@ -409,8 +412,8 @@ function CaseFrame({
           })}
         </ol>
         <div className="ros-case-header__facts">
-          <span>已审核证据 {data.progress.verified}</span>
-          <span>待审核 {data.progress.pending}</span>
+          <span>{data.event.workflowMode === "automatic" ? "机器自动纳入" : "已审核证据"} {data.progress.verified}</span>
+          <span>{data.event.workflowMode === "automatic" ? "处理异常" : "待审核"} {data.progress.pending}</span>
           <span>无效来源 {data.progress.invalidSource}</span>
           <span>
             {hasPendingResearchPreparation(data)
@@ -465,12 +468,12 @@ function CaseFrame({
             })}
         </div>
       </details>
-      {navigation.section.pages.length > 0 && (
+      {secondaryPages.length > 0 && (
         <nav
           aria-label={`${navigation.section.label}页面`}
           className="ros-case-secondary-tabs"
         >
-          {navigation.section.pages.map((page) => (
+          {secondaryPages.map((page) => (
             <Link
               aria-current={navigation.currentSuffix === page.suffix ? "page" : undefined}
               className={navigation.currentSuffix === page.suffix ? "active" : ""}
@@ -506,7 +509,7 @@ function FactorList({ data }: { data: EventWorkbench }) {
           <div>
             <strong>{factor.statement}</strong>
             <small>
-              已审核支持 {factor.reviewedSupportCount} · 反证{" "}
+              {data.event.workflowMode === "automatic" ? "机器纳入支持" : "已审核支持"} {factor.reviewedSupportCount} · 反证{" "}
               {factor.reviewedContradictionCount} · AI 待审{" "}
               {factor.pendingProposalCount}
             </small>
@@ -584,9 +587,11 @@ export function CaseEvidencePage() {
                     <span
                       className={`ros-pill ${evidence.reviewState === "reviewed" ? "ros-pill--system" : "ros-pill--human"}`}
                     >
-                      {evidence.reviewState === "reviewed"
-                        ? "已审核关系"
-                        : "AI 候选，未经复核"}
+                      {evidence.reviewState === "automatically_admitted"
+                        ? "系统自动纳入，未经人工审核"
+                        : evidence.reviewState === "reviewed"
+                          ? "已审核关系"
+                          : "AI 候选，未经复核"}
                     </span>
                     <h3>{evidence.factorStatement}</h3>
                     {evidence.sourceVisibleInCase ? (
@@ -1787,7 +1792,17 @@ export function CaseConclusionPage() {
   return (
     <CaseFrame>
       {(data, caseId) => {
-        const action = eventActionPresentation(data, caseId);
+        const action = data.event.workflowMode === "automatic"
+          ? {
+              owner: data.conclusion.state === "system_generated" ? "本轮已完成" as const : "现在不用做" as const,
+              title: data.conclusion.state === "system_generated" ? "自动研究结果已生成" : "系统正在自动处理",
+              why: "此 Case 不需要人工审核、发布或逐步确认；可直接查看机器处理过程与审计记录。",
+              steps: ["处理用户材料", "补齐证据缺口", "生成机器结论"],
+              unlock: "系统会保留每条来源、准入结果和未人工审核状态。",
+              to: `/events/${caseId}/automatic-research`,
+              buttonLabel: "查看自动研究过程",
+            }
+          : eventActionPresentation(data, caseId);
         const preparationPending = hasPendingResearchPreparation(data);
         return <>
           {workflowNotice && (
@@ -1800,6 +1815,8 @@ export function CaseConclusionPage() {
                 当前判断 ·{" "}
                 {preparationPending
                   ? "研究准备中，未形成结论"
+                  : data.event.workflowMode === "automatic"
+                  ? "系统生成，未经人工审核"
                   : data.conclusion.state === "published"
                   ? "已人工发布"
                   : data.conclusion.state === "ai_draft"
@@ -1810,6 +1827,8 @@ export function CaseConclusionPage() {
               <p className="ros-conclusion-text">
                 {preparationPending
                   ? "系统只会准备候选、协议和补证计划草案；未经过逐项确认，不会采纳、授权或开始正式补证。"
+                  : data.event.workflowMode === "automatic"
+                  ? "该结论仅基于通过机器准入门槛的证据；没有经过人工复核或发布。"
                   : data.conclusion.state === "published"
                   ? "该版本只基于已审核资料；新运行只会追加待审证据，不会自动重写结论。"
                   : "尚未审核的候选、二手转述和无授权材料都不会自动进入当前判断。"}
@@ -1862,8 +1881,9 @@ export function CaseConclusionPage() {
             <section className="ros-rail-section">
               <p className="ros-eyebrow">结论依据</p>
               <p>
-                {data.conclusion.citations.length}{" "}
-                条可回溯引用；每条都保留原文定位、可用时点与审核状态。
+                {data.event.workflowMode === "automatic"
+                  ? `${data.conclusion.citations.length} 条机器自动纳入引用；每条均未经人工审核，并保留来源与审计状态。`
+                  : `${data.conclusion.citations.length} 条可回溯引用；每条都保留原文定位、可用时点与审核状态。`}
               </p>
             </section>
             <CaseRelationRail caseId={caseId} />
@@ -2234,6 +2254,15 @@ function ReviewContent({
   caseId: string;
   workbench: EventWorkbench;
 }) {
+  if (workbench.event.workflowMode === "automatic") {
+    return (
+      <section className="ros-empty">
+        <strong>自动研究不提供人工审核或发布操作</strong>
+        <p>可返回 Case 详情查看系统结论、机器纳入证据和完整审计状态。</p>
+        <Link to={`/events/${caseId}`}>返回 Case 详情</Link>
+      </section>
+    );
+  }
   if (workbench.nextAction.kind === "review_conclusion") {
     const draftIdentity = JSON.stringify([
       caseId,

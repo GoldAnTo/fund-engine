@@ -33,7 +33,7 @@ from app.models.research_preparation import ResearchPreparation
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
-from app.services.source_admission import classify_source
+from app.services.source_admission import classify_source, source_contract_is_active
 from app.schemas.v1.event_research import (
     CaseRelationCaseDTO,
     CaseRelationCandidateOriginDTO,
@@ -246,10 +246,28 @@ class EventResearchQueries:
         event = self._list_item(brief, lifecycle, preparation)
         scope = self._latest_scope(case_id)
         progress = self._progress(case_id, lifecycle)
-        factors = self._factors(case_id, scope, self._pending_by_factor(case_id, scope))
+        automatic = brief.workflow_mode == "automatic"
+        evidence_states = (
+            frozenset({"automatically_admitted"})
+            if automatic
+            else frozenset({"reviewed"})
+        )
+        factors = self._factors(
+            case_id,
+            scope,
+            self._pending_by_factor(case_id, scope),
+            evidence_states=evidence_states,
+        )
         confidence = self._conclusion_confidence(factors)
-        evidence = self._formal_evidence(case_id)
-        conclusion = self._conclusion(case_id, lifecycle, confidence)
+        evidence = self._formal_evidence(
+            case_id, review_states=evidence_states
+        )
+        conclusion = self._conclusion(
+            case_id,
+            lifecycle,
+            confidence,
+            workflow_mode=brief.workflow_mode,
+        )
         return EventWorkbenchDTO(
             event=event,
             lifecycle=self._lifecycle(lifecycle),
@@ -322,7 +340,37 @@ class EventResearchQueries:
         case_id: uuid.UUID,
         lifecycle: EventResearchLifecycle,
         confidence: str,
+        *,
+        workflow_mode: str = "reviewed",
     ) -> EventConclusionDraftDTO:
+        if workflow_mode == "automatic":
+            record = self._session.scalar(
+                select(EventResearchConclusion)
+                .where(EventResearchConclusion.research_case_id == case_id)
+                .where(EventResearchConclusion.state == "system_generated")
+                .order_by(EventResearchConclusion.created_at.desc())
+                .limit(1)
+            )
+            if record is not None:
+                return EventConclusionDraftDTO(
+                    state="system_generated",
+                    text=record.text,
+                    confidence=confidence,
+                    citations=self._formal_evidence(
+                        case_id,
+                        record.evidence_link_ids,
+                        review_states=frozenset({"automatically_admitted"}),
+                    ),
+                )
+            return EventConclusionDraftDTO(
+                state="cannot_conclude",
+                text="自动研究正在处理材料并核验证据缺口。",
+                confidence="low",
+                citations=self._formal_evidence(
+                    case_id,
+                    review_states=frozenset({"automatically_admitted"}),
+                ),
+            )
         if lifecycle.status == "published":
             record = self._session.scalar(
                 select(EventResearchConclusion)
@@ -479,6 +527,8 @@ class EventResearchQueries:
         case_id: uuid.UUID,
         scope: EventResearchScopeVersion | None,
         pending_by_factor: dict[str, int],
+        *,
+        evidence_states: frozenset[str] = frozenset({"reviewed"}),
     ) -> list[EventResearchFactorDTO]:
         if scope is not None:
             factors = list(
@@ -524,7 +574,7 @@ class EventResearchQueries:
                     EventResearchScopeEvidenceAssignment.factor_statement
                     == Thesis.statement,
                     Thesis.research_case_id == case_id,
-                    EvidenceLink.review_state == "reviewed",
+                    EvidenceLink.review_state.in_(evidence_states),
                 )
                 .group_by(
                     EventResearchScopeEvidenceAssignment.factor_statement,
@@ -687,9 +737,15 @@ class EventResearchQueries:
         )
 
     def _formal_evidence(
-        self, case_id: uuid.UUID, evidence_link_ids: list[str] | None = None
+        self,
+        case_id: uuid.UUID,
+        evidence_link_ids: list[str] | None = None,
+        *,
+        review_states: frozenset[str] = frozenset({"reviewed"}),
     ) -> list[EventKeyEvidenceDTO]:
-        mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
+        mapped_evidence_ids = current_mapped_evidence_ids(
+            self._session, case_id, review_states=review_states
+        )
         if evidence_link_ids is not None:
             snapshot_ids = set(evidence_link_ids)
             mapped_evidence_ids = [
@@ -717,7 +773,7 @@ class EventResearchQueries:
                 SourceContract.document_version_id == DocumentVersion.id,
             )
             .where(EvidenceLink.id.in_(mapped_evidence_ids))
-            .where(EvidenceLink.review_state == "reviewed")
+            .where(EvidenceLink.review_state.in_(review_states))
             .order_by(EvidenceLink.available_at.desc())
         )
         return [
@@ -751,6 +807,7 @@ class EventResearchQueries:
             linked_to_case is not None
             and contract is not None
             and contract.allow_display
+            and source_contract_is_active(contract)
         )
         return EventKeyEvidenceDTO(
             case_id=str(case_id),

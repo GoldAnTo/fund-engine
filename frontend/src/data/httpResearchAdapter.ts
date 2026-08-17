@@ -2902,7 +2902,7 @@ export class HttpResearchAdapter implements ActiveResearchClient {
     const dto = await this.get<{
       event: components["schemas"]["EventResearchListItemDTO"];
       lifecycle: { status: EventLifecycleStatus; active_run_id: string | null; current_round: number; status_summary: string; current_gap: string | null; next_human_action: string | null };
-      conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
+      conclusion: { state: "cannot_conclude" | "ai_draft" | "published" | "system_generated"; text: string; confidence?: "low" | "medium" | "high"; citations: unknown[] };
       factors: Array<{ thesis_id: string; statement: string; description?: string | null; position: number; reviewed_support_count: number; reviewed_contradiction_count: number; pending_proposal_count?: number; current_gap: string | null }>;
       evidence: Array<{
         case_id: string; factor_statement: string; role: string; review_state: string;

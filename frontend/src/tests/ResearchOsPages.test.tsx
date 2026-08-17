@@ -113,6 +113,116 @@ function monitorRunSummary(id: string, status: string, stage: string) {
 }
 
 describe("Research OS event entry", () => {
+  it("shows automatic Case details as machine-generated without review controls", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventWorkbench = adapter.getEventWorkbench.bind(adapter);
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation(async (caseId) => {
+      const workbench = await getEventWorkbench(caseId);
+      return {
+        ...workbench,
+        event: { ...workbench.event, workflowMode: "automatic" },
+        conclusion: {
+          state: "system_generated",
+          text: "系统自动结论",
+          confidence: "medium",
+          citations: [{
+            caseId,
+            factorStatement: "需求",
+            role: "supports",
+            reviewState: "automatically_admitted",
+            sourceTitle: "用户材料",
+            sourceUrl: null,
+            documentVersionId: "document-1",
+            sourceVisibleInCase: true,
+            excerpt: "需求增长",
+            locator: { page: 1 },
+            availableAt: "2026-08-17T01:00:00Z",
+          }],
+        },
+      } as EventWorkbench;
+    });
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/automatic-case"]}>
+        <Routes>
+          <Route path="/events/:caseId" element={<CaseConclusionPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/当前判断 ·\s*系统生成，未经人工审核/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "系统自动结论" })).toBeVisible();
+    expect(screen.getByText("1 条机器自动纳入引用；每条均未经人工审核，并保留来源与审计状态。"))
+      .toBeVisible();
+    expect(screen.queryByRole("link", { name: /审核|复核|发布/ })).not.toBeInTheDocument();
+  });
+
+  it("labels automatic evidence precisely and hides the review workspace", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventWorkbench = adapter.getEventWorkbench.bind(adapter);
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation(async (caseId) => {
+      const workbench = await getEventWorkbench(caseId);
+      return {
+        ...workbench,
+        event: { ...workbench.event, workflowMode: "automatic" },
+        evidence: [{
+          caseId,
+          factorStatement: "需求",
+          role: "supports",
+          reviewState: "automatically_admitted",
+          sourceTitle: "用户材料",
+          sourceUrl: null,
+          documentVersionId: "document-1",
+          sourceVisibleInCase: true,
+          excerpt: "需求增长",
+          locator: { page: 1 },
+          availableAt: "2026-08-17T01:00:00Z",
+        }],
+      } as EventWorkbench;
+    });
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/automatic-case/evidence"]}>
+        <Routes>
+          <Route path="/events/:caseId/evidence" element={<CaseEvidencePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("系统自动纳入，未经人工审核"),
+    ).toBeVisible();
+    expect(screen.queryByRole("link", { name: "证据审核" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a direct automatic review URL read-only", async () => {
+    const adapter = new MockResearchAdapter();
+    const getEventWorkbench = adapter.getEventWorkbench.bind(adapter);
+    vi.spyOn(adapter, "getEventWorkbench").mockImplementation(async (caseId) => {
+      const workbench = await getEventWorkbench(caseId);
+      return {
+        ...workbench,
+        event: { ...workbench.event, workflowMode: "automatic" },
+      } as EventWorkbench;
+    });
+    setResearchClient(adapter);
+
+    render(
+      <MemoryRouter initialEntries={["/events/automatic-case/review"]}>
+        <Routes>
+          <Route path="/events/:caseId/review" element={<CaseReviewPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("自动研究不提供人工审核或发布操作"),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: /审核|发布/ })).not.toBeInTheDocument();
+  });
+
   it("groups Case navigation into research stages", async () => {
     render(
       <MemoryRouter initialEntries={["/events/event-tsm"]}>

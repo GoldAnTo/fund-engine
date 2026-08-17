@@ -188,7 +188,7 @@ export interface EventReviewQueue {
 export interface EventWorkbench {
   event: EventResearchListItem;
   lifecycle: EventLifecycle;
-  conclusion: { state: "cannot_conclude" | "ai_draft" | "published"; text: string; confidence: "low" | "medium" | "high"; citations: EventEvidenceCitation[] };
+  conclusion: { state: "cannot_conclude" | "ai_draft" | "published" | "system_generated"; text: string; confidence: "low" | "medium" | "high"; citations: EventEvidenceCitation[] };
   factors: EventFactor[];
   evidence: EventEvidenceCitation[];
   progress: WorkbenchProgress;
