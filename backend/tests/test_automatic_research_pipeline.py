@@ -197,11 +197,17 @@ def _automatic_run(
     return run
 
 
-def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
+def _admit_link(
+    session,
+    job: AcquisitionJob,
+    *,
+    link_thesis_id: uuid.UUID | None = None,
+) -> EvidenceLink:
     """Persist one coherent automatic-admission lineage for a source job."""
     now = datetime.now(timezone.utc)
-    raw = f"admitted-{job.id}".encode()
+    raw = f"admitted-{job.id}-{uuid.uuid4()}".encode()
     sha = hashlib.sha256(raw).hexdigest()
+    adapter_key = f"test-{uuid.uuid4()}"
     document = DocumentVersion(
         content_sha256=sha,
         source_url=f"https://example.test/{job.id}",
@@ -218,7 +224,7 @@ def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
     )
     attempt = AcquisitionAttempt(
         job_id=job.id,
-        adapter_key="test",
+        adapter_key=adapter_key,
         operation="fetch",
         attempt_no=1,
         started_at=now,
@@ -229,7 +235,7 @@ def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
     )
     reference = SourceReference(
         job_id=job.id,
-        adapter_key="test",
+        adapter_key=adapter_key,
         external_record_id=str(job.id),
         external_version="v1",
         canonical_url=document.source_url,
@@ -299,7 +305,7 @@ def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
     session.add(statement)
     session.flush()
     link = EvidenceLink(
-        thesis_id=job.thesis_id,
+        thesis_id=link_thesis_id or job.thesis_id,
         source_statement_id=statement.id,
         role=job.request_snapshot["target_link_role"],
         reason="automatic admission",
@@ -1175,6 +1181,433 @@ def test_advance_creates_exact_next_round_for_gaps_and_is_idempotent(session) ->
     ) == 8
 
 
+def _advance_to_round_two(session, pipeline, run):
+    assert pipeline.advance(run) == "waiting_for_sources"
+    round_one_jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    round_one_link = _admit_link(session, round_one_jobs[0])
+    for index, job in enumerate(round_one_jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    round_one_jobs[0].admitted_count = 1
+    assert pipeline.advance(run) == "waiting_for_sources"
+    assert run.round == 2
+    return round_one_jobs, round_one_link
+
+
+@pytest.mark.parametrize("mutation", ["binding", "request", "idempotency"])
+def test_advance_round_two_revalidates_prior_round_source_provenance(
+    session, mutation: str
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=2, budget=6)
+    pipeline = AutomaticResearchPipeline(
+        session,
+        assessment_generator=_AssessmentGenerator(
+            conclusion="insufficient_evidence", gaps=["缺少行业对照"]
+        ),
+    )
+    round_one_jobs, _link = _advance_to_round_two(session, pipeline, run)
+    prior_tasks = list(
+        session.scalars(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run.id,
+                ResearchTask.round == 1,
+                ResearchTask.task_type != "result",
+            )
+        )
+    )
+    if mutation == "binding":
+        prior_tasks[0].result = {
+            **(prior_tasks[0].result or {}),
+            "acquisition_job_id": prior_tasks[1].result["acquisition_job_id"],
+        }
+    elif mutation == "request":
+        round_one_jobs[0].request_snapshot = {
+            **round_one_jobs[0].request_snapshot,
+            "target_link_role": "tampered",
+        }
+    else:
+        round_one_jobs[0].idempotency_key = f"tampered:{uuid.uuid4()}"
+
+    with pytest.raises(ValueError, match="source.*binding|source task matrix"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_advance_rejects_extra_unbound_run_job_and_its_mapped_evidence(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_research_scope_evidence import (
+        append_current_scope_evidence_assignment,
+    )
+
+    run = _automatic_run(session, max_rounds=1)
+    generator = _AssessmentGenerator(gaps=[])
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    admitted = _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    extra_key = f"automatic-extra:{uuid.uuid4()}"
+    extra_snapshot = dict(jobs[0].request_snapshot)
+    extra_snapshot["idempotency_key"] = extra_key
+    extra_job = AcquisitionJob(
+        tenant_id=jobs[0].tenant_id,
+        research_case_id=run.research_case_id,
+        thesis_id=jobs[0].thesis_id,
+        research_run_id=run.id,
+        idempotency_key=extra_key,
+        request_snapshot=extra_snapshot,
+        policy_snapshot=dict(jobs[0].policy_snapshot),
+        status="succeeded",
+        stage="succeeded",
+        attempt=1,
+        reference_count=1,
+        fetched_count=1,
+        frozen_count=1,
+        admitted_count=1,
+        exception_count=0,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(extra_job)
+    session.flush()
+    extra_link = _admit_link(session, extra_job)
+    thesis = session.get(Thesis, extra_job.thesis_id)
+    assert thesis is not None
+    append_current_scope_evidence_assignment(
+        session,
+        case_id=run.research_case_id,
+        evidence_link_id=extra_link.id,
+        factor_statement=thesis.statement,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(ValueError, match="source.*binding|unbound"):
+        pipeline.advance(run)
+    assert generator.calls == []
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+    assert admitted.id != extra_link.id
+
+
+def test_automatic_conclusion_independently_rejects_extra_unbound_run_job(
+    session, monkeypatch
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_conclusion import EventConclusionService
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator(gaps=[])
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            EventConclusionService,
+            "create_automatic_result",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("stop before conclusion")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="stop before conclusion"):
+            pipeline.advance(run)
+
+    extra_key = f"automatic-extra:{uuid.uuid4()}"
+    extra_snapshot = dict(jobs[0].request_snapshot)
+    extra_snapshot["idempotency_key"] = extra_key
+    session.add(
+        AcquisitionJob(
+            tenant_id=jobs[0].tenant_id,
+            research_case_id=run.research_case_id,
+            thesis_id=jobs[0].thesis_id,
+            research_run_id=run.id,
+            idempotency_key=extra_key,
+            request_snapshot=extra_snapshot,
+            policy_snapshot=dict(jobs[0].policy_snapshot),
+            status="succeeded",
+            stage="succeeded",
+            attempt=1,
+            reference_count=0,
+            fetched_count=0,
+            frozen_count=0,
+            admitted_count=0,
+            exception_count=0,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
+
+    with pytest.raises(ValidationFailedError, match="source binding"):
+        EventConclusionService(session).create_automatic_result(
+            run.research_case_id, run.id
+        )
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_automatic_conclusion_rejects_cross_thesis_link_from_valid_bound_job(
+    session, monkeypatch
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_conclusion import EventConclusionService
+    from app.services.event_research_scope_evidence import (
+        append_current_scope_evidence_assignment,
+    )
+
+    run = _automatic_run(
+        session, factors=["需求增长", "利润改善"], max_rounds=1, budget=6
+    )
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator(gaps=[])
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    thesis_ids = [uuid.UUID(value) for value in run.scope_thesis_ids or []]
+    admitted_jobs = {
+        thesis_id: next(job for job in jobs if job.thesis_id == thesis_id)
+        for thesis_id in thesis_ids
+    }
+    for job in jobs:
+        job.status, job.stage = "failed", "failed"
+    for job in admitted_jobs.values():
+        _admit_link(session, job)
+        job.status, job.stage, job.admitted_count = "succeeded", "succeeded", 1
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            EventConclusionService,
+            "create_automatic_result",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("stop before conclusion")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="stop before conclusion"):
+            pipeline.advance(run)
+
+    first_job = admitted_jobs[thesis_ids[0]]
+    second_thesis = session.get(Thesis, thesis_ids[1])
+    assert second_thesis is not None
+    cross_link = _admit_link(
+        session,
+        first_job,
+        link_thesis_id=second_thesis.id,
+    )
+    append_current_scope_evidence_assignment(
+        session,
+        case_id=run.research_case_id,
+        evidence_link_id=cross_link.id,
+        factor_statement=second_thesis.statement,
+        created_at=datetime.now(timezone.utc),
+    )
+    second_result = session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "result",
+            ResearchTask.thesis_id == second_thesis.id,
+        )
+    )
+    assert second_result is not None and isinstance(second_result.result, dict)
+    original_assessment = session.get(
+        AIAssessment, uuid.UUID(second_result.result["assessment_id"])
+    )
+    assert original_assessment is not None
+    original_snapshot = session.get(EvidenceSnapshot, original_assessment.snapshot_id)
+    assert original_snapshot is not None
+    tampered_snapshot = EvidenceSnapshot(
+        thesis_id=second_thesis.id,
+        cutoff=datetime.now(timezone.utc),
+        evidence_link_ids=[*original_snapshot.evidence_link_ids, str(cross_link.id)],
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(tampered_snapshot)
+    session.flush()
+    tampered_assessment = AIAssessment(
+        snapshot_id=tampered_snapshot.id,
+        conclusion=original_assessment.conclusion,
+        rationale=original_assessment.rationale,
+        gaps=list(original_assessment.gaps or []),
+        displayed_as_provisional=True,
+        creator_type="ai",
+        model_version="test",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(tampered_assessment)
+    session.flush()
+    second_result.result = {
+        **second_result.result,
+        "assessment_id": str(tampered_assessment.id),
+    }
+
+    with pytest.raises(ValidationFailedError, match="evidence snapshot differs"):
+        EventConclusionService(session).create_automatic_result(
+            run.research_case_id, run.id
+        )
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_automatic_conclusion_limitations_use_validated_source_jobs(
+    session, monkeypatch
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_conclusion import EventConclusionService
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator(gaps=[])
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    jobs[0].status, jobs[0].stage = "partial", "partial"
+    jobs[0].admitted_count = 1
+    jobs[0].exception_count = 2
+    for job in jobs[1:]:
+        job.status, job.stage = "failed", "failed"
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            EventConclusionService,
+            "create_automatic_result",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("stop before conclusion")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="stop before conclusion"):
+            pipeline.advance(run)
+
+    for task in session.scalars(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type != "result",
+        )
+    ):
+        task.result = {
+            **(task.result or {}),
+            "acquisition_status": "succeeded",
+            "admitted_count": 99,
+            "exception_count": 0,
+        }
+
+    conclusion = EventConclusionService(session).create_automatic_result(
+        run.research_case_id, run.id
+    )
+    assert "失败 2" in conclusion.text
+    assert "部分完成 1" in conclusion.text
+    assert "跳过/异常条目 2" in conclusion.text
+
+
+def test_assessment_output_slot_rejects_source_binding_mutation_during_provider(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+
+    def mutate_source_binding(provider_session) -> None:
+        source_tasks = list(
+            provider_session.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.task_type != "result")
+                .order_by(ResearchTask.task_type)
+            )
+        )
+        source_tasks[0].result = {
+            **(source_tasks[0].result or {}),
+            "acquisition_job_id": source_tasks[1].result["acquisition_job_id"],
+        }
+        provider_session.commit()
+
+    generator = _AssessmentGenerator(
+        gaps=[], before_persist_hook=mutate_source_binding
+    )
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    with pytest.raises(ValueError, match="cancelled or stale"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_valid_multi_round_run_uses_all_validly_bound_evidence_idempotently(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=2, budget=6)
+    generator = _AssessmentGenerator(
+        conclusion="insufficient_evidence", gaps=["缺少行业对照"]
+    )
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    _round_one_jobs, round_one_link = _advance_to_round_two(session, pipeline, run)
+    round_two_jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(
+                AcquisitionJob.research_run_id == run.id,
+                AcquisitionJob.request_snapshot["round"].as_integer() == 2,
+            )
+        )
+    )
+    assert len(round_two_jobs) == 3
+    round_two_link = _admit_link(session, round_two_jobs[0])
+    for index, job in enumerate(round_two_jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    round_two_jobs[0].admitted_count = 1
+    generator.gaps = []
+
+    assert pipeline.advance(run) == "completed"
+    conclusion = session.scalar(select(EventResearchConclusion))
+    assert conclusion is not None
+    assert conclusion.evidence_link_ids == [
+        str(round_one_link.id),
+        str(round_two_link.id),
+    ]
+    assert pipeline.advance(run) == "completed"
+    assert session.scalar(
+        select(func.count()).select_from(EventResearchConclusion)
+    ) == 1
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1278,7 +1711,9 @@ def test_advance_revalidates_resumed_source_matrix_and_job_bindings(
     else:
         jobs["support"].idempotency_key = f"tampered:{uuid.uuid4()}"
 
-    with pytest.raises(ValueError, match="source task matrix|acquisition binding"):
+    with pytest.raises(
+        ValueError, match="source task matrix|acquisition binding|unbound job"
+    ):
         pipeline.advance(run)
     assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
     assert all(

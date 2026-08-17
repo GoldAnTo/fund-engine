@@ -25,6 +25,9 @@ from app.services.event_research_scope_evidence import (
     current_mapped_evidence_ids,
     lock_event_research_lifecycle,
 )
+from app.services.automatic_source_bindings import (
+    validate_automatic_source_bindings,
+)
 
 
 def _utcnow() -> datetime:
@@ -191,6 +194,19 @@ class EventConclusionService:
                     "automatic result frozen thesis identity is invalid"
                 )
 
+        self._session.flush()
+        try:
+            source_bindings = validate_automatic_source_bindings(
+                self._session,
+                run,
+                scope_payload,
+                lock=True,
+            )
+        except ValueError as exc:
+            raise ValidationFailedError(
+                "automatic result source binding provenance is invalid"
+            ) from exc
+
         result_tasks = list(
             self._session.scalars(
                 select(ResearchTask)
@@ -274,6 +290,8 @@ class EventConclusionService:
                     Thesis.research_case_id == case_id,
                     AcquisitionJob.research_case_id == case_id,
                     AcquisitionJob.research_run_id == run.id,
+                    AcquisitionJob.id.in_(source_bindings.job_ids),
+                    AcquisitionJob.thesis_id == EvidenceLink.thesis_id,
                     EvidenceLink.review_state == "automatically_admitted",
                 )
                 .order_by(EvidenceLink.created_at, EvidenceLink.id)
@@ -282,6 +300,17 @@ class EventConclusionService:
         valid_evidence_link_ids = [str(link.id) for link, _thesis in evidence_rows]
         if not valid_evidence_link_ids:
             raise ValidationFailedError("automatic result has no admitted evidence")
+        valid_evidence_theses = {
+            str(link.id): link.thesis_id for link, _thesis in evidence_rows
+        }
+        if any(
+            valid_evidence_theses.get(str(link_id)) != snapshot.thesis_id
+            for _assessment, snapshot, _thesis in assessment_rows
+            for link_id in snapshot.evidence_link_ids
+        ):
+            raise ValidationFailedError(
+                "automatic result evidence snapshot differs from assessment evidence"
+            )
         assessment_evidence_ids = [
             str(link_id)
             for _assessment, snapshot, _thesis in assessment_rows
@@ -323,15 +352,13 @@ class EventConclusionService:
         skipped = 0
         exception_count = 0
         partial_without_admitted_count = 0
-        for task in self._session.scalars(
-            select(ResearchTask)
-            .where(ResearchTask.run_id == run.id)
-            .where(ResearchTask.research_case_id == case_id)
-            .where(ResearchTask.task_type != "result")
+        for task in sorted(
+            source_bindings.tasks_by_id.values(),
+            key=lambda value: (value.round, value.created_at, str(value.id)),
         ):
-            result = task.result if isinstance(task.result, dict) else {}
-            status = result.get("acquisition_status")
-            task_exception_count = result.get("exception_count", 0)
+            job = source_bindings.jobs_by_task_id[task.id]
+            status = job.status
+            task_exception_count = job.exception_count
             if (
                 isinstance(task_exception_count, bool)
                 or not isinstance(task_exception_count, int)
@@ -342,7 +369,7 @@ class EventConclusionService:
                 )
             exception_count += task_exception_count
             if status == "partial":
-                admitted_count = result.get("admitted_count")
+                admitted_count = job.admitted_count
                 if (
                     isinstance(admitted_count, bool)
                     or not isinstance(admitted_count, int)
@@ -353,10 +380,7 @@ class EventConclusionService:
                     )
                 if admitted_count == 0:
                     partial_without_admitted_count += 1
-            if status is None:
-                skipped += 1
-            else:
-                acquisition_statuses.append(status)
+            acquisition_statuses.append(status)
         failed_count = acquisition_statuses.count("failed")
         cancelled_count = acquisition_statuses.count("cancelled")
         partial_count = acquisition_statuses.count("partial")

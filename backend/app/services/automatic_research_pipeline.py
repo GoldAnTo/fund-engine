@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.acquisition.policy import B_SCOPE_POLICY
@@ -44,6 +44,9 @@ from app.models.research_monitor import ResearchRunEvent
 from app.repositories.acquisition import AcquisitionRepository
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.acquisition import AcquisitionModule
+from app.services.automatic_source_bindings import (
+    validate_automatic_source_bindings,
+)
 from app.services.case_monitor import ResearchRunEventRepository
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_research_scope_evidence import (
@@ -119,30 +122,16 @@ class AutomaticResearchPipeline:
         tasks = self._round_tasks(run)
         self._validate_result_task_matrix(run, tasks, scope_payload)
         source_tasks = [task for task in tasks if task.task_type != "result"]
-        self._validate_source_task_matrix(run, source_tasks, scope_payload)
-        bindings_missing = all(
-            not isinstance(task.result, dict)
-            or not task.result.get("acquisition_job_id")
-            for task in source_tasks
+        bindings = validate_automatic_source_bindings(
+            self._session,
+            run,
+            scope_payload,
+            allow_unbound_current_round=True,
         )
-        if bindings_missing:
-            current_round_job_exists = any(
-                isinstance(job.request_snapshot, dict)
-                and job.request_snapshot.get("round") == run.round
-                for job in self._session.scalars(
-                    select(AcquisitionJob).where(
-                        AcquisitionJob.research_run_id == run.id,
-                        AcquisitionJob.research_case_id == run.research_case_id,
-                    )
-                )
-            )
-            if current_round_job_exists:
-                raise ValueError(
-                    "automatic source task acquisition binding is missing on resume"
-                )
+        jobs = bindings.jobs_for_round(run.round)
+        if not jobs:
             return self.dispatch_sources(run)
 
-        jobs = self._linked_jobs(run, source_tasks)
         if any(
             job.status not in AUTOMATIC_SOURCE_JOB_TERMINAL
             or job.lease_owner is not None
@@ -156,10 +145,11 @@ class AutomaticResearchPipeline:
             return "waiting_for_sources"
 
         self._reconcile_sources(run, source_tasks, jobs)
-        run.budget_used = self._acquisition_count(run)
+        run.budget_used = len(bindings.job_ids)
         allowed_evidence = self._allowed_evidence_by_thesis(
             run,
             scope_version_id=current_scope_id,
+            job_ids=bindings.job_ids,
         )
         admitted_count = sum(len(link_ids) for link_ids in allowed_evidence.values())
         final_attempt = run.round >= run.max_rounds or run.budget_used >= run.budget
@@ -173,6 +163,7 @@ class AutomaticResearchPipeline:
             frozen_scope=scope_payload,
             scope_version_id=current_scope_id,
             research_job=locked_job,
+            source_binding_fingerprint=bindings.fingerprint,
         )
         gaps = sorted(
             {
@@ -274,6 +265,12 @@ class AutomaticResearchPipeline:
         )
         all_current_tasks = self._round_tasks(run)
         self._validate_result_task_matrix(run, all_current_tasks, scope)
+        source_bindings = validate_automatic_source_bindings(
+            self._session,
+            run,
+            scope,
+            allow_unbound_current_round=True,
+        )
         expected = self._expected_task_matrix(
             run=run,
             scope=scope,
@@ -355,8 +352,10 @@ class AutomaticResearchPipeline:
             for task in current_tasks
             if isinstance(task.result, dict) and task.result.get("acquisition_job_id")
         )
-        existing_count = self._acquisition_count(run)
-        if existing_count + len(current_tasks) - already_bound > run.budget:
+        resulting_count = (
+            len(source_bindings.job_ids) + len(current_tasks) - already_bound
+        )
+        if resulting_count > run.budget:
             raise ValueError("automatic research acquisition budget is exhausted")
 
         module = AcquisitionModule(self._session)
@@ -379,7 +378,7 @@ class AutomaticResearchPipeline:
 
         run.status = "waiting_for_sources"
         run.stage = "retrieve"
-        run.budget_used = self._acquisition_count(run)
+        run.budget_used = resulting_count
         if wrote_task_binding:
             ResearchRunEventRepository(self._session).append(
                 run.id,
@@ -438,37 +437,6 @@ class AutomaticResearchPipeline:
         ):
             raise ValueError("automatic result task matrix contains a non-writable task")
 
-    def _validate_source_task_matrix(
-        self,
-        run: ResearchRun,
-        tasks: list[ResearchTask],
-        scope: dict,
-    ) -> None:
-        expected = self._expected_task_matrix(
-            run=run,
-            scope=scope,
-            plan_by_factor=self._frozen_plan(scope),
-        )
-        actual: list[tuple[uuid.UUID, uuid.UUID, EvidenceObjective]] = []
-        for task in tasks:
-            mapping = _TASK_OBJECTIVES.get(task.task_type)
-            if (
-                task.run_id != run.id
-                or task.research_case_id != run.research_case_id
-                or task.round != run.round
-                or task.thesis_id is None
-                or mapping is None
-            ):
-                raise ValueError(
-                    "automatic source task matrix crosses the frozen run scope"
-                )
-            objective, _target_link_role = mapping
-            actual.append((task.research_case_id, task.thesis_id, objective))
-        if not actual or len(actual) != len(expected) or set(actual) != set(expected):
-            raise ValueError(
-                "automatic source task matrix does not match the frozen evidence plan"
-            )
-
     def _validate_current_scope(self, run: ResearchRun, scope: dict) -> uuid.UUID:
         factor_ids = scope.get("factor_ids")
         factor_statements = scope.get("factor_statements")
@@ -512,56 +480,6 @@ class AutomaticResearchPipeline:
         ):
             raise ValueError("automatic current scope no longer matches the frozen scope")
         return current_scope.id
-
-    def _linked_jobs(
-        self,
-        run: ResearchRun,
-        tasks: list[ResearchTask],
-    ) -> dict[uuid.UUID, AcquisitionJob]:
-        jobs: dict[uuid.UUID, AcquisitionJob] = {}
-        linked_job_ids: set[uuid.UUID] = set()
-        for task in tasks:
-            if not isinstance(task.result, dict):
-                raise ValueError("automatic source task has no acquisition binding")
-            mapping = _TASK_OBJECTIVES.get(task.task_type)
-            if mapping is None or task.thesis_id is None:
-                raise ValueError("automatic source task acquisition binding is invalid")
-            objective, target_link_role = mapping
-            try:
-                job_id = uuid.UUID(str(task.result["acquisition_job_id"]))
-            except (KeyError, TypeError, ValueError, AttributeError) as exc:
-                raise ValueError(
-                    "automatic source task acquisition binding is invalid"
-                ) from exc
-            if job_id in linked_job_ids:
-                raise ValueError("automatic source task acquisition binding is duplicated")
-            linked_job_ids.add(job_id)
-            job = self._session.get(AcquisitionJob, job_id)
-            expected_idempotency_key = (
-                f"automatic:{run.id}:{run.round}:{task.thesis_id}:{objective.value}"
-            )
-            snapshot = job.request_snapshot if job is not None else None
-            if (
-                job is None
-                or job.research_run_id != run.id
-                or job.research_case_id != run.research_case_id
-                or job.thesis_id != task.thesis_id
-                or not isinstance(snapshot, dict)
-                or task.result.get("objective") != objective.value
-                or snapshot.get("research_run_id") != str(run.id)
-                or snapshot.get("case_id") != str(run.research_case_id)
-                or snapshot.get("thesis_id") != str(task.thesis_id)
-                or snapshot.get("round") != run.round
-                or snapshot.get("objective") != objective.value
-                or snapshot.get("target_link_role") != target_link_role
-                or job.idempotency_key != expected_idempotency_key
-                or snapshot.get("idempotency_key") != expected_idempotency_key
-            ):
-                raise ValueError(
-                    "automatic source task acquisition binding does not match its frozen task"
-                )
-            jobs[task.id] = job
-        return jobs
 
     def _reconcile_sources(
         self,
@@ -629,6 +547,7 @@ class AutomaticResearchPipeline:
         frozen_scope: dict,
         scope_version_id: uuid.UUID,
         research_job: Job,
+        source_binding_fingerprint: tuple[tuple[uuid.UUID, uuid.UUID], ...],
     ) -> list[AIAssessment]:
         assessments: list[AIAssessment] = []
         generator = self._generator()
@@ -668,6 +587,7 @@ class AutomaticResearchPipeline:
                         frozen_scope=frozen_scope,
                         scope_version_id=scope_version_id,
                         evidence_link_ids=tuple(allowed_ids),
+                        source_binding_fingerprint=source_binding_fingerprint,
                     ),
                 )
                 if assessment is None:
@@ -728,6 +648,7 @@ class AutomaticResearchPipeline:
         frozen_scope: dict,
         scope_version_id: uuid.UUID,
         evidence_link_ids: tuple[uuid.UUID, ...],
+        source_binding_fingerprint: tuple[tuple[uuid.UUID, uuid.UUID], ...],
     ) -> bool:
         with self._session.no_autoflush:
             case = self._session.scalar(
@@ -792,9 +713,18 @@ class AutomaticResearchPipeline:
                 return False
             if self._validate_current_scope(current_run, frozen_scope) != scope_version_id:
                 return False
+            bindings = validate_automatic_source_bindings(
+                self._session,
+                current_run,
+                frozen_scope,
+                lock=True,
+            )
+            if bindings.fingerprint != source_binding_fingerprint:
+                return False
             current_ids = self._allowed_evidence_by_thesis(
                 current_run,
                 scope_version_id=scope_version_id,
+                job_ids=bindings.job_ids,
             ).get(thesis_id, [])
         except ValueError:
             return False
@@ -805,6 +735,7 @@ class AutomaticResearchPipeline:
         run: ResearchRun,
         *,
         scope_version_id: uuid.UUID,
+        job_ids: frozenset[uuid.UUID],
     ) -> dict[uuid.UUID, list[uuid.UUID]]:
         try:
             thesis_ids = [
@@ -833,6 +764,7 @@ class AutomaticResearchPipeline:
             .where(
                 AcquisitionJob.research_run_id == run.id,
                 AcquisitionJob.research_case_id == run.research_case_id,
+                AcquisitionJob.id.in_(job_ids),
                 AcquisitionJob.thesis_id == EvidenceLink.thesis_id,
                 EventResearchScopeEvidenceAssignment.scope_version_id
                 == scope_version_id,
@@ -926,42 +858,6 @@ class AutomaticResearchPipeline:
         # round before reacquiring it so populate_existing cannot restore the
         # just-completed round and validate the wrong task matrix.
         self._session.flush()
-
-    def _acquisition_count(self, run: ResearchRun) -> int:
-        return int(
-            self._session.scalar(
-                select(func.count())
-                .select_from(AcquisitionJob)
-                .where(
-                    AcquisitionJob.research_run_id == run.id,
-                    AcquisitionJob.research_case_id == run.research_case_id,
-                )
-            )
-            or 0
-        )
-
-    def _admitted_count(self, run: ResearchRun) -> int:
-        return int(
-            self._session.scalar(
-                select(func.count())
-                .select_from(EvidenceLink)
-                .join(
-                    AutomaticAdmissionDecision,
-                    AutomaticAdmissionDecision.id
-                    == EvidenceLink.automatic_admission_decision_id,
-                )
-                .join(
-                    AcquisitionJob,
-                    AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
-                )
-                .where(
-                    AcquisitionJob.research_run_id == run.id,
-                    AcquisitionJob.research_case_id == run.research_case_id,
-                    EvidenceLink.review_state == "automatically_admitted",
-                )
-            )
-            or 0
-        )
 
     def _fail_no_usable_evidence(self, run: ResearchRun) -> str:
         run.status = "failed"
