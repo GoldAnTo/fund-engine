@@ -614,6 +614,11 @@ class AutomaticResearchPipeline:
         assessment: AIAssessment,
         evidence_link_ids: list[uuid.UUID],
     ) -> None:
+        if (
+            assessment.displayed_as_provisional is not True
+            or assessment.creator_type != "ai"
+        ):
+            raise ValueError("automatic assessment provenance is invalid")
         snapshot = self._session.get(EvidenceSnapshot, assessment.snapshot_id)
         expected_ids = [str(link_id) for link_id in evidence_link_ids]
         if (

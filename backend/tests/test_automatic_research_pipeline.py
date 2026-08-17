@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.acquisition.policy import B_SCOPE_POLICY
+from app.errors import ValidationFailedError
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionJob,
@@ -321,10 +322,14 @@ class _AssessmentGenerator:
         conclusion="supported",
         gaps=None,
         before_persist_hook=None,
+        displayed_as_provisional=True,
+        creator_type="ai",
     ):
         self.conclusion = conclusion
         self.gaps = list(gaps or [])
         self.before_persist_hook = before_persist_hook
+        self.displayed_as_provisional = displayed_as_provisional
+        self.creator_type = creator_type
         self.calls = []
 
     def generate(
@@ -362,8 +367,8 @@ class _AssessmentGenerator:
             conclusion=self.conclusion,
             rationale="当前证据的暂定判断",
             gaps=self.gaps,
-            displayed_as_provisional=True,
-            creator_type="ai",
+            displayed_as_provisional=self.displayed_as_provisional,
+            creator_type=self.creator_type,
             model_version="test",
             created_at=cutoff,
         )
@@ -902,6 +907,7 @@ def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     )
     admitted = _admit_link(session, jobs[0])
     jobs[0].status, jobs[0].stage, jobs[0].admitted_count = "partial", "partial", 1
+    jobs[0].exception_count = 2
     jobs[1].status, jobs[1].stage = "failed", "failed"
     jobs[2].status, jobs[2].stage = "cancelled", "cancelled"
 
@@ -920,6 +926,7 @@ def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     assert "失败 1" in conclusion.text
     assert "取消 1" in conclusion.text
     assert "未执行 0" in conclusion.text
+    assert "跳过/异常条目 2" in conclusion.text
     lifecycle = session.get(EventResearchLifecycle, run.research_case_id)
     assert lifecycle is not None
     assert lifecycle.status == "completed"
@@ -1221,6 +1228,90 @@ def test_advance_rejects_reused_assessment_bound_to_the_wrong_scoped_thesis(
     assert admitted.id is not None
 
 
+def test_advance_rejects_generated_assessment_not_marked_provisional(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session,
+        assessment_generator=_AssessmentGenerator(
+            displayed_as_provisional=False,
+        ),
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    with pytest.raises(ValueError, match="provenance"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
+def test_advance_rejects_reused_non_ai_assessment(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator()
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    admitted = _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+    snapshot = EvidenceSnapshot(
+        thesis_id=jobs[0].thesis_id,
+        cutoff=datetime.now(timezone.utc),
+        evidence_link_ids=[str(admitted.id)],
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(snapshot)
+    session.flush()
+    assessment = AIAssessment(
+        snapshot_id=snapshot.id,
+        conclusion="supported",
+        rationale="not automatic AI provenance",
+        gaps=[],
+        displayed_as_provisional=True,
+        creator_type="human",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(assessment)
+    session.flush()
+    result_task = session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "result",
+        )
+    )
+    assert result_task is not None
+    result_task.status, result_task.stage = "done", "completed"
+    result_task.result = {
+        "task_type": "result",
+        "assessment_id": str(assessment.id),
+        "conclusion": assessment.conclusion,
+        "gaps": [],
+    }
+
+    with pytest.raises(ValueError, match="provenance"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+
+
 def test_advance_assessment_excludes_prior_run_and_reviewed_visible_evidence(
     session,
 ) -> None:
@@ -1404,6 +1495,92 @@ def test_automatic_conclusion_id_is_run_derived_and_ignores_overlapping_result(
     assert retried.id == expected_id
     assert retried.id == original.id
     assert retried.id != overlapping.id
+
+
+@pytest.mark.parametrize("drift", ["primary_factor", "reviewer", "based_on"])
+def test_automatic_conclusion_retry_rejects_immutable_identity_drift(
+    session, monkeypatch, drift: str
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_conclusion import EventConclusionService
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator()
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    admitted = _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            EventConclusionService,
+            "create_automatic_result",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("stop before conclusion")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="stop before conclusion"):
+            pipeline.advance(run)
+
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert scope is not None
+    based_on_id = None
+    if drift == "based_on":
+        seed = EventResearchConclusion(
+            research_case_id=run.research_case_id,
+            scope_version_id=scope.id,
+            state="system_generated",
+            text="unrelated seed",
+            primary_factor=None,
+            evidence_link_ids=[],
+            based_on_conclusion_id=None,
+            reviewer=None,
+            created_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        session.add(seed)
+        session.flush()
+        based_on_id = seed.id
+    expected_text = (
+        "需求增长：得到当前证据支持。当前证据的暂定判断\n"
+        "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
+        "采集任务：失败 2，取消 0，未执行 0，跳过/异常条目 0。"
+    )
+    conflict = EventResearchConclusion(
+        id=uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"fund-engine:event-research:automatic:{run.id}",
+        ),
+        research_case_id=run.research_case_id,
+        scope_version_id=scope.id,
+        state="system_generated",
+        text=expected_text,
+        primary_factor="错误主因素" if drift == "primary_factor" else "需求增长",
+        evidence_link_ids=[str(admitted.id)],
+        based_on_conclusion_id=based_on_id,
+        reviewer="human:reviewer" if drift == "reviewer" else None,
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(conflict)
+    session.flush()
+
+    with pytest.raises(ValidationFailedError, match="immutable"):
+        EventConclusionService(session).create_automatic_result(
+            run.research_case_id, run.id
+        )
 
 
 def test_automatic_clean_success_still_reports_evidence_boundary(session) -> None:

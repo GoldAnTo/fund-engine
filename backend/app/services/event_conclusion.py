@@ -321,17 +321,25 @@ class EventConclusionService:
             text_lines.append("证据缺口：" + "；".join(unique_gaps))
         acquisition_statuses = []
         skipped = 0
+        exception_count = 0
         for task in self._session.scalars(
             select(ResearchTask)
             .where(ResearchTask.run_id == run.id)
             .where(ResearchTask.research_case_id == case_id)
             .where(ResearchTask.task_type != "result")
         ):
-            status = (
-                task.result.get("acquisition_status")
-                if isinstance(task.result, dict)
-                else None
-            )
+            result = task.result if isinstance(task.result, dict) else {}
+            status = result.get("acquisition_status")
+            task_exception_count = result.get("exception_count", 0)
+            if (
+                isinstance(task_exception_count, bool)
+                or not isinstance(task_exception_count, int)
+                or task_exception_count < 0
+            ):
+                raise ValidationFailedError(
+                    "automatic source exception count is invalid"
+                )
+            exception_count += task_exception_count
             if status is None:
                 skipped += 1
             else:
@@ -340,7 +348,8 @@ class EventConclusionService:
         cancelled_count = acquisition_statuses.count("cancelled")
         text_lines.append(
             "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
-            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，未执行 {skipped}。"
+            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，未执行 {skipped}，"
+            f"跳过/异常条目 {exception_count}。"
         )
         text = "\n".join(text_lines)
 
@@ -356,6 +365,9 @@ class EventConclusionService:
                 or existing.state != "system_generated"
                 or existing.evidence_link_ids != evidence_link_ids
                 or existing.text != text
+                or existing.primary_factor != primary_factor
+                or existing.based_on_conclusion_id is not None
+                or existing.reviewer is not None
             ):
                 raise ValidationFailedError("automatic result snapshot is immutable")
             result = existing
