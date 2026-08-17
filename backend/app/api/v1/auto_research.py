@@ -4,6 +4,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from app.domain.automatic_research import (
+    AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES,
+    AUTOMATIC_RESEARCH_MANAGED_START_MESSAGE,
+)
+from app.errors import ConflictError
+from app.models.event_research import EventResearchBrief
 from app.models.research_monitor import ResearchRunEvent
 from app.models.ledger import ResearchCase
 from app.models.operational import ResearchRun
@@ -107,9 +113,7 @@ def list_active_runs(
             select(ResearchRun)
             .where(ResearchRun.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)))
             .where(
-                ResearchRun.status.in_(
-                    ("queued", "running", "waiting_for_sources", "waiting_for_review")
-                )
+                ResearchRun.status.in_(AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES)
             )
             .order_by(ResearchRun.updated_at.desc(), ResearchRun.id.desc())
             .limit(limit + 1)
@@ -170,6 +174,13 @@ def start_run(
     tenant_id: str = Depends(require_research_tenant),
 ):
     _require_case(db, case_id, tenant_id)
+    workflow_mode = db.scalar(
+        select(EventResearchBrief.workflow_mode).where(
+            EventResearchBrief.research_case_id == case_id
+        )
+    )
+    if workflow_mode == "automatic":
+        raise ConflictError(AUTOMATIC_RESEARCH_MANAGED_START_MESSAGE)
     try:
         run = AutoResearchService(db).start(case_id, max_rounds=request.max_rounds, budget=request.budget, auto_execute=request.auto_execute)
     except ValueError as exc:

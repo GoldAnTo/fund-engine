@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.automatic_research import (
+    AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES,
+    AUTOMATIC_RESEARCH_UNMANAGED_RUN_MESSAGE,
+)
 from app.errors import ConflictError, NotFoundError
 from app.models.acquisition import (
     AcquisitionException,
@@ -140,6 +144,18 @@ class AutomaticResearchQueries:
         run = self._session.get(ResearchRun, lifecycle.active_run_id)
         if run is None or run.research_case_id != case_id:
             raise NotFoundError("automatic research case not found")
+        unmanaged_active_run_id = self._session.scalar(
+            select(ResearchRun.id)
+            .where(
+                ResearchRun.research_case_id == case_id,
+                ResearchRun.id != run.id,
+                ResearchRun.status.in_(AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES),
+            )
+            .order_by(ResearchRun.created_at, ResearchRun.id)
+            .limit(1)
+        )
+        if unmanaged_active_run_id is not None:
+            raise ConflictError(AUTOMATIC_RESEARCH_UNMANAGED_RUN_MESSAGE)
 
         run_events = list(
             self._session.scalars(

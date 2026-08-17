@@ -603,6 +603,161 @@ def test_get_rejects_reviewed_case_and_other_tenant_without_disclosure(
     assert other.status_code == 404
 
 
+def test_professional_start_rejects_automatic_case_without_creating_work(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    old_run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert old_run is not None and lifecycle is not None
+    old_run.status = "failed"
+    old_run.stage = "failed"
+    old_run.stop_reason = "no_usable_evidence"
+    lifecycle.status = "exhausted"
+    cmd_session.commit()
+    run_ids_before = list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == old_run.research_case_id
+            )
+        )
+    )
+    job_ids_before = list(
+        cmd_session.scalars(
+            select(Job.id).where(Job.research_case_id == old_run.research_case_id)
+        )
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 20},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+    assert (
+        response.json()["error"]["message"]
+        == "自动研究 Case 必须通过自动研究重试接口重新运行"
+    )
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == old_run.research_case_id
+            )
+        )
+    ) == run_ids_before
+    assert list(
+        cmd_session.scalars(
+            select(Job.id).where(Job.research_case_id == old_run.research_case_id)
+        )
+    ) == job_ids_before
+
+
+def test_professional_start_authorizes_before_automatic_workflow_disclosure(
+    cmd_client, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    from app.main import app
+
+    previous = os.environ["RESEARCH_TENANT_TOKENS"]
+    os.environ["RESEARCH_TENANT_TOKENS"] = (
+        '{"test-tenant-token":"test-team","other-token":"other-team"}'
+    )
+    try:
+        response = TestClient(
+            app, headers={"Authorization": "Bearer other-token"}
+        ).post(
+            f"/api/v1/research-cases/{created['case_id']}/runs",
+            json={"max_rounds": 1, "budget": 20},
+        )
+    finally:
+        os.environ["RESEARCH_TENANT_TOKENS"] = previous
+
+    assert response.status_code == 404
+    assert "automatic" not in response.text.lower()
+
+
+def test_professional_start_still_accepts_reviewed_event_case(
+    cmd_client, cmd_session
+) -> None:
+    from tests.test_event_research_api import _confirmed_event
+
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
+    assert created.status_code == 201
+
+    response = cmd_client.post(
+        f"/api/v1/research-cases/{created.json()['case_id']}/runs",
+        json={"max_rounds": 1, "budget": 20},
+    )
+
+    assert response.status_code == 201, response.text
+    run = cmd_session.get(ResearchRun, uuid.UUID(response.json()["id"]))
+    assert run is not None
+    assert run.status == "queued"
+
+
+@pytest.mark.parametrize(
+    "unmanaged_status",
+    ["queued", "running", "waiting_for_sources", "waiting_for_review"],
+)
+def test_unmanaged_active_run_blocks_automatic_get_and_retry(
+    cmd_client, cmd_session, monkeypatch, unmanaged_status
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    old_run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    assert old_run is not None and lifecycle is not None
+    old_run.status = "failed"
+    old_run.stage = "failed"
+    old_run.stop_reason = "no_usable_evidence"
+    lifecycle.status = "exhausted"
+    unmanaged = ResearchRun(
+        research_case_id=old_run.research_case_id,
+        status=unmanaged_status,
+        stage="planning",
+        round=0,
+        max_rounds=old_run.max_rounds,
+        budget=old_run.budget,
+        budget_used=0,
+        scope_thesis_ids=list(old_run.scope_thesis_ids or []),
+        monitor_version_id=old_run.monitor_version_id,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(unmanaged)
+    cmd_session.commit()
+    run_ids_before = list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == old_run.research_case_id
+            )
+        )
+    )
+
+    get_response = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    )
+    retry_response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    for response in (get_response, retry_response):
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "conflict"
+    assert lifecycle.active_run_id == old_run.id
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun.id).where(
+                ResearchRun.research_case_id == old_run.research_case_id
+            )
+        )
+    ) == run_ids_before
+
+
 def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     cmd_client, cmd_session, monkeypatch
 ) -> None:

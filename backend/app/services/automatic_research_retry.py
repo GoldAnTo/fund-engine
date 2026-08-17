@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.automatic_research import AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES
 from app.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.models.acquisition import AcquisitionJob
 from app.models.event_research import EventResearchBrief
@@ -22,14 +23,6 @@ from app.services.automatic_research_scope import (
     validate_automatic_research_scope,
 )
 from app.services.case_tenant_access import CaseTenantAccess
-
-
-_ACTIVE_RUN_STATUSES = (
-    "queued",
-    "running",
-    "waiting_for_sources",
-    "waiting_for_review",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +85,7 @@ class AutomaticResearchRetryService:
                 select(ResearchRun)
                 .where(
                     ResearchRun.research_case_id == case_id,
-                    ResearchRun.status.in_(_ACTIVE_RUN_STATUSES),
+                    ResearchRun.status.in_(AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES),
                 )
                 .order_by(ResearchRun.id)
                 .with_for_update()
