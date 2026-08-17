@@ -29,7 +29,9 @@ for (const automaticInput of automaticInputs) {
     await expect(stats.getByText("资料来源", { exact: true }).locator("..")).toContainText("3");
     await expect(stats.getByText("跳过资料", { exact: true }).locator("..")).toContainText("1");
     const process = page.getByRole("main");
-    await expect(process.getByRole("button", { name: /确认|审核|授权|发布/ })).toHaveCount(0);
-    await expect(process.getByRole("link", { name: /确认|审核|授权|发布/ })).toHaveCount(0);
+    const forbiddenControlName = /配置|编辑范围|暂停|确认|审核|授权|发布/;
+    for (const role of ["button", "textbox", "combobox", "checkbox", "radio", "spinbutton"] as const) {
+      await expect(process.getByRole(role, { name: forbiddenControlName })).toHaveCount(0);
+    }
   });
 }

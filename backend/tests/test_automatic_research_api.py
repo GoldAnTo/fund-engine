@@ -360,6 +360,13 @@ def test_get_queued_view_always_has_five_ordered_stages(
         "analyze",
         "conclude",
     ]
+    assert [stage["label"] for stage in body["stages"]] == [
+        "资料获取",
+        "内容解析",
+        "证据校验",
+        "分析判断",
+        "生成结论",
+    ]
     assert body["result"] is None
 
     listed = cmd_client.get("/api/v1/event-research")

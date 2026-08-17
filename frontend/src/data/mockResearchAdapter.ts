@@ -3182,10 +3182,10 @@ function mockAutomaticResearchView(
     "key" | "label" | "summary"
   >> = [
     { key: "acquire", label: "资料获取", summary: completed ? "已找到 3 份资料" : "正在查找允许使用的资料" },
-    { key: "parse", label: "内容解析", summary: completed ? "已提取原文内容" : "等待资料采集" },
+    { key: "parse", label: "内容解析", summary: completed ? "已提取原文内容" : "等待资料获取" },
     { key: "admit", label: "证据校验", summary: completed ? "已自动纳入 2 条证据" : "等待内容解析" },
-    { key: "analyze", label: "分析判断", summary: completed ? "已比较支持证据与反证" : "等待证据准入" },
-    { key: "conclude", label: "生成结论", summary: completed ? "已生成自动结论" : "等待证据分析" },
+    { key: "analyze", label: "分析判断", summary: completed ? "已比较支持证据与反证" : "等待证据校验" },
+    { key: "conclude", label: "生成结论", summary: completed ? "已生成自动结论" : "等待分析判断" },
   ];
   const baseTime = Date.parse("2026-08-17T01:00:00Z");
   const stages: AutomaticResearchView["stages"] = stageDefinitions.map((stage, index) => {
@@ -3216,8 +3216,8 @@ function mockAutomaticResearchView(
       ? { sourceCount: 3, admittedEvidenceCount: 2, skippedCount: 1, durationSeconds: 65 }
       : { sourceCount: 0, admittedEvidenceCount: 0, skippedCount: 0, durationSeconds: 0 },
     recentActivity: completed
-      ? ["完成来源采集", "生成自动结论"]
-      : failed ? ["证据准入未能完成"] : ["正在采集资料"],
+      ? ["完成资料获取", "生成自动结论"]
+      : failed ? ["证据校验未能完成"] : ["正在获取资料"],
     exceptions: completed
       ? [{ reason: "来源许可不满足", stage: "admit", count: 1 }]
       : failed ? [{ reason: "必要来源暂时不可读取", stage: "admit", count: 1 }] : [],

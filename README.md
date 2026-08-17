@@ -69,19 +69,40 @@ cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node
 
 ### 一键自动研究运行条件
 
-真实环境要让一键研究从排队持续推进到结论，需要由 supervisor 同时管理 API、
-研究 worker 和受治理资料采集 worker：
+真实环境要让一键研究从排队持续推进到结论，需要由 supervisor 把 API、研究
+worker 和受治理资料采集 worker 配成三个独立 program；手工启动时也必须使用
+三个独立终端，不能在同一终端串行执行以下命令。
+
+终端或 program 1（API）：
 
 ```bash
 cd backend
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+终端或 program 2（研究 worker）：
+
+```bash
+cd backend
 .venv/bin/python -m app.scripts.run_research_worker --loop
+```
+
+终端或 program 3（资料采集 worker）：
+
+```bash
+cd backend
 .venv/bin/python -m app.scripts.run_acquisition_worker --loop
 ```
 
 两个 worker 都必须持续受监督运行，并先配置所启用来源需要的凭证，系统才会真正
 自动采集、校验证据并恢复研究任务。`research_preparation` worker 仅供旧版
 `reviewed` Case 使用；一键自动研究不依赖它。
+
+启动后可用 `curl http://127.0.0.1:8000/health` 检查 API，并用已配置的 Bearer
+token 读取 `/api/v1/research-runs/worker-status` 检查研究 worker 心跳；资料采集
+worker 目前没有独立健康端点，应由 supervisor 检查进程存活并观察采集任务日志。
+停止时向两个 worker 发送 `SIGINT`（前台运行可按 Ctrl-C）；资料采集 worker 也会
+处理 `SIGTERM`，完成当前短事务后退出。API 按 Uvicorn 的正常停止信号优雅关闭。
 
 ## 仓库结构
 

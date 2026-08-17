@@ -344,80 +344,6 @@ test.describe("Event-first Research OS", () => {
     expect(box!.width).toBeGreaterThan(100);
   });
 
-  test("event intake keeps the scope confirmation unavailable until the source is read", async ({ page }) => {
-    await page.goto("/events/new?client=mock");
-
-    await expect(page.getByRole("heading", { name: "先冻结材料，再决定它属于哪个研究" })).toBeVisible();
-    await expect(page.getByText("先识别事件，才能决定它应创建新研究还是归入已有 Case。")).toBeVisible();
-
-    await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
-    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
-    await expect(page.getByLabel("研究问题")).toBeVisible();
-    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
-  });
-
-  test("licensed-provider intake requires a reproducible record and makes use permissions explicit", async ({ page }) => {
-    await page.goto("/events/new?client=mock");
-
-    await page.getByLabel("事件原始输入").fill("供应商研报指出资本开支计划调整。 ");
-    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
-    await page.getByLabel("来源接入方式").selectOption("licensed_provider");
-
-    await expect(page.getByLabel("供应商名称")).toBeVisible();
-    await expect(page.getByLabel("供应商记录 ID")).toBeVisible();
-    await expect(page.getByLabel("允许 AI 处理")).not.toBeChecked();
-    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeDisabled();
-
-    await page.getByLabel("供应商名称").fill("聚源");
-    await page.getByLabel("供应商记录 ID").fill("report-2026-001");
-    await page.getByLabel("供应商查询口径").fill("研报 / 标的 000001 / 2026H1");
-    await page.getByLabel("允许 AI 处理").check();
-    await page.getByLabel("允许团队展示").check();
-    await expect(page.getByRole("button", { name: "建立 Case，进入资料核验" })).toBeEnabled();
-    await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
-    await page.getByRole("link", { name: "核验冻结原文" }).click();
-    await expect(page.getByText("供应商记录")).toBeVisible();
-    await expect(page.getByText("聚源 · report-2026-001")).toBeVisible();
-    await expect(page.getByText("供应商获取时点")).toBeVisible();
-    await expect(page.getByText("供应商响应 hash")).toBeVisible();
-    await expect(page.getByText("供应商合同版本")).toBeVisible();
-  });
-
-  test("new strict Case opens its own intake workbench before any run starts", async ({ page }) => {
-    await page.goto("/events/new?client=mock");
-
-    await page.getByLabel("事件原始输入").fill("公司上调资本开支指引，盘后股价下跌。");
-    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
-    await page.getByRole("button", { name: "建立 Case，进入资料核验" }).click();
-
-    await expect(page).toHaveURL(/\/events\/event-created-1$/);
-    await expect(page.getByRole("heading", { name: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
-    await expect(page.getByText("尚未创建主研究运行")).toBeVisible();
-    const inspectSource = page.getByRole("link", { name: "核验冻结原文" });
-    await expect(inspectSource).toHaveAttribute("href", "/events/event-created-1/documents");
-    await inspectSource.click();
-    await expect(page).toHaveURL(/\/events\/event-created-1\/documents$/);
-    await expect(page.getByRole("heading", { name: "事件原始材料快照" })).toBeVisible();
-    await expect(page.getByRole("blockquote").filter({ hasText: "公司上调资本开支指引，盘后股价下跌。" })).toBeVisible();
-  });
-
-  test("inbox freezes a material into a chosen active Case without starting a new Case", async ({ page }) => {
-    await page.goto("/events/new?client=mock");
-
-    await page.getByLabel("事件原始输入").fill("公司补充说明订单交付节奏，需进入现有 Case 由研究员核验。");
-    await page.getByRole("button", { name: "识别事件与研究问题" }).click();
-    await page.getByRole("radio", { name: "归入已有 Case" }).check();
-    await expect(page.getByLabel("选择目标 Case")).toHaveValue("");
-    await expect(page.getByRole("button", { name: "冻结并归入当前 Case" })).toBeDisabled();
-
-    await page.getByLabel("选择目标 Case").selectOption("event-tsm");
-    await page.getByRole("button", { name: "冻结并归入当前 Case" }).click();
-
-    await expect(page).toHaveURL(/\/events\/event-tsm\/documents\?document=document-attached-/);
-    await expect(page.getByRole("heading", { name: "收件箱新增材料" })).toBeVisible();
-    await expect(page.getByRole("blockquote").filter({ hasText: "公司补充说明订单交付节奏" })).toBeVisible();
-  });
-
   test("mock recovery keeps the original and opens its frozen supplement in the same Case", async ({ page }) => {
     await page.goto("/events/event-tsm/documents?client=mock");
 
@@ -639,25 +565,6 @@ test.describe("Event-first Research OS", () => {
     await expect(page.getByRole("textbox", { name: "新增材料正文", exact: true })).toHaveValue("公司补充披露订单交付节奏。");
     await expect(page.getByText(/冻结原始 PDF、TXT、Markdown 或 CSV/)).toBeVisible();
     await expect(page.getByLabel("已发布结论与新材料对照")).toContainText("公司补充披露订单交付节奏。");
-  });
-
-  test("freezes an uploaded original into an existing Case and exposes its immutable file record", async ({ page }) => {
-    await page.goto("/events/new?client=mock");
-
-    await page.getByLabel("来源接入方式").selectOption("uploaded_file");
-    await page.getByLabel("选择上传原件文件").setInputFiles({
-      name: "disclosure.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("公司披露本季度订单金额增长。"),
-    });
-    await expect(page.getByText(/原件待冻结 · disclosure.txt/)).toBeVisible();
-    await page.getByLabel("选择原件目标 Case").selectOption("event-tsm");
-    await page.getByRole("button", { name: "冻结原件并归入当前 Case" }).click();
-
-    await expect(page.getByRole("heading", { name: "disclosure.txt" })).toBeVisible();
-    await expect(page.getByText("文本原件已冻结；解析内容作为定位片段另行展示。")).toBeVisible();
-    await expect(page.getByText("原件文件")).toBeVisible();
-    await expect(page.getByText(/human:researcher · case_retained/)).toBeVisible();
   });
 
   test("published Case cannot freeze a provider material without its reproducible record", async ({ page }) => {

@@ -19,11 +19,11 @@ function completedView(overrides: Partial<AutomaticResearchView> = {}): Automati
     title: "英伟达新产品供应链影响",
     status: "completed",
     stages: [
-      { key: "acquire", label: "采集资料", status: "completed", summary: "找到 3 份资料", startedAt: "2026-08-17T01:00:00Z", completedAt: "2026-08-17T01:00:10Z" },
-      { key: "parse", label: "解析内容", status: "completed", summary: "提取原文", startedAt: "2026-08-17T01:00:10Z", completedAt: "2026-08-17T01:00:20Z" },
-      { key: "admit", label: "证据准入", status: "completed", summary: "自动纳入 2 条", startedAt: "2026-08-17T01:00:20Z", completedAt: "2026-08-17T01:00:30Z" },
-      { key: "analyze", label: "分析证据", status: "completed", summary: "比较支持与反证", startedAt: "2026-08-17T01:00:30Z", completedAt: "2026-08-17T01:00:40Z" },
-      { key: "conclude", label: "形成结论", status: "completed", summary: "结论已生成", startedAt: "2026-08-17T01:00:40Z", completedAt: "2026-08-17T01:01:05Z" },
+      { key: "acquire", label: "资料获取", status: "completed", summary: "找到 3 份资料", startedAt: "2026-08-17T01:00:00Z", completedAt: "2026-08-17T01:00:10Z" },
+      { key: "parse", label: "内容解析", status: "completed", summary: "提取原文", startedAt: "2026-08-17T01:00:10Z", completedAt: "2026-08-17T01:00:20Z" },
+      { key: "admit", label: "证据校验", status: "completed", summary: "自动纳入 2 条", startedAt: "2026-08-17T01:00:20Z", completedAt: "2026-08-17T01:00:30Z" },
+      { key: "analyze", label: "分析判断", status: "completed", summary: "比较支持与反证", startedAt: "2026-08-17T01:00:30Z", completedAt: "2026-08-17T01:00:40Z" },
+      { key: "conclude", label: "生成结论", status: "completed", summary: "结论已生成", startedAt: "2026-08-17T01:00:40Z", completedAt: "2026-08-17T01:01:05Z" },
     ],
     stats: { sourceCount: 3, admittedEvidenceCount: 2, skippedCount: 1, durationSeconds: 65 },
     recentActivity: ["完成来源采集", "生成自动结论"],
@@ -184,7 +184,7 @@ describe("AutomaticResearchPage", () => {
     expect(screen.getByText("系统生成，未经人工审核")).toBeVisible();
     expect(screen.getByText("新增产品可能提高液冷和电源环节需求。")).toBeVisible();
 
-    for (const label of ["采集资料", "解析内容", "证据准入", "分析证据", "形成结论"]) {
+    for (const label of ["资料获取", "内容解析", "证据校验", "分析判断", "生成结论"]) {
       const stage = screen.getByRole("listitem", { name: new RegExp(label) });
       expect(stage).toHaveTextContent("已完成");
       expect(stage).toHaveTextContent(/2026/);
@@ -214,7 +214,7 @@ describe("AutomaticResearchPage", () => {
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/确认研究|授权启动|发布结论|人工流程控制/);
-    const liveStage = screen.getByText(/当前阶段：形成结论/);
+    const liveStage = screen.getByText(/当前阶段：生成结论/);
     expect(liveStage).toHaveAttribute("aria-live", "polite");
     expect(liveStage).toHaveAttribute("aria-atomic", "true");
   });
