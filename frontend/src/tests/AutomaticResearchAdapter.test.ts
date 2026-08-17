@@ -95,6 +95,40 @@ describe("automatic research HTTP adapter", () => {
     });
   });
 
+  it("preserves a failed result with omitted optional stage timestamps", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      case_id: "case-failed",
+      run_id: "run-failed",
+      title: "失败的自动研究",
+      status: "failed",
+      stages: [
+        { key: "acquire", label: "采集", status: "completed", summary: "已采集" },
+        { key: "parse", label: "解析", status: "failed", summary: "解析失败" },
+        { key: "admit", label: "准入", status: "pending", summary: "尚未开始" },
+        { key: "analyze", label: "分析", status: "pending", summary: "尚未开始" },
+        { key: "conclude", label: "结论", status: "pending", summary: "尚未开始" },
+      ],
+      stats: { source_count: 1, admitted_evidence_count: 0, skipped_count: 1, duration_seconds: 3 },
+      recent_activity: ["解析失败"],
+      exceptions: [{ reason: "内容无法解析", stage: "parse", count: 1 }],
+      failure_reason: "自动研究未能完成，请重试。",
+      result: null,
+    })));
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    const view = await adapter.getAutomaticResearch("case-failed");
+
+    expect(view).toMatchObject({
+      status: "failed",
+      failureReason: "自动研究未能完成，请重试。",
+      result: null,
+    });
+    expect(view.stages).toHaveLength(5);
+    expect(view.stages.every((stage) =>
+      stage.startedAt === null && stage.completedAt === null,
+    )).toBe(true);
+  });
+
   it("retries a failed automatic research case through the dedicated endpoint", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse({ case_id: "case-1", run_id: "run-2", status: "queued" }, 201),

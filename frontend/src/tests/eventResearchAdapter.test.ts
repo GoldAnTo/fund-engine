@@ -48,4 +48,34 @@ describe("event research adapters", () => {
       ]),
     );
   });
+
+  it("maps reviewed workflow mode and keeps the reviewed fallback for older responses", async () => {
+    const response = (workflowMode?: "reviewed") => ({
+      items: [{
+        case_id: "event-1",
+        ...(workflowMode ? { workflow_mode: workflowMode } : {}),
+        event_title: "事件研究",
+        company_name: null,
+        ticker: null,
+        event_at: null,
+        lifecycle_status: "researching",
+        status_summary: "研究中",
+        next_human_action: null,
+        next_action_kind: "wait",
+        updated_at: "2026-08-17T00:00:00Z",
+      }],
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(response("reviewed")))
+      .mockResolvedValueOnce(jsonResponse(response()));
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = new HttpResearchAdapter({ baseUrl: "http://api.test/api/v1" });
+
+    await expect(adapter.listEventResearch()).resolves.toMatchObject([
+      { workflowMode: "reviewed" },
+    ]);
+    await expect(adapter.listEventResearch()).resolves.toMatchObject([
+      { workflowMode: "reviewed" },
+    ]);
+  });
 });
