@@ -389,6 +389,23 @@ def _scope_event(session, run: ResearchRun) -> ResearchRunEvent:
     return event
 
 
+def test_pipeline_uses_local_protocol_for_assessment_generator_dependency() -> None:
+    from typing import get_type_hints
+
+    from app.services import automatic_research_pipeline as pipeline_module
+
+    protocol = getattr(pipeline_module, "_AssessmentGeneratorProtocol", None)
+    assert protocol is not None
+    constructor_hints = get_type_hints(
+        pipeline_module.AutomaticResearchPipeline.__init__
+    )
+    generator_hints = get_type_hints(
+        pipeline_module.AutomaticResearchPipeline._generator
+    )
+    assert constructor_hints["assessment_generator"] == protocol | None
+    assert generator_hints["return"] is protocol
+
+
 def test_dispatch_sources_queues_three_frozen_idempotent_jobs(session) -> None:
     from app.services.automatic_research_pipeline import AutomaticResearchPipeline
 
@@ -975,6 +992,41 @@ def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     assert session.scalar(select(func.count()).select_from(AtomicClaimReview)) == 0
 
 
+def test_automatic_conclusion_reports_partial_source_without_admitted_evidence(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator(gaps=[])
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob)
+            .where(AcquisitionJob.research_run_id == run.id)
+            .order_by(AcquisitionJob.idempotency_key)
+        )
+    )
+    _admit_link(session, jobs[0])
+    jobs[0].status, jobs[0].stage, jobs[0].admitted_count = (
+        "succeeded",
+        "succeeded",
+        1,
+    )
+    jobs[1].status, jobs[1].stage = "partial", "partial"
+    jobs[1].admitted_count = 0
+    jobs[1].exception_count = 0
+    jobs[2].status, jobs[2].stage = "succeeded", "succeeded"
+
+    assert pipeline.advance(run) == "completed"
+    conclusion = session.scalar(select(EventResearchConclusion))
+    assert conclusion is not None
+    assert "部分完成 1" in conclusion.text
+    assert "部分完成但无准入证据 1" in conclusion.text
+
+
 def test_advance_fails_final_round_with_no_usable_evidence(session) -> None:
     from app.services.automatic_research_pipeline import AutomaticResearchPipeline
 
@@ -1121,6 +1173,119 @@ def test_advance_creates_exact_next_round_for_gaps_and_is_idempotent(session) ->
         .select_from(ResearchTask)
         .where(ResearchTask.run_id == run.id)
     ) == 8
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "duplicate_source_task",
+        "all_missing_bindings",
+        "duplicate_job_binding",
+        "swapped_job_binding",
+        "task_objective",
+        "task_round",
+        "request_objective",
+        "request_target_role",
+        "request_round",
+        "idempotency_key",
+    ],
+)
+def test_advance_revalidates_resumed_source_matrix_and_job_bindings(
+    session, mutation: str
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator()
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    tasks = {
+        task.task_type: task
+        for task in session.scalars(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run.id,
+                ResearchTask.task_type != "result",
+            )
+        )
+    }
+    jobs = {
+        task_type: session.get(
+            AcquisitionJob,
+            uuid.UUID(str(task.result["acquisition_job_id"])),
+        )
+        for task_type, task in tasks.items()
+        if isinstance(task.result, dict)
+    }
+    assert set(tasks) == {"support", "contradict", "alternative"}
+    assert all(job is not None for job in jobs.values())
+    for job in jobs.values():
+        assert job is not None
+        job.status, job.stage = "failed", "failed"
+
+    if mutation == "duplicate_source_task":
+        duplicate = AutoResearchRepository(session).create_task(
+            run_id=run.id,
+            research_case_id=run.research_case_id,
+            thesis_id=tasks["support"].thesis_id,
+            task_type="support",
+            query="duplicate resumed support task",
+            round=run.round,
+        )
+        duplicate.result = dict(tasks["support"].result or {})
+        duplicate.stage = "acquire"
+    elif mutation == "all_missing_bindings":
+        for task in tasks.values():
+            task.result = None
+    elif mutation == "duplicate_job_binding":
+        tasks["contradict"].result = {
+            **(tasks["contradict"].result or {}),
+            "acquisition_job_id": tasks["support"].result["acquisition_job_id"],
+        }
+    elif mutation == "swapped_job_binding":
+        support_job_id = tasks["support"].result["acquisition_job_id"]
+        contradict_job_id = tasks["contradict"].result["acquisition_job_id"]
+        tasks["support"].result = {
+            **(tasks["support"].result or {}),
+            "acquisition_job_id": contradict_job_id,
+        }
+        tasks["contradict"].result = {
+            **(tasks["contradict"].result or {}),
+            "acquisition_job_id": support_job_id,
+        }
+    elif mutation == "task_objective":
+        tasks["support"].result = {
+            **(tasks["support"].result or {}),
+            "objective": "contradict",
+        }
+    elif mutation == "task_round":
+        tasks["support"].round = run.round + 1
+    elif mutation == "request_objective":
+        jobs["support"].request_snapshot = {
+            **jobs["support"].request_snapshot,
+            "objective": "contradict",
+        }
+    elif mutation == "request_target_role":
+        jobs["support"].request_snapshot = {
+            **jobs["support"].request_snapshot,
+            "target_link_role": "contradicts",
+        }
+    elif mutation == "request_round":
+        jobs["support"].request_snapshot = {
+            **jobs["support"].request_snapshot,
+            "round": run.round + 1,
+        }
+    else:
+        jobs["support"].idempotency_key = f"tampered:{uuid.uuid4()}"
+
+    with pytest.raises(ValueError, match="source task matrix|acquisition binding"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+    assert all(
+        not isinstance(task.result, dict)
+        or "acquisition_status" not in task.result
+        for task in tasks.values()
+    )
 
 
 @pytest.mark.parametrize("mutation", ["missing", "duplicate"])
@@ -1557,7 +1722,8 @@ def test_automatic_conclusion_retry_rejects_immutable_identity_drift(
     expected_text = (
         "需求增长：得到当前证据支持。当前证据的暂定判断\n"
         "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
-        "采集任务：失败 2，取消 0，未执行 0，跳过/异常条目 0。"
+        "采集任务：失败 2，取消 0，部分完成 0，部分完成但无准入证据 0，"
+        "未执行 0，跳过/异常条目 0。"
     )
     conflict = EventResearchConclusion(
         id=uuid.uuid5(

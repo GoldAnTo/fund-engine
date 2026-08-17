@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -67,6 +68,18 @@ _PLAN_OBJECTIVES = frozenset(
 )
 
 
+class _AssessmentGeneratorProtocol(Protocol):
+    def generate(
+        self,
+        thesis_id: uuid.UUID,
+        cutoff: datetime,
+        session: Session,
+        *,
+        evidence_link_ids: list[uuid.UUID],
+        before_persist: Callable[[], bool],
+    ) -> AIAssessment | None: ...
+
+
 class AutomaticResearchPipeline:
     """Run the automatic workflow without introducing human review gates."""
 
@@ -76,7 +89,7 @@ class AutomaticResearchPipeline:
         *,
         client: LLMClient | None = None,
         repository: AutoResearchRepository | None = None,
-        assessment_generator: Any | None = None,
+        assessment_generator: _AssessmentGeneratorProtocol | None = None,
     ) -> None:
         self._session = session
         self._client = client
@@ -106,11 +119,27 @@ class AutomaticResearchPipeline:
         tasks = self._round_tasks(run)
         self._validate_result_task_matrix(run, tasks, scope_payload)
         source_tasks = [task for task in tasks if task.task_type != "result"]
-        if not source_tasks or all(
+        self._validate_source_task_matrix(run, source_tasks, scope_payload)
+        bindings_missing = all(
             not isinstance(task.result, dict)
             or not task.result.get("acquisition_job_id")
             for task in source_tasks
-        ):
+        )
+        if bindings_missing:
+            current_round_job_exists = any(
+                isinstance(job.request_snapshot, dict)
+                and job.request_snapshot.get("round") == run.round
+                for job in self._session.scalars(
+                    select(AcquisitionJob).where(
+                        AcquisitionJob.research_run_id == run.id,
+                        AcquisitionJob.research_case_id == run.research_case_id,
+                    )
+                )
+            )
+            if current_round_job_exists:
+                raise ValueError(
+                    "automatic source task acquisition binding is missing on resume"
+                )
             return self.dispatch_sources(run)
 
         jobs = self._linked_jobs(run, source_tasks)
@@ -409,6 +438,37 @@ class AutomaticResearchPipeline:
         ):
             raise ValueError("automatic result task matrix contains a non-writable task")
 
+    def _validate_source_task_matrix(
+        self,
+        run: ResearchRun,
+        tasks: list[ResearchTask],
+        scope: dict,
+    ) -> None:
+        expected = self._expected_task_matrix(
+            run=run,
+            scope=scope,
+            plan_by_factor=self._frozen_plan(scope),
+        )
+        actual: list[tuple[uuid.UUID, uuid.UUID, EvidenceObjective]] = []
+        for task in tasks:
+            mapping = _TASK_OBJECTIVES.get(task.task_type)
+            if (
+                task.run_id != run.id
+                or task.research_case_id != run.research_case_id
+                or task.round != run.round
+                or task.thesis_id is None
+                or mapping is None
+            ):
+                raise ValueError(
+                    "automatic source task matrix crosses the frozen run scope"
+                )
+            objective, _target_link_role = mapping
+            actual.append((task.research_case_id, task.thesis_id, objective))
+        if not actual or len(actual) != len(expected) or set(actual) != set(expected):
+            raise ValueError(
+                "automatic source task matrix does not match the frozen evidence plan"
+            )
+
     def _validate_current_scope(self, run: ResearchRun, scope: dict) -> uuid.UUID:
         factor_ids = scope.get("factor_ids")
         factor_statements = scope.get("factor_statements")
@@ -459,23 +519,47 @@ class AutomaticResearchPipeline:
         tasks: list[ResearchTask],
     ) -> dict[uuid.UUID, AcquisitionJob]:
         jobs: dict[uuid.UUID, AcquisitionJob] = {}
+        linked_job_ids: set[uuid.UUID] = set()
         for task in tasks:
             if not isinstance(task.result, dict):
                 raise ValueError("automatic source task has no acquisition binding")
+            mapping = _TASK_OBJECTIVES.get(task.task_type)
+            if mapping is None or task.thesis_id is None:
+                raise ValueError("automatic source task acquisition binding is invalid")
+            objective, target_link_role = mapping
             try:
                 job_id = uuid.UUID(str(task.result["acquisition_job_id"]))
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
                 raise ValueError(
                     "automatic source task acquisition binding is invalid"
                 ) from exc
+            if job_id in linked_job_ids:
+                raise ValueError("automatic source task acquisition binding is duplicated")
+            linked_job_ids.add(job_id)
             job = self._session.get(AcquisitionJob, job_id)
+            expected_idempotency_key = (
+                f"automatic:{run.id}:{run.round}:{task.thesis_id}:{objective.value}"
+            )
+            snapshot = job.request_snapshot if job is not None else None
             if (
                 job is None
                 or job.research_run_id != run.id
                 or job.research_case_id != run.research_case_id
                 or job.thesis_id != task.thesis_id
+                or not isinstance(snapshot, dict)
+                or task.result.get("objective") != objective.value
+                or snapshot.get("research_run_id") != str(run.id)
+                or snapshot.get("case_id") != str(run.research_case_id)
+                or snapshot.get("thesis_id") != str(task.thesis_id)
+                or snapshot.get("round") != run.round
+                or snapshot.get("objective") != objective.value
+                or snapshot.get("target_link_role") != target_link_role
+                or job.idempotency_key != expected_idempotency_key
+                or snapshot.get("idempotency_key") != expected_idempotency_key
             ):
-                raise ValueError("automatic source task acquisition binding crosses scope")
+                raise ValueError(
+                    "automatic source task acquisition binding does not match its frozen task"
+                )
             jobs[task.id] = job
         return jobs
 
@@ -764,7 +848,7 @@ class AutomaticResearchPipeline:
             result[thesis_id].append(link_id)
         return result
 
-    def _generator(self):
+    def _generator(self) -> _AssessmentGeneratorProtocol:
         if self._assessment_generator is None:
             self._assessment_generator = AssessmentGenerator(
                 self._client or LLMClient.from_env()

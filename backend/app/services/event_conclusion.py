@@ -322,6 +322,7 @@ class EventConclusionService:
         acquisition_statuses = []
         skipped = 0
         exception_count = 0
+        partial_without_admitted_count = 0
         for task in self._session.scalars(
             select(ResearchTask)
             .where(ResearchTask.run_id == run.id)
@@ -340,15 +341,31 @@ class EventConclusionService:
                     "automatic source exception count is invalid"
                 )
             exception_count += task_exception_count
+            if status == "partial":
+                admitted_count = result.get("admitted_count")
+                if (
+                    isinstance(admitted_count, bool)
+                    or not isinstance(admitted_count, int)
+                    or admitted_count < 0
+                ):
+                    raise ValidationFailedError(
+                        "automatic partial source admitted count is invalid"
+                    )
+                if admitted_count == 0:
+                    partial_without_admitted_count += 1
             if status is None:
                 skipped += 1
             else:
                 acquisition_statuses.append(status)
         failed_count = acquisition_statuses.count("failed")
         cancelled_count = acquisition_statuses.count("cancelled")
+        partial_count = acquisition_statuses.count("partial")
         text_lines.append(
             "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
-            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，未执行 {skipped}，"
+            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，"
+            f"部分完成 {partial_count}，"
+            f"部分完成但无准入证据 {partial_without_admitted_count}，"
+            f"未执行 {skipped}，"
             f"跳过/异常条目 {exception_count}。"
         )
         text = "\n".join(text_lines)
