@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +19,30 @@ from app.models.operational import ResearchRun
 
 _OBJECTIVES = ["support", "contradict", "alternative_explanation"]
 _SOURCE_ROLES = ["company_disclosure", "licensed_provider"]
+AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE = "自动研究范围不可用，请稍后重试"
+
+
+class AutomaticResearchScopeReason(str, Enum):
+    FROZEN_INVALID = "frozen_invalid"
+    CURRENT_MISSING = "current_missing"
+    CURRENT_MISMATCH = "current_mismatch"
+
+
+class AutomaticResearchScopeError(ValueError):
+    def __init__(
+        self,
+        reason: AutomaticResearchScopeReason,
+        detail: str,
+    ) -> None:
+        super().__init__(detail)
+        self.reason = reason
+
+
+def _frozen_invalid(detail: str) -> AutomaticResearchScopeError:
+    return AutomaticResearchScopeError(
+        AutomaticResearchScopeReason.FROZEN_INVALID,
+        detail,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,18 +60,18 @@ def validate_automatic_research_scope(
 ) -> ValidatedAutomaticResearchScope:
     """Validate one run's frozen protocol, plan, theses, and current scope."""
     if not isinstance(payload, dict) or payload.get("workflow_mode") != "automatic":
-        raise ValueError("automatic research scope event is invalid")
+        raise _frozen_invalid("automatic research scope event is invalid")
     factor_values = payload.get("factor_ids")
     statements = payload.get("factor_statements")
     if not isinstance(factor_values, list) or not isinstance(statements, list):
-        raise ValueError("automatic research factor scope is invalid")
+        raise _frozen_invalid("automatic research factor scope is invalid")
     try:
         factor_ids = tuple(uuid.UUID(str(value)) for value in factor_values)
         run_ids = tuple(
             uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
         )
     except (TypeError, ValueError, AttributeError) as exc:
-        raise ValueError("automatic research factor identity is invalid") from exc
+        raise _frozen_invalid("automatic research factor identity is invalid") from exc
     factor_statements = tuple(statements)
     if (
         not factor_ids
@@ -56,7 +81,7 @@ def validate_automatic_research_scope(
         or any(not isinstance(value, str) or not value for value in factor_statements)
         or len(factor_statements) != len(set(factor_statements))
     ):
-        raise ValueError("automatic research factor scope differs from the run")
+        raise _frozen_invalid("automatic research factor scope differs from the run")
     for thesis_id, statement in zip(factor_ids, factor_statements):
         thesis = session.get(Thesis, thesis_id)
         if (
@@ -64,7 +89,7 @@ def validate_automatic_research_scope(
             or thesis.research_case_id != run.research_case_id
             or thesis.statement != statement
         ):
-            raise ValueError("automatic research factor thesis is invalid")
+            raise _frozen_invalid("automatic research factor thesis is invalid")
 
     protocol = payload.get("automatic_protocol")
     if (
@@ -74,10 +99,10 @@ def validate_automatic_research_scope(
         or not protocol["research_question"].strip()
         or protocol.get("factors") != list(factor_statements)
     ):
-        raise ValueError("automatic research protocol is invalid")
+        raise _frozen_invalid("automatic research protocol is invalid")
 
     if type(payload.get("budget")) is not int or payload["budget"] != run.budget:
-        raise ValueError("automatic research top-level budget is invalid")
+        raise _frozen_invalid("automatic research top-level budget is invalid")
 
     plan = payload.get("automatic_evidence_plan")
     if (
@@ -89,7 +114,7 @@ def validate_automatic_research_scope(
         or not isinstance(plan.get("items"), list)
         or len(plan["items"]) != len(factor_statements)
     ):
-        raise ValueError("automatic research evidence plan is invalid")
+        raise _frozen_invalid("automatic research evidence plan is invalid")
     for item, statement in zip(plan["items"], factor_statements):
         if (
             not isinstance(item, dict)
@@ -97,16 +122,16 @@ def validate_automatic_research_scope(
             or item.get("objectives") != _OBJECTIVES
             or item.get("allowed_source_roles") != _SOURCE_ROLES
         ):
-            raise ValueError("automatic research evidence plan item is invalid")
+            raise _frozen_invalid("automatic research evidence plan item is invalid")
     allowed_source_types = payload.get("allowed_source_types")
     if (
         not isinstance(allowed_source_types, list)
         or any(not isinstance(value, str) for value in allowed_source_types)
         or len(allowed_source_types) != len(set(allowed_source_types))
     ):
-        raise ValueError("automatic research source scope is invalid")
+        raise _frozen_invalid("automatic research source scope is invalid")
     if "source_scope" in payload and not isinstance(payload["source_scope"], dict):
-        raise ValueError("automatic research source scope is invalid")
+        raise _frozen_invalid("automatic research source scope is invalid")
 
     current_scope = session.scalar(
         select(EventResearchScopeVersion)
@@ -118,7 +143,10 @@ def validate_automatic_research_scope(
         .limit(1)
     )
     if current_scope is None:
-        raise ValueError("automatic research current scope is missing")
+        raise AutomaticResearchScopeError(
+            AutomaticResearchScopeReason.CURRENT_MISSING,
+            "automatic research current scope is missing",
+        )
     current_statements = tuple(
         session.scalars(
             select(EventResearchScopeFactor.statement)
@@ -130,7 +158,10 @@ def validate_automatic_research_scope(
         )
     )
     if current_statements != factor_statements:
-        raise ValueError("automatic research current scope has drifted")
+        raise AutomaticResearchScopeError(
+            AutomaticResearchScopeReason.CURRENT_MISMATCH,
+            "automatic research current scope has drifted",
+        )
     return ValidatedAutomaticResearchScope(
         payload=copy.deepcopy(payload),
         factor_ids=factor_ids,

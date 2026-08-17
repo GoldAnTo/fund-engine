@@ -16,7 +16,11 @@ from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.research_monitor import ResearchRunEvent
 from app.queries.automatic_research import AutomaticResearchQueries
 from app.services.auto_research import AutoResearchService
-from app.services.automatic_research_scope import validate_automatic_research_scope
+from app.services.automatic_research_scope import (
+    AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE,
+    AutomaticResearchScopeError,
+    validate_automatic_research_scope,
+)
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -124,8 +128,10 @@ class AutomaticResearchRetryService:
             validated_scope = validate_automatic_research_scope(
                 self._session, old_run, payload
             )
-        except (TypeError, ValueError, AttributeError) as exc:
-            raise ConflictError("automatic research frozen scope is unavailable") from exc
+        except AutomaticResearchScopeError as exc:
+            raise ConflictError(
+                AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE
+            ) from exc
 
         frozen = copy.deepcopy(validated_scope.payload)
         expected_payload = copy.deepcopy(frozen)
@@ -164,9 +170,9 @@ class AutomaticResearchRetryService:
             new_validated = validate_automatic_research_scope(
                 self._session, new_run, new_payload
             )
-        except (TypeError, ValueError, AttributeError) as exc:
+        except AutomaticResearchScopeError as exc:
             raise ConflictError(
-                "automatic research retry scope differs from failed run"
+                AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE
             ) from exc
         if (
             new_payload != expected_payload

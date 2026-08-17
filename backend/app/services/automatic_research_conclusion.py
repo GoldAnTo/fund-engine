@@ -11,6 +11,7 @@ _CONCLUSION_LABELS = {
     "contradicted": "受到当前证据反驳",
     "insufficient_evidence": "证据不足",
 }
+_TERMINAL_SOURCE_STATUSES = {"succeeded", "partial", "failed", "cancelled"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,8 @@ def build_automatic_research_conclusion(
         if primary_factor is None and row.conclusion == "supported":
             primary_factor = statement
         gaps.extend(gap.strip() for gap in row.gaps if gap.strip())
+    if not evidence_ids:
+        raise ValueError("automatic assessment evidence is empty")
     if len(evidence_ids) != len(set(evidence_ids)):
         raise ValueError("automatic assessment evidence is duplicated")
 
@@ -104,6 +107,11 @@ def build_automatic_research_conclusion(
     partial_without_admitted_count = 0
     exception_count = 0
     for job in source_jobs:
+        if (
+            not isinstance(job.status, str)
+            or job.status not in _TERMINAL_SOURCE_STATUSES
+        ):
+            raise ValueError("automatic source status is not terminal")
         if (
             isinstance(job.exception_count, bool)
             or not isinstance(job.exception_count, int)
@@ -125,8 +133,6 @@ def build_automatic_research_conclusion(
                 raise ValueError("automatic partial admitted count is invalid")
             if job.admitted_count == 0:
                 partial_without_admitted_count += 1
-        elif not isinstance(job.status, str):
-            raise ValueError("automatic source status is invalid")
     text_lines.append(
         "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
         f"采集任务：失败 {failed_count}，取消 {cancelled_count}，"

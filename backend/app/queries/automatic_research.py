@@ -47,7 +47,11 @@ from app.services.automatic_research_conclusion import (
     AutomaticSourceJobInput,
     build_automatic_research_conclusion,
 )
-from app.services.automatic_research_scope import validate_automatic_research_scope
+from app.services.automatic_research_scope import (
+    AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE,
+    AutomaticResearchScopeError,
+    validate_automatic_research_scope,
+)
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -154,18 +158,14 @@ class AutomaticResearchQueries:
             validated_scope = validate_automatic_research_scope(
                 self._session, run, frozen_scope
             )
-        except (TypeError, ValueError, AttributeError) as exc:
-            if str(exc) in {
-                "automatic research current scope is missing",
-                "automatic research current scope has drifted",
-            }:
-                validated_scope = None
-            else:
-                raise ConflictError("自动研究冻结范围不可用") from exc
+        except AutomaticResearchScopeError as exc:
+            raise ConflictError(
+                AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE
+            ) from exc
 
         jobs: list[AcquisitionJob] = []
         job_ids: frozenset[uuid.UUID] = frozenset()
-        if run.round >= 1 and validated_scope is not None:
+        if run.round >= 1:
             try:
                 bindings = validate_automatic_source_bindings(
                     self._session,
@@ -201,7 +201,7 @@ class AutomaticResearchQueries:
         stages = self._stages(overall, run, jobs, run_events, acquisition_events)
         links = self._validated_links(
             case_id,
-            validated_scope.current_scope_id if validated_scope else None,
+            validated_scope.current_scope_id,
             frozen_scope,
             job_ids,
         )
@@ -210,7 +210,7 @@ class AutomaticResearchQueries:
             self._result(
                 case_id,
                 run,
-                validated_scope.current_scope_id if validated_scope else None,
+                validated_scope.current_scope_id,
                 frozen_scope,
                 links,
                 jobs,
@@ -218,8 +218,6 @@ class AutomaticResearchQueries:
             if overall == "completed"
             else _ResultProjection(result=None)
         )
-        if overall == "completed" and validated_scope is None:
-            projection = _ResultProjection(result=None, failure_stage=4)
         if overall == "completed" and projection.result is None:
             # A terminal run is not a completed product until its exact
             # system-generated conclusion can be projected from validated

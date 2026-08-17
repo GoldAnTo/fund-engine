@@ -576,6 +576,12 @@ def test_retry_failed_case_creates_new_run_and_preserves_old_run(
     )
     cmd_session.commit()
 
+    view = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    )
+    assert view.status_code == 200
+    assert view.json()["status"] == "failed"
+
     response = cmd_client.post(
         f"/api/v1/automatic-research/{created['case_id']}/retry"
     )
@@ -832,6 +838,27 @@ def test_retry_rejects_malformed_frozen_scope(
     ) == 1
 
 
+def test_scope_validator_exposes_stable_frozen_error_reason(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.services.automatic_research_scope import (
+        AutomaticResearchScopeError,
+        AutomaticResearchScopeReason,
+        validate_automatic_research_scope,
+    )
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    malformed = _scope_payload(cmd_session, run.id)
+    malformed["automatic_protocol"]["generated_by"] = "provider-secret"
+
+    with pytest.raises(AutomaticResearchScopeError) as exc_info:
+        validate_automatic_research_scope(cmd_session, run, malformed)
+
+    assert exc_info.value.reason is AutomaticResearchScopeReason.FROZEN_INVALID
+
+
 def test_completed_view_returns_machine_result_and_display_safe_sources(
     cmd_client, cmd_session, monkeypatch
 ) -> None:
@@ -970,6 +997,12 @@ def test_completed_view_uses_only_active_run_deterministic_conclusion(
 def test_completed_view_fails_closed_when_current_scope_order_drifted(
     cmd_client, cmd_session, monkeypatch
 ) -> None:
+    from app.services.automatic_research_scope import (
+        AutomaticResearchScopeError,
+        AutomaticResearchScopeReason,
+        validate_automatic_research_scope,
+    )
+
     created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
     current = cmd_session.scalar(
         select(EventResearchScopeVersion)
@@ -1021,12 +1054,85 @@ def test_completed_view_fails_closed_when_current_scope_order_drifted(
         )
     cmd_session.commit()
 
-    body = cmd_client.get(
+    with pytest.raises(AutomaticResearchScopeError) as exc_info:
+        validate_automatic_research_scope(
+            cmd_session, run, _scope_payload(cmd_session, run.id)
+        )
+    assert exc_info.value.reason is AutomaticResearchScopeReason.CURRENT_MISMATCH
+
+    get_response = cmd_client.get(
         f"/api/v1/automatic-research/{created['case_id']}"
-    ).json()
-    assert body["status"] == "failed"
-    assert body["result"] is None
-    assert _stage_statuses(body)["conclude"] == "failed"
+    )
+    retry_response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    for response in (get_response, retry_response):
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "conflict"
+        assert error["message"] == "自动研究范围不可用，请稍后重试"
+        assert "drift" not in response.text
+        assert "reorder" not in response.text
+
+
+def test_current_scope_missing_get_and_retry_return_same_safe_conflict(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.services.automatic_research_scope import (
+        AutomaticResearchScopeError,
+        AutomaticResearchScopeReason,
+        validate_automatic_research_scope,
+    )
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == run.research_case_id
+        )
+    )
+    assert run is not None and lifecycle is not None and scope is not None
+    run.status = "failed"
+    run.stage = "failed"
+    run.stop_reason = "no_usable_evidence"
+    lifecycle.status = "exhausted"
+    cmd_session.flush()
+    cmd_session.connection().exec_driver_sql(
+        "DELETE FROM event_research_scope_factors WHERE scope_version_id = ?",
+        (scope.id.hex,),
+    )
+    cmd_session.connection().exec_driver_sql(
+        "DELETE FROM event_research_scope_versions WHERE id = ?",
+        (scope.id.hex,),
+    )
+    cmd_session.commit()
+    cmd_session.expire_all()
+
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    with pytest.raises(AutomaticResearchScopeError) as exc_info:
+        validate_automatic_research_scope(
+            cmd_session, run, _scope_payload(cmd_session, run.id)
+        )
+    assert exc_info.value.reason is AutomaticResearchScopeReason.CURRENT_MISSING
+
+    get_response = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    )
+    retry_response = cmd_client.post(
+        f"/api/v1/automatic-research/{created['case_id']}/retry"
+    )
+
+    for response in (get_response, retry_response):
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "conflict"
+        assert error["message"] == "自动研究范围不可用，请稍后重试"
+        assert "missing" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -1110,6 +1216,125 @@ def test_completed_projection_rejects_malformed_empty_snapshot_assessment_id(
         ).evidence_link_ids
     )
     empty_task.result = {"assessment_id": "malformed"}
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == "failed"
+    assert body["result"] is None
+    assert _stage_statuses(body)["analyze"] == "failed"
+
+
+def test_completed_projection_rejects_forged_zero_evidence_conclusion(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    lifecycle = cmd_session.get(
+        EventResearchLifecycle, uuid.UUID(created["case_id"])
+    )
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == uuid.UUID(
+                created["case_id"]
+            )
+        )
+    )
+    assert run is not None and lifecycle is not None and scope is not None
+    frozen = _scope_payload(cmd_session, run.id)
+    thesis_ids = [uuid.UUID(value) for value in frozen["factor_ids"]]
+    statements = list(frozen["factor_statements"])
+    tasks = list(
+        cmd_session.scalars(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run.id,
+                ResearchTask.task_type == "result",
+            )
+        )
+    )
+    tasks_by_thesis = {task.thesis_id: task for task in tasks}
+    for thesis_id in thesis_ids:
+        snapshot = EvidenceSnapshot(
+            thesis_id=thesis_id,
+            cutoff=datetime.now(timezone.utc),
+            evidence_link_ids=[],
+            created_at=datetime.now(timezone.utc),
+        )
+        cmd_session.add(snapshot)
+        cmd_session.flush()
+        assessment = AIAssessment(
+            snapshot_id=snapshot.id,
+            conclusion="supported",
+            rationale="zero evidence rationale",
+            gaps=[],
+            displayed_as_provisional=True,
+            creator_type="ai",
+            model_version="forged",
+            created_at=datetime.now(timezone.utc),
+        )
+        cmd_session.add(assessment)
+        cmd_session.flush()
+        task = tasks_by_thesis[thesis_id]
+        task.round = 1
+        task.status = "done"
+        task.stage = "completed"
+        task.result = {"assessment_id": str(assessment.id)}
+    conclusion_lines = [
+        f"{statement}：得到当前证据支持。zero evidence rationale"
+        for statement in statements
+    ]
+    conclusion_lines.append(
+        "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
+        "采集任务：失败 0，取消 0，部分完成 0，部分完成但无准入证据 0，"
+        "未执行 0，跳过/异常条目 0。"
+    )
+    cmd_session.add(
+        EventResearchConclusion(
+            id=uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fund-engine:event-research:automatic:{run.id}",
+            ),
+            research_case_id=run.research_case_id,
+            scope_version_id=scope.id,
+            state="system_generated",
+            text="\n".join(conclusion_lines),
+            primary_factor=statements[0],
+            evidence_link_ids=[],
+            based_on_conclusion_id=None,
+            reviewer=None,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    run.round = 1
+    run.status = "succeeded"
+    run.stage = "complete"
+    run.stop_reason = "automatic_completed"
+    lifecycle.status = "completed"
+    cmd_session.commit()
+
+    body = cmd_client.get(
+        f"/api/v1/automatic-research/{created['case_id']}"
+    ).json()
+
+    assert body["status"] == "failed"
+    assert body["result"] is None
+
+
+def test_completed_projection_rejects_nonterminal_validated_source_job(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    created, run = _completed_case(cmd_client, cmd_session, monkeypatch)
+    job = cmd_session.scalar(
+        select(AcquisitionJob).where(
+            AcquisitionJob.research_run_id == run.id,
+            AcquisitionJob.status == "succeeded",
+        )
+    )
+    assert job is not None
+    job.status = "running"
+    job.stage = "fetching"
     cmd_session.commit()
 
     body = cmd_client.get(
